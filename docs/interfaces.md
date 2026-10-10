@@ -71,7 +71,8 @@ wactorz --interface rest --port 8000
 |--------|------|-------------|
 | `POST` | `/chat` | Send a message. Body: `{"message": "..."}`. Returns a buffered JSON response. |
 | `GET` | `/agents` | List all registered agents with their status. |
-| `GET` | `/health` | System health check. |
+| `GET` | `/health`, `/healthz`, `/livez` | Liveness: 200 whenever the process can answer. |
+| `GET` | `/ready`, `/readyz` | Readiness: 200 once agents, broker and database are up, 503 naming what is not. |
 | `GET` | `/metrics` | Prometheus-format HTTP and actor metrics. |
 | `GET` | `/ha-map` | Latest Home Assistant map snapshot, if available. |
 | `GET` | `/actors` | Alias for `/agents`. |
@@ -139,7 +140,7 @@ HA_TOKEN=                     # optional; enables direct HA tools
 | Tool | Description |
 |---|---|
 | `ask_wactorz(message)` | Send a message to the main orchestrator through `/chat`. |
-| `ask_agent(agent_name, message)` | Send a message through `/chat` with `agent_name` included in the payload. |
+| `ask_agent(agent_name, message)` | Send a message to one agent through `/chat`: main hands it over as an `@<name>` mention and returns that agent's reply. |
 | `list_agents()` | List currently registered agents from `/agents`. |
 | `list_capabilities(keyword)` | Ask main for the running and spawnable capability catalog. |
 | `stop_agent(agent_id)` | Stop an actor via REST, leaving it registered so it can be started again. Refused for an essential actor. |
@@ -250,10 +251,13 @@ wactorz --interface whatsapp
 
 ```bash
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token
+TWILIO_AUTH_TOKEN=your_auth_token               # required — the webhook checks Twilio's signature with it
 TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
 WHATSAPP_ALLOWED_NUMBERS=+306912345678        # required — comma-separate for several people
 ```
+
+The webhook will not start without both. It answers Twilio at once and replies
+to the message when the model has, so a slow answer is never delivered twice.
 
 > **The allow-list is required.** The webhook is a public HTTP endpoint, so without it the interface refuses to start. Messages from other numbers are dropped before reaching the LLM.
 
@@ -324,23 +328,29 @@ wactorz --no-monitor
 
 ## Adding a custom interface
 
-All interfaces implement the same minimal pattern — call `process_user_input()` and stream or return the result. The simplest possible interface:
+All interfaces implement the same minimal pattern — hand the message to the orchestrator, saying which channel it came in on, and stream or return the answer. The orchestrator is main unless the deployment installed another (see *Your own orchestrator* in the library guide), so an interface never names main. The simplest possible interface:
 
 ```python
+from wactorz.orchestration import SOCIAL
+
+
 class MyInterface:
-    def __init__(self, main_actor):
-        self.main = main_actor
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
 
     async def run(self):
-        async for message in self._receive_messages():
-            # Streaming response
-            async for chunk in self.main.process_user_input_stream(message):
+        async for sender, message in self._receive_messages():
+            # A public channel: the orchestrator answers with the restrictions
+            # that go with one. "dashboard", "cli" and "rest" are the operator's own.
+            async for chunk in self.orchestrator.handle_turn_stream(
+                message, channel=SOCIAL, user=sender
+            ):
                 await self._send(chunk)
 
 
-# Register in cli.py alongside the other interfaces
+# Register in app.py alongside the other interfaces
 elif interface == "my-interface":
-    iface = MyInterface(main_actor)
+    iface = MyInterface(orchestrator)
     await asyncio.gather(iface.run(), system.run_forever())
 ```
 

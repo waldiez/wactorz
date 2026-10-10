@@ -16,8 +16,11 @@ First off — thank you. Wactorz is built in the open and every contribution mat
 git clone https://github.com/waldiez/wactorz
 cd wactorz
 
-# Python (editable install with all extras and dev tooling)
-pip install -e ".[all,docs,dev]"
+# Python (editable install with all extras and dev tooling). With uv on PATH
+# this installs the versions pinned in uv.lock into .venv; without it, pip
+# installs from the ranges in pyproject.toml. Either way the other make targets
+# use .venv. USE_UV=0 forces pip.
+make install-dev
 
 # Frontend
 cd frontend && bun install && bun run build && cd ..
@@ -28,6 +31,14 @@ cd frontend && bun install && bun run build && cd ..
 # by CI and published to https://waldiez.github.io/wactorz/api/
 ```
 
+**Dependencies.** `pyproject.toml` keeps ranges, because Wactorz is installed as
+a library too. `uv.lock` pins them for development and CI: after changing a
+dependency, run `make lock` and commit `uv.lock` (CI refuses one that does not
+match), and `make audit` checks the locked versions for known vulnerabilities.
+One CI job still installs with plain pip and no lockfile, as users do. The
+packages agents install while running, locally and on edge nodes, go through
+pip on purpose: it is on every machine Wactorz runs on, and uv is not.
+
 Run the tests and linters:
 
 ```bash
@@ -35,6 +46,18 @@ make test           # Python + frontend tests
 make lint-py        # Python format + lint gate
 make lint           # frontend lint gate
 ```
+
+There is also an end-to-end suite that runs the real thing — a broker, the app
+as a process, a node deployed over SSH, and a browser. It starts all of it
+itself. It is not part of `make test` and is not a required check; run it when
+you have changed something it covers:
+
+```bash
+make e2e-setup      # once: Playwright and the browser it drives
+make e2e            # needs Docker
+```
+
+See `e2e/README.md` for what it covers and how to add a journey.
 
 ## Pull Request Process
 
@@ -52,7 +75,12 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 - **Python**: `make lint-py` — ruff format + lint gate, and basedpyright over the package, tests and scripts
 - **TypeScript**: `make lint` — Prettier, ESLint and `tsc` typecheck
 
-Install pre-commit hooks to run these on commit: `pre-commit install`
+Install the commit hooks to run these on every commit: `make precommit-install`. They run
+through [prek](https://github.com/j178/prek), a faster drop-in for pre-commit that reads the
+same `.pre-commit-config.yaml`; it comes with `make install-dev`. The hooks use the
+project's `.venv` whether or not it is activated, and run the tests git knows about: a new
+test file you have not staged is left out, since the hook sets your other unstaged changes
+aside and the file would run without the code it tests.
 
 ## Commit Messages
 

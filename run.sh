@@ -9,6 +9,7 @@ set -e
 # itself contains, and with `set -e` above that aborts the launch.
 if [ -f .env ]; then
   set -a
+  # shellcheck source=/dev/null  # the user's own file, absent from the checkout
   . ./.env
   set +a
 fi
@@ -36,9 +37,11 @@ echo "Starting Wactorz (Python backend)..."
 # fall through to a system python3 on PATH.
 PYTHON=""
 if [ -f ".venv/bin/activate" ]; then
+    # shellcheck source=/dev/null  # created by the install, absent from the checkout
     source .venv/bin/activate
     PYTHON="$VIRTUAL_ENV/bin/python"
 elif [ -f ".venv/Scripts/activate" ]; then
+    # shellcheck source=/dev/null  # created by the install, absent from the checkout
     source .venv/Scripts/activate
     PYTHON="$VIRTUAL_ENV/Scripts/python.exe"
 fi

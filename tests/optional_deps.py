@@ -11,8 +11,6 @@ whether the module has been *imported yet*, not whether it *can* be. Import it
 for real first, and stub only what is genuinely absent.
 """
 
-from __future__ import annotations
-
 import importlib
 import sys
 import types

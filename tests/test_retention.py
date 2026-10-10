@@ -195,7 +195,7 @@ class TestTheJob:
         _turn(db, 400, (ID_A,))
         _upload(tmp_path / "uploads", ID_A, 400)
 
-        assert retention.prune() == {"timeseries": 0, "chat": 1, "uploads": 1}
+        assert retention.prune() == {"timeseries": 0, "chat": 1, "metrics": 0, "uploads": 1}
 
     def test_zero_keeps_the_chat_log_and_its_files(
         self, db: WactorzDB, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -209,6 +209,27 @@ class TestTheJob:
         assert "chat" not in done
         assert done["uploads"] == 0
         assert len(db.query_chat_log()) == 1
+
+    def test_old_metrics_samples_go_and_recent_ones_stay(
+        self, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "RETENTION_METRICS_DAYS", 7)
+        now = time.time()
+        db.write_metrics_history(
+            [{"ts": now - 8 * 86400, "agent": "old"}, {"ts": now, "agent": "new"}],
+            [{"ts": now - 8 * 86400, "node": "rpi", "online": 1}],
+        )
+
+        assert retention.prune()["metrics"] == 2
+        assert db.query_agent_history("new", now - 60) != []
+        assert db.query_agent_history("old", 0) == []
+
+    def test_zero_keeps_the_metrics_history(
+        self, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "RETENTION_METRICS_DAYS", 0)
+
+        assert "metrics" not in retention.prune()
 
     def test_it_runs_at_most_hourly(self) -> None:
         assert retention.prune() != {}
@@ -264,9 +285,9 @@ class TestTheOutbox:
 
     async def test_zero_keeps_every_message(self, tmp_path: Path) -> None:
         pub = self._publisher(tmp_path, days=0)
-        self._stored(tmp_path, "nodes/pi/spawn", 4000)
+        self._stored(tmp_path, "custom/x", 4000)
 
         pub._expire()
 
-        assert self._replayed(pub) == ["nodes/pi/spawn"]
+        assert self._replayed(pub) == ["custom/x"]
         pub._close_db()

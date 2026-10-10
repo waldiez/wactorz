@@ -113,9 +113,14 @@ Wactorz uses a three-tier persistence layer (`wactorz/core/persistence/`) that r
 |-------|----------|----------|
 | **SQLite** | `state/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, topic contracts, conversation history, time-series sensor/detection/HA-state data |
 | **Process memory** | in-process, lost on restart | Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state |
-| **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state dicts, ML models, numpy arrays, cv2 captures |
+| **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state dicts, cv2 captures |
+| **Blobs** | `state/{actor_name}/blobs/` | Bytes, numpy arrays, torch tensors and modules, scikit-learn-family models, one file per key |
 
 `Actor.persist(key, value)` and `Actor.recall(key)` route automatically to the correct store based on the key name. Existing agent code works without changes.
+
+Each value in `state.pkl` is pickled on its own, so one that no longer unpickles after a library upgrade costs that key and not the rest of the agent's state; its bytes are kept in the file until the key is written again. The pickle store keeps each agent's state in memory once it has read it, and writes the file about a second after a change, from a worker thread, so the disk is never waited for on the event loop. A node does the same with its agents' JSON state files.
+
+A value stored directly under a key that is bytes, a numpy array (not one of objects), a torch tensor, a `state_dict()`, a torch module, or a scikit-learn, XGBoost, LightGBM or CatBoost model is kept as a blob: a file of its own in `blobs/` beside the state file, which holds a marker in its place. It is written when its key is persisted, not with every other key, so a model persisted once costs nothing when a counter beside it changes; and it is written only then, so a value changed in place is saved by persisting it again. Nodes keep blobs the same way, beside their JSON state. A stop, a migration and a clean shutdown write what is waiting. Anything that changes or removes a state file in a running server — a reset, a migration step — goes through the store, because the copy in memory is what gets written next.
 
 The spawn registry (`_spawned_agents`) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.
 
@@ -145,8 +150,8 @@ On first startup after upgrading from an older version, `migrate_from_pickle()` 
 User types:  "@my-agent {"action": "status"}"
   │
   ▼
-Interface (CLIInterface / DiscordInterface / RESTInterface / WhatsAppInterface / TelegramInterface)
-  │  calls main_actor.process_user_input(text)
+Interface (dashboard / CLIInterface / RESTInterface / DiscordInterface / WhatsAppInterface / TelegramInterface)
+  │  calls orchestrator.handle_turn(text, channel=...)   ← the seam; main is the default behind it
   ▼
 MainActor._classify_intent()     ← one LLM call: ACTUATE | HA | PIPELINE | OTHER
   │
@@ -165,6 +170,19 @@ MainActor._classify_intent()     ← one LLM call: ACTUATE | HA | PIPELINE | OTH
           ▼
       main receives RESULT, formats, returns to user
 ```
+
+**The orchestrator seam.** The chat surfaces never reach main by name. Each
+calls an `Orchestrator` (`wactorz/orchestration.py`: `handle_turn`,
+`handle_turn_stream`, `commands`) through `runtime.orchestrator`, naming the
+channel the message came in on: `dashboard`, `cli` and `rest` are the
+operator's, `social` is a public bot. `MainOrchestrator` adapts main's three
+entry points to it and routes a social channel to the restricted one;
+`DirectOrchestrator` answers the minimal profile without a model, by sending
+`@name {json}` to the agent as a task; a deployment supplies its own with
+`run(orchestrator=...)` or `WACTORZ_ORCHESTRATOR=package.module:attr`. A
+message that names an agent still reaches that agent directly, and the node
+commands (`/deploy`, `/migrate`, `/nodes`) still go to main, which holds the
+node table.
 
 ### Pipeline (HA state → Discord notification)
 
@@ -263,6 +281,35 @@ The format is `<site>=<provider>[:<model>]`; only the first colon splits provide
 Surrounding quotes are stripped, from the value as a whole and from each site and model, as they are from `LLM_PROVIDER` and `LLM_MODEL`. Several ways of setting an environment variable keep the quotes as part of the value — Windows `set VAR="…"`, Docker's `env_file`, an unbalanced quote in a hand-edited `.env` — and split on `,` and `=` afterwards, those quotes land on the first site name and the last model name. The site then matches nothing and the model is one character away from real, which the API answers with `404 … model: claude-sonnet-4-6"`. The startup line logs the parsed table rather than the raw string, so an entry that was dropped is visible by its absence.
 
 For Ollama, `system` is encoded as the first `{"role": "system"}` entry in the native `/api/chat` `messages` array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.
+
+### Prompt fragments
+
+Main's system prompt, its intent classifier, its fact extraction and the planner's prompts are
+not fixed texts. Each is a **template**: a core that holds on every installation, with named slots
+that the **fragments** of the configured integrations fill (`wactorz/agents/prompts/assemble.py`).
+A slot shows what the fragments insert into it, or its own default when none does, so a prompt
+rendered for a given set of fragments is the same every time.
+
+Which fragments an installation gets is decided once, at startup, in `app.py`, by the same test
+that decides whether the Home Assistant agents start: `HA_URL` and `HA_TOKEN`, or
+`WACTORZ_HA_AGENTS=on|off` outright. Main is built with the result and hands it to every planner it
+spawns. Without Home Assistant, main never mentions it, the classifier offers and the router accepts
+only `PIPELINE` and `OTHER`, and the planner designs from MQTT topics and the live data flows with no
+`ha_actuator` type and no entity or camera sections. A `MainActor` or `PlannerAgent` constructed
+directly, outside `build_system`, gets every fragment, so library code and tests see no difference.
+
+Two tests guard the mechanism. `tests/test_prompts_are_pinned.py` keeps the prompts a Home Assistant
+installation sends word for word under `tests/parity_fixtures/prompts/`; a prompt change shows up as
+a fixture diff in the pull request that makes it, regenerated with
+`WACTORZ_UPDATE_PROMPT_FIXTURES=1 pytest tests/test_prompts_are_pinned.py`.
+`tests/test_prompt_fragments.py` renders every prompt with no fragments and checks that Home
+Assistant is not mentioned.
+
+An integration adds its own text by returning a `PromptFragment` (its name, a mapping of slot name to
+text per template, and the intent tokens it adds) and listing it in
+`wactorz/agents/prompts/fragments.py`; `home_assistant_prompts.py` holds the one that exists. A
+fragment naming a slot a template has not got is refused when rendered, so a misspelt slot cannot
+vanish silently.
 
 ---
 

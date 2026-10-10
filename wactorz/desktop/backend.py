@@ -54,7 +54,7 @@ def start() -> None:
         # Both the log handle and the child outlive this call: a `with` block
         # would close the pipe and terminate the backend on return.
         # pylint: disable=consider-using-with
-        log = open(BACKEND_LOG, "w", encoding="utf-8")  # noqa: SIM115
+        log = BACKEND_LOG.open("w", encoding="utf-8")
         _process = subprocess.Popen(  # noqa: S603  # argv is this interpreter; no shell
             cmd, env=env, cwd=str(DATA_DIR), stdout=log, stderr=subprocess.STDOUT
         )

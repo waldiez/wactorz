@@ -153,13 +153,12 @@ def test_start_keeps_shell_owned_vars_above_user_config(popen_calls, monkeypatch
     assert popen_calls[0].kwargs["env"]["MONITOR_PORT"] == str(backend.PORT)
 
 
-def test_start_still_runs_when_the_log_file_cannot_be_opened(monkeypatch):
+def test_start_still_runs_when_the_log_file_cannot_be_opened(monkeypatch, tmp_path):
     # Losing captured output must not stop the backend from running.
     calls: list = []
     monkeypatch.setattr(backend.backend_config, "env_for_backend", dict)
-    monkeypatch.setattr(
-        backend, "open", lambda *a, **k: (_ for _ in ()).throw(OSError), raising=False
-    )
+    monkeypatch.setattr(backend, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backend, "BACKEND_LOG", tmp_path)  # a directory: opening it fails
 
     def _popen(cmd, **kwargs):
         calls.append(kwargs)

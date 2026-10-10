@@ -5,12 +5,17 @@ sender, so the allow-list alone authorises a caller it never authenticated.
 The signature is what establishes that Twilio sent the request.
 """
 
-from collections.abc import AsyncGenerator
+import asyncio
+import logging
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from twilio.request_validator import RequestValidator
+
+RequestValidator = pytest.importorskip(
+    "twilio.request_validator", reason="the whatsapp extra is not installed"
+).RequestValidator
 
 from wactorz.interfaces.chat.whatsapp import WhatsAppInterface
 
@@ -19,22 +24,41 @@ ALLOWED = "+306912345678"
 FORM = {"Body": "hello", "From": f"whatsapp:{ALLOWED}"}
 
 
-class _Main:
-    """The one MainActor method the webhook reaches for."""
+class _Orchestrator:
+    """The one orchestrator method the webhook reaches for."""
 
     def __init__(self) -> None:
         self.seen: list[str] = []
+        self.channels: list[tuple[str, str | None]] = []
+        #: Held until a test sets it, to stand for a model still thinking.
+        self.release = asyncio.Event()
+        self.release.set()
 
-    async def process_user_input_restricted(self, message: str) -> str:
-        self.seen.append(message)
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        self.seen.append(text)
+        self.channels.append((channel, user))
+        await self.release.wait()
         return "reply"
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
 
 
 @pytest.fixture(name="interface")
 def interface_fixture(monkeypatch: pytest.MonkeyPatch) -> WhatsAppInterface:
     """An interface whose outbound sends are captured rather than dialled."""
     iface = WhatsAppInterface(
-        _Main(),  # pyright: ignore[reportArgumentType]
+        _Orchestrator(),
         account_sid="AC" + "0" * 32,
         auth_token=AUTH_TOKEN,
         from_number="+15550000000",
@@ -80,7 +104,7 @@ class TestUnsignedRequestsAreRefused:
         # The forged POST names a permitted number; without a signature it is
         # still refused, and the agent is never reached.
         await client.post("/webhook/whatsapp", data=FORM)
-        assert interface.agent.seen == []  # pyright: ignore[reportAttributeAccessIssue]
+        assert interface.orchestrator.seen == []  # pyright: ignore[reportAttributeAccessIssue]
 
     async def test_a_signature_for_a_different_body_is_refused(self, client: TestClient) -> None:
         url = str(client.make_url("/webhook/whatsapp"))
@@ -100,7 +124,86 @@ class TestASignedRequestIsAccepted:
             "/webhook/whatsapp", data=FORM, headers={"X-Twilio-Signature": _signature(url, FORM)}
         )
         assert resp.status == 200
-        assert interface.agent.seen == ["hello"]  # pyright: ignore[reportAttributeAccessIssue]
+        await _replies(interface)
+        assert interface.orchestrator.seen == ["hello"]  # pyright: ignore[reportAttributeAccessIssue]
+        assert interface.sent == ["reply"]  # pyright: ignore[reportAttributeAccessIssue]
+
+
+async def _replies(interface: WhatsAppInterface) -> None:
+    """Wait for the replies the webhook left running."""
+    await asyncio.gather(*list(interface._replies))
+
+
+def _signed_post(client: TestClient, form: dict[str, str]) -> Any:
+    url = str(client.make_url("/webhook/whatsapp"))
+    return client.post(
+        "/webhook/whatsapp", data=form, headers={"X-Twilio-Signature": _signature(url, form)}
+    )
+
+
+class TestTwilioIsAnsweredBeforeTheModel:
+    """A turn outlasts Twilio's wait, and a webhook that has not answered is sent again."""
+
+    async def test_the_webhook_answers_while_the_model_is_still_thinking(
+        self, client: TestClient, interface: WhatsAppInterface
+    ) -> None:
+        agent: Any = interface.orchestrator
+        agent.release.clear()
+
+        resp = await asyncio.wait_for(_signed_post(client, FORM), timeout=2)
+
+        assert resp.status == 200
+        assert interface.sent == []  # pyright: ignore[reportAttributeAccessIssue]
+        agent.release.set()
+        await _replies(interface)
+        assert interface.sent == ["reply"]  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def test_a_message_delivered_again_is_answered_once(
+        self, client: TestClient, interface: WhatsAppInterface
+    ) -> None:
+        form = {**FORM, "MessageSid": "SM" + "1" * 32}
+
+        await _signed_post(client, form)
+        await _signed_post(client, form)
+        await _replies(interface)
+
+        assert interface.orchestrator.seen == ["hello"]  # pyright: ignore[reportAttributeAccessIssue]
+        # A public endpoint: the orchestrator is told so, and who is asking.
+        assert interface.orchestrator.channels == [("social", ALLOWED)]  # pyright: ignore[reportAttributeAccessIssue]
+        assert interface.sent == ["reply"]  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def test_a_failing_turn_is_logged_and_frees_the_sender(
+        self, client: TestClient, interface: WhatsAppInterface, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        async def fail(_text: str, *, channel: str, user: str | None = None) -> str:
+            raise RuntimeError("model unavailable")
+
+        interface.orchestrator.handle_turn = fail  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.ERROR):
+            await _signed_post(client, FORM)
+            await _replies(interface)
+
+        assert "Could not answer" in caplog.text
+        assert interface.limiter.check(ALLOWED) is None
+
+
+class TestAnEmptyAuthToken:
+    async def test_it_does_not_start(self, caplog: pytest.LogCaptureFixture) -> None:
+        # A signature made with an empty key is one anybody can make.
+        iface = WhatsAppInterface(
+            _Orchestrator(),
+            account_sid="AC" + "0" * 32,
+            auth_token="",
+            from_number="+15550000000",
+            port=0,
+            allowed_numbers=frozenset({ALLOWED}),
+        )
+
+        with caplog.at_level(logging.ERROR):
+            await asyncio.wait_for(iface.run(), timeout=2)
+
+        assert "TWILIO_AUTH_TOKEN is empty" in caplog.text
 
 
 class TestTheSignedUrl:

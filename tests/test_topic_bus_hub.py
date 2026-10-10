@@ -5,8 +5,6 @@ a leaked bus would decide the outcome of anything that later calls
 `get_topic_bus()`.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Iterator
 from typing import Any

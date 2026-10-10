@@ -42,8 +42,12 @@ def build_qt_tray(hooks: TrayHooks):
     it, or hosts without a tray area, get no tray.
     """
     try:
-        from PySide6.QtGui import QAction, QIcon
-        from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+        from PySide6.QtGui import QAction, QIcon  # pyright: ignore[reportMissingImports]
+        from PySide6.QtWidgets import (  # pyright: ignore[reportMissingImports]
+            QApplication,
+            QMenu,
+            QSystemTrayIcon,
+        )
     except ImportError:
         return None
 

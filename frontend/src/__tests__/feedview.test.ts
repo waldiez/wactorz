@@ -64,7 +64,78 @@ describe("feedItemEl", () => {
         const text = c.querySelector<HTMLElement>(".af-feed-text")!;
         expect(text.textContent!.startsWith("x")).toBe(true); // prefix stripped
         expect(text.textContent!.endsWith("…")).toBe(true); // truncated
-        expect(text.title.length).toBeGreaterThan(120); // full label kept as tooltip
+    });
+});
+
+describe("feedItemEl — a long or multi-line message", () => {
+    function row(label: string, over: Partial<FeedItem> = {}): HTMLElement {
+        const c = document.createElement("div");
+        feedItemEl(c, item({ label, ...over }));
+        return c.firstElementChild as HTMLElement;
+    }
+
+    it("opens in place instead of hiding the rest in a hover-only tooltip", () => {
+        // A tooltip never shows on a touchscreen or from the keyboard.
+        const long = "x".repeat(200);
+        const r = row(long);
+        const full = r.querySelector<HTMLElement>(".af-feed-full")!;
+
+        expect(r.querySelector<HTMLElement>(".af-feed-text")!.title).toBe("");
+        expect(full.hidden).toBe(true);
+
+        r.click();
+
+        expect(full.hidden).toBe(false);
+        expect(full.textContent).toBe(long);
+        expect(r.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("shows its first line collapsed and keeps its line breaks expanded", () => {
+        const reply = "Here is the plan:\n1. pair the button\n2. wire it to the lamp";
+        const r = row(reply);
+
+        expect(r.querySelector(".af-feed-text")!.textContent).toBe("Here is the plan:");
+        r.click();
+        expect(r.querySelector(".af-feed-full")!.textContent).toBe(reply);
+    });
+
+    it("reads as prose rather than as a log record", () => {
+        const r = row("a\nb");
+
+        expect(r.querySelector(".af-feed-full")!.classList.contains("af-feed-full-prose")).toBe(true);
+    });
+
+    it("keeps the agent a user's own turn was addressed to", () => {
+        const r = row("@researcher first line\nsecond line", { role: "user" });
+
+        r.click();
+        expect(r.querySelector(".af-feed-full")!.textContent).toBe("@researcher first line\nsecond line");
+    });
+
+    it("expands from the keyboard too", () => {
+        const r = row("a\nb");
+
+        r.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+        expect(r.querySelector<HTMLElement>(".af-feed-full")!.hidden).toBe(false);
+    });
+
+    it("leaves a short single-line message as it is", () => {
+        const r = row("done");
+
+        expect(r.classList.contains("af-feed-expandable")).toBe(false);
+        expect(r.querySelector(".af-feed-full")).toBeNull();
+    });
+
+    it("can be found by search beyond its first line", () => {
+        // The hidden text is part of the row, so the filter sees all of it.
+        const feed = document.createElement("div");
+        // Past the cut-off, where a tooltip kept it out of the row's text.
+        feedItemEl(feed, item({ label: "summary " + "x".repeat(150) + " needle" }));
+
+        applyFilters(feed, { ...DEFAULT_FILTERS, search: "needle" });
+
+        expect((feed.firstElementChild as HTMLElement).hidden).toBe(false);
     });
 });
 

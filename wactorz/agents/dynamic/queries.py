@@ -1,7 +1,5 @@
 """Reading back what agents have recorded: time series, detections, HA state."""
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -76,10 +74,13 @@ class QueriesMixin(_Host):
             # Get as pandas DataFrame for ML
             df = agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
 
-            # Train a model
+            # Train a model, and keep it as a file under the state directory.
+            # persist() keeps only JSON values on a node and in a migration, so
+            # a model persisted there is dropped; a file stays where it is.
+            import joblib
             from sklearn.ensemble import IsolationForest
             model = IsolationForest().fit(df[['value']])
-            agent.persist('anomaly_model', model)
+            joblib.dump(model, f"{WACTORZ_STATE_DIR}/{agent.name}-anomaly_model.joblib")
         """
         from ...core.persistence import get_db
 

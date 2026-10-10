@@ -17,9 +17,37 @@ Both publish to the same MQTT broker, so external clients can mix and match.
 
 Base URL: `http://localhost:8888/`. Most endpoints accept both `/api/<path>` and `/<path>`; `/api/tts` and `/api/reset` are `/api/`-only.
 
-### `GET /health`
+### `GET /health` · `/healthz` · `/livez`
 
-Liveness probe. Returns `200 OK` with `{"status": "ok"}`.
+Liveness probe. Returns `200 OK` with `{"status": "ok"}` whenever the process can
+answer. It depends on nothing outside the process, so a broker or Home Assistant
+outage never fails it: acting on a liveness failure means restarting, and a restart
+would not bring the broker back.
+
+### `GET /ready` · `/readyz`
+
+Readiness probe. Returns `200 OK` once this process should be sent traffic, and
+`503 Service Unavailable` until then, naming each check:
+
+```json
+{"status": "not ready", "checks": {"supervisor": "ok", "main": "ok", "broker": "disconnected", "database": "ok"}}
+```
+
+| Check | Passes when |
+|---|---|
+| `supervisor` | The supervision tree has started and shutdown has not begun (`not started`, `stopping`) |
+| `main` | The `main` agent is running (`missing`, or its state: `failed`, `idle`, `stopped`) |
+| `broker` | The connection to the MQTT broker is up (`disconnected`) |
+| `database` | SQLite answers a query within 2 seconds (`not open`, `unavailable`) |
+
+A monitor started on its own, with no agents in its process, reports only
+`broker`, for the connection it listens on. Agents that depend on Home Assistant
+or a device are not checked: the supervisor restarts them, and chat keeps working
+while it does.
+
+Every probe path is reachable without a key and under any host name, and is sent
+with `Cache-Control: no-store`. The `z` spellings follow the Kubernetes
+convention.
 
 ---
 
@@ -36,7 +64,6 @@ List all registered actors with live metrics.
     "state":              "running",
     "protected":          true,
     "essential":          false,
-    "cpu":                1.4,
     "mem":                69.9,
     "task":               "idle",
     "messagesProcessed":  42,
@@ -65,6 +92,68 @@ Live metrics for one actor (LLM cost, tokens, messages, errors, restarts).
 ### `GET /api/actors/{actor_id}/history`
 
 Conversation history for the actor (only useful for LLM-backed actors like `main`). Returns the persisted `conversation_history` filtered to `user` + `assistant` roles. Accepts either an `actor_id` (UUID) or a display name (e.g. `main`).
+
+---
+
+### `GET /api/nodes`
+
+Every remote node main knows: whether it is online, its agents, its latest readings and what its machine is. The readings are the node's last heartbeat; `manifest` is the retained manifest it publishes (`null` from a node that has not sent one). Empty when there is no main.
+
+**Response** `200 OK`
+```json
+{
+  "nodes": [
+    {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
+     "version": "0.7.0", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
+     "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
+     "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
+                  "devices": ["bluetooth", "speaker", "gpio", "i2c"], "...": "..."}}
+  ]
+}
+```
+
+The fields of `manifest` are described with the `nodes/{node}/manifest` topic in [MQTT topics](mqtt_topics.md).
+
+---
+
+### `GET /api/history/agents/{name}` · `GET /api/history/nodes/{name}`
+
+An agent's or a node's metrics history: one sample about every minute, oldest first, for the last `hours` (default `24`). Kept for `WACTORZ_RETENTION_METRICS_DAYS` (default `7`); an agent is sampled while the dashboard is hearing from it.
+
+**Response** `200 OK`
+```json
+{
+  "agent":          "weather",
+  "hours":          24,
+  "kept_days":      7,
+  "sample_every_s": 60,
+  "samples": [
+    {"ts": 1740000000.0, "agent": "weather", "node": "", "state": "running",
+     "memory_mb": 42.5, "messages_processed": 7, "errors": 0,
+     "tasks_completed": 5, "tasks_failed": 0, "cost_usd": 0.0012,
+     "queue_wait_p95_s": 0.01, "message_p95_s": 0.2, "task_p95_s": null}
+  ]
+}
+```
+
+A node's samples carry `node`, `online`, `cpu_pct`, `mem_used_mb`, `mem_free_mb`, `agents` (how many it ran), `swap_used_mb`, `load_1m`, `disk_free_mb`, `temp_c` and `throttled` (a list of flags, `[]` for none; `null` where the node could not tell, as for any reading it did not send). `400` when `hours` is not a finite number above 0; `503` when there is no database to keep the history in.
+
+### `GET /api/history/agents`
+
+One field of every agent's samples, in one request: what the dashboard draws each card's trend from. `field` is one of `memory_mb`, `messages_processed`, `errors`, `tasks_completed`, `tasks_failed`, `cost_usd`, `queue_wait_p95_s`, `message_p95_s`, `task_p95_s` (default `messages_processed`); `hours` defaults to `1`.
+
+**Response** `200 OK`
+```json
+{
+  "field": "messages_processed",
+  "hours": 1,
+  "sample_every_s": 60,
+  "agents": {"weather": [[1740000000.0, 7], [1740000060.0, 9]]}
+}
+```
+
+`400` for a field outside that list or a `hours` that is not a finite number above 0; `503` when there is no database.
 
 ---
 
@@ -193,6 +282,29 @@ Recent activity feed events.
 
 ---
 
+### `GET /api/logs`
+
+Recent application log lines, oldest first, from an in-memory buffer of the last thousand or so; the same lines the dashboard's log view shows. Redacted on the way in.
+
+Query, all optional: `limit` (default `200`, at most `500`), `level` (this level and above), `logger` (part of the logger's name), `turn` and `agent`.
+
+A line written while a person's message was being answered names its `turn`: the id given to that message where it entered, which travels with everything done to answer it, through main, the planner and the agents it asks, their model and Home Assistant calls, and a task sent to an agent on a node. `?turn=` returns the lines of one answer. A line also names the `agent` that was at work when it was written, whatever logger wrote it; `?agent=` matches the name whole.
+
+**Response** `200 OK`
+```json
+{
+  "entries": [
+    {"source": "app", "ts": 1740000000.0, "level": "INFO", "origin": "wactorz.agents.main.actor",
+     "text": "[main] Intent: PIPELINE — …", "turn": "eea5bad62007", "agent": "main"}
+  ],
+  "capacity": 1000
+}
+```
+
+An agent's own errors and log events carry the turn as well (`turn`, on `agents/{id}/errors` and `agents/{id}/logs`).
+
+---
+
 ### `POST /api/chat/stop`
 
 Cancel every in-flight generation. Takes no request body, and stops all of them
@@ -226,7 +338,8 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | `{"status": "ok"}` |
+| `GET` | `/health`, `/healthz`, `/livez` | Liveness: `{"status": "ok"}` |
+| `GET` | `/ready`, `/readyz` | Readiness: `200` or `503`, same body as the monitor's |
 | `GET` | `/metrics` | Prometheus format |
 | `GET` | `/ha-map` | HA map snapshot |
 | `GET` | `/actors` | List actors |
@@ -244,9 +357,14 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 { "status": "sent", "agent": "main", "response": "..." }
 ```
 
+`agent_name` is optional and defaults to `main`. Any other name reaches that agent
+the way typing `@<name> <message>` in chat does: main finds it running, spawns it
+from the catalogue, or asks the node it runs on, and `response` is that agent's
+reply. A name that is not a single word is refused with `400`.
+
 #### Authentication
 
-Set `API_KEY` in `.env` to require a key on **every** route except `/health`. Both
+Set `API_KEY` in `.env` to require a key on **every** route except the probes. Both
 `X-API-Key` and `Authorization: Bearer` are accepted. With no key set the API is
 open, which is why the default bind is loopback:
 
@@ -273,7 +391,6 @@ After connection the server streams every MQTT message as a JSON object. Field n
     "name":      "main",
     "state":     "running",
     "timestamp": 1709500000.0,
-    "cpu":       1.4,
     "memory_mb": 69.9
   }
 }
@@ -293,7 +410,7 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 
 | Topic | Direction | Notes |
 |---|---|---|
-| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, cpu, memory_mb, task, protected, essential, timestamp}` |
+| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, memory_mb, task, protected, essential, timestamp, node}`. No CPU figure: agents share one process, whose CPU is on `system/host` |
 | `agents/{id}/metrics` | actor → all | Same cadence. LLM agents add `input_tokens`, `output_tokens`, `cost_usd`. |
 | `agents/{id}/status` | actor → all | On state change. |
 | `agents/{id}/logs` | actor → dashboard | Log entries. |
@@ -353,7 +470,7 @@ python -m wactorz.interfaces.mcp_server
 | Tool | Backend |
 |---|---|
 | `ask_wactorz(message)` | `POST /chat` |
-| `ask_agent(agent_name, message)` | `POST /chat` with `agent_name` |
+| `ask_agent(agent_name, message)` | `POST /chat` with `agent_name`: main hands it to that agent |
 | `list_agents()` | `GET /agents` |
 | `list_capabilities(keyword)` | `POST /chat` with `/capabilities` |
 | `stop_agent(agent_id)` | `DELETE /actors/{agent_id}` |

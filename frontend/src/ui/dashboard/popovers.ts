@@ -12,23 +12,19 @@ import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { tts } from "../../ext/tts";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
+import { button, el, named, option } from "../dom";
 
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
-    const toggleRow = document.createElement("div");
-    toggleRow.className = "af-audio-row";
+    const toggleRow = el("div", "af-audio-row");
 
-    const beepBtn = document.createElement("button");
-    beepBtn.className = `af-audio-toggle${tts.beepEnabled ? " on" : ""}`;
-    beepBtn.textContent = `🔔 Beep`;
+    const beepBtn = button(`af-audio-toggle${tts.beepEnabled ? " on" : ""}`, "🔔 Beep");
     beepBtn.title = "Notification beep";
     beepBtn.addEventListener("click", () => {
         beepBtn.classList.toggle("on", tts.toggleBeep());
     });
 
-    const ttsBtn = document.createElement("button");
-    ttsBtn.className = `af-audio-toggle${tts.ttsEnabled ? " on" : ""}`;
-    ttsBtn.textContent = `🗣 TTS`;
+    const ttsBtn = button(`af-audio-toggle${tts.ttsEnabled ? " on" : ""}`, "🗣 TTS");
     ttsBtn.title = "Read replies aloud";
     ttsBtn.addEventListener("click", () => {
         const on = tts.toggleTTS();
@@ -45,21 +41,12 @@ function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
  *  listener — the audio popover is rebuilt on every nav rebuild, and without
  *  this each rebuild would stack another listener mutating a detached select. */
 function buildVoiceRow(): { row: HTMLElement; release: () => void } {
-    const voiceRow = document.createElement("div");
-    voiceRow.className = "af-audio-row";
+    const voiceRow = el("div", "af-audio-row");
     voiceRow.style.display = tts.ttsEnabled ? "" : "none";
 
-    const voiceSel = document.createElement("select");
-    voiceSel.className = "af-audio-select";
-    voiceSel.id = "af-tts-voice";
-    voiceSel.name = "tts-voice";
+    const voiceSel = named(el("select", "af-audio-select"), "tts-voice", "TTS voice", "af-tts-voice");
     voiceSel.title = "TTS voice";
-    voiceSel.setAttribute("aria-label", "TTS voice");
-
-    const placeholderOpt = document.createElement("option");
-    placeholderOpt.value = "";
-    placeholderOpt.textContent = "— loading voices… —";
-    voiceSel.appendChild(placeholderOpt);
+    voiceSel.appendChild(option("", "— loading voices… —"));
 
     const populateVoices = (): void => {
         const voices = tts.voices;
@@ -70,10 +57,9 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
             voiceSel.remove(1);
         }
         voices.forEach(v => {
-            const o = document.createElement("option");
-            o.value = v.name;
-            o.textContent = v.name.replace(/^Microsoft\s+/, "").replace(/\s+Online.*$/i, "");
-            voiceSel.appendChild(o);
+            voiceSel.appendChild(
+                option(v.name, v.name.replace(/^Microsoft\s+/, "").replace(/\s+Online.*$/i, "")),
+            );
         });
         const saved = tts.selectedVoice;
         if (saved) {
@@ -94,19 +80,14 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
 
 /** Ambient volume slider row (visibility toggled by the track buttons). */
 function buildVolumeRow(): HTMLElement {
-    const volRow = document.createElement("div");
-    volRow.className = "af-audio-row af-audio-vol-row";
+    const volRow = el("div", "af-audio-row af-audio-vol-row");
     volRow.style.display = ambient.track === "none" ? "none" : "";
 
-    const volIcon = document.createElement("span");
-    volIcon.textContent = "🔉";
+    const volIcon = el("span", "", "🔉");
     volIcon.style.fontSize = "14px";
 
-    const volSlider = document.createElement("input");
+    const volSlider = named(el("input", "af-audio-slider"), "ambient-volume", "Ambient volume");
     volSlider.type = "range";
-    volSlider.className = "af-audio-slider";
-    volSlider.name = "ambient-volume";
-    volSlider.setAttribute("aria-label", "Ambient volume");
     volSlider.min = "0";
     volSlider.max = "1";
     volSlider.step = "0.05";
@@ -119,13 +100,10 @@ function buildVolumeRow(): HTMLElement {
 
 /** Ambient track buttons; selecting one updates the volume row's visibility. */
 function buildAmbientTracks(volRow: HTMLElement): HTMLElement {
-    const trackRow = document.createElement("div");
-    trackRow.className = "af-audio-tracks";
+    const trackRow = el("div", "af-audio-tracks");
 
     AMBIENT_TRACKS.forEach(({ id, label }) => {
-        const btn = document.createElement("button");
-        btn.className = `af-audio-track-btn${ambient.track === id ? " on" : ""}`;
-        btn.textContent = label;
+        const btn = button(`af-audio-track-btn${ambient.track === id ? " on" : ""}`, label);
         btn.addEventListener("click", () => {
             trackRow.querySelectorAll(".af-audio-track-btn").forEach(b => b.classList.remove("on"));
             btn.classList.add("on");
@@ -141,9 +119,7 @@ function buildAmbientTracks(volRow: HTMLElement): HTMLElement {
 function buildAmbientRows(): DocumentFragment {
     const frag = document.createDocumentFragment();
 
-    const trackLabel = document.createElement("div");
-    trackLabel.className = "af-audio-label";
-    trackLabel.textContent = "Ambient";
+    const trackLabel = el("div", "af-audio-label", "Ambient");
     frag.appendChild(trackLabel);
 
     const volRow = buildVolumeRow();
@@ -160,16 +136,13 @@ export interface AudioPopover extends HTMLElement {
 
 /** Audio controls: beep/TTS toggles, voice select, ambient track + volume. */
 export function buildAudioPopover(): AudioPopover {
-    const pop = document.createElement("div");
-    pop.className = "af-audio-popover glass";
+    const pop = el("div", "af-audio-popover glass");
 
     const { row: voiceRow, release } = buildVoiceRow();
     pop.appendChild(buildAudioToggles(voiceRow));
     pop.appendChild(voiceRow);
 
-    const divider = document.createElement("div");
-    divider.className = "af-audio-divider";
-    pop.appendChild(divider);
+    pop.appendChild(el("div", "af-audio-divider"));
 
     pop.appendChild(buildAmbientRows());
     return Object.assign(pop, { _release: release });
@@ -226,17 +199,18 @@ function buildResetButton(
     armResets: Array<() => void>,
     { scope, label, danger }: (typeof RESET_SCOPES)[number],
 ): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "af-mini-btn";
+    const btn = button("af-mini-btn");
     btn.style.cssText = [
         "display:flex;align-items:center;gap:8px;width:100%;",
         "padding:6px 8px;margin-bottom:3px;border-radius:6px;",
         "font-size:12px;text-align:left;transition:background .15s;",
         danger ? "color:#f87171;" : "",
     ].join("");
-    btn.innerHTML = `${RESET_ICONS[scope] ?? ""}<span>${label}</span>`;
-
-    const span = btn.querySelector("span")!;
+    // The icon is fixed markup; the label is kept as its own element so the
+    // confirm step can rewrite it without reparsing the button.
+    btn.innerHTML = RESET_ICONS[scope] ?? "";
+    const span = el("span", "", label);
+    btn.appendChild(span);
     let armed = false;
     let armTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -277,12 +251,10 @@ export interface ResetPopover extends HTMLElement {
 
 /** Scoped state-reset menu with per-button two-step confirmation. */
 export function buildResetPopover(): ResetPopover {
-    const pop = document.createElement("div");
-    pop.className = "af-audio-popover glass";
+    const pop = el("div", "af-audio-popover glass");
     pop.style.cssText = "min-width:210px;padding:12px 14px;";
 
-    const title = document.createElement("div");
-    title.textContent = "Clear stored state";
+    const title = el("div", "", "Clear stored state");
     title.style.cssText =
         "font-size:10px;font-weight:600;opacity:.45;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;";
     pop.appendChild(title);
@@ -290,7 +262,7 @@ export function buildResetPopover(): ResetPopover {
     const armResets: Array<() => void> = [];
     RESET_SCOPES.forEach(spec => {
         if (spec.danger) {
-            const hr = document.createElement("div");
+            const hr = el("div");
             hr.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:6px 0 8px;";
             pop.appendChild(hr);
         }

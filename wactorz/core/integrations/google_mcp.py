@@ -32,6 +32,8 @@ from urllib.parse import urlencode, urlparse
 import aiohttp
 from aiohttp import web
 
+from ..atomic_io import write_private_json
+
 # mcp is optional, so every name it provides has a stand-in for the case where
 # it is absent. Those stand-ins describe nothing, and several of these names are
 # used as base classes and annotations, so the real ones are declared separately
@@ -64,30 +66,6 @@ else:
 logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # an endpoint URL, not a credential
-
-
-def _write_private_json(path: Path, data: dict[str, Any]) -> None:
-    """Write JSON to `path` so only this user can read it back.
-
-    Created at 0600 rather than chmod-ed afterwards: creating it at the umask's
-    permissions and narrowing them after leaves a window in which the tokens are
-    readable by anyone on the machine, and leaves them that way for good if the
-    chmod fails. Replaced rather than written in place, so a crash mid-write
-    leaves the previous file whole instead of a truncated one.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Named for this process and created exclusively: two writers cannot land on
-    # the same temp file, and O_EXCL refuses a path that already exists — so a
-    # symlink planted there is an error rather than somewhere the tokens go.
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 @dataclass(frozen=True)
@@ -215,7 +193,7 @@ class _GoogleTokenStorage(TokenStorage):
             return {}
 
     def _write(self, data: dict) -> None:
-        _write_private_json(self.path, data)
+        write_private_json(self.path, data)
 
     async def get_tokens(self) -> OAuthToken | None:
         raw = self._read().get("tokens")
@@ -443,7 +421,7 @@ class GoogleMcpClient:
         tokens["token_type"] = td.get("token_type", "Bearer")
         data["tokens"] = tokens
         try:
-            _write_private_json(path, data)
+            write_private_json(path, data)
         except Exception:
             logger.debug("Could not store %s token", self.config.label)
 
@@ -565,8 +543,10 @@ class GoogleMcpClient:
             data = {}
         data.setdefault("tokens", {})["access_token"] = access_token
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            # The same private, whole-file write as the token response: a
+            # refresh can be the first write, and must not create the file
+            # readable by other users or truncate it mid-write.
+            write_private_json(path, data)
         except Exception:
             logger.debug("Could not persist refreshed %s token", self.config.label)
 

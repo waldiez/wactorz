@@ -17,7 +17,7 @@ import pytest
 
 from wactorz.core.actor import Actor
 from wactorz.core.atomic_io import write_pickle
-from wactorz.core.persistence.pickle_store import PickleStore
+from wactorz.core.persistence.pickle_store import PickleStore, read_state_file
 
 
 class _Unpicklable:
@@ -53,21 +53,65 @@ class TestWritePickle:
         assert pickle.loads(target.read_bytes()) == {"generation": 1}
 
 
+def _on_disk(tmp_path: Path, agent: str) -> dict:
+    """What a restart would read for ``agent``."""
+    return read_state_file(tmp_path / agent / "state.pkl").values
+
+
 class TestPickleStore:
-    def test_a_failed_save_keeps_the_last_good_state(self, tmp_path: Path) -> None:
+    """A value that cannot be pickled costs that key, not the file.
+
+    The store keeps the state in memory and writes the file after; with no
+    event loop running, as here, it writes at once.
+    """
+
+    def test_a_value_that_will_not_pickle_is_left_out_and_the_rest_written(
+        self, tmp_path: Path
+    ) -> None:
         store = PickleStore(str(tmp_path))
-        assert store.save("worker", {"generation": 1}) is True
+        store.save("worker", {"generation": 1})
 
-        assert store.save("worker", {"bad": _Unpicklable()}) is False
+        store.save("worker", {"generation": 2, "bad": _Unpicklable()})
 
-        # Not {} — that is what the truncating write produced, and it is
-        # indistinguishable from an agent that had never saved at all.
-        assert store.load("worker") == {"generation": 1}
+        assert _on_disk(tmp_path, "worker") == {"generation": 2}
 
-    def test_a_lost_save_is_reported_to_the_caller(self, tmp_path: Path) -> None:
+    def test_the_key_left_out_is_named_with_the_agent(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         store = PickleStore(str(tmp_path))
-        assert store.save("worker", {"bad": _Unpicklable()}) is False
-        assert store.save("worker", {"generation": 1}) is True
+
+        store.save("worker", {"bad": _Unpicklable()})
+
+        assert "Not writing bad for 'worker'" in caplog.text
+
+    def test_it_is_named_once_while_it_stays(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Persisted every tick, a warning per write would bury the log.
+        store = PickleStore(str(tmp_path))
+        bad = _Unpicklable()
+
+        for tick in range(3):
+            store.save("worker", {"bad": bad, "tick": tick})
+
+        assert caplog.text.count("Not writing bad") == 1
+
+    def test_the_agent_keeps_its_state_in_memory_all_the_same(self, tmp_path: Path) -> None:
+        # It carries on with what it has; only a restart would miss it.
+        store = PickleStore(str(tmp_path))
+        bad = _Unpicklable()
+
+        store.save("worker", {"bad": bad, "count": 3})
+
+        assert store.load("worker") == {"bad": bad, "count": 3}
+
+    def test_a_later_save_that_can_be_written_is(self, tmp_path: Path) -> None:
+        store = PickleStore(str(tmp_path))
+        store.save("worker", {"bad": _Unpicklable()})
+
+        store.save("worker", {"generation": 1})
+
+        assert _on_disk(tmp_path, "worker") == {"generation": 1}
 
 
 class TestLegacyActorPath:

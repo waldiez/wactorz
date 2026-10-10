@@ -124,9 +124,10 @@ def historical_cost_usd(live_names: set) -> float:
                     total += entry.get("cost_usd", 0.0)
             except Exception:
                 pass
-        return total
     except Exception:
         return 0.0
+    else:
+        return total
 
 
 def historical_messages(live_names: set) -> int:
@@ -145,9 +146,10 @@ def historical_messages(live_names: set) -> int:
                     total += entry.get("count", 0)
                 except Exception:
                     pass
-        return total
     except Exception:
         return 0
+    else:
+        return total
 
 
 def _final_cost_from_db(name: str):

@@ -92,7 +92,92 @@ describe("CardDashboard behaviour", () => {
         });
     });
 
+    describe("the Devices link", () => {
+        it("hides once the server runs without Home Assistant, though this browser saw one", async () => {
+            cd.destroy();
+            document.body.innerHTML = "";
+            localStorage.setItem("wactorz-ha-url", "http://ha.local");
+            localStorage.setItem("wactorz-ha-url__server", "http://ha.local");
+            const realFetch = globalThis.fetch;
+            globalThis.fetch = vi.fn(async () => ({
+                ok: true,
+                json: async () => ({ ha: { url: "" } }),
+            })) as unknown as typeof fetch;
+            try {
+                cd = new CardDashboard() as any;
+                cd.show([agent("main")]);
+
+                await vi.waitFor(() => {
+                    const links = [...cd.root.querySelectorAll(".af-ha-nav-link")] as HTMLAnchorElement[];
+                    expect(links.length).toBeGreaterThan(0);
+                    expect(links.every(a => a.style.display === "none" && !a.hasAttribute("href"))).toBe(
+                        true,
+                    );
+                });
+            } finally {
+                globalThis.fetch = realFetch;
+            }
+        });
+    });
+
     describe("remote nodes", () => {
+        it("keeps a node's readings, and the manifest a heartbeat does not carry", () => {
+            cd.show([agent("main")]);
+            cd._remoteNodes.set("edge-1", { agents: [], lastSeen: 0, manifest: { arch: "aarch64" } });
+
+            cd.updateRemoteNode("edge-1", ["alpha"], { cpu_pct: 9 });
+
+            expect(cd._remoteNodes.get("edge-1")).toMatchObject({
+                agents: ["alpha"],
+                readings: { cpu_pct: 9 },
+                manifest: { arch: "aarch64" },
+            });
+        });
+
+        it("takes manifests from the listing, and shows a listed node not heard from yet", () => {
+            cd.show([agent("main")]);
+            cd.updateRemoteNode("edge-1", ["alpha"]);
+            cd._data.listings.set("edge-1", { node: "edge-1", online: true, manifest: { arch: "x86_64" } });
+            cd._data.listings.set("rpi", {
+                node: "rpi",
+                online: true,
+                last_seen: Date.now() / 1000,
+                agents: ["flic", 3],
+                cpu_pct: 12,
+                manifest: { arch: "aarch64" },
+            });
+            cd._data.listings.set("bare", { node: "bare", online: false });
+
+            cd._onDataUpdate();
+
+            expect(cd._remoteNodes.get("edge-1").manifest).toEqual({ arch: "x86_64" });
+            expect(cd._remoteNodes.get("rpi")).toMatchObject({
+                agents: ["flic"],
+                readings: { cpu_pct: 12 },
+                manifest: { arch: "aarch64" },
+            });
+            expect(cd._remoteNodes.get("bare")).toMatchObject({ agents: [], lastSeen: 0, manifest: null });
+            expect(cd.root.querySelector('.af-node-card[data-node="rpi"] .af-node-pill')?.textContent).toBe(
+                "online",
+            );
+        });
+
+        it("repaints nothing off the overview when the data arrives", () => {
+            cd.show([agent("main")]);
+            cd._setView("feed");
+            cd._data.listings.set("rpi", { node: "rpi", online: true });
+            expect(() => cd._onDataUpdate()).not.toThrow();
+            expect(cd._remoteNodes.has("rpi")).toBe(true);
+        });
+
+        it("opens and closes an agent's history from its card", async () => {
+            cd.show([agent("main")]);
+            cd.root.querySelector('[data-id="main"] .af-history-btn').click();
+            await vi.waitFor(() => expect(document.querySelector(".af-trend-overlay")).not.toBeNull());
+            cd.hide();
+            expect(document.querySelector(".af-trend-overlay")).toBeNull();
+        });
+
         it("updateRemoteNode stores the node and renders it on the overview", () => {
             cd.show([agent("main")]);
             cd.updateRemoteNode("edge-1", ["alpha", "beta"]);
@@ -273,7 +358,7 @@ describe("CardDashboard behaviour", () => {
             cd._heartbeats.lastSeen.set("main", Date.now() - 200_000);
             cd._heartbeats.refresh();
             const dot = cd.root.querySelector('[data-id="main"] .af-card-state-dot');
-            expect(dot.classList.contains("af-card-stale")).toBe(true);
+            expect(dot.classList.contains("af-card-missing")).toBe(true);
         });
     });
 
@@ -404,7 +489,8 @@ describe("CardDashboard behaviour", () => {
             const link = withHa.root.querySelector(".af-ha-nav-link");
             expect(link.getAttribute("href")).toBe("http://ha.local:8123");
             expect(link.target).toBe("_blank");
-            expect(link.rel).toBe("noopener");
+            // noreferrer as well: Home Assistant has no use for this page's address.
+            expect(link.rel).toBe("noopener noreferrer");
             withHa.destroy();
         });
 

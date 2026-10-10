@@ -9,6 +9,8 @@
  * agent list, the active target, and the send action.
  */
 
+import { button, el } from "../dom";
+
 export interface ChatInputHost {
     /** All known agent names (for `@mention` completion). */
     agentNames(): string[];
@@ -201,13 +203,10 @@ export class ChatInput {
         const match = this.history.find(h => h.toLowerCase().startsWith(lower) && h !== val);
         if (match) {
             this.suggestion = match;
-            const typed = document.createElement("span");
+            const typed = el("span", "", val);
             typed.style.color = "transparent";
-            typed.textContent = val;
-            const tail = document.createElement("span");
-            tail.textContent = match.slice(val.length);
             ghost.textContent = "";
-            ghost.append(typed, tail);
+            ghost.append(typed, el("span", "", match.slice(val.length)));
             input.classList.add("has-suggestion");
         } else {
             this._clearGhost(input, ghost);
@@ -257,9 +256,7 @@ export class ChatInput {
     ): void {
         panel.textContent = "";
         this.mentionMatches.forEach((name, i) => {
-            const chip = document.createElement("button");
-            chip.className = "af-mention-chip" + (i === this.mentionIdx ? " active" : "");
-            chip.textContent = name;
+            const chip = button("af-mention-chip" + (i === this.mentionIdx ? " active" : ""), name);
             chip.addEventListener("mousedown", e => {
                 e.preventDefault();
                 this._acceptMention(name, input, select, panel, ghost);

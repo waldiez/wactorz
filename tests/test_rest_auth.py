@@ -6,6 +6,7 @@ later is covered without anyone remembering to add a check to it.
 An install with no key configured is unaffected — every route stays open.
 """
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -16,7 +17,7 @@ from wactorz.interfaces.chat.rest import RESTInterface
 
 API_KEY = "secret-key"
 
-# Every route the interface serves, minus /health. Kept explicit so a route
+# Every route the interface serves, minus the probes. Kept explicit so a route
 # added without a matching guard shows up as a failure here.
 GUARDED_GET_PATHS = [
     "/metrics",
@@ -47,14 +48,31 @@ class _Registry:
         return None
 
 
+class _Orchestrator:
+    """Answers every turn with the same word."""
+
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        return "reply"
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield "reply"
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
+
+
 class _MainActor:
     """The parts of MainActor that RESTInterface reaches for."""
 
     def __init__(self) -> None:
         self._registry = _Registry()
-
-    async def process_user_input(self, message: str) -> str:
-        return "reply"
 
     async def send_command(self, target: str, command: Any) -> None:
         return None
@@ -64,7 +82,7 @@ class _MainActor:
 
 
 def _interface(api_key: str | None) -> RESTInterface:
-    return RESTInterface(_MainActor(), port=0, api_key=api_key)  # pyright: ignore[reportArgumentType]
+    return RESTInterface(_Orchestrator(), _MainActor(), port=0, api_key=api_key)  # pyright: ignore[reportArgumentType]
 
 
 async def _client(app: web.Application) -> TestClient:
@@ -153,3 +171,52 @@ class TestNoKeyConfigured:
         resp = await open_client.post("/chat", json={"message": "hi"})
         assert resp.status == 200
         assert (await resp.json())["response"] == "reply"
+
+
+class TestAnOpenInstallRefusesOtherSites:
+    """With no key, the host and origin checks are all that keeps a web page out."""
+
+    async def test_a_rebound_host_name_is_refused(self, open_client: TestClient) -> None:
+        # What DNS rebinding looks like: a name the attacker controls, resolving here.
+        resp = await open_client.get("/actors", headers={"Host": "attacker.example:8000"})
+
+        assert resp.status == 403
+
+    async def test_a_post_from_another_site_is_refused(self, open_client: TestClient) -> None:
+        resp = await open_client.post(
+            "/chat", json={"message": "hi"}, headers={"Origin": "https://attacker.example"}
+        )
+
+        assert resp.status == 403
+
+    async def test_a_client_that_is_not_a_browser_is_unaffected(
+        self, open_client: TestClient
+    ) -> None:
+        # curl, scripts: loopback host, no Origin.
+        resp = await open_client.post("/chat", json={"message": "hi"})
+
+        assert resp.status == 200
+
+    async def test_a_probe_under_any_name_is_answered(self, open_client: TestClient) -> None:
+        # A load balancer asks under its own name; /health changes nothing.
+        resp = await open_client.get("/health", headers={"Host": "lb.internal:8000"})
+
+        assert resp.status == 200
+
+    async def test_an_ip_address_is_accepted(self, open_client: TestClient) -> None:
+        # A rebinding attack needs a name it controls; an address cannot be one.
+        resp = await open_client.get("/actors", headers={"Host": "192.168.1.20:8000"})
+
+        assert resp.status == 200
+
+
+class TestAKeyedInstallIsNotHostChecked:
+    async def test_a_scraper_on_the_container_network_is_answered(
+        self, keyed_client: TestClient
+    ) -> None:
+        # Prometheus scrapes by service name; with a key, the key is the guard.
+        resp = await keyed_client.get(
+            "/metrics", headers={"Host": "wactorz-python:8000", "X-API-Key": API_KEY}
+        )
+
+        assert resp.status == 200

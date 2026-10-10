@@ -174,6 +174,38 @@ def read_bytes(file_id: str, state_dir: str | None = None) -> bytes | None:
         return None
 
 
+class RefusedUpload(ValueError):
+    """Bytes the upload rules refuse: an empty file, or one over the size limit."""
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        reason = "empty file" if size == 0 else f"larger than {config.UPLOAD_MAX_BYTES} bytes"
+        super().__init__(reason)
+
+
+def store(data: bytes, name: str, state_dir: str | None = None) -> dict[str, object]:
+    """Store `data` as an attachment and return its record.
+
+    For a caller that already holds the bytes, such as the terminal UI attaching
+    a file from disk, rather than one reading a request body. The endpoint's
+    rules hold here as well: the stored name is generated, the type is sniffed
+    from the bytes, and the blob is written under a temporary name first, so an
+    interrupted write never leaves a file the id would resolve to.
+
+    Raises :class:`RefusedUpload` for the two files the endpoint refuses.
+    """
+    if not data or len(data) > config.UPLOAD_MAX_BYTES:
+        raise RefusedUpload(len(data))
+    directory = upload_dir(state_dir)
+    file_id = new_id()
+    staging = directory / f".{file_id}.part"
+    staging.write_bytes(data)
+    staging.replace(directory / file_id)
+    record = {"name": safe_name(name), "mime": sniff(data[:SNIFF_BYTES]), "size": len(data)}
+    (directory / f"{file_id}.json").write_text(json.dumps(record), encoding="utf-8")
+    return {"id": file_id, **record}
+
+
 def resolve(ids: object, state_dir: str | None = None) -> list[dict[str, object]]:
     """The stored records for `ids`, dropping anything unknown.
 

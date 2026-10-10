@@ -9,7 +9,7 @@ import logging
 import re
 import socket
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any, ClassVar
 
 from ...config import (
@@ -19,13 +19,16 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.actor import Actor, Message, MessageType
+from ...core.node_signing import node_control_properties
 from ...core.persistence import chat_turn_recorded
+from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
 from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
-from ..prompts.main_actor_prompts import (
-    ORCHESTRATOR_PROMPT,
-)
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.main_actor_prompts import orchestrator_prompt
+from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .delegation import DelegationManager
@@ -128,11 +131,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def __init__(
         self,
         llm_provider: LLMProvider | None = None,
+        prompt_fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS,
         **kwargs: Any,
     ) -> None:
+        """``prompt_fragments`` are the integrations main's prompts speak of and
+        its router accepts intents for: every one by default, so a main built
+        directly behaves as one on a fully configured installation; what the
+        configuration says when built by ``build_system``. The planners main
+        spawns inherit them.
+        """
         kwargs.setdefault("name", "main")
-        kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
+        fragments = tuple(prompt_fragments)
+        kwargs.setdefault("system_prompt", orchestrator_prompt(fragments))
         super().__init__(llm_provider=llm_provider, **kwargs)
+        self._prompt_fragments = fragments
         self._result_futures: dict[str, asyncio.Future] = {}
         # Queued monitor notifications — prepended to next user response, and
         # capped at MAX_PENDING_NOTIFICATIONS: they drain only when someone
@@ -146,6 +158,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.manifests = ManifestRegistry(self)
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
+        self.code_refresh = CodeRefresh(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.delegation = DelegationManager(self)
@@ -256,6 +269,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.migration.restore()
         # Receive state + config from remote nodes during remote→local migration
         self._tasks.append(asyncio.create_task(self._state_return_listener()))
+        # Follow agents that repaired themselves on a node, so the registry
+        # holds the program they actually run
+        self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
@@ -330,10 +346,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Route interface tasks through the full orchestrator without blocking replies."""
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         if payload.get("_via_interface"):
-            task = asyncio.create_task(self._handle_interface_request(payload, msg))
-            self._tasks.append(task)
-            task.add_done_callback(
-                lambda done: self._tasks.remove(done) if done in self._tasks else None
+            self.run_detached(
+                self._handle_interface_request(payload, msg), name="interface-request"
             )
             return
         await super()._handle_task(msg)
@@ -411,7 +425,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
-        asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
+        self.run_detached(self._extract_and_save_facts(clean_msg, response), name="facts")
         return response
 
     async def chat_stream(
@@ -430,7 +444,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Skips early-exit cases like cost-limit errors so no extra LLM call is made.
         if full_response and got_usage:
             clean_msg = _strip_live_context(user_message)
-            asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
+            self.run_detached(
+                self._extract_and_save_facts(clean_msg, "".join(full_response)), name="facts"
+            )
 
     async def _record_external_exchange(
         self, user_message: str, assistant_response: str, *, ts_user: float
@@ -466,7 +482,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             logger.warning("[%s] Failed to record external exchange: %s", self.name, e)
         self._log_delivered_turn(user_message, str(assistant_response), ts_user=ts_user)
         # Fire-and-forget fact extraction — same as chat()
-        asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
+        self.run_detached(
+            self._extract_and_save_facts(user_message, str(assistant_response)), name="facts"
+        )
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
         """Store nothing: main stores a turn at the exit it leaves by.
@@ -528,6 +546,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.persist("conversation_history", self._conversation_history)
 
     async def process_user_input(self, text: str) -> str:
+        """Answer one message from a person, as one turn (see `wactorz.core.turns`)."""
+        with turn_scope(), acting_as(self.name):
+            return await self._process_user_input(text)
+
+    async def _process_user_input(self, text: str) -> str:
         ts_user = time.time()
         note_prefix = self._drain_notifications()
 
@@ -685,6 +708,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return cleaned.strip(), had
 
     async def process_user_input_restricted(self, text: str) -> str:
+        """Answer one message from an untrusted channel, as one turn."""
+        with turn_scope(), acting_as(self.name):
+            return await self._process_user_input_restricted(text)
+
+    async def _process_user_input_restricted(self, text: str) -> str:
         """Social-channel (Discord/Telegram) entry point — the untrusted-surface
         counterpart of process_user_input.
 
@@ -810,9 +838,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             "rules",
         )
         if _is_command:
-            # /deploy is the one slash command that needs to stream progress
-            # messages mid-execution (subnet scan, deploy phases). Other commands
-            # go through process_user_input which is request/response.
+            # /deploy streams its progress as it goes (the name lookup, the
+            # install). Other commands go through process_user_input, which
+            # answers once.
             if _stripped.startswith("/deploy"):
                 async for chunk in self._slash_deploy_stream(_stripped):
                     yield chunk
@@ -1003,6 +1031,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         await self.spawns._spawn_remote(config, node, save)
 
+    def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
+        """Sign whatever main addresses to a node's control topics.
+
+        Here rather than in Actor, whose publish carries every agent's messages: an
+        agent that published to a node's spawn topic would be signed along with
+        main, and reach nodes as main does. Agent code runs in this process, so
+        this keeps a mistake or a model's code from being signed by accident; it
+        is not a boundary against code that sets out to read the key.
+        """
+        return node_control_properties(topic, encoded)
+
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:
@@ -1069,6 +1108,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _node_is_online(self, node_name: str) -> bool:
         """True if ``node_name`` sent a heartbeat inside the freshness window."""
         return self.nodes.is_online(node_name)
+
+    def _node_version_mismatch(self, node_name: str) -> str | None:
+        """Why ``node_name`` cannot take an agent from this server, or None."""
+        return self.nodes.version_mismatch(node_name)
 
     def _online_node_names(self) -> list[str]:
         """Names of all nodes currently considered online."""
@@ -1159,10 +1202,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             /deploy <node>
 
         where ``<node>`` names a target configured in the environment
-        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). The older
-        ``/deploy <node> <host> <user> <password> [broker]`` form is refused:
-        the password reached the reply stream and the persisted conversation
-        history, and running with no host port-scanned the local /24 for SSH.
+        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). Anything after the
+        name is refused and never echoed: a host and credentials typed into chat
+        would reach the reply stream and the persisted conversation history.
+        Every chat channel's /deploy comes here.
         """
         parts = stripped.split()
         if len(parts) < 2:
@@ -1209,7 +1252,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         yield (
             f"[deploy] Deploying to {target.user}@{host} as node '{node_name}'...\n"
-            f"(This may take 20-60 seconds while packages install on the remote machine)"
+            f"(This may take 20-60 seconds while packages install on the remote machine)\n"
         )
         try:
             result = await self.delegate_to_installer(
@@ -1229,7 +1272,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         if result.get("success"):
             yield (
-                f"[OK] Node '{node_name}' is live! It will appear in /nodes within ~15 seconds.\n\n"
+                f"[OK] Node '{node_name}' is live and its first heartbeat has arrived.\n\n"
                 f"Spawn agents on it:\n"
                 f'  "spawn a CPU monitor agent on {node_name}"\n'
                 f'  "spawn a temperature sensor on {node_name}"'
@@ -1237,9 +1280,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         else:
             yield f"[FAIL] Deploy failed: {result.get('error', result)}"
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
+    async def migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool = False
+    ) -> dict[str, Any]:
         """Move a running agent to a different node. Owned by `self.migration`."""
-        return await self.migration.migrate_agent(agent_name, target_node)
+        return await self.migration.migrate_agent(agent_name, target_node, force=force)
 
     async def _node_heartbeat_listener(self) -> None:
         """Follow node heartbeats. Owned by `self.nodes`."""

@@ -21,6 +21,7 @@
 
 <p align="center">
 <a href="https://github.com/waldiez/wactorz/actions/workflows/ci.yml"><img src="https://github.com/waldiez/wactorz/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+<a href="https://coveralls.io/github/waldiez/wactorz"><img src="https://coveralls.io/repos/github/waldiez/wactorz/badge.svg" alt="Coverage"/></a>
 <a href="https://pypi.org/project/wactorz/"><img src="https://img.shields.io/pypi/v/wactorz.svg" alt="PyPI"/></a>
 <a href="https://github.com/waldiez/wactorz/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
 <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python"/></a>
@@ -30,15 +31,6 @@
 </p>
 
 ---
-
-<!--
-  TODO(promo): drop a hero demo GIF here — the highest-impact addition to this README.
-  Record a ~15s screencast of the dashboard running one end-to-end automation
-  (e.g. the "person detected on camera → office light on" example below), export
-  to GIF, commit under .github/assets/demo.gif, and uncomment:
-
-  <p align="center"><img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/demo.gif" width="720" alt="Wactorz dashboard demo"/></p>
--->
 
 Wactorz is a runtime for **physical AI**: LLM-driven agents that live next to the
 sensors, machines and spaces they act on — not in a cloud notebook. Agents run as
@@ -100,7 +92,7 @@ Dashboard: `http://localhost:8888`.
 
 > [!IMPORTANT]
 > Wactorz binds to `127.0.0.1` by default and its agents execute code. **Set `API_KEY`
-> before exposing it beyond loopback** — it warns at startup if you expose it without
+> before exposing it beyond loopback** — it refuses to start if you expose it without
 > one. See [Security](#security) before deploying anywhere shared.
 
 If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
@@ -111,6 +103,29 @@ python -m wactorz --llm ollama --ollama-model llama3
 ```
 
 Windows setup is in [docs/windows.md](https://github.com/waldiez/wactorz/blob/main/docs/windows.md); the full set of deployment options lives in [docs/deployment.md](https://docs.waldiez.io/wactorz/guide/deployment.html).
+
+## Use it as a library
+
+Bring an agent you already have — a trained model, a class with its own loop — and
+Wactorz supervises it, restarts it, persists its state and shows it on the dashboard.
+One decorator is enough:
+
+```python
+import wactorz
+
+@wactorz.agent(subscribes="sensors/imu/#", publishes="anomalies/imu")
+def detect(reading: dict) -> dict | None:
+    return reading if MODEL.score(reading) > 4.0 else None
+
+wactorz.run(agents=[detect], minimal=True)   # monitor + dashboard + your agent, no LLM needed
+# or, inside a program that already has an event loop:  await wactorz.serve(agents=[detect], minimal=True)
+```
+
+Or name it in `WACTORZ_AGENTS=mypkg.agent:detect` for a normal `wactorz` start, or list it
+as a `wactorz.agents` entry point in your package. `wactorz.pipeline(...)` groups several
+such agents with a schedule and rules, wiring checked up front. The Home Assistant agents start only
+when Home Assistant is configured. See [Using Wactorz as a library](https://docs.waldiez.io/wactorz/guide/library.html)
+and [`examples/imu_anomaly/`](examples/imu_anomaly/README.md).
 
 ---
 
@@ -244,8 +259,9 @@ See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metric
   handshake, the Prometheus scrape, and the login flow are authenticated — constant-time
   comparison, session cookies that survive a restart, and sign-in throttling.
 - **The server binds to `127.0.0.1`.** Reaching it from the network is deliberate: set
-  `WACTORZ_BIND_HOST` *and* `WACTORZ_EXPOSED_OK=1`. Startup warns if it is exposed
-  without a key, or with a guessable one.
+  `WACTORZ_BIND_HOST`, and startup refuses unless `API_KEY` is set too, or
+  `WACTORZ_EXPOSED_OK=1` says the only way in is already authenticated. A key short
+  enough to guess is warned about.
 - **The broker requires credentials.** Anonymous MQTT is off, and remote nodes are given
   credentials rather than connecting openly.
 - Origin and Host allow-lists guard the HTTP surface and the WebSocket handshake against
@@ -296,6 +312,7 @@ rather than opening a public issue.
 | [Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html) | Run from Docker without cloning the repo |
 | [Architecture](https://docs.waldiez.io/wactorz/guide/architecture.html) | Actor system, supervision, MQTT flow |
 | [Agents](https://docs.waldiez.io/wactorz/guide/agents.html) | Built-in agents, recipes, and dynamic agents |
+| [Library](https://docs.waldiez.io/wactorz/guide/library.html) | Your own agents, pipelines and models, with examples |
 | [Pipelines](https://docs.waldiez.io/wactorz/guide/pipelines.html) | Reactive automation patterns |
 | [Remote nodes](https://docs.waldiez.io/wactorz/guide/remote-nodes.html) | Edge deployment over SSH |
 | [Interfaces](https://docs.waldiez.io/wactorz/guide/interfaces.html) | CLI, REST, chat platforms, dashboard, MCP |

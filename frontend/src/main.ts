@@ -346,7 +346,7 @@ function recomputeLive(): void {
         return;
     }
     emit("af-connection-status", { status: "live" });
-    agentStore.pruneStaleRemoteAgents();
+    agentStore.pruneSilentRemoteAgents();
     if (!seeded) {
         seeded = true;
         // Startup spawn events are published before the browser connects;
@@ -380,7 +380,7 @@ router.on("completed", payload => {
 });
 
 router.on("node-heartbeat", payload => {
-    agentStore.updateRemoteNode(payload.node, payload.agents);
+    agentStore.updateRemoteNode(payload.node, payload.agents, payload.readings);
     pushFeed(nodeHeartbeatFeedItem(payload));
 });
 
@@ -444,7 +444,16 @@ listen("af-send-message", detail => {
 });
 
 // wipe all
-listen("af-wipe-all", () => {
+listen("af-wipe-all", ({ survivors }) => {
+    // A wipe deletes: every agent it took away is tombstoned as a deleted one
+    // is, so a heartbeat still on its way cannot put its card back. Cards are
+    // otherwise kept until a delete says so, and a wipe sends none per agent.
+    const kept = new Set(survivors);
+    for (const agent of agentStore.getAgents()) {
+        if (!kept.has(agent.id)) {
+            markDeleted(agent.id);
+        }
+    }
     agentStore.clearAll();
     _logFeedState.maxTs = 0;
 });
@@ -465,7 +474,7 @@ const _liveActorsTimer = window.setInterval(() => {
         return;
     }
     refreshLiveActors();
-    agentStore.pruneStaleRemoteAgents();
+    agentStore.pruneSilentRemoteAgents();
 }, 15000);
 
 // Ahead of the first request this module makes — the feed seed below. A session

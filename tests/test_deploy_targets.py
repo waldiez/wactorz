@@ -15,8 +15,10 @@ checked all look exactly like success from the caller's side.
 import asyncio
 import dataclasses
 import os
+import socket
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import asyncssh
 import pytest
@@ -24,6 +26,7 @@ import pytest
 from wactorz import config as config_module
 from wactorz.agents import installer_agent as installer_module
 from wactorz.agents.installer_agent import InstallerAgent
+from wactorz.agents.main.actor import MainActor
 from wactorz.config import (
     DeployTarget,
     deploy_name_error,
@@ -77,6 +80,20 @@ def test_targets_parse_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert parsed[1].user == "pi"
 
 
+def test_a_targets_tls_override_parses_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEPLOY_TARGETS", "rpi-kitchen, rpi-garage")
+    monkeypatch.setenv("DEPLOY_RPI_KITCHEN_BROKER_TLS", " off ")
+    monkeypatch.setenv("DEPLOY_RPI_KITCHEN_BROKER_TLS_PORT", "18883")
+    monkeypatch.delenv("DEPLOY_RPI_GARAGE_BROKER_TLS", raising=False)
+    monkeypatch.delenv("DEPLOY_RPI_GARAGE_BROKER_TLS_PORT", raising=False)
+
+    kitchen, garage = config_module._deploy_targets()
+
+    assert (kitchen.broker_tls, kitchen.broker_tls_port) == ("off", 18883)
+    # Unset: the deploy checks from the node, on the usual TLS port.
+    assert (garage.broker_tls, garage.broker_tls_port) == ("", 8883)
+
+
 def test_unset_targets_parse_to_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """No configuration means no targets — not one target named ""."""
     monkeypatch.delenv("DEPLOY_TARGETS", raising=False)
@@ -118,28 +135,36 @@ class _Replies:
         return "\n".join(self.sent)
 
 
-class _FakeMain:
-    """A main actor that records the installer payloads it is handed."""
+class _Installer:
+    """Stands in for main's installer: records each payload and answers ``result``."""
 
     def __init__(self, result: dict | None = None) -> None:
         self.payloads: list[dict] = []
         self._result = result or {"success": True}
 
-    async def delegate_to_installer(self, payload: dict, timeout: float = 0.0) -> dict:
+    async def __call__(self, payload: dict, timeout: float = 0.0) -> dict:
         self.payloads.append(payload)
         return self._result
 
 
 @pytest.fixture
-def fake_main(monkeypatch: pytest.MonkeyPatch) -> _FakeMain:
-    main = _FakeMain()
+def main_actor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MainActor:
+    """Main, found by the chat's slash commands, with a recording installer."""
+    main = MainActor(llm_provider=None, persistence_dir=str(tmp_path))
+    monkeypatch.setattr(main, "delegate_to_installer", _Installer())
     monkeypatch.setattr(chat, "find_main_actor", lambda _registry: main)
     return main
 
 
-async def test_credential_arguments_are_refused_and_never_echoed(
-    targets, fake_main: _FakeMain
-) -> None:
+def _payloads(main: MainActor) -> list[dict]:
+    return cast(_Installer, main.delegate_to_installer).payloads
+
+
+async def _collect(main: MainActor, command: str) -> str:
+    return "\n".join([chunk async for chunk in main._slash_deploy_stream(command)])
+
+
+async def test_credential_arguments_are_refused_and_never_echoed(targets, main_actor) -> None:
     """The old form must not deploy — and must not repeat the password back.
 
     The reply is written into the persisted conversation history, so echoing the
@@ -151,26 +176,23 @@ async def test_credential_arguments_are_refused_and_never_echoed(
     handled = await chat.handle_slash(f"/deploy rpi-kitchen 10.0.0.5 pi {SECRET}", replies)
 
     assert handled is True
-    assert fake_main.payloads == []
+    assert _payloads(main_actor) == []
     assert SECRET not in replies.text
     assert "node name only" in replies.text
 
 
-async def test_unknown_target_is_refused_with_the_variables_to_set(
-    targets, fake_main: _FakeMain
-) -> None:
+async def test_unknown_target_is_refused_with_the_variables_to_set(targets, main_actor) -> None:
     targets()
-    replies = _Replies()
 
-    await chat.slash_deploy("rpi-kitchen", replies)
+    out = await _collect(main_actor, "/deploy rpi-kitchen")
 
-    assert fake_main.payloads == []
-    assert "not a configured deploy target" in replies.text
-    assert "DEPLOY_RPI_KITCHEN_HOST" in replies.text
+    assert _payloads(main_actor) == []
+    assert "not a configured deploy target" in out
+    assert "DEPLOY_RPI_KITCHEN_HOST" in out
 
 
 async def test_configured_target_deploys_without_credentials_in_the_payload(
-    targets, fake_main: _FakeMain
+    targets, main_actor
 ) -> None:
     targets(
         DeployTarget(
@@ -182,12 +204,10 @@ async def test_configured_target_deploys_without_credentials_in_the_payload(
             broker_port=1884,
         )
     )
-    replies = _Replies()
 
-    await chat.slash_deploy("rpi-kitchen", replies)
+    out = await _collect(main_actor, "/deploy rpi-kitchen")
 
-    assert len(fake_main.payloads) == 1
-    payload = fake_main.payloads[0]
+    [payload] = _payloads(main_actor)
     assert payload["host"] == "10.0.0.5"
     assert payload["node_name"] == "rpi-kitchen"
     assert payload["broker"] == "10.0.0.1"
@@ -196,80 +216,72 @@ async def test_configured_target_deploys_without_credentials_in_the_payload(
     # logged, persisted or forwarded over MQTT.
     assert "password" not in payload
     assert "key_path" not in payload
-    assert SECRET not in replies.text
+    assert SECRET not in out
 
 
-async def test_usage_lists_configured_targets(targets, fake_main: _FakeMain) -> None:
+async def test_usage_lists_configured_targets(targets, main_actor) -> None:
     targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5"))
     replies = _Replies()
 
     await chat.handle_slash("/deploy", replies)
 
     assert "rpi-kitchen" in replies.text
-    assert fake_main.payloads == []
+    assert _payloads(main_actor) == []
 
 
-# ── The streaming copy on the main actor ───────────────────────────────────
-# /deploy exists twice: the request/response handler above and this generator,
-# which is what the dashboard's WebSocket actually drives. Fixing one and
-# leaving the other is the failure this section exists to catch.
+async def test_the_dashboard_deploy_is_mains_own(targets, main_actor) -> None:
+    """A /deploy typed on the dashboard reads as main's does, success line included."""
+    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5"))
+    replies = _Replies()
+
+    await chat.handle_slash("/deploy rpi-kitchen", replies)
+
+    assert replies.sent == [
+        chunk async for chunk in main_actor._slash_deploy_stream("/deploy rpi-kitchen")
+    ]
+    assert "is live and its first heartbeat has arrived" in replies.text
 
 
-async def _collect(agent, command: str) -> str:
-    return "\n".join([chunk async for chunk in agent._slash_deploy_stream(command)])
+async def test_on_a_stream_the_deploy_is_one_message(targets, main_actor) -> None:
+    """Progress and outcome build one message, closed once, as main's own stream does."""
+    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5"))
+    replies, streamed = _Replies(), _Replies()
+    ended: list[bool] = []
+
+    async def _end() -> None:
+        ended.append(True)
+
+    await chat.handle_slash("/deploy rpi-kitchen", replies, streamed, _end)
+
+    assert replies.sent == []
+    assert "is live and its first heartbeat has arrived" in "".join(streamed.sent)
+    assert ended == [True]
 
 
-@pytest.fixture
-def main_actor(tmp_path: Path):
-    from wactorz.agents.main.actor import MainActor
+async def test_a_failed_install_is_reported_not_raised(targets, main_actor) -> None:
+    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5"))
 
-    return MainActor(llm_provider=None, persistence_dir=str(tmp_path))
+    async def _unreachable(payload: dict, timeout: float = 0.0) -> dict:
+        raise OSError("no route to host")
+
+    main_actor.delegate_to_installer = _unreachable
+    replies = _Replies()
+
+    await chat.handle_slash("/deploy rpi-kitchen", replies)
+
+    assert "[FAIL] Deploy failed: no route to host" in replies.text
 
 
-async def test_stream_refuses_credential_arguments_without_echoing_them(
-    main_actor, targets
+async def test_without_main_there_is_nowhere_to_deploy(
+    targets, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5", password="configured"))
-    calls: list[dict] = []
+    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5"))
+    monkeypatch.setattr(chat, "find_main_actor", lambda _registry: None)
+    replies = _Replies()
 
-    async def _delegate(payload, timeout=0.0):  # pragma: no cover - must never run
-        calls.append(payload)
-        return {"success": True}
+    await chat.handle_slash("/deploy rpi-kitchen", replies)
 
-    main_actor.delegate_to_installer = _delegate
-
-    out = await _collect(main_actor, f"/deploy rpi-kitchen 10.0.0.5 pi {SECRET}")
-
-    assert calls == []
-    assert SECRET not in out
-    assert "node name only" in out
-
-
-async def test_stream_deploys_a_configured_target_without_credentials(main_actor, targets) -> None:
-    targets(
-        DeployTarget(name="rpi-kitchen", host="10.0.0.5", user="pi", password=SECRET, broker="b")
-    )
-    calls: list[dict] = []
-
-    async def _delegate(payload, timeout=0.0):
-        calls.append(payload)
-        return {"success": True}
-
-    main_actor.delegate_to_installer = _delegate
-
-    out = await _collect(main_actor, "/deploy rpi-kitchen")
-
-    assert len(calls) == 1
-    assert "password" not in calls[0] and "key_path" not in calls[0]
-    assert calls[0]["host"] == "10.0.0.5"
-    assert SECRET not in out
-
-
-async def test_stream_refuses_an_unconfigured_target(main_actor, targets) -> None:
-    targets()
-    out = await _collect(main_actor, "/deploy rpi-kitchen")
-    assert "not a configured deploy target" in out
-    assert "DEPLOY_RPI_KITCHEN_HOST" in out
+    assert replies.text == f"[error] {chat.NO_MAIN_FOR_NODES}"
 
 
 # ── The subnet scan is gone ────────────────────────────────────────────────
@@ -293,7 +305,7 @@ def test_no_subnet_scanner_remains() -> None:
 
 
 def test_deploy_never_opens_a_connection_to_a_host_it_was_not_configured_for(
-    targets, fake_main: _FakeMain, monkeypatch: pytest.MonkeyPatch
+    targets, main_actor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """mDNS is a name lookup for one host — nothing probes a range of addresses."""
     targets(DeployTarget(name="rpi-kitchen"))
@@ -303,14 +315,14 @@ def test_deploy_never_opens_a_connection_to_a_host_it_was_not_configured_for(
         looked_up.append(name)
         return "10.0.0.5"
 
-    monkeypatch.setattr(chat.socket, "gethostbyname", _resolve)
+    monkeypatch.setattr(socket, "gethostbyname", _resolve)
 
     async def _opened(*args, **kwargs):  # pragma: no cover - must never run
         raise AssertionError(f"deploy opened a raw connection: {args} {kwargs}")
 
     monkeypatch.setattr(asyncio, "open_connection", _opened)
 
-    asyncio.run(chat.slash_deploy("rpi-kitchen", _Replies()))
+    asyncio.run(chat.handle_slash("/deploy rpi-kitchen", _Replies()))
 
     assert looked_up == ["rpi-kitchen.local"]
 
@@ -611,7 +623,13 @@ async def _deploy_with_home(installer, targets, monkeypatch, home: str) -> _Fake
         # dials the target for its host key and the test hangs on the network.
         return "known_hosts"
 
+    async def _account(*_args: object) -> None:
+        # The broker is not part of what these tests are about; the check that
+        # asks it has its own tests.
+        return None
+
     monkeypatch.setattr(installer, "_known_hosts", _known_hosts)
+    monkeypatch.setattr(installer, "_check_node_account", _account)
     monkeypatch.setattr(installer_module.asyncssh, "connect", lambda **_kw: conn)
     monkeypatch.setattr(installer, "_persist_node_info", lambda **_kw: None)
 
@@ -625,12 +643,11 @@ async def test_uploads_follow_the_home_the_node_reports(
     """Nothing is addressed as `/home/<user>`.
 
     Every shell step in the deploy uses `~`, so a home that is not under
-    `/home` -- root's `/root` above all -- would put the runner and its `.env`
+    `/home` -- root's `/root` above all -- would put the node's `.env`
     somewhere the venv is not. Deploying as root failed on exactly this.
     """
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
-    assert conn.sftp.uploads == ["/root/wactorz/remote_runner.py"]
     assert conn.sftp.opened == ["/root/wactorz/.env"]
 
 
@@ -639,7 +656,6 @@ async def test_an_unusual_home_is_honoured_end_to_end(
 ) -> None:
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/var/lib/node")
 
-    assert conn.sftp.uploads == ["/var/lib/node/wactorz/remote_runner.py"]
     assert conn.sftp.opened == ["/var/lib/node/wactorz/.env"]
 
 
@@ -651,7 +667,7 @@ async def test_the_unit_is_written_against_that_home(
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
     unit = next(c for c in conn.commands if "WZUNIT" in c)
-    assert "ExecStart=/root/wactorz/venv/bin/python /root/wactorz/remote_runner.py" in unit
+    assert "ExecStart=/root/wactorz/venv/bin/wactorz-node " in unit
     assert "/home/pi" not in unit
 
 

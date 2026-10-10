@@ -11,8 +11,6 @@ Not here: the MQTT outbox. It is a database of its own, owned by the publisher,
 which expires undelivered messages on its own checkpoint timer.
 """
 
-from __future__ import annotations
-
 import time
 
 from wactorz import config
@@ -47,5 +45,7 @@ def prune() -> dict[str, int]:
         done["timeseries"] = db.prune_old_data(config.RETENTION_TIMESERIES_DAYS)
     if config.RETENTION_CHAT_DAYS > 0:
         done["chat"] = db.prune_chat_log(config.RETENTION_CHAT_DAYS)
+    if config.RETENTION_METRICS_DAYS > 0:
+        done["metrics"] = db.prune_metrics_history(config.RETENTION_METRICS_DAYS)
     done["uploads"] = uploads.sweep(db.chat_attachment_ids())
     return done

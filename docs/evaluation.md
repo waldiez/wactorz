@@ -33,14 +33,23 @@ several local models can be served from one endpoint.
 | `--categories` | Subset of `intent,ha,actuator,planner,dynamic` |
 | `--repeat` | Repetitions per case — use >1 for generation tasks, which vary |
 | `--temperature` | Temperature for every model; omit to use `LLM_TEMPERATURE` |
+| `--profile` | Which installation the prompts are assembled for: `ha` (with Home Assistant, the default) or `minimal` (without) |
 | `--out` | Output directory (default `./eval_results`) |
 
 ## Call sites and scoring
 
-The `intent`, `ha` and `actuator` categories run against the framework's **unmodified production
+The `intent`, `ha`, `actuator` and `planner` categories run against the framework's **production
 system prompts**, imported directly from the agent code, so results describe the real system rather
-than a simplified benchmark. `planner` and `dynamic` use condensed variants of the production
-prompts, which are assembled dynamically inside the agents and run to hundreds of lines.
+than a simplified benchmark; the planner's is its pipeline-design preamble with the output format it
+is given at runtime, and none of the live context (topic contracts, entities, URLs) a benchmark has
+not got. `dynamic` uses a condensed variant of the production prompt, which is assembled inside the
+agent.
+
+Main's and the planner's prompts are assembled per installation (see
+[Prompt fragments](architecture.md#prompt-fragments)), so `--profile` says which one is measured.
+On `minimal` the classifier offers `PIPELINE` and `OTHER` only, the planner has no `ha_actuator`
+type, and the `ha` and `actuator` categories are skipped, since those call sites exist only with
+Home Assistant. Compare the two profiles on the same model to see what the split costs or gains.
 
 | Category | Task | Scored by |
 |----------|------|-----------|
@@ -69,7 +78,10 @@ One JSON object per line:
 
 `expected` is a label for `intent`/`ha`, a list of `{domain, service, entity_id}` actions for
 `actuator`, a list of allowed agent types for `planner`, and a list of required function names for
-`dynamic`. Malformed lines are skipped with a warning rather than aborting the run.
+`dynamic`. A case may also carry `expected_minimal`, used in place of `expected` under
+`--profile minimal`, for a prompt whose right answer differs without Home Assistant ("turn on the
+lamp" is `ACTUATE` with it and `OTHER` without). Malformed lines are skipped with a warning rather
+than aborting the run.
 
 ## Output
 

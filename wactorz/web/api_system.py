@@ -12,27 +12,44 @@ import time
 from aiohttp import web
 from aiohttp.web import Response
 
-from . import cost, origins, runtime
+from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
+from . import cost, origins, probes, runtime
+from .metrics import known_nodes
 
 logger = logging.getLogger(__name__)
 
 
-async def health_handler(_request: web.Request) -> Response:
-    """Liveness probe — 200 as long as the server is accepting requests."""
-    return web.json_response({"status": "ok"})
+async def readiness_handler(_request: web.Request) -> Response:
+    """Readiness probe — 200 once this process should be sent traffic, 503 until then.
+
+    A monitor with no actor system in its process reports on the broker link it
+    listens on, which is all it depends on.
+    """
+    if runtime.system is None:
+        checks = {"broker": probes.broker_check(runtime.mqtt_connected)}
+    else:
+        checks = await probes.readiness(runtime.system)
+    return probes.readiness_response(checks)
+
+
+async def nodes_handler(_request: web.Request) -> Response:
+    """``GET /api/nodes``: every node main knows, its readings and what its machine is.
+
+    The dashboard hears node heartbeats as they arrive, but a node's manifest
+    is retained and reaches this server once, when it subscribes; this is where
+    a page that opens later reads it. Empty without main, which is what knows
+    the nodes.
+    """
+    return web.json_response({"nodes": known_nodes()})
 
 
 async def cost_handler(_request: web.Request) -> Response:
     """Return spend and message totals for the cost widget."""
-    from ..agents.llm_agent import get_global_cost_info
-
     return web.json_response(get_global_cost_info())
 
 
 async def cost_limit_handler(request: web.Request) -> Response:
     """Set the spend ceiling that pauses LLM calls once exceeded."""
-    from ..agents.llm_agent import set_cost_limit
-
     try:
         body = await request.json()
         limit_usd = float(body.get("limit_usd", 0))
@@ -56,8 +73,6 @@ async def cost_limit_handler(request: web.Request) -> Response:
 
 async def cost_reset_handler(_request: web.Request) -> Response:
     """Zero the current spend period without touching the lifetime ledger."""
-    from ..agents.llm_agent import reset_global_cost
-
     try:
         info = reset_global_cost()
         # Clear the in-memory lifetime ledger so max() doesn't pin the display

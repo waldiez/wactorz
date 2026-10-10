@@ -16,7 +16,9 @@ from typing import Any
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..agents.llm import cost as llm_cost
 from ..agents.lookup import find_main_actor
+from ..core.node_signing import signed_publish_kwargs
 from . import cost, events, lifecycle, runtime, ws
 
 logger = logging.getLogger(__name__)
@@ -60,15 +62,13 @@ CHAT_STATE_KEYS = ("conversation_history", "history_summary")
 
 
 def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None:
-    """Drop the legacy pickle copy a wipe cannot otherwise reach.
+    """Drop the in-memory state a wipe cannot otherwise reach.
 
-    `Actor._load_persistent_state` loads a legacy `state.pkl` into
-    `_persistent_state` even on the new store path, and `Actor.recall` falls
-    back to that dict whenever the new store returns `None`. A reset empties the
-    store and deletes the file, so `recall` then finds nothing, falls through,
-    and returns the very value that was just destroyed — for as long as the
-    process lives. On the legacy write path the next `persist` puts the file
-    back from the same dict.
+    An actor without a persistence store holds its state in
+    `_persistent_state` and writes all of it back on every `persist`, so a key
+    a reset removed from disk returns with the next write unless it goes from
+    memory too. An actor with a store holds nothing there, and this leaves it
+    unchanged.
 
     `keys=None` clears the lot, for a factory reset: it has already deleted the
     pickle from disk, so anything left in memory is the two halves disagreeing.
@@ -85,6 +85,20 @@ def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None
         state.pop(key, None)
 
 
+async def forget_actor(actor: Any) -> None:
+    """Stop an actor a factory reset is forgetting, after its own clean-up.
+
+    The reset removes the agent for good, as a delete does, and purges what it
+    knows about: the agent's retained `agents/<id>/` topics, its pickle, its
+    spawn entry. What an agent keeps elsewhere — files of its own, retained
+    messages under its own topics — only the agent knows, and `on_delete` is
+    where it removes them. Stopped without it, those outlive the reset, and a
+    fresh spawn of the same agent picks them up again.
+    """
+    await actor.delete_own_traces()
+    await actor.stop()
+
+
 def survives_factory_reset(name: str, protected: bool) -> bool:
     """Whether an agent is kept by ``reset all`` (factory reset).
 
@@ -95,6 +109,52 @@ def survives_factory_reset(name: str, protected: bool) -> bool:
     alone, so the HA agents stay individually deletable.
     """
     return protected or name in HA_SYSTEM_AGENTS
+
+
+def _agents_on_nodes(main_actor: Any) -> dict[str, set[str]]:
+    """The agents each node runs for this install, by node.
+
+    From everything that says so: main's spawn registry, which covers a node
+    that is away; the dashboard's agents; and each node's last heartbeat, which
+    covers an agent the other two never heard of.
+    """
+    on: dict[str, set[str]] = {}
+    registry = main_actor._get_spawn_registry() if main_actor is not None else None
+    for name, config in (registry or {}).items():
+        node = (config.get("node") or "").strip()
+        if node:
+            on.setdefault(node, set()).add(name)
+    for agent in runtime.state["agents"].values():
+        if agent.get("node") and agent.get("name"):
+            on.setdefault(agent["node"], set()).add(agent["name"])
+    for node, listed in runtime.state["nodes"].items():
+        names = {str(n) for n in listed.get("agents") or [] if n}
+        on.setdefault(node, set()).update(names)
+    return on
+
+
+async def _delete_on_nodes(on: dict[str, set[str]]) -> None:
+    """Have each node delete its agents, state and retained topics included.
+
+    At QoS 1, so a node that is away is told when it returns. One stop per
+    agent rather than ``stop_all``, which shuts the node itself down.
+    """
+    client = runtime.mqtt_client_ref
+    if client is None:
+        return
+    sends = []
+    for node, names in on.items():
+        for name in sorted(names):
+            payload = json.dumps({"name": name, "delete": True})
+            sends.append(
+                client.publish(
+                    f"nodes/{node}/stop",
+                    payload,
+                    qos=1,
+                    **signed_publish_kwargs(f"nodes/{node}/stop", payload),
+                )
+            )
+    await asyncio.gather(*sends, return_exceptions=True)
 
 
 async def reset_handler(request: web.Request) -> Response:
@@ -163,34 +223,23 @@ async def reset_handler(request: web.Request) -> Response:
             # Release supervised actors first so the Supervisor doesn't race to
             # restart them, then stop + unregister the live local ones.
             if supervisor is not None:
+                # Forgotten, not released: a factory reset removes these agents
+                # for good, and a retired entry would outlive them.
                 for actor in stoppable:
-                    supervisor.release(actor.name)
-            await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
+                    supervisor.drop_supervised(actor.name)
+            await asyncio.gather(
+                *[forget_actor(actor) for actor in stoppable], return_exceptions=True
+            )
             await asyncio.gather(
                 *[runtime.registry.unregister(a.actor_id) for a in stoppable if runtime.registry],
                 return_exceptions=True,
             )
 
-            # Stop agents living on runner nodes (not in this registry) and clear the
-            # retained spawn directives that would otherwise replay on reconnect.
-            # Harmless when there are no nodes.
-            node_names = set(runtime.state["nodes"].keys())
+            # Delete the agents running on nodes, not in this registry. The
+            # nodes themselves stay: a reset clears what was built on the
+            # install, and a node is the machine it runs on.
             main_actor = find_main_actor(runtime.registry)
-            if main_actor is not None:
-                for cfg in (main_actor._get_spawn_registry() or {}).values():
-                    n = (cfg.get("node") or "").strip()
-                    if n:
-                        node_names.add(n)
-            if runtime.mqtt_client_ref and node_names:
-                await asyncio.gather(
-                    *[
-                        runtime.mqtt_client_ref.publish(
-                            f"nodes/{n}/stop_all", json.dumps({"reason": "wipe everything"}), qos=1
-                        )
-                        for n in node_names
-                    ],
-                    return_exceptions=True,
-                )
+            await _delete_on_nodes(_agents_on_nodes(main_actor))
 
             # Purge retained MQTT for EVERY non-protected agent, tombstone each so a
             # late/in-flight frame can't re-admit it once _hard_resetting clears, and
@@ -244,13 +293,13 @@ async def reset_handler(request: web.Request) -> Response:
             # clears and heartbeats resume (mirrors /api/cost/reset).
             cost.lifetime_cost.clear()
             try:
-                from ..agents.llm_agent import reset_global_cost
-
-                reset_global_cost()
+                llm_cost.reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
             runtime.state["agents"].clear()
-            runtime.state["nodes"].clear()
+            # Each node is kept, running nothing now; its next heartbeat says so too.
+            for listed in runtime.state["nodes"].values():
+                listed["agents"] = []
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
         finally:
@@ -326,9 +375,7 @@ async def reset_handler(request: web.Request) -> Response:
         else:
             cost.lifetime_cost.clear()
             try:
-                from ..agents.llm_agent import reset_global_cost
-
-                reset_global_cost()
+                llm_cost.reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
     elif scope == "spawns":

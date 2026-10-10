@@ -4,11 +4,14 @@ Topic patterns decide which agent receives which message, so a matching bug is
 silent: the wrong agent is wired, or none is, and nothing raises.
 """
 
-from __future__ import annotations
-
 import pytest
 
-from wactorz.core.topic_bus import TopicContract, TopicRegistry, topic_matches
+from wactorz.core.topic_bus import (
+    PLANNER_DESCRIPTION_CHARS,
+    TopicContract,
+    TopicRegistry,
+    topic_matches,
+)
 
 
 class TestTopicMatching:
@@ -196,3 +199,33 @@ class TestRegistry:
         context = registry.to_planner_context()
         assert "thermo" in context
         assert "sensors/kitchen/temp" in context
+
+    def test_planner_context_carries_what_an_agent_says_about_itself(self) -> None:
+        # Two buttons publish the same gestures under different serials; the
+        # description is the only place that says which is which.
+        registry = TopicRegistry()
+        registry.register(
+            TopicContract(
+                name="flic",
+                publishes=["custom/flic/bh16-f58317/click", "custom/flic/bh16-f58211/click"],
+                description="Buttons: 'Desk' is custom/flic/bh16-f58317; 'Lamp' is custom/flic/bh16-f58211.",
+            )
+        )
+
+        context = registry.to_planner_context()
+
+        assert "about     : Buttons: 'Desk' is custom/flic/bh16-f58317" in context
+
+    def test_a_long_description_is_cut_for_the_planner(self) -> None:
+        registry = TopicRegistry()
+        registry.register(TopicContract(name="chatty", description="word " * 1000))
+
+        line = next(row for row in registry.to_planner_context().splitlines() if "about" in row)
+
+        assert line.endswith("…")
+        assert len(line) < PLANNER_DESCRIPTION_CHARS + 50
+
+    def test_the_description_survives_a_round_trip(self) -> None:
+        contract = TopicContract(name="flic", description="Buttons: 'Desk'.")
+
+        assert TopicContract.from_dict(contract.to_dict()).description == "Buttons: 'Desk'."

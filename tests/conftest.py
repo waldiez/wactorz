@@ -15,8 +15,11 @@ from typing import Any
 import pytest
 
 from wactorz import config, llm_factory
+from wactorz.agents import llm_agent
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
+from wactorz.ext import tts as tts_extension
+from wactorz.web import runtime as web_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +80,60 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
 
 
+#: The settings that put broker connections on TLS.
+_TLS_VARIABLES = (
+    "MQTT_TLS",
+    "MQTT_TLS_CA",
+    "MQTT_TLS_CHECK_HOSTNAME",
+    "MQTT_TLS_PORT",
+    "MQTT_BROKER_DIR",
+    "WACTORZ_NODE_ACCOUNTS",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore broker TLS settings from the developer's environment or `.env`.
+
+    `CONFIG` is built from them at import, after `load_dotenv` put a developer's
+    `.env` into the environment. A developer trying TLS with `MQTT_TLS=1` there
+    would otherwise turn every test that fakes the broker client into a failure
+    about a CA file.
+
+    Both are reset: the variables removed, so a test that builds its own config
+    or starts a process starts plain, and `CONFIG` put back to plain MQTT on the
+    plain port. Tests that want TLS set it explicitly, and win.
+    """
+    for variable in (*_TLS_VARIABLES, "MQTT_USERNAME", "MQTT_PASSWORD"):
+        monkeypatch.delenv(variable, raising=False)
+    plain = {
+        "mqtt_tls": "",
+        "mqtt_tls_ca": "",
+        "mqtt_tls_check_hostname": "",
+        "mqtt_broker_dir": "",
+        "node_accounts": False,
+        "mqtt_port": config._env_int("MQTT_PORT", 1883),
+        # The broker account too: a deploy checks the account a node would get
+        # against the broker, and a developer's own credentials in `.env` would
+        # otherwise send that check to a real socket from inside a test.
+        "mqtt_username": "",
+        "mqtt_password": "",
+    }
+    # Every module that imported the name, not just `config`: `from ..config import
+    # CONFIG` binds the object into that module, and replacing it here alone leaves
+    # those reading the developer's own settings.
+    #
+    # By the type's *name*, not the type: `tests/test_dev_mode_defaults.py` reloads
+    # `wactorz.config`, which builds a second `AppConfig` class, and an `isinstance`
+    # check against the current one then silently matches nothing -- leaving the
+    # settings ambient in whichever files ran after it, under a random order.
+    for module in list(sys.modules.values()):
+        ambient = getattr(module, "CONFIG", None)
+        if ambient is None or type(ambient).__name__ != "AppConfig":
+            continue
+        monkeypatch.setattr(module, "CONFIG", replace(ambient, **plain))
+
+
 #: The real factory, for the tests that exist to exercise it.
 real_mqtt_client = mqtt.mqtt_client
 
@@ -120,6 +177,46 @@ def _no_ambient_broker(request: pytest.FixtureRequest, monkeypatch: pytest.Monke
             monkeypatch.setattr(module, "mqtt_client", _refuse)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_voice_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never ask Microsoft's voice service for its voice list from a test.
+
+    The TTS extension warms its voice cache when the web app starts, and that
+    warm-up is a real HTTPS request. Every test that serves the monitor app
+    made it, so each one reached out to the internet and took most of a second
+    to start — work no assertion looked at.
+
+    Refused rather than answered: the extension already treats a failed fetch
+    as an empty list, which is the case a test without a network is really in.
+    """
+    edge_tts = getattr(tts_extension, "edge_tts", None)
+    if edge_tts is None:
+        return
+
+    async def _refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise ConnectionRefusedError("no voice service in tests")
+
+    monkeypatch.setattr(edge_tts, "list_voices", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_price_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never download the model price list when an agent starts in a test.
+
+    Every LLM agent's `on_start` schedules a fetch of LiteLLM's pricing catalogue
+    from GitHub, so a test that starts main or any conversational agent reached
+    out to the internet in a background task no assertion waited on.
+
+    Replaced at the call site, not at its definition, so the tests of the fetch
+    itself still reach the real function.
+    """
+
+    async def _skip() -> None:
+        return None
+
+    monkeypatch.setattr(llm_agent, "refresh_pricing", _skip)
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
@@ -151,3 +248,16 @@ def _no_leaked_stores() -> Iterator[None]:
         Stores.db.close()  # don't leak the handle a test left installed
     Stores.db, Stores.pickle = saved
     Stores.memory.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no agent marked deleted and no reset under way.
+
+    The server ignores every heartbeat and event from an agent id it has marked
+    deleted, and everything at all while a factory reset runs. Tests reuse the
+    same few ids, so one left marked by an earlier test makes a later test's
+    heartbeat vanish, and which test fails then depends on the random order.
+    """
+    monkeypatch.setattr(web_runtime, "deleted_agent_ids", [])
+    monkeypatch.setattr(web_runtime, "hard_resetting", False)

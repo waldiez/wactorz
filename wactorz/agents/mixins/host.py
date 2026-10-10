@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from ...core.actor import Actor, MessageType
+    from collections.abc import Coroutine
+
+    from ...core.actor import Actor, ActorState, MessageType
     from ...core.registry import ActorRegistry
     from ..llm_agent import LLMProvider
 
@@ -68,3 +70,8 @@ class SpawnHost(ActorHost, Protocol):
 
     llm: LLMProvider | None
     _result_futures: dict[str, asyncio.Future]
+    state: ActorState
+
+    def run_detached(
+        self, coro: Coroutine[Any, Any, Any], *, name: str | None = None
+    ) -> asyncio.Task[Any]: ...

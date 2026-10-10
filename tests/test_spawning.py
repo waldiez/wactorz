@@ -11,6 +11,7 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 
 import asyncio
 import json
+import logging
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,10 @@ from wactorz.agents.catalog_agent import _build_native_catalog, get_native_facto
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
+from wactorz.core.actor import ActorState
+from wactorz.core.persistence import PickleStore, WactorzDB
 
 
 def run(coro):
@@ -43,10 +47,21 @@ class FakeActor:
         self.stopped = True
 
 
+class FakeSupervisor:
+    """Records the entries it is told to forget, and when, against the actors' stops."""
+
+    def __init__(self, log: list[str]) -> None:
+        self._specs: dict = {}
+        self._log = log
+
+    def drop_supervised(self, name: str) -> None:
+        self._log.append(f"forget {name}")
+
+
 class FakeRegistry:
     def __init__(self):
         self._by_name = {}
-        self._supervisor_ref = None
+        self._supervisor_ref: FakeSupervisor | None = None
 
     def add(self, actor):
         self._by_name[actor.name] = actor
@@ -75,6 +90,8 @@ class _BaseHost(SpawnMixin):
         self.spawn_calls = []  # (cls, kwargs)
         self.sent = []  # installer payloads
         self.published = []  # mqtt dashboard echoes
+        self.state = ActorState.RUNNING
+        self.detached: list[asyncio.Task] = []  # background work the host was handed
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
@@ -97,6 +114,11 @@ class _BaseHost(SpawnMixin):
 
     def recall(self, key, default=None):
         return default
+
+    def run_detached(self, coro, *, name=None):
+        task = asyncio.create_task(coro, name=name)
+        self.detached.append(task)
+        return task
 
 
 class MainHost(_BaseHost):
@@ -281,6 +303,30 @@ def test_existing_with_replace(main_host):
     assert main_host.spawn_calls and actor is not pre
 
 
+def test_a_replaced_agent_leaves_supervision_before_it_stops(main_host):
+    # The replacement takes a fresh entry when it is spawned. If that spawn
+    # fails, an entry left holding the stopped agent would be stopped again at
+    # shutdown; and forgetting it first keeps the watch loop off the agent while
+    # it stops.
+    log: list[str] = []
+    main_host._registry._supervisor_ref = FakeSupervisor(log)
+    pre = FakeActor("dup")
+
+    async def _stop() -> None:
+        log.append("stop dup")
+
+    pre.stop = _stop  # pyright: ignore[reportAttributeAccessIssue]  # records the order
+    main_host._registry.add(pre)
+
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "dup", "type": "dynamic", "code": "x", "replace": True}
+        )
+    )
+
+    assert log == ["forget dup", "stop dup"]
+
+
 # ── Install models ───────────────────────────────────────────────────────────
 
 
@@ -329,6 +375,48 @@ def test_install_fast_path_no_send(main_host):
     main_host._registry.add(FakeActor("installer"))
     run(main_host._install_packages(["os", "json"], agent_name="x"))
     assert not main_host.sent
+
+
+def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_host, caplog):
+    # The agent is spawned regardless and says so itself if the import fails.
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _never(*_args, **_kwargs):
+        raise asyncio.TimeoutError("'installer' did not answer within 120s")
+
+    monkeypatch.setattr(spawning, "ask_through", _never)
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Install timed out" in caplog.text
+
+
+def test_an_install_the_installer_refuses_is_a_warning(monkeypatch, main_host, caplog):
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _refused(*_args, **_kwargs):
+        raise RuntimeError("'installer' answered with an error: pip exited with 1")
+
+    monkeypatch.setattr(spawning, "ask_through", _refused)
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Install failed: 'installer' answered with an error" in caplog.text
+
+
+def test_packages_the_installer_could_not_install_are_named(main_host, caplog):
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _send(target_id, msg_type, payload):
+        fut = main_host._result_futures[payload["_task_id"]]
+        fut.set_result({"message": "partly", "failed": ["totally_missing_pkg_zzz"]})
+        return True
+
+    main_host.send = _send
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Failed to install: ['totally_missing_pkg_zzz']" in caplog.text
 
 
 # ── Flags / wiring ───────────────────────────────────────────────────────────
@@ -540,3 +628,77 @@ def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
     run(SpawnService(host)._spawn_remote({"name": "all#"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
 
     assert published == []
+
+
+def test_a_background_install_is_owned_by_the_host(main_host):
+    # Kept by the host, so its stop cancels the install rather than leaving it
+    # running against a system that has shut down.
+    main_host._registry.add(FakeActor("installer"))
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d4", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        assert [task.get_name() for task in main_host.detached] == ["install-d4"]
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+
+def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    real_install = main_host._install_packages
+
+    async def install_then_stop(packages, agent_name):
+        await real_install(packages, agent_name=agent_name)
+        main_host.state = ActorState.STOPPED
+
+    main_host._install_packages = install_then_stop
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d5", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+    assert main_host.spawn_calls == []
+
+
+# ── A name the state directory refuses ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["..", ".", "../outside", "..hidden"])
+def test_a_name_that_would_climb_out_of_the_state_directory_is_not_spawned(main_host, name, caplog):
+    # An agent's name is also the directory its state is kept in. Such a name
+    # was refused only when the agent was built, after a state shipped with a
+    # migration had been written under it -- and then quietly gone.
+    applied = []
+
+    async def _apply(agent_name, config):
+        applied.append(agent_name)
+
+    main_host._apply_initial_state = _apply
+    config = {"name": name, "type": "llm", "_initial_state": {"conversation_history": ["x"]}}
+
+    actor = run(main_host._spawn_local_from_config(config))
+
+    assert actor is None
+    assert main_host.spawn_calls == []
+    assert applied == [], "nothing is written for an agent that will not exist"
+    assert "unsafe agent name" in caplog.text
+
+
+def test_a_migrated_state_is_applied_through_the_stores(main_host, tmp_path, monkeypatch):
+    db, store = WactorzDB(tmp_path / "wactorz.db"), PickleStore(str(tmp_path))
+    monkeypatch.setattr(spawning, "get_db", lambda: db)
+    monkeypatch.setattr(spawning, "get_pickle_store", lambda: store)
+    config = {"name": "mover", "_initial_state": {"conversation_history": ["x"], "count": 3}}
+
+    run(main_host._apply_initial_state("mover", config))
+
+    assert "_initial_state" not in config, "the snapshot is not kept in the spawn registry"
+    assert db.kv_get("mover", "conversation_history") == ["x"]
+    assert store.load("mover") == {"count": 3}

@@ -212,3 +212,61 @@ class TestStopDoesNotHang:
 
         await asyncio.wait_for(own, timeout=3)
         assert worker.state == ActorState.STOPPED
+
+
+class _Counted(Actor):
+    """Counts its on_stop calls, and can be held inside one."""
+
+    def __init__(self) -> None:
+        super().__init__(name="counted")
+        self.stops = 0
+        self.hold: asyncio.Event | None = None
+
+    async def handle_message(self, message: Message) -> None:
+        return None
+
+    async def on_stop(self) -> None:
+        self.stops += 1
+        if self.hold is not None:
+            await self.hold.wait()
+
+
+class TestStopRunsOncePerRun:
+    """A second stop, from a replace, a migration or a delete meeting shutdown, repeats nothing."""
+
+    async def test_a_second_stop_does_not_run_on_stop_again(self) -> None:
+        actor = _Counted()
+        await actor.start()
+
+        await actor.stop()
+        await actor.stop()
+
+        assert actor.stops == 1
+
+    async def test_a_second_stop_returns_only_once_the_first_has_finished(self) -> None:
+        # So a caller that goes on to act on the stopped actor -- a delete that
+        # purges its state -- does so after the stop's saves, not during them.
+        actor = _Counted()
+        await actor.start()
+        actor.hold = asyncio.Event()
+        first = asyncio.create_task(actor.stop())
+        while actor.stops == 0:
+            await asyncio.sleep(0.01)
+
+        second = asyncio.create_task(actor.stop())
+        await asyncio.sleep(0.05)
+        assert not second.done()
+
+        actor.hold.set()
+        await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+        assert actor.stops == 1
+
+    async def test_after_a_restart_it_stops_in_full_again(self) -> None:
+        actor = _Counted()
+        await actor.start()
+        await actor.stop()
+
+        await actor.start()
+        await actor.stop()
+
+        assert actor.stops == 2

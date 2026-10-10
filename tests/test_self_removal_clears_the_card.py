@@ -13,9 +13,9 @@ ending already publishes — including a node's runner, which runs in another
 process on another machine where none of `web/` can be called. So the monitor
 listens for the withdrawal rather than each ending reaching in here.
 
-Retiring is deliberately not one of those endings: an agent past its restart
-budget is what the operator is being asked to look at, and a card that vanishes
-takes the notification's subject with it.
+An agent the supervisor keeps restarting is deliberately not one of those
+endings: it is what the operator is being asked to look at, and a card that
+vanished would take the notification's subject with it.
 """
 
 import json
@@ -29,6 +29,7 @@ from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 from wactorz.agents.planner.agent import PlannerAgent
 from wactorz.agents.scheduled_agent import ScheduledAgent
 from wactorz.core.actor import Actor, Message
+from wactorz.core.registry import ActorRegistry
 from wactorz.web import events, mqtt, runtime
 
 
@@ -147,6 +148,29 @@ class TestTheEndingsThatRemoveAnAgent:
         await agent._deferred_stop()
 
         assert f"agents/{agent.actor_id}/manifest" in broker.withdrawals()
+
+    async def test_a_one_off_actuator_stopped_before_it_finished(self, tmp_path: Path) -> None:
+        # It will not run again either way, so an outside stop leaves no card,
+        # no registry entry and no state directory behind.
+        state = tmp_path / "actuator"
+        agent = OneOffActuatorAgent(
+            request="turn on the hall light",
+            llm_provider=None,
+            task_id="actuate_test",
+            reply_to_id="main-actor",
+            persistence_dir=str(state),
+        )
+        broker = RecordingMQTT()
+        agent._mqtt_client = broker  # pyright: ignore[reportAttributeAccessIssue]
+        registry = ActorRegistry()
+        await registry.register(agent)
+        agent._registry = registry
+
+        await agent.stop()
+
+        assert f"agents/{agent.actor_id}/manifest" in broker.withdrawals()
+        assert registry.find_by_name(agent.name) is None
+        assert not agent._persistence_dir.exists()
 
     async def test_a_schedule_that_has_fired_its_last(self, tmp_path: Path) -> None:
         at = (datetime.now().astimezone() + timedelta(days=1)).isoformat()

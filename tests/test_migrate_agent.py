@@ -19,6 +19,8 @@ import json
 import time
 from typing import Any
 
+import pytest
+
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
@@ -26,11 +28,22 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
 
 
+class _Supervisor:
+    """Records the entries it is told to forget."""
+
+    def __init__(self) -> None:
+        self.dropped: list[str] = []
+
+    def drop_supervised(self, name: str) -> None:
+        self.dropped.append(name)
+
+
 class _Registry:
     """The actor registry, holding whichever agents are alive locally."""
 
     def __init__(self, names: tuple[str, ...] = ()) -> None:
         self._by = {n: _LocalAgent(n) for n in names}
+        self._supervisor_ref: _Supervisor | None = None
 
     def find_by_name(self, name: str) -> "_LocalAgent | None":
         return self._by.get(name)
@@ -41,14 +54,32 @@ class _Registry:
                 del self._by[name]
 
 
+class _Persistence:
+    """An agent's persisted keys, as `PersistenceAPI.all()` returns them."""
+
+    def __init__(self, values: dict[str, Any]) -> None:
+        self.values = values
+
+    def all(self) -> dict[str, Any]:
+        return dict(self.values)
+
+
 class _LocalAgent:
     def __init__(self, name: str) -> None:
         self.name = name
         self.actor_id = f"{name}-id"
-        self._persistence_api = None
+        self._persistence_api: _Persistence | None = None
         self.stopped = False
+        #: Keys the agent writes while stopping, as an `on_stop` would.
+        self.writes_on_stop: dict[str, Any] = {}
+
+    def holding(self, **values: Any) -> "_LocalAgent":
+        self._persistence_api = _Persistence(dict(values))
+        return self
 
     async def stop(self) -> None:
+        if self._persistence_api is not None:
+            self._persistence_api.values.update(self.writes_on_stop)
         self.stopped = True
 
 
@@ -81,6 +112,8 @@ class _Main:
         self.spawned_remote: list[tuple[dict[str, Any], str, bool]] = []
         self.spawned_local: list[dict[str, Any]] = []
         self.purged: list[tuple[Any, str]] = []
+        self.notifications: list[dict[str, Any]] = []
+        self.recorded: dict[str, Any] = {}
         self._spawn_registry = dict(spawn_registry or {})
 
         async def _publish(topic: str, payload: Any, **kw: Any) -> None:
@@ -106,11 +139,17 @@ class _Main:
         setattr(main, "_spawn_remote", _spawn_remote)
         setattr(main, "_spawn_from_config", _spawn_from_config)
         setattr(main, "_purge_local_agent_persistence", _purge)
-        setattr(main, "_queue_notification", lambda _n: None)
+        setattr(main, "_queue_notification", self.notifications.append)
+        setattr(main, "persist", self.recorded.__setitem__)
         self.actor = main
 
-    async def migrate(self, agent: str, target: str) -> dict[str, Any]:
-        return await self.actor.migrate_agent(agent, target)
+    async def migrate(self, agent: str, target: str, *, force: bool = False) -> dict[str, Any]:
+        return await self.actor.migrate_agent(agent, target, force=force)
+
+    def local(self, name: str = "collector") -> _LocalAgent:
+        agent = self.registry.find_by_name(name)
+        assert agent is not None
+        return agent
 
     def published_to(self, suffix: str) -> list[tuple[str, Any]]:
         return [(t, p) for t, p in self.published if t.endswith(suffix)]
@@ -232,10 +271,10 @@ class TestFindingWhereTheAgentIs:
 class TestBetweenTwoNodes:
     """Node-to-node migration is routed through main, in two legs.
 
-    The source used to publish `nodes/{target}/spawn` itself. That is lateral
+    Main asks the source to hand the agent back, then places it on the target
+    itself. A source never publishes `nodes/{target}/spawn`: that would be lateral
     remote code execution -- generated code on one node placing code on another
-    -- and the ACL that closes it forbids the write anyway. So main asks the
-    source to hand the agent back, then places it on the target itself.
+    -- and a node holding a signing key refuses a spawn main did not sign.
     """
 
     def _main(self) -> _Main:
@@ -255,8 +294,7 @@ class TestBetweenTwoNodes:
         assert payload["return_token"]
 
     async def test_the_source_is_never_asked_to_write_the_targets_topics(self) -> None:
-        # The whole point of the routing change: nothing tells one node to
-        # publish into another node's namespace.
+        # Nothing tells one node to publish into another node's namespace.
         main = self._main()
 
         await main.migrate("collector", "nuc")
@@ -273,9 +311,9 @@ class TestBetweenTwoNodes:
         assert main.publish_options[0].get("qos") == 1
 
     async def test_nothing_is_committed_before_the_agent_has_moved(self) -> None:
-        # The registry and both nodes' desired state used to be written the
-        # moment the command went out, so a migration that never completed left
-        # them claiming the agent had moved. Now they move on the ack.
+        # The registry and both nodes' desired state move on the ack, not when
+        # the command goes out: a migration that never completes must not leave
+        # them claiming the agent moved.
         main = self._main()
 
         await main.migrate("collector", "nuc")
@@ -350,11 +388,8 @@ class TestComingHome:
         assert main.publish_options[0].get("qos") == 1
 
     async def test_the_node_to_node_command_is_durable_too(self) -> None:
-        # This used to assert the opposite, and said the difference was
-        # deliberate: coming home went out at QoS 1, node-to-node at QoS 0.
-        # It was a defect either way -- a dropped migrate leaves the agent on
-        # the source while main waits -- and both paths are the same command
-        # now, so the asymmetry is gone rather than tidied away.
+        # The same command as coming home, at the same QoS 1: a dropped migrate
+        # leaves the agent on the source while main waits.
         main = _Main(
             spawn_registry={"collector": with_code(node="rpi")},
             nodes={"rpi": online(), "nuc": online()},
@@ -417,6 +452,18 @@ class TestGoingOut:
 
         assert agent is not None and agent.stopped
 
+    async def test_the_local_instance_leaves_supervision(self) -> None:
+        # Stopped but still in its entry, it would be stopped a second time at
+        # shutdown, running its on_stop and saves again. A rollback spawns it
+        # afresh, which gives it an entry of its own.
+        main = self._main()
+        supervisor = _Supervisor()
+        main.registry._supervisor_ref = supervisor
+
+        await main.migrate("collector", "nuc")
+
+        assert supervisor.dropped == ["collector"]
+
     async def test_the_migration_is_recorded_so_it_can_be_rolled_back(self) -> None:
         _main, _token, pending = await self._migrated()
 
@@ -469,7 +516,7 @@ class TestGoingOut:
         assert [a["name"] for a in payload["agents"]] == []
 
     async def test_the_stop_that_undoes_the_spawn_is_durable(self) -> None:
-        # The spawn is no longer retained, so this is what corrects a node that
+        # The spawn is not retained, so this is what corrects a node that
         # was away while the migration was rolled back: it has to be queued
         # behind that spawn, which means surviving the same absence.
         main, token, _pending = await self._migrated()
@@ -485,6 +532,18 @@ class TestGoingOut:
         assert stops, "the target was never told to drop the agent"
         assert all(o.get("qos") == 1 for o in stops)
 
+    async def test_the_rollback_keeps_the_topics_the_restored_copy_shares(self) -> None:
+        # An actor id comes from the name: cleared on the target, the topics
+        # are the restored copy's too, and its empty manifest read as it
+        # withdrawing -- which dropped it from the registry.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        ((_topic, stop),) = main.published_to("nodes/nuc/stop")
+        assert stop == {"name": "collector", "delete": True, "keep_topics": True}
+
     async def test_what_comes_home_carries_no_stale_snapshot(self) -> None:
         # Local state was never purged, so it is both intact and newer than the
         # snapshot that was shipped out.
@@ -497,3 +556,187 @@ class TestGoingOut:
         assert "_initial_state" not in restored
         assert "node" not in restored
         assert restored["replace"] is True
+
+
+class TestTheStateThatGoesOut:
+    """What a local agent takes with it, and when it is refused instead."""
+
+    @staticmethod
+    def _main(**values: Any) -> _Main:
+        main = TestGoingOut._main()
+        main.local().holding(**values)
+        return main
+
+    @staticmethod
+    def shipped(main: _Main) -> dict[str, Any]:
+        (config, _node, _save), *_ = main.spawned_remote
+        return config.get("_initial_state", {})
+
+    async def test_what_the_agent_writes_while_stopping_goes_with_it(self) -> None:
+        # The local copy is purged once the target confirms, so a write left
+        # there -- an LLM agent's last turn, a final counter -- is gone.
+        main = self._main(turns=1)
+        main.local().writes_on_stop = {"turns": 2}
+
+        await main.migrate("collector", "nuc")
+
+        assert self.shipped(main) == {"turns": 2}
+
+    async def test_state_that_cannot_travel_keeps_the_agent_here(self) -> None:
+        main = self._main(count=3, capture=object())
+        agent = main.local()
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is False
+        assert "capture" in result["message"] and "--force" in result["message"]
+        assert not agent.stopped
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns
+
+    async def test_a_forced_move_ships_the_rest(self) -> None:
+        main = self._main(count=3, capture=object())
+
+        result = await main.migrate("collector", "nuc", force=True)
+
+        assert result["success"] is True
+        assert self.shipped(main) == {"count": 3}
+
+    async def test_what_a_forced_move_left_is_named_when_it_completes(self) -> None:
+        main = self._main(count=3)
+        main.local().writes_on_stop = {"capture": object()}
+        await main.migrate("collector", "nuc")
+        token = next(iter(main.actor.migration.pending_spawns))
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        (notice,) = main.notifications
+        assert notice["severity"] == "warning"
+        assert "capture" in notice["message"]
+
+    async def test_state_over_the_limit_keeps_the_agent_here(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.migration.MIGRATION_MAX_STATE_BYTES", 100)
+        main = self._main(history="x" * 200)
+
+        result = await main.migrate("collector", "nuc", force=True)
+
+        assert result["success"] is False
+        assert "limit" in result["message"]
+        assert not main.local().stopped
+
+    async def test_growing_over_the_limit_while_stopping_starts_it_here_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.migration.MIGRATION_MAX_STATE_BYTES", 100)
+        main = self._main(history="x")
+        main.local().writes_on_stop = {"history": "x" * 200}
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is False
+        assert not main.spawned_remote
+        (restored,) = main.spawned_local
+        assert restored["replace"] is True
+        assert "_initial_state" not in restored, "its own store is newer than any snapshot"
+
+    async def test_the_record_of_the_migration_holds_no_snapshot(self) -> None:
+        # The local copy is kept until the ack and is what a rollback restarts
+        # from, so the record only needs to say where the agent is going.
+        main = self._main(history="x" * 1000)
+
+        await main.migrate("collector", "nuc")
+
+        assert "_initial_state" in main.spawned_remote[0][0]
+        (entry,) = main.actor.migration.pending_spawns.values()
+        assert "_initial_state" not in entry["config"]
+        recorded = main.recorded["_pending_migrations"]["spawns"]
+        assert "x" * 1000 not in json.dumps(recorded)
+
+
+class TestTheStateThatComesBack:
+    """A node checks its own agent's state, on terms main sends with the request."""
+
+    async def test_the_request_carries_the_terms(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("wactorz.agents.main.migration.MIGRATION_MAX_STATE_BYTES", 1234)
+        main = _Main(spawn_registry={"collector": with_code("rpi")}, nodes={"rpi": online()})
+
+        await main.migrate("collector", "local", force=True)
+
+        ((_topic, request),) = main.published_to("/migrate")
+        assert request["force"] is True
+        assert request["max_state_bytes"] == 1234
+
+    async def test_unforced_is_the_default(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code("rpi")},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+
+        await main.migrate("collector", "nuc")
+
+        ((_topic, request),) = main.published_to("/migrate")
+        assert request["force"] is False
+
+    async def test_placing_it_on_another_node_records_no_snapshot(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code("rpi")},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+        await main.migrate("collector", "nuc")
+        ((_topic, request),) = main.published_to("/migrate")
+
+        await main.actor.migration.receive_state_return(
+            "nodes/rpi/state_return",
+            json.dumps(
+                {
+                    "agent": "collector",
+                    "return_token": request["return_token"],
+                    "config": with_code("rpi"),
+                    "state": {"history": "x" * 1000},
+                }
+            ).encode(),
+        )
+
+        assert main.spawned_remote[0][0]["_initial_state"] == {"history": "x" * 1000}
+        (entry,) = main.actor.migration.pending_spawns.values()
+        assert "_initial_state" not in entry["config"]
+
+
+class TestAnAgentANodeCannotRun:
+    """A built-in agent stays where it is, rather than arriving on a node empty.
+
+    The node would start an agent with nothing to run and confirm it, and the
+    migration would then purge the only copy that worked.
+    """
+
+    @staticmethod
+    def _main() -> _Main:
+        return _Main(
+            spawn_registry={"flic": {"name": "flic", "type": "native", "node": ""}},
+            nodes={"rpi": online()},
+            local=("flic",),
+        )
+
+    async def test_it_is_refused_with_the_reason(self) -> None:
+        main = self._main()
+
+        result = await main.migrate("flic", "rpi")
+
+        assert result["success"] is False
+        assert "native agent" in result["message"]
+        assert "stays on 'local'" in result["message"]
+
+    async def test_nothing_is_stopped_or_sent(self) -> None:
+        main = self._main()
+        agent = main.local("flic")
+
+        await main.migrate("flic", "rpi")
+
+        assert not agent.stopped
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns

@@ -58,6 +58,7 @@ NAV = [
             ("Docker Hub", "dockerhub.md"),
             ("Architecture", "architecture.md"),
             ("Agents", "agents.md"),
+            ("Library", "library.md"),
             ("Auto-Wiring", "mqtt_auto_wiring.md"),
             ("Interfaces", "interfaces.md"),
             ("Pipelines", "pipelines.md"),
@@ -236,12 +237,13 @@ def _ensure_markdown():
     try:
         import markdown  # noqa: F401
 
-        return True
     except ImportError:
         print("[build_docs] installing markdown + pygments …")
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-q", "markdown", "pygments"]
         )
+        return True
+    else:
         return True
 
 

@@ -13,6 +13,8 @@ export interface FeedItem {
     timestamp: number;
     /** Speaker role for chat rows ("user" | "assistant"); absent for other types. */
     role?: string | undefined;
+    /** The chat turn this event belongs to, when the agent was answering one. */
+    turn?: string | undefined;
 }
 
 /** Severity of an application-log row, lowest first. Agent rows have none. */
@@ -34,6 +36,10 @@ export interface AppLogItem {
     /** The logger name, e.g. `wactorz.agents.installer`. */
     origin: string;
     text: string;
+    /** The chat turn the line was written during, if any. */
+    turn?: string | undefined;
+    /** The agent at work when the line was written, if any. */
+    agent?: string | undefined;
 }
 
 /** Anything the activity feed can show. Agent items carry no `source`. */

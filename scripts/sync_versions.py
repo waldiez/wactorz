@@ -16,31 +16,14 @@ def update_python_version(new_version: str) -> None:
         print(f"Updated {version_file}")
 
 
-_RUNNER_VERSION = re.compile(r'^RUNNER_VERSION = ".*"$', re.MULTILINE)
-
-
-def update_remote_runner_version(new_version: str, path: Path | None = None) -> None:
-    """Stamp the version into the single-file node runner.
-
-    The runner is deployed to a node on its own, so it cannot read the package
-    version; it carries a copy, which is what a node reports in its heartbeat.
-    """
-    runner_file = path if path is not None else ROOT_DIR / "wactorz" / "remote_runner.py"
-    if runner_file.exists():
-        content = runner_file.read_text(encoding="utf-8")
-        new_content = _RUNNER_VERSION.sub(f'RUNNER_VERSION = "{new_version}"', content, count=1)
-        runner_file.write_text(new_content, encoding="utf-8")
-        print(f"Updated {runner_file}")
-
-
 def update_package_json(new_version: str) -> None:
     files = [ROOT_DIR / "frontend" / "package.json"]
     for package_file in files:
         if package_file.exists():
-            with open(package_file) as f:
+            with package_file.open() as f:
                 data = json.load(f, strict=False)
             data["version"] = new_version
-            with open(package_file, "w") as f:
+            with package_file.open("w") as f:
                 json.dump(data, f, indent=2)
                 f.write("\n")
             print(f"Updated {package_file}")
@@ -88,6 +71,25 @@ def update_ha_addon_config(new_version: str) -> None:
             print(f"Updated {ha_file}")
 
 
+_ADDON_BUILD_REF = re.compile(r"^(\s*WACTORZ_REF:\s*)\S+", re.MULTILINE)
+
+
+def update_ha_addon_build_ref(new_version: str) -> None:
+    """Point each add-on's source build at the release tag of ``new_version``.
+
+    ``build.yaml`` is what Home Assistant uses to build an add-on from source, and
+    the Dockerfile has no default ref on purpose, so this is the ref such a build
+    installs. It is the library's tag even for an add-on rebuild (0.5.3.1), which
+    ships the same library and has no tag of its own.
+    """
+    for build_file in sorted((ROOT_DIR / "ha-addon").glob("*/build.yaml")):
+        content = build_file.read_text()
+        new_content, found = _ADDON_BUILD_REF.subn(rf"\g<1>v{new_version}", content, count=1)
+        if found and new_content != content:
+            build_file.write_text(new_content)
+            print(f"Updated {build_file}")
+
+
 def update_docs_landing(new_version: str) -> None:
     landing_file = ROOT_DIR / "docs" / "_landing.html"
     if landing_file.exists():
@@ -108,13 +110,13 @@ def update_docs_versions_json(new_version: str) -> None:
     v_file = ROOT_DIR / "docs" / "versions.json"
     if v_file.exists():
         try:
-            with open(v_file) as f:
+            with v_file.open() as f:
                 data = json.load(f)
             # Check if version already exists
             exists = any(v.get("version") == new_version for v in data)
             if not exists:
                 data.append({"version": new_version, "title": new_version})
-                with open(v_file, "w") as f:
+                with v_file.open("w") as f:
                     json.dump(data, f, indent=2)
                     f.write("\n")
                 print(f"Updated {v_file}")
@@ -140,9 +142,9 @@ def main() -> None:
         sys.exit(1)
 
     update_python_version(new_version)
-    update_remote_runner_version(new_version)
     update_package_json(new_version)
     update_ha_addon_config(new_version)
+    update_ha_addon_build_ref(new_version)
     update_docs_landing(new_version)
     update_docs_versions_json(new_version)
 

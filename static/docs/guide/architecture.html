@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="active">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -311,11 +312,18 @@
 <tr>
 <td><strong>Pickle</strong></td>
 <td><code>state/{actor_name}/state.pkl</code></td>
-<td>Arbitrary Python objects: custom agent state dicts, ML models, numpy arrays, cv2 captures</td>
+<td>Arbitrary Python objects: custom agent state dicts, cv2 captures</td>
+</tr>
+<tr>
+<td><strong>Blobs</strong></td>
+<td><code>state/{actor_name}/blobs/</code></td>
+<td>Bytes, numpy arrays, torch tensors and modules, scikit-learn-family models, one file per key</td>
 </tr>
 </tbody>
 </table>
 <p><code>Actor.persist(key, value)</code> and <code>Actor.recall(key)</code> route automatically to the correct store based on the key name. Existing agent code works without changes.</p>
+<p>Each value in <code>state.pkl</code> is pickled on its own, so one that no longer unpickles after a library upgrade costs that key and not the rest of the agent's state; its bytes are kept in the file until the key is written again. The pickle store keeps each agent's state in memory once it has read it, and writes the file about a second after a change, from a worker thread, so the disk is never waited for on the event loop. A node does the same with its agents' JSON state files.</p>
+<p>A value stored directly under a key that is bytes, a numpy array (not one of objects), a torch tensor, a <code>state_dict()</code>, a torch module, or a scikit-learn, XGBoost, LightGBM or CatBoost model is kept as a blob: a file of its own in <code>blobs/</code> beside the state file, which holds a marker in its place. It is written when its key is persisted, not with every other key, so a model persisted once costs nothing when a counter beside it changes; and it is written only then, so a value changed in place is saved by persisting it again. Nodes keep blobs the same way, beside their JSON state. A stop, a migration and a clean shutdown write what is waiting. Anything that changes or removes a state file in a running server — a reset, a migration step — goes through the store, because the copy in memory is what gets written next.</p>
 <p>The spawn registry (<code>_spawned_agents</code>) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.</p>
 <p>On first startup after upgrading from an older version, <code>migrate_from_pickle()</code> reads existing <code>.pkl</code> files and moves structured keys to their store. Pickle files are left in place for keys that remain in pickle.</p>
 <hr />
@@ -368,11 +376,11 @@
 <hr />
 <h2 id="message-flow">Message Flow</h2>
 <h3 id="user-agent-any-interface">User → Agent (any interface)</h3>
-<div class="highlight"><pre><span></span><code><span class="n">User</span><span class="w"> </span><span class="n">types</span><span class="p">:</span><span class="w">  </span><span class="s2">&quot;@my-agent {&quot;</span><span class="n">action</span><span class="s2">&quot;: &quot;</span><span class="n">status</span><span class="s2">&quot;}&quot;</span>
+<div class="highlight"><pre><span></span><code><span class="n">User</span><span class="w"> </span><span class="n">types</span><span class="p">:</span><span class="w">  </span><span class="s2">"@my-agent {"</span><span class="n">action</span><span class="s2">": "</span><span class="n">status</span><span class="s2">"}"</span>
 <span class="w">  </span><span class="err">│</span>
 <span class="w">  </span><span class="err">▼</span>
-<span class="n">Interface</span><span class="w"> </span><span class="p">(</span><span class="n">CLIInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">DiscordInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RESTInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">WhatsAppInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TelegramInterface</span><span class="p">)</span>
-<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">calls</span><span class="w"> </span><span class="n">main_actor</span><span class="o">.</span><span class="n">process_user_input</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+<span class="n">Interface</span><span class="w"> </span><span class="p">(</span><span class="n">dashboard</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">CLIInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RESTInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">DiscordInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">WhatsAppInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TelegramInterface</span><span class="p">)</span>
+<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">calls</span><span class="w"> </span><span class="n">orchestrator</span><span class="o">.</span><span class="n">handle_turn</span><span class="p">(</span><span class="n">text</span><span class="p">,</span><span class="w"> </span><span class="n">channel</span><span class="o">=...</span><span class="p">)</span><span class="w">   </span><span class="err">←</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">seam</span><span class="p">;</span><span class="w"> </span><span class="n">main</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="n">behind</span><span class="w"> </span><span class="n">it</span>
 <span class="w">  </span><span class="err">▼</span>
 <span class="n">MainActor</span><span class="o">.</span><span class="n">_classify_intent</span><span class="p">()</span><span class="w">     </span><span class="err">←</span><span class="w"> </span><span class="n">one</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">call</span><span class="p">:</span><span class="w"> </span><span class="n">ACTUATE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">PIPELINE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">OTHER</span>
 <span class="w">  </span><span class="err">│</span>
@@ -392,6 +400,18 @@
 <span class="w">      </span><span class="n">main</span><span class="w"> </span><span class="n">receives</span><span class="w"> </span><span class="n">RESULT</span><span class="p">,</span><span class="w"> </span><span class="n">formats</span><span class="p">,</span><span class="w"> </span><span class="n">returns</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">user</span>
 </code></pre></div>
 
+<p><strong>The orchestrator seam.</strong> The chat surfaces never reach main by name. Each
+calls an <code>Orchestrator</code> (<code>wactorz/orchestration.py</code>: <code>handle_turn</code>,
+<code>handle_turn_stream</code>, <code>commands</code>) through <code>runtime.orchestrator</code>, naming the
+channel the message came in on: <code>dashboard</code>, <code>cli</code> and <code>rest</code> are the
+operator's, <code>social</code> is a public bot. <code>MainOrchestrator</code> adapts main's three
+entry points to it and routes a social channel to the restricted one;
+<code>DirectOrchestrator</code> answers the minimal profile without a model, by sending
+<code>@name {json}</code> to the agent as a task; a deployment supplies its own with
+<code>run(orchestrator=...)</code> or <code>WACTORZ_ORCHESTRATOR=package.module:attr</code>. A
+message that names an agent still reaches that agent directly, and the node
+commands (<code>/deploy</code>, <code>/migrate</code>, <code>/nodes</code>) still go to main, which holds the
+node table.</p>
 <h3 id="pipeline-ha-state-discord-notification">Pipeline (HA state → Discord notification)</h3>
 <div class="highlight"><pre><span></span><code>HA state changes (lamp turns on)
   │
@@ -403,9 +423,9 @@ Mosquitto
   │
   ▼
 lamp-on-discord-notify (DynamicAgent)
-  │  setup(): agent.subscribe(&quot;homeassistant/state_changes/#&quot;, on_state)
-  │  on_state(): if entity_id == &quot;light.wiz_...&quot; and new_state[&quot;state&quot;] == &quot;on&quot;:
-  │      httpx.post(discord_webhook, {&quot;content&quot;: &quot;Lamp is on!&quot;})
+  │  setup(): agent.subscribe("homeassistant/state_changes/#", on_state)
+  │  on_state(): if entity_id == "light.wiz_..." and new_state["state"] == "on":
+  │      httpx.post(discord_webhook, {"content": "Lamp is on!"})
   ▼
 Discord channel
 </code></pre></div>
@@ -481,7 +501,7 @@ Useful for running the dashboard without an API key, for end-to-end runs that
 need the same answer twice, and for recording a walkthrough without paying per
 take. Useless for anything that depends on the reply being <em>right</em>.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">LLM_PROVIDER</span><span class="o">=</span>fake
-<span class="nv">LLM_FAKE_SCRIPT</span><span class="o">=</span><span class="s1">&#39;{&quot;weather&quot;: &quot;It is 22 degrees and clear.&quot;}&#39;</span><span class="w">   </span><span class="c1"># substring → reply</span>
+<span class="nv">LLM_FAKE_SCRIPT</span><span class="o">=</span><span class="s1">'{"weather": "It is 22 degrees and clear."}'</span><span class="w">   </span><span class="c1"># substring → reply</span>
 <span class="nv">LLM_FAKE_INTENT</span><span class="o">=</span>OTHER<span class="w">                                          </span><span class="c1"># ACTUATE | HA | PIPELINE | OTHER</span>
 </code></pre></div>
 
@@ -490,7 +510,7 @@ default reply that is deliberately obviously synthetic, so a recording made
 against it cannot be mistaken for a real session.</p>
 <h3 id="per-call-site-overrides">Per-call-site overrides</h3>
 <p><code>LLM_OVERRIDES</code> routes individual call sites to different providers/models, falling back to the global <code>LLM_PROVIDER</code> for any site not listed (<code>wactorz/llm_factory.py</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">&quot;intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6&quot;</span>
+<div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">"intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"</span>
 </code></pre></div>
 
 <table>
@@ -530,14 +550,38 @@ against it cannot be mistaken for a real session.</p>
 <p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. An entry naming a site not in the table above is skipped with a warning too — nothing would read it, and a silent no-op looks exactly like an override that did not work. <code>site=none</code> disables the LLM for that site.</p>
 <p>Surrounding quotes are stripped, from the value as a whole and from each site and model, as they are from <code>LLM_PROVIDER</code> and <code>LLM_MODEL</code>. Several ways of setting an environment variable keep the quotes as part of the value — Windows <code>set VAR="…"</code>, Docker's <code>env_file</code>, an unbalanced quote in a hand-edited <code>.env</code> — and split on <code>,</code> and <code>=</code> afterwards, those quotes land on the first site name and the last model name. The site then matches nothing and the model is one character away from real, which the API answers with <code>404 … model: claude-sonnet-4-6"</code>. The startup line logs the parsed table rather than the raw string, so an entry that was dropped is visible by its absence.</p>
 <p>For Ollama, <code>system</code> is encoded as the first <code>{"role": "system"}</code> entry in the native <code>/api/chat</code> <code>messages</code> array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.</p>
+<h3 id="prompt-fragments">Prompt fragments</h3>
+<p>Main's system prompt, its intent classifier, its fact extraction and the planner's prompts are
+not fixed texts. Each is a <strong>template</strong>: a core that holds on every installation, with named slots
+that the <strong>fragments</strong> of the configured integrations fill (<code>wactorz/agents/prompts/assemble.py</code>).
+A slot shows what the fragments insert into it, or its own default when none does, so a prompt
+rendered for a given set of fragments is the same every time.</p>
+<p>Which fragments an installation gets is decided once, at startup, in <code>app.py</code>, by the same test
+that decides whether the Home Assistant agents start: <code>HA_URL</code> and <code>HA_TOKEN</code>, or
+<code>WACTORZ_HA_AGENTS=on|off</code> outright. Main is built with the result and hands it to every planner it
+spawns. Without Home Assistant, main never mentions it, the classifier offers and the router accepts
+only <code>PIPELINE</code> and <code>OTHER</code>, and the planner designs from MQTT topics and the live data flows with no
+<code>ha_actuator</code> type and no entity or camera sections. A <code>MainActor</code> or <code>PlannerAgent</code> constructed
+directly, outside <code>build_system</code>, gets every fragment, so library code and tests see no difference.</p>
+<p>Two tests guard the mechanism. <code>tests/test_prompts_are_pinned.py</code> keeps the prompts a Home Assistant
+installation sends word for word under <code>tests/parity_fixtures/prompts/</code>; a prompt change shows up as
+a fixture diff in the pull request that makes it, regenerated with
+<code>WACTORZ_UPDATE_PROMPT_FIXTURES=1 pytest tests/test_prompts_are_pinned.py</code>.
+<code>tests/test_prompt_fragments.py</code> renders every prompt with no fragments and checks that Home
+Assistant is not mentioned.</p>
+<p>An integration adds its own text by returning a <code>PromptFragment</code> (its name, a mapping of slot name to
+text per template, and the intent tokens it adds) and listing it in
+<code>wactorz/agents/prompts/fragments.py</code>; <code>home_assistant_prompts.py</code> holds the one that exists. A
+fragment naming a slot a template has not got is refused when rendered, so a misspelt slot cannot
+vanish silently.</p>
 <hr />
 <h2 id="supervision-tree">Supervision Tree</h2>
 <p>The supervisor is configured in <code>cli.py</code> inside <code>build_system()</code>. Each actor is registered with a factory function (called fresh on each restart), a strategy, and restart limits:</p>
 <div class="highlight"><pre><span></span><code><span class="n">system</span><span class="o">.</span><span class="n">supervisor</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;main&quot;</span><span class="p">,</span>     <span class="n">make_main</span><span class="p">,</span>     <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;monitor&quot;</span><span class="p">,</span>  <span class="n">make_monitor</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;catalog&quot;</span><span class="p">,</span>  <span class="n">make_catalog</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;home-assistant-agent&quot;</span><span class="p">,</span> <span class="n">make_ha_agent</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"main"</span><span class="p">,</span>     <span class="n">make_main</span><span class="p">,</span>     <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"monitor"</span><span class="p">,</span>  <span class="n">make_monitor</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"catalog"</span><span class="p">,</span>  <span class="n">make_catalog</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"home-assistant-agent"</span><span class="p">,</span> <span class="n">make_ha_agent</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
   <span class="c1"># ... etc</span>
 </code></pre></div>
 

@@ -18,18 +18,15 @@ from wactorz.core.actor import derive_actor_id, has_derived_id
 from wactorz.core.mqtt import (
     AGENT_SESSION_EXPIRY_SECONDS,
     SERVER_SESSION_EXPIRY_SECONDS,
+    agent_client_id,
     client_id,
     install_id,
 )
 from wactorz.core.mqtt_publisher import MQTTPublisher
 
 #: Connections that serve one request and must keep a random id -- see
-#: TestTheEphemeralSet for why a stable one would be actively harmful.
-#: The node's own one-shots, named by the function that opens them. These build
-#: `aiomqtt.Client` directly -- remote_runner.py imports nothing from wactorz --
-#: so the module scan below cannot see them.
-NODE_EPHEMERAL = ["_listen", "_fetch"]
-
+#: TestTheEphemeralSet for why a stable one would be actively harmful. A node's
+#: one-shots are here too, because a node runs these same functions.
 EPHEMERAL = [
     "wactorz/web/chat.py",
     "wactorz/interfaces/chat/cli.py",
@@ -38,20 +35,6 @@ EPHEMERAL = [
     "wactorz/core/topic_bus.py",
     "wactorz/agents/dynamic/streams.py",
 ]
-
-
-def _node_client_calls(function_name: str) -> list[ast.Call]:
-    """Every `aiomqtt.Client(...)` built inside one runner function."""
-    tree = ast.parse(Path("wactorz/remote_runner.py").read_text(encoding="utf-8"))
-    return [
-        call
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == function_name
-        for call in ast.walk(node)
-        if isinstance(call, ast.Call)
-        and isinstance(call.func, ast.Attribute)
-        and call.func.attr == "Client"
-    ]
 
 
 @pytest.fixture(name="state_dir")
@@ -122,6 +105,43 @@ class TestClientId:
         ids = {client_id("srv", "abc123", d) for d in details}
 
         assert len(ids) == len(details)
+
+    def test_a_node_scopes_its_two_connections_by_its_own_name(self) -> None:
+        # A node holds two long-lived connections at once — the control
+        # subscriber and the publisher — and is scoped by its name rather than
+        # by the install id, because several nodes share one install.
+        assert client_id("node", "rpi") != client_id("nodepub", "rpi")
+        assert client_id("node", "rpi") != client_id("node", "nuc")
+
+
+class TestAnAgentsConnections:
+    """An agent's id comes from its name, so it is the same on every machine.
+
+    Scoped by it alone, a copy of an agent on a node and one on main -- the two
+    sides of a migration, or a node still running what main took back -- took
+    each other's connection in a loop. Scoped like every other connection, they
+    cannot.
+    """
+
+    def test_on_main_it_is_scoped_to_the_install(self, state_dir: Path) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id) == f"wactorz-agent-{install_id()}-{actor_id}"
+
+    def test_on_a_node_to_the_nodes_name(self) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id, "rpi") == f"wactorz-agent-rpi-{actor_id}"
+
+    def test_one_agent_on_main_and_on_a_node_do_not_collide(self, state_dir: Path) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id) != agent_client_id(actor_id, "rpi")
+
+    def test_its_two_connections_are_told_apart(self) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id, "rpi") != agent_client_id(actor_id, "rpi", "commands")
 
 
 class TestThePublisher:
@@ -222,15 +242,6 @@ class TestTheEphemeralSet:
         ]
 
         assert not named, f"{module_path} gave a request-scoped connection a stable id"
-
-    @pytest.mark.parametrize("function_name", NODE_EPHEMERAL)
-    def test_a_node_one_shot_passes_no_identifier(self, function_name: str) -> None:
-        calls = _node_client_calls(function_name)
-
-        assert calls, f"{function_name} builds no client -- has it moved or been renamed?"
-        assert not [c for c in calls if any(kw.arg == "identifier" for kw in c.keywords)], (
-            f"{function_name} gave a one-shot connection a stable id"
-        )
 
     def test_the_list_is_not_vacuous(self) -> None:
         # A path typo would make every case above pass by finding no calls.

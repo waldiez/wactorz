@@ -128,6 +128,7 @@ class _Main:
         registry: bool = True,
         result: dict[str, Any] | None = None,
         answers: bool = True,
+        accepts: bool = True,
     ) -> None:
         main = MainActor.__new__(MainActor)
         main.name = "main"
@@ -144,13 +145,16 @@ class _Main:
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
         self.published: list[tuple[str, Any]] = []
 
-        async def _send(actor_id: str, kind: Any, payload: dict[str, Any]) -> None:
+        async def _send(actor_id: str, kind: Any, payload: dict[str, Any]) -> bool:
             self.sent.append((actor_id, kind, payload))
+            if not accepts:
+                return False  # a full mailbox: the task was never taken
             if not answers:
-                return
+                return True
             future = main._result_futures.get(payload["_task_id"])
             if future is not None and not future.done():
                 future.set_result(result if result is not None else {"ok": True})
+            return True
 
         async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
             self.published.append((topic, payload))
@@ -190,7 +194,7 @@ class TestChoosingWhereTheTaskGoes:
 
         await main.delegate("weather")
 
-        assert main.sent[0][2]["reply_to"] == "main-id"
+        assert main.sent[0][2]["_reply_to"] == "main-id"
 
     async def test_an_agent_on_a_node_is_reached_over_mqtt(
         self, monkeypatch: pytest.MonkeyPatch
@@ -222,6 +226,20 @@ class TestChoosingWhereTheTaskGoes:
         main = _Main(registry=False)
 
         assert await main.delegate("weather") is None
+
+    async def test_an_agents_error_reply_is_the_answer(self) -> None:
+        # The agent's own account of its failure: every caller reads the
+        # reply's fields, so it is returned rather than raised.
+        main = _Main(running=("weather",), result={"error": "no forecast for Mars"})
+
+        assert await main.delegate("weather") == {"error": "no forecast for Mars"}
+
+    async def test_an_agent_with_no_room_for_the_task_answers_nothing(self) -> None:
+        # The same as an agent that never replies, without the wait.
+        main = _Main(running=("weather",), accepts=False)
+
+        assert await main.delegate("weather") is None
+        assert not main.actor._result_futures
 
 
 class TestWaitingForTheAnswer:
@@ -268,7 +286,7 @@ class TestAskingTheInstaller:
         payload = main.sent[0][2]
         assert payload["action"] == "node_deploy"
         assert payload["_task_id"]
-        assert payload["task"] == payload["_task_id"]
+        assert payload["_reply_to"] == "main-id"
 
     async def test_the_callers_payload_is_left_alone(self) -> None:
         # The caller may reuse it, and finding a task id in it later would make
@@ -289,6 +307,19 @@ class TestAskingTheInstaller:
         main = _Main(registry=False)
 
         assert "error" in await main.install({"action": "node_deploy"})
+
+    async def test_a_failed_install_is_the_installers_report(self) -> None:
+        main = _Main(running=("installer",), result={"error": "pip exited with 1"})
+
+        assert await main.install({"action": "install"}) == {"error": "pip exited with 1"}
+
+    async def test_an_installer_with_no_room_is_reported_at_once(self) -> None:
+        main = _Main(running=("installer",), accepts=False)
+
+        result = await main.install({"action": "install"}, timeout=600)
+
+        assert "not taking messages" in result["error"]
+        assert not main.actor._result_futures
 
     async def test_a_slow_deploy_says_it_timed_out(self) -> None:
         # Deploys are SSH and pip, so the caller needs the difference between
@@ -382,3 +413,20 @@ class TestTheReplyTopic:
                 seen.append(topic)
 
         assert len(set(seen)) == 3
+
+
+class TestAnAgentThatCannotTakeTheTask:
+    async def test_no_answer_is_waited_for(self) -> None:
+        # Its mailbox had no room, so nothing will reply. The same answer as an
+        # agent that stays silent, without waiting the timeout out.
+        main = _Main(running=("weather",))
+
+        async def _refused(actor_id: str, kind: Any, payload: dict[str, Any]) -> bool:
+            return False
+
+        setattr(main.actor, "send", _refused)
+
+        result = await asyncio.wait_for(main.delegate("weather", timeout=600), timeout=5)
+
+        assert result is None
+        assert main.actor._result_futures == {}

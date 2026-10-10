@@ -9,7 +9,8 @@ description = "Actor-model multi-agent framework — spawn, coordinate and monit
 readme = "README.md"
 license = "Apache-2.0"
 license-files = [
-    "LICENSE"
+    "LICENSE",
+    "NOTICE.md",
 ]
 requires-python = ">=3.10"
 authors = [{ name = "Wactorz Contributors" }]
@@ -40,7 +41,13 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
     "asyncssh>=2.14.0",
+    # The MQTT broker's CA and certificate
+    "cryptography>=48.0.1",
     "tzdata>=2026.3; sys_platform == 'win32'",
+    # Agents install the packages they need at runtime with `python -m pip`, in
+    # whatever environment runs Wactorz. An environment pip made has it anyway;
+    # one made by uv has none unless it is listed, and `uv sync` removes what is not.
+    "pip",
 ]
 
 [project.optional-dependencies]
@@ -50,12 +57,16 @@ google    = ["google-genai>=1.0.0"]
 discord   = ["discord.py>=2.7.1"]
 telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
-ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
+# `torchvision` comes with `ultralytics` anyway. It is named so that the lockfile
+# can take it from the same place as `torch` (see `[tool.uv.sources]`, which
+# reaches only what is named here): the two are built against each other.
+ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "torchvision>=0.15.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-tts       = [
-    "edge-tts>=6.1.9",
-]
+tts       = ["edge-tts>=6.1.9"]
 cron      = ["croniter>=2.0.0"]
+# Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
+# no Bluetooth adapter has nothing to install it for.
+flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
 
@@ -99,14 +110,21 @@ desktop-gtk = [
     "pystray>=0.19.5; sys_platform == 'linux'",
     "pillow>=10.0;    sys_platform == 'linux'",
 ]
+# A LangGraph graph or a LangChain chain as an agent, with its spend reported
+# through `wactorz.core.integrations.langchain`.
+langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
+# AG2 agents as a Wactorz agent, on the system's model, with their spend
+# reported through `wactorz.core.integrations.ag2`. AG2 1.x (`import ag2`);
+# the provider's own SDK comes from the matching Wactorz extra.
+ag2       = ["ag2>=1.1"]
 docs      = [
     # Pinned exactly, not floored: both decide the bytes of the HTML committed
     # under static/docs, which CI checks against the sources. Pygments in
     # particular classifies box-drawing characters differently between minor
     # versions, so a floating floor makes the freshness check fail on every pull
     # request the day a new one is released, for a page nobody touched.
-    "markdown==3.10.2",
-    "pygments==2.20.0",
+    "markdown==3.10.3",
+    "pygments==2.21.0",
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
@@ -114,11 +132,13 @@ docs      = [
 # The pre-built static/docs/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "wactorz[docs]",
+    # So the LangChain cost callback and the LangGraph example are tested.
+    "wactorz[langgraph]",
     # Test-only support for optional catalogue-agent media paths. These stay out
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
-    "pre-commit>=4.5.1",
+    "prek>=0.5.3",
     "coverage>=7.13.5",
     "watchdog>=6.0.0",
     "pytest>=8.0.0",
@@ -134,6 +154,17 @@ dev       = [
     "packaging>=26.3",
     "twine>=7.0.0",
 ]
+
+# Drives the browser in the end-to-end suite (e2e/). Its own extra rather than
+# part of `dev`: a contributor running unit tests has no use for it, and the
+# browser it drives is a separate ~150MB download (`make e2e-setup`).
+#
+# Pinned exactly, not floored. The pip package and the browser build it fetches
+# are version-matched, so a floating floor silently changes the browser under the
+# suite - and with no dependency lock in this project, nothing else would catch
+# that. Same reasoning as the `docs` extra above pins markdown and pygments: the
+# dependency decides the thing being compared.
+e2e       = ["playwright==1.63.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
@@ -152,9 +183,11 @@ all = [
 
 [project.scripts]
 wactorz         = "wactorz.cli:main"
+wactorz-node    = "wactorz.node.cli:main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 wactorz-desktop = "wactorz.desktop.app:main"
+wactorz-state   = "wactorz.state_archive:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
@@ -162,6 +195,33 @@ Homepage      = "https://docs.waldiez.io/wactorz/"
 Repository    = "https://github.com/waldiez/wactorz"
 Documentation = "https://docs.waldiez.io/wactorz/"
 "Bug Tracker" = "https://github.com/waldiez/wactorz/issues"
+
+# ── uv: what the lockfile resolves, for development, CI and the images ───────
+# None of this reaches someone installing Wactorz with pip, who gets the ranges
+# above and nothing else.
+#
+# On Linux the `torch` on PyPI is the CUDA build, and brings every NVIDIA
+# library with it: several gigabytes that a container with no GPU passed to it
+# cannot use. The lockfile takes PyTorch's own CPU build there instead, which
+# is what the `ultra` image installs. On macOS and Windows the PyPI build is
+# the CPU one already. A machine with a GPU installs with pip, or names the
+# CUDA index for itself.
+[tool.uv]
+# Releases younger than a week are not locked, as Dependabot's cooldown does
+# not propose them: a compromised release is usually found and pulled within
+# days. Without it, `make lock` takes yesterday's releases, and Dependabot then
+# proposes older ones in their place. Kept in the lockfile as a span, so
+# `uv sync --locked` holds as the days pass.
+exclude-newer = "7 days"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 # ── Version ────────────────────────────────────────────────────────────────────
 [tool.hatch.version]
@@ -200,6 +260,11 @@ asyncio_mode = "auto"
 # hangs. pytest-randomly prints the seed on every run; pass it back with
 # `-p randomly --randomly-seed=<n>` to replay an ordering that failed.
 timeout = 60
+# Shorter than the timeout above, so a test on its way to it first says where
+# every thread is. On Windows the timeout ends the worker process outright, and
+# all that is reported is that the worker died: with this, the log also holds
+# the line each thread was on. It only prints; the timeout still decides.
+faulthandler_timeout = 45
 # `mcp.server.fastmcp`'s own settings model declares `lifespan` with a forward
 # reference it never resolves, so newer pydantic-settings warns once per run
 # about a model that is not ours and a value we never set from the environment.
@@ -263,6 +328,10 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
+    "TRY300",  # a try guards the call that can fail; the success return goes in its else
+    "TRY301",  # a raise inside a try that catches it: control flow by exception
+    "TRY400",  # logger.error in an except drops the traceback; log after the handler
+    "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -280,14 +349,9 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, pathlib, security) stay
-# advisory via `make lint-py` until each is triaged and gated. One member of the
-# pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
-# is already a Path, and the convention here is that a path is a Path — which
-# those call sites satisfy — not that every read goes through `Path.open`. It is
-# declined on the `make lint-py` line itself rather than in the `ignore` above,
-# which a CLI `--extend-select` outranks; the per-file entries below still apply,
-# which is why the exemptions there work. Logging moved out
+# Further families (exception style, complexity, prints) stay advisory via
+# `make lint-py` until each is triaged and gated. Pathlib moved out once the tree
+# reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
 # debug line in production, and the message loses the structure that lets a log
@@ -303,17 +367,23 @@ ignore = [
 # mechanism rather than a guard stripped under `-O`, the credentials are fixture
 # strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
 # a path a test asserts about rather than writes to, and `exec` is how the
-# catalogue programs get parsed. None of it reaches an installed wheel.
-"tests/*" = ["B", "E402", "D", "S"]
+# catalogue programs get parsed. None of it reaches an installed wheel. A test
+# raises inside a `try` to produce the exception, or the rollback, it examines.
+"tests/*" = ["B", "E402", "D", "S", "TRY301"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
 "scripts/*" = ["S603", "S607", "S110"]
-# The runner carries its own `--test` reporter, whose output is the point of it.
-# It also runs agent code it is sent and installs what that code imports, so
-# `exec` and the pip subprocess are the feature rather than an oversight; how far
-# either should be trusted is a design question, not one a lint rule settles.
-"wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
+# The end-to-end suite is test code that drives real processes. `assert` is the
+# mechanism, as it is under tests/; every subprocess is a literal argv naming
+# `docker` or this interpreter; and every URL it opens is the backend it
+# started or the Home Assistant instance `HA_URL` names.
+"e2e/*" = ["S101", "S310", "S603", "S607"]
+# A node runs agent code it is sent, installs what that code imports, and
+# re-execs itself when main asks it to restart — so the pip subprocess and the
+# `execv` are the feature rather than an oversight. How far either should be
+# trusted is a design question, not one a lint rule settles.
+"wactorz/node/*.py" = ["S603", "S606"]
 # Console entry points: what they write to the terminal is the thing the user
 # asked for, not incidental output, so a logger is the wrong sink for it.
 # `log_setup` is the strongest case — it reports to stderr that file logging
@@ -373,7 +443,10 @@ reportMissingTypeStubs = false
 [tool.coverage.run]
 source = ["wactorz"]
 branch = true
-omit = ["wactorz/_version.py", "tests/*"]
+omit = [
+    "wactorz/_version.py",
+    "tests/*",
+]
 
 [tool.coverage.report]
 show_missing = true
@@ -382,9 +455,10 @@ exclude_also = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "\\.\\.\\.",               # ellipsis / stub bodies
+    "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 65
+fail_under = 92
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

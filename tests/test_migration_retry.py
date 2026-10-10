@@ -18,15 +18,15 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.old_database import as_first_release
 from wactorz.core.persistence import migrations
 from wactorz.core.persistence.db import WactorzDB
 
 
 @pytest.fixture(name="db")
 def db_fixture(tmp_path: Path) -> Any:
-    """A fresh database, which is at v1 — the framework_version column itself
-    is what the v1→v2 SQL migration adds, so migrations have work to do."""
-    database = WactorzDB(str(tmp_path / "wactorz.db"))
+    """A database as the first release left it, so the migrations have work to do."""
+    database = as_first_release(WactorzDB(str(tmp_path / "wactorz.db")))
     yield database
     database.conn.close()
 

@@ -1,4 +1,8 @@
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from wactorz.core.integrations.gmail_mcp import GmailMcpClient, _clean_text, _format_message_line
@@ -172,21 +176,16 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Work", result)
 
     def test_store_token_response_preserves_refresh(self):
-        import json
-        import os
-        import tempfile
-
         with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "tok.json")
-            with mock.patch.dict(os.environ, {"GMAIL_MCP_TOKEN_FILE": path}):
+            path = Path(d) / "tok.json"
+            with mock.patch.dict(os.environ, {"GMAIL_MCP_TOKEN_FILE": str(path)}):
                 client = GmailMcpClient()
                 client._store_token_response(
                     {"access_token": "a1", "refresh_token": "r1", "scope": "s"}
                 )
                 # A refresh response without a refresh_token must not wipe the stored one.
                 client._store_token_response({"access_token": "a2"})
-                with open(path) as f:
-                    tokens = json.loads(f.read())["tokens"]
+                tokens = json.loads(path.read_text())["tokens"]
         self.assertEqual(tokens["access_token"], "a2")
         self.assertEqual(tokens["refresh_token"], "r1")
 

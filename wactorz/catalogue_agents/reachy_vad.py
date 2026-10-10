@@ -6,8 +6,6 @@ It is deliberately blocking: callers run it in an executor so SDK/GStreamer
 pulls never block the actor event loop.
 """
 
-from __future__ import annotations
-
 import math
 import time
 from collections import deque

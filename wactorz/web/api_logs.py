@@ -70,7 +70,13 @@ def _at_or_above(level: str | None) -> set[str] | None:
     return set(LEVELS[LEVELS.index(wanted) :])
 
 
-def _matches(entry: dict[str, Any], allowed: set[str] | None, origin: str) -> bool:
+def _matches(
+    entry: dict[str, Any],
+    allowed: set[str] | None,
+    origin: str,
+    turn: str = "",
+    agent: str = "",
+) -> bool:
     """Whether one record survives the requested filters.
 
     A record whose level we do not rank is *kept*. Python allows custom levels
@@ -82,6 +88,13 @@ def _matches(entry: dict[str, Any], allowed: set[str] | None, origin: str) -> bo
     level = str(entry.get("level", ""))
     if allowed is not None and level in LEVELS and level not in allowed:
         return False
+    # Exact, unlike `logger`: a turn id is copied from somewhere, not typed from
+    # memory, and an agent's name is matched whole so `weather` is not also
+    # `weather-2`.
+    if turn and entry.get("turn") != turn:
+        return False
+    if agent and entry.get("agent") != agent:
+        return False
     return not origin or origin in str(entry.get("origin", "")).lower()
 
 
@@ -89,7 +102,8 @@ async def logs_handler(request: web.Request) -> Response:
     """GET /api/logs — recent application-log records, oldest first.
 
     Query: `limit` (clamped), `level` (this and above), `logger` (substring of
-    the logger name).
+    the logger name), `turn` (the chat turn the line was written during) and
+    `agent` (the agent it was written for).
     """
     buffer = get_buffer()
     if buffer is None:
@@ -100,10 +114,12 @@ async def logs_handler(request: web.Request) -> Response:
     limit = _clamp_limit(request.query.get("limit"))
     allowed = _at_or_above(request.query.get("level"))
     origin = request.query.get("logger", "").strip().lower()
+    turn = request.query.get("turn", "").strip()
+    agent = request.query.get("agent", "").strip()
 
     # Filtered before the limit is applied, so `limit=50&level=ERROR` means the
     # 50 most recent *errors* rather than the errors among the 50 most recent.
-    matching = [e for e in buffer.snapshot() if _matches(e, allowed, origin)]
+    matching = [e for e in buffer.snapshot() if _matches(e, allowed, origin, turn, agent)]
     return web.json_response(
         {"entries": matching[-limit:], "capacity": buffer.capacity},
     )

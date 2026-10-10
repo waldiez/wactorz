@@ -715,7 +715,7 @@ async def test_create_context_builds_a_system_from_the_cli_args(
     async def _build(passed: SimpleNamespace) -> tuple:
         assert passed is args
         assert passed.interface == "cli"  # the TUI forces the in-process path
-        return system, actor, None
+        return system, actor, None, None  # system, main, database, orchestrator
 
     monkeypatch.setattr(wactorz.cli, "get_args", lambda: args)
     monkeypatch.setattr(wactorz.app, "build_system", _build)

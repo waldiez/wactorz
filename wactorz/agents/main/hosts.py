@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from ...core.actor import ActorState
     from ..llm_agent import LLMProvider
+    from ..prompts.assemble import PromptFragment
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -77,6 +78,8 @@ class SpawnHost(Protocol):
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
         """Read-only here: consulted for a node's address before an install."""
         ...
+
+    def _node_version_mismatch(self, node_name: str) -> str | None: ...
 
     def recall(self, key: str) -> Any: ...
 
@@ -161,6 +164,10 @@ class NodeHost(ManifestHost, Protocol):
 
     def _queue_notification(self, notice: dict[str, Any]) -> None: ...
 
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = ...) -> None: ...
 
     async def _update_node_desired_state(
@@ -208,6 +215,24 @@ class LifecycleHost(Protocol):
     ) -> None: ...
 
 
+class CodeRefreshHost(ListenerHost, Protocol):
+    """What filing a node's repaired program needs from the actor.
+
+    Narrow on purpose. This writes one field of one registry entry and asks one
+    question over the broker, so it reaches the registry, the connection, and
+    nothing else — the reach is the trust boundary, and it is worth being able
+    to read it in four lines.
+    """
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
 class NodeReaders(Protocol):
     """The live node view a migration consults.
 
@@ -243,6 +268,8 @@ class MigrationHost(NodeHost, Protocol):
 
     def _node_is_online(self, node_name: str) -> bool: ...
 
+    def _node_version_mismatch(self, node_name: str) -> str | None: ...
+
     def _online_node_names(self) -> list[str]: ...
 
     # The migrations in flight are written down, so a restart does not drop the
@@ -271,18 +298,20 @@ class MigrationHost(NodeHost, Protocol):
 
 
 class RoutingHost(LLMHost, Protocol):
-    """What `RoutingMixin` needs: the LLM surface plus in-flight task futures."""
+    """What `RoutingMixin` needs: the LLM surface, in-flight task futures, and
+    which integrations' intents to offer and accept.
+    """
 
     _result_futures: dict[str, asyncio.Future]
+    _prompt_fragments: tuple[PromptFragment, ...]
 
 
 class MemoryHost(LLMHost, Protocol):
-    """What `MemoryMixin` needs — nothing beyond the LLM host.
-
-    Named anyway rather than reusing `LLMHost` directly: the mixin should say
-    what it depends on, and if that grows the change belongs here where it is
-    visible.
+    """What `MemoryMixin` needs: the LLM host, and which integrations the
+    system prompt and fact extraction speak of.
     """
+
+    _prompt_fragments: tuple[PromptFragment, ...]
 
 
 class PlanningHost(ActorHost, Protocol):
@@ -301,6 +330,8 @@ class PlanningHost(ActorHost, Protocol):
     llm: LLMProvider | None
     _result_futures: dict[str, asyncio.Future]
     _conversation_history: list[dict]
+    #: Handed to every planner main spawns, so it plans for the same integrations.
+    _prompt_fragments: tuple[PromptFragment, ...]
 
     def get_user_facts(self) -> dict: ...
 

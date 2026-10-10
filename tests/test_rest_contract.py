@@ -50,8 +50,13 @@ class _FakeRegistry:
 
 
 def _iface(**main_actor: Any) -> RESTInterface:
-    """A REST interface over a main actor that has only the given attributes."""
-    return RESTInterface(main_actor=cast(MainActor, types.SimpleNamespace(**main_actor)), port=8080)
+    """A REST interface over a main actor that has only the given attributes.
+
+    Nothing here chats, so there is no orchestrator behind it.
+    """
+    return RESTInterface(
+        cast(Any, None), main_actor=cast(MainActor, types.SimpleNamespace(**main_actor)), port=8080
+    )
 
 
 class RestContractTest(unittest.TestCase):

@@ -56,6 +56,10 @@ def close_stores() -> None:
     """
     if Stores.db is not None:
         Stores.db.close()
+    if Stores.pickle is not None:
+        # Agent state is written a moment after it changes; whatever is still
+        # waiting goes out now, since nothing will write it later.
+        Stores.pickle.flush()
     Stores.db = None
     Stores.pickle = None
     Stores.memory.clear()

@@ -39,7 +39,9 @@ declared dependencies are `pip`-installed on first spawn.
 
 ## Adding a recipe
 
-Create `wactorz/catalogue_agents/my_agent.py` exporting `AGENT_CODE = r'''…'''`, then add
-an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. It becomes available
+Write the program as an ordinary module, `wactorz/catalogue_agents/my_agent.py`, defining
+the DynamicAgent functions (`setup`, `process`, `handle_task`, `cleanup`), then add an entry
+to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The module's source is what gets
+sent and exec'd, so it may import `wactorz` but must not rely on being imported. It becomes available
 on the next restart. See the [Agents reference](../guide/agents.html) for the DynamicAgent
 API and code-safety rules.

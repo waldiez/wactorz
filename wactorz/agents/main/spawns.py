@@ -19,10 +19,9 @@ import json
 import logging
 import re
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import MessageType
+from ...core.actor import ReplyError, ask_through
 from ...core.topics import topic_name_error
 
 if TYPE_CHECKING:
@@ -48,6 +47,30 @@ SPAWN_REGISTRY_KEY = "_spawned_agents"
 #: standing record it is re-applied on every reconcile, so a node reboot would
 #: roll the agent back to the moment it arrived.
 TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
+
+
+def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
+    """Why a node could not run the agent ``config`` describes, or None if it can.
+
+    A node runs every agent as generated code: what the config's ``code`` holds,
+    or, for an agent of type ``llm``, the bridge code main writes for it. Every
+    other kind of agent is a class built into this server -- a native catalogue
+    agent, a Home Assistant actuator, a scheduled or rule agent, a registered
+    module -- and its config carries no program. Sent to a node, it starts as an
+    agent with nothing to run, answers every message with an error, and is
+    reported as started all the same.
+    """
+    if (config.get("code") or "").strip():
+        return None
+    agent_type = (config.get("type") or "dynamic").strip().lower()
+    if agent_type == "llm":
+        return None
+    if agent_type == "dynamic":
+        return "it has no program to send there"
+    return (
+        f"it is a {agent_type} agent, built into this server, and a node runs only an "
+        f"agent whose program goes with it: generated code, or an LLM agent"
+    )
 
 
 def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -514,8 +537,8 @@ class SpawnService:
 
         No-op (returns the original config) when:
           - the config already has code (caller provided their own logic)
-          - the config isn't type "llm" (DynamicAgent, ha_actuator, etc. are
-            handled directly by the runner already)
+          - the config isn't type "llm": a node runs nothing else without code,
+            and `why_a_node_cannot_run` keeps such a config off it
 
         Why a copy: callers may pass the same config dict for multiple writes
         (spawn registry, desired_state, MQTT publish) and we don't want to
@@ -616,36 +639,44 @@ class SpawnService:
             node,
             address,
         )
-        task_id = f"remote_install_{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_running_loop().create_future()
-        self.host._result_futures[task_id] = future
         # The node's name rather than its credentials: the installer already
         # holds those, and putting them in a message would spread them.
-        await self.host.send(
-            installer.actor_id,
-            MessageType.TASK,
-            {
-                "action": "node_install",
-                "host": address,
-                "packages": packages,
-                "node_name": node,
-                "_task_id": task_id,
-                "task": task_id,
-            },
-        )
+        request = {
+            "action": "node_install",
+            "host": address,
+            "packages": packages,
+            "node_name": node,
+        }
         try:
-            result = await asyncio.wait_for(future, timeout=INSTALL_TIMEOUT_S)
+            result = await ask_through(self.host, "installer", request, timeout=INSTALL_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.warning("[%s] Remote install timed out — spawning anyway", self.host.name)
+        except ReplyError as exc:
+            logger.warning(
+                "[%s] Remote install issue: %s", self.host.name, exc.reply.get("error", "?")
+            )
+        except RuntimeError as exc:
+            logger.warning("[%s] Remote install not sent: %s", self.host.name, exc)
         else:
-            if result.get("success"):
+            if isinstance(result, dict) and result.get("success"):
                 logger.info("[%s] Remote install OK: %s", self.host.name, packages)
             else:
-                logger.warning(
-                    "[%s] Remote install issue: %s", self.host.name, result.get("error", "?")
-                )
-        finally:
-            self.host._result_futures.pop(task_id, None)
+                logger.warning("[%s] Remote install issue: %s", self.host.name, result)
+
+    async def _refuse_remote_spawn(self, config: dict[str, Any], node: str, reason: str) -> None:
+        """Say in the log and on the dashboard why an agent was not sent to ``node``."""
+        name = config.get("name")
+        logger.error("[%s] Cannot spawn %r on %s: %s", self.host.name, name, node, reason)
+        await self.host._mqtt_publish(
+            f"agents/{self.host.actor_id}/logs",
+            {
+                "type": "error",
+                "message": f"Cannot spawn '{name}' on '{node}': {reason}",
+                "child_name": name,
+                "node": node,
+                "timestamp": time.time(),
+            },
+        )
 
     async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         """Publish a spawn command to a node, which runs the agent there.
@@ -671,6 +702,27 @@ class SpawnService:
                 config.get("name"),
                 node,
                 problem,
+            )
+            return
+        unrunnable = why_a_node_cannot_run(config)
+        if unrunnable:
+            await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
+            return
+        mismatch = self.host._node_version_mismatch(node)
+        if mismatch:
+            # Before the install, the spawn and the desired state: a node on
+            # other code must not be handed an agent it may not be able to run,
+            # and must not be told to keep running it after a reboot.
+            logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
+            await self.host._mqtt_publish(
+                f"agents/{self.host.actor_id}/logs",
+                {
+                    "type": "error",
+                    "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
+                    "child_name": config.get("name"),
+                    "node": node,
+                    "timestamp": time.time(),
+                },
             )
             return
         wire_config = self._inject_llm_bridge_code(config)

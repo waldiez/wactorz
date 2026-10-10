@@ -13,12 +13,11 @@ from typing import Any
 
 import pytest
 
-from wactorz.catalogue_agents.doc_to_pptx_agent import AGENT_CODE
+from tests.programs import program_namespace
 
 # The agent ships as source that the framework exec's when spawning it, so the
 # only way to reach its helpers is the way the framework does.
-_agent: dict = {}
-exec(AGENT_CODE, _agent)
+_agent = program_namespace("doc_to_pptx_agent.py")
 _run_blocking = _agent["_run_blocking"]
 
 
@@ -48,7 +47,9 @@ class TestRunBlocking:
 
         # Called inline this is 0: nothing else gets a turn until the command
         # returns, which is what let a 60s task timeout sit behind a 120s npm.
-        assert ticks > 5
+        # How many turns fit is the machine's business; that there were any is
+        # the point.
+        assert ticks > 0
 
     async def test_a_task_timeout_can_now_fire(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(_agent["subprocess"], "run", _slow_command)

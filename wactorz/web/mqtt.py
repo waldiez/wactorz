@@ -1,12 +1,13 @@
 """Broker link: subscribe, dispatch, and report connection state.
 
 Owns the long-lived MQTT listener that feeds every inbound broker message
-through ``events.parse_topic`` into the live state, plus the startup
-reachability probe. The connection flag itself lives in ``runtime`` — ``ws``
+through ``events.parse_topic`` into the live state, reconnecting for as long
+as the server runs. The connection flag itself lives in ``runtime`` — ``ws``
 reports it to browsers, so it cannot live here (mqtt already depends on ws).
 """
 
 import asyncio
+import gc
 import json
 import logging
 import time
@@ -17,6 +18,7 @@ from ..core.mqtt import (
     client_id,
     install_id,
     mqtt_client,
+    reconnect_wait,
     session_kwargs,
 )
 from ..monitoring.log_redaction import redact
@@ -132,19 +134,6 @@ async def mqtt_listener() -> None:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
 
-                    if runtime.registry is not None:
-                        await client.publish(
-                            f"agents/{runtime.IO_GATEWAY_ID}/spawn",
-                            json.dumps(
-                                {
-                                    "agentId": runtime.IO_GATEWAY_ID,
-                                    "agentName": runtime.IO_GATEWAY_ID,
-                                    "agentType": "gateway",
-                                    "timestamp": time.time(),
-                                }
-                            ),
-                        )
-
                     for topic in runtime.MQTT_TOPICS:
                         await client.subscribe(topic, qos=1)
 
@@ -158,48 +147,10 @@ async def mqtt_listener() -> None:
             except Exception as e:
                 runtime.mqtt_client_ref = None
                 await set_mqtt_status(False)
-                logger.warning("MQTT error: %s. Reconnecting in 5s...", e)
-                await asyncio.sleep(5)
+                logger.warning("MQTT error: %s. Reconnecting in about 5s...", e)
+                await asyncio.sleep(reconnect_wait(5.0))
     finally:
         # Drop ref and force GC while loop is still open so paho's __del__
         # doesn't fire after the event loop closes (avoids RuntimeError noise).
-        import gc
-
         runtime.mqtt_client_ref = None
         gc.collect()
-
-
-# ── Startup checks ─────────────────────────────────────────────────────────
-
-
-async def check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
-    """Return True if MQTT broker is reachable.
-
-    Retries briefly so a transient blip (or a broker mid-restart) does not fatally
-    abort startup: the aiomqtt client itself reconnects, so this pre-flight probe
-    must be at least as tolerant, or it aborts a server whose MQTT is actually fine.
-    """
-    last = ""
-    for i in range(attempts):
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(runtime.MQTT_BROKER, runtime.MQTT_PORT), timeout=3
-            )
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:  # noqa: S110  # closing a probe socket already being discarded
-                pass
-            return True
-        except Exception as exc:
-            last = repr(exc)
-            if i < attempts - 1:
-                await asyncio.sleep(delay)
-    logger.error(
-        "[startup] MQTT broker %s:%s unreachable after %s tries — %s",
-        runtime.MQTT_BROKER,
-        runtime.MQTT_PORT,
-        attempts,
-        last,
-    )
-    return False

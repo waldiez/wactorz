@@ -28,11 +28,13 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 | Task | Command |
 | ---- | ------- |
-| Install dev deps | `make install-dev` |
+| Install dev deps | `make install-dev` (uv from `uv.lock` if uv is on PATH, else pip; `USE_UV=0` forces pip) · after changing deps: `make lock` · `make audit` |
 | Run backend | `make run` · full dev stack: `make dev-full` |
-| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) |
+| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) · every supported Python, opt-in: `make test-py-versions` (`PYTHONS="3.10 3.11"` to narrow) · main and a node over a real mosquitto: `make test-broker` (needs Docker) · the same two kept busy for a while, failing on anything that only grows: `make soak` (`DURATION=` seconds, default 300) · the whole product through a browser, with a real broker and a node deployed over SSH: `make e2e` (needs Docker; `make e2e-setup` once; see `e2e/README.md`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
 | Frontend lint | `make lint` (typecheck + prettier + eslint + markdownlint) |
+| Workflows, shell scripts, Dockerfiles | `make lint-ci` (zizmor + shellcheck + hadolint, pinned images; needs Docker, online with `GH_TOKEN`) |
+| App image checks | `make image` then `make image-smoke` (beside a broker: probes, no root, no set-id) and `make image-scan` (Trivy; accepted findings in `.trivyignore.yaml`); `IMAGE=` picks another image, and `make image FLAVOUR=ultra` builds the larger of the two (PyTorch, Ultralytics, OpenCV, GStreamer) |
 | Build everything | `make build` · local CI: `make ci` |
 
 ## Branches & pull requests
@@ -87,8 +89,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
   - **Superlatives.** "the largest", "the only", "the last remaining" — all of them decay
     silently.
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
-  plus an advisory pass that reports but never blocks. Pre-commit and CI both enforce the gated
-  rules, so a push that skips them fails rather than merging.
+  plus an advisory pass that reports but never blocks. The commit hook (prek) and CI both enforce
+  the gated rules, so a push that skips them fails rather than merging.
 - basedpyright (basic mode) is gated too, over `wactorz`, `tests` and `scripts` alike. In a test,
   a fake declares the attributes tests set on it, and where one stands in for a real object it
   says so on that line: `cast()`, or `# pyright: ignore[rule]` naming the rule — never a bare
@@ -96,15 +98,19 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 ## Catalogue agents
 
-`wactorz/catalogue_agents/*.py` hold a runnable agent program as a string in `AGENT_CODE`,
-exec'd when the agent is spawned. Two consequences:
+A dynamic catalogue agent's program is a module of `wactorz/catalogue_agents/`: the catalogue
+reads its source and sends it as the spawn config's `code`, and a DynamicAgent execs it — on
+main or on a node. Consequences:
 
-- **Ruff and the type checker see a string literal**, so none of the gated rules reach that code.
-  A near-zero finding count for these files means nothing was read, not that nothing is wrong.
-  `tests/test_catalogue_agent_code.py` parses each program so a syntax error fails a test rather
-  than an agent that will not start.
-- **The program cannot import `wactorz`** when it runs on a node. What it needs is either stdlib
-  or injected into the exec namespace by the host.
+- **The source is what runs, not the imported module.** The program sees the exec namespace
+  (`agent` is passed in; the host injects a few names), never its own package; it must work
+  without being imported, so no relative imports.
+- **It may import `wactorz`** — a node is a wactorz install. Absolute imports only.
+- **The linters, the type checker and coverage read it like any other module.** Tests reach a
+  program through `tests/programs.py`, which execs it the way a DynamicAgent does.
+- `reachy_mini_agent.py` still holds its program in an `AGENT_CODE` string, which the linters see
+  only as a literal; `scripts/lint_agent_code.py` lints it, and
+  `tests/test_catalogue_agent_code.py` checks every program the catalogue sends compiles.
 
 ## Safety
 

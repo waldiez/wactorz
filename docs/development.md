@@ -148,7 +148,7 @@ MQTT_PASSWORD=
 #### Web dashboard
 
 ```env
-WS_PORT=8888   # dashboard port, default 8888
+MONITOR_PORT=8888   # dashboard port, default 8888; WS_PORT is read only when this is unset
 ```
 
 ---
@@ -390,17 +390,25 @@ wactorz/                         ← repo root
 ```bash
 git clone https://github.com/waldiez/wactorz.git
 cd wactorz
-pip install -e ".[all]"
+make install-dev
 
 # Start with hot-reload (restarts on .py/.yaml file changes)
-wactorz --reload
+.venv/bin/wactorz --reload
 ```
+
+`make install-dev` uses [uv](https://docs.astral.sh/uv/) when it is installed,
+putting the versions pinned in `uv.lock` into `.venv`; without it, pip installs
+from the ranges in `pyproject.toml`. It never removes what is already there, so
+extras installed by hand survive it. `USE_UV=0` forces pip. After changing a
+dependency, `make lock` re-resolves `uv.lock`, and `make audit` checks it for
+known vulnerabilities. What agents install at runtime, here and on edge nodes,
+always goes through pip.
 
 ### Adding a catalog recipe
 
 ```bash
-# 1. Create the recipe file
-#    Must export AGENT_CODE = r'''...'''
+# 1. Create the recipe file: an ordinary module defining setup / process /
+#    handle_task / cleanup, as any dynamic agent's code does
 touch wactorz/catalogue_agents/my_agent.py
 
 # 2. Register it in catalog_agent.py → _build_catalog()
@@ -416,8 +424,8 @@ touch wactorz/catalogue_agents/my_agent.py
 ### Running tests
 
 ```bash
-pip install -e ".[dev]"
-make test-py          # or: python -m pytest tests
+make install-dev
+make test-py          # or: .venv/bin/python -m pytest tests
 ```
 
 ---
@@ -464,12 +472,6 @@ print('User facts:', json.loads(row[0]) if row else {})
 "
 ```
 
-The `spawn_registry` table also holds spawn configs in a structured form:
-
-```bash
-sqlite3 state/wactorz.db "SELECT name, node FROM spawn_registry;"
-```
-
 #### Remove a stuck agent from the spawn registry
 
 ```python
@@ -485,7 +487,6 @@ conn.execute(
     \"UPDATE kv_store SET value=? WHERE agent='main' AND key='_spawned_agents'\",
     (json.dumps(spawned),),
 )
-conn.execute(\"DELETE FROM spawn_registry WHERE name='my-stuck-agent'\")
 conn.commit()
 print('Done. Remaining:', list(spawned.keys()))
 "

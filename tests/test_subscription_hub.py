@@ -82,6 +82,8 @@ class FakeActor:
         self.actor_id = "11111111-2222-3333-4444-555555555555"
         self._mqtt_broker = "localhost"
         self._mqtt_port = 1883
+        #: The node it runs on; empty on main.
+        self._node = ""
         self._cb_error_count: dict[str, int] = {}
         self._cb_error_last: dict[str, float] = {}
         self.state = "RUNNING"
@@ -135,14 +137,20 @@ class TestOneConnectionPerActor:
         assert second is None
         first.cancel()
 
-    async def test_the_connection_carries_the_actor_id(self, broker: FakeBroker) -> None:
+    async def test_the_connection_carries_the_actor_id_scoped_to_where_it_runs(
+        self, broker: FakeBroker
+    ) -> None:
+        # Actor ids come from the name, so the same agent has the same id on
+        # every machine: unscoped, a copy on a node and one on main took each
+        # other's connection in a loop.
         actor = FakeActor()
+        actor._node = "rpi"
         hub = SubscriptionHub(actor)
 
         hub.bind("a/one", lambda _payload: None)
         await _settle()
 
-        assert broker.identifiers == [f"wactorz-agent-{actor.actor_id}"]
+        assert broker.identifiers == [f"wactorz-agent-rpi-{actor.actor_id}"]
         _stop(hub)
 
 
@@ -549,3 +557,25 @@ class TestRepairUnbinds:
         assert seen == ["after"]
         assert len(broker.connections) == 1, "a repair should not rebuild the connection"
         _stop(hub)
+
+
+async def test_a_subscribe_on_the_live_connection_is_held_until_it_is_done(
+    broker: FakeBroker,
+) -> None:
+    # Not left for the collector to take part-way through.
+    async def noop(_payload: Any) -> None:
+        return None
+
+    hub = SubscriptionHub(FakeActor())
+    hub.bind("sensors/a", noop)
+    await _settle()
+
+    hub.bind("sensors/b", noop)
+    pending = set(hub._subscribing)
+    await _settle()
+
+    assert pending
+    assert all(task.done() for task in pending)
+    assert hub._subscribing == set()
+    _stop(hub)
+    await hub.clear()

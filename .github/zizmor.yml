@@ -1,0 +1,6 @@
+# zizmor's configuration, read from here by `make lint-ci` and CI.
+rules:
+  self-repository:
+    # It proposes `$/...` for a reusable workflow in this repository. `./...`
+    # is the form GitHub documents for it and reads as the path it is.
+    disable: true

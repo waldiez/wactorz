@@ -14,8 +14,6 @@ Nothing in here reaches for an actor or a broker. It is handed what happened and
 asked to describe it, which is why it can be read and tested on its own.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any
 

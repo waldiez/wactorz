@@ -95,7 +95,7 @@ class CrashOnceActor(Actor):
 
 
 class AlwaysCrashActor(Actor):
-    """Crashes every time it starts — exhausts restart budget."""
+    """Crashes every time it starts — drives restarts into slow retry."""
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "always-crash")
@@ -126,6 +126,18 @@ class DependentActor(Actor):
 
 
 # ── Test infrastructure ───────────────────────────────────────────────────────
+
+
+def running_actor(system: Any, name: str) -> Any:
+    """The actor the supervisor holds for ``name``, once it is started; else None.
+
+    What a test of a restart waits for. Not the factory having been called: the
+    supervisor records and starts the new actor after building it, so a test that
+    stopped waiting at the build read the spec while the restart was still on its
+    way, and failed on a loaded machine.
+    """
+    actor = system.supervisor._specs[name].actor
+    return actor if actor is not None and actor.state == ActorState.RUNNING else None
 
 
 async def wait_until(
@@ -240,7 +252,9 @@ async def test_one_for_one_restart() -> None:
     )
     await system.supervisor.start()
 
-    await wait_until(lambda: call_n["crash"] >= 2)
+    assert await wait_until(
+        lambda: call_n["crash"] >= 2 and running_actor(system, "crash-once") is not None
+    )
 
     new_crash_actor = system.supervisor._specs["crash-once"].actor
     assert new_crash_actor
@@ -279,7 +293,10 @@ async def test_restart_count_increments() -> None:
     )
     await system.supervisor.start()
 
-    await wait_until(lambda: crash_counter["n"] >= 3)  # initial + 2 restarts
+    # The initial start and two restarts, the last one finished.
+    assert await wait_until(
+        lambda: crash_counter["n"] >= 3 and running_actor(system, "counted") is not None
+    )
 
     final = system.supervisor._specs["counted"].actor
     assert final
@@ -291,9 +308,9 @@ async def test_restart_count_increments() -> None:
     await system.supervisor.stop()
 
 
-async def test_budget_exhausted_gives_up() -> None:
-    """After max_restarts within the window the supervisor stops trying."""
-    section("TEST 4 — Budget exhausted: supervisor gives up")
+async def test_repeated_crashes_slow_restarts_down() -> None:
+    """After max_restarts crashes in a row the supervisor slows down, and keeps it."""
+    section("TEST 4 — Repeated crashes: supervisor slows down")
 
     system = make_system()
     notifications = []
@@ -326,13 +343,15 @@ async def test_budget_exhausted_gives_up() -> None:
     )
     await system.supervisor.start()
 
-    await wait_until(lambda: system.supervisor._specs["always-crash"].exhausted)
+    await wait_until(lambda: system.supervisor._specs["always-crash"].slow)
 
     spec = system.supervisor._specs["always-crash"]
-    assert_true("restart budget exhausted", spec.exhausted, f"restart_times={spec._restart_times}")
+    assert_true("restarts slowed down", spec.slow, f"crash_streak={spec.crash_streak}")
+    assert_true("still supervised", not spec.retired)
+    # The initial start plus max_restarts quick restarts; the next waits minutes.
     assert_true(
-        "supervisor stopped restarting (start_count <= 5)",
-        start_count["n"] <= 5,
+        "supervisor stopped restarting quickly (start_count <= 4)",
+        start_count["n"] <= 4,
         f"start_count={start_count['n']}",
     )
 
@@ -492,7 +511,8 @@ async def test_supervisor_status_snapshot() -> None:
     assert_eq("strategy correct", entry["strategy"], "one_for_one")
     assert_eq("max_restarts correct", entry["max_restarts"], 7)
     assert_eq("actor_state is running", entry["actor_state"], "running")
-    assert_eq("not exhausted", entry["exhausted"], False)
+    assert_eq("not slowed down", entry["slow_retry"], False)
+    assert_eq("no crash streak", entry["crash_streak"], 0)
 
     await system.supervisor.stop()
 
@@ -552,7 +572,7 @@ ALL_TESTS = [
     ("Stable actor not restarted", test_stable_actor_not_restarted),
     ("ONE_FOR_ONE restart", test_one_for_one_restart),
     ("restart_count increments", test_restart_count_increments),
-    ("Budget exhausted — gives up", test_budget_exhausted_gives_up),
+    ("Repeated crashes — slows down", test_repeated_crashes_slow_restarts_down),
     ("ONE_FOR_ALL restarts siblings", test_one_for_all_restarts_siblings),
     ("REST_FOR_ONE only downstream", test_rest_for_one_only_downstream),
     ("supervisor.status() snapshot", test_supervisor_status_snapshot),

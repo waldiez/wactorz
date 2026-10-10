@@ -144,10 +144,12 @@ async def ask_wactorz(message: str) -> str:
 
 @mcp.tool()
 async def ask_agent(agent_name: str, message: str) -> str:
-    """Send a message directly to a named agent, bypassing the orchestrator.
+    """Send a message to a named agent and return that agent's reply.
 
-    Use when you already know which agent should handle the request.
-    Agent names are lowercase-hyphenated (e.g. "home-assistant-agent").
+    Main hands it straight to the agent, without deciding who should answer:
+    it finds the agent running here, spawns it from the catalogue, or asks the
+    node it runs on. Use when you already know which agent should handle the
+    request. Agent names are lowercase-hyphenated (e.g. "home-assistant-agent").
     Run list_agents() first if unsure.
     """
     data = await _wactorz_post("/chat", {"message": message, "agent_name": agent_name})

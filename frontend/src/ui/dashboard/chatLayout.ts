@@ -10,28 +10,23 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel } from "./agentState";
+import { button, el, named } from "../dom";
 
 /** The sidebar shell: a filter box above the (separately rendered) agent list. */
 export function buildChatSidebar(filter: string, onFilter: (value: string) => void): HTMLElement {
-    const sidebar = document.createElement("div");
-    sidebar.className = "af-chat-sidebar";
+    const sidebar = el("div", "af-chat-sidebar");
 
-    const searchWrap = document.createElement("div");
-    searchWrap.className = "af-chat-sidebar-search";
-    const searchInput = document.createElement("input");
+    const searchWrap = el("div", "af-chat-sidebar-search");
     // Keep the default text type — `type="search"` adds browser chrome (a
     // clear button / WebKit rounding) that would change this field's look.
-    searchInput.id = "af-agent-filter";
-    searchInput.name = "agent-filter";
+    const searchInput = named(el("input"), "agent-filter", "Filter agents", "af-agent-filter");
     searchInput.placeholder = "Filter agents…";
-    searchInput.setAttribute("aria-label", "Filter agents");
     searchInput.value = filter;
     searchInput.addEventListener("input", () => onFilter(searchInput.value.toLowerCase()));
     searchWrap.appendChild(searchInput);
     sidebar.appendChild(searchWrap);
 
-    const agentList = document.createElement("div");
-    agentList.className = "af-chat-agent-list";
+    const agentList = el("div", "af-chat-agent-list");
     agentList.id = "af-chat-agent-list";
     sidebar.appendChild(agentList);
     return sidebar;
@@ -39,15 +34,12 @@ export function buildChatSidebar(filter: string, onFilter: (value: string) => vo
 
 /** The pane shell: a header and an empty thread, both filled in by renders. */
 export function buildChatPane(): HTMLElement {
-    const pane = document.createElement("div");
-    pane.className = "af-chat-pane";
+    const pane = el("div", "af-chat-pane");
 
-    const paneHdr = document.createElement("div");
-    paneHdr.className = "af-chat-pane-header";
+    const paneHdr = el("div", "af-chat-pane-header");
     paneHdr.id = "af-chat-pane-header";
 
-    const thread = document.createElement("div");
-    thread.className = "af-chat-thread";
+    const thread = el("div", "af-chat-thread");
     thread.id = "af-chat-thread";
 
     pane.append(paneHdr, thread);
@@ -68,26 +60,17 @@ export function renderPaneHeader(
 ): void {
     hdr.innerHTML = "";
 
-    const backBtn = document.createElement("button");
-    backBtn.className = "af-chat-back-btn";
-    backBtn.textContent = "‹ Back";
+    const backBtn = button("af-chat-back-btn", "‹ Back");
     backBtn.addEventListener("click", onBack);
     hdr.appendChild(backBtn);
 
     if (agent) {
-        const dot = document.createElement("span");
-        dot.className = "af-chat-agent-dot";
+        const dot = el("span", "af-chat-agent-dot");
         dot.style.background = stateColor(agent.state);
         hdr.appendChild(dot);
     }
-    const title = document.createElement("span");
-    title.className = "af-chat-pane-title";
-    title.textContent = `@${target}`;
-    hdr.appendChild(title);
+    hdr.appendChild(el("span", "af-chat-pane-title", `@${target}`));
     if (agent) {
-        const st = document.createElement("span");
-        st.className = "af-chat-pane-state";
-        st.textContent = stateLabel(agent.state);
-        hdr.appendChild(st);
+        hdr.appendChild(el("span", "af-chat-pane-state", stateLabel(agent.state)));
     }
 }

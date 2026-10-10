@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.waiting import PATIENCE_S
 from wactorz.core.persistence import maintenance
 from wactorz.core.persistence.db import WactorzDB
 
@@ -131,7 +132,7 @@ class TestStartAndStop:
         maintenance.INTERVAL_S, original = 0.01, maintenance.INTERVAL_S
         try:
             maintenance.start()
-            await asyncio.to_thread(started.wait, 2.0)
+            assert await asyncio.to_thread(started.wait, PATIENCE_S), "the job never started"
             await maintenance.stop()
         finally:
             maintenance.INTERVAL_S = original
@@ -177,3 +178,75 @@ class TestTheCheckpointItself:
         with sqlite3.connect(str(tmp_path / "w.db")) as conn:
             row = conn.execute("SELECT COUNT(*) FROM kv_store WHERE key='keep'").fetchone()
         assert row[0] == 1
+
+
+class TestWhatAgentsKeep:
+    """`kv_store` is not pruned, so the rotation says who keeps the most, and warns."""
+
+    @pytest.fixture(name="db")
+    def db_fixture(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        with WactorzDB(str(tmp_path / "w.db")) as database:
+            monkeypatch.setattr(maintenance, "get_db", lambda: database)
+            monkeypatch.setattr(maintenance, "_warned_kv", set())
+            yield database
+
+    def test_sizes_by_agent_largest_first(self, db: WactorzDB) -> None:
+        db.kv_set("small", "a", "x")
+        db.kv_set("large", "a", "y" * 1000)
+        db.kv_set("large", "b", "z" * 1000)
+
+        sizes = db.kv_sizes()
+
+        assert list(sizes) == ["large", "small"]
+        assert sizes["large"] > 2000
+
+    def test_the_report_names_the_largest(self, db: WactorzDB) -> None:
+        for n in range(maintenance.REPORTED_AGENTS + 2):
+            db.kv_set(f"agent-{n}", "k", "v" * (n + 1) * 100)
+
+        report = str(maintenance._report_kv_sizes())
+
+        assert report.startswith(f"agent-{maintenance.REPORTED_AGENTS + 1} ")
+        assert report.count("KB") == maintenance.REPORTED_AGENTS
+
+    def test_an_agent_keeping_too_much_is_warned_about_once(
+        self, db: WactorzDB, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        db.kv_set("hoarder", "history", "x" * maintenance.LARGE_STATE_BYTES)
+        db.kv_set("tidy", "k", "x")
+
+        with caplog.at_level("WARNING", logger=maintenance.__name__):
+            maintenance._report_kv_sizes()
+            maintenance._report_kv_sizes()
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "'hoarder'" in warnings[0]
+
+    def test_an_agent_that_slimmed_down_and_grew_again_is_warned_again(
+        self, db: WactorzDB, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING", logger=maintenance.__name__):
+            db.kv_set("hoarder", "history", "x" * maintenance.LARGE_STATE_BYTES)
+            maintenance._report_kv_sizes()
+            db.kv_set("hoarder", "history", "x")
+            maintenance._report_kv_sizes()
+            db.kv_set("hoarder", "history", "x" * maintenance.LARGE_STATE_BYTES)
+            maintenance._report_kv_sizes()
+
+        assert sum(r.levelname == "WARNING" for r in caplog.records) == 2
+
+    def test_without_a_database_it_says_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(maintenance, "get_db", lambda: None)
+
+        assert maintenance._report_kv_sizes() is None
+
+    def test_an_empty_store_reads_as_empty(self, db: WactorzDB) -> None:
+        assert maintenance._report_kv_sizes() == "empty"
+
+    async def test_start_registers_it(self) -> None:
+        maintenance.start()
+        try:
+            assert "kv-sizes" in maintenance._JOBS
+        finally:
+            await maintenance.stop()

@@ -13,9 +13,9 @@ import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
 import { VERSION_KEY } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
-import { escapeHtml } from "../escapeHtml";
 import { buildSignOutButton } from "./signOut";
 import { iconMarkup, type IconName } from "./icons";
+import { button, el, externalLink, iconButton } from "../dom";
 
 export interface HeaderOpts {
     view: View;
@@ -67,16 +67,37 @@ function applyHaNavUrl(a: HTMLAnchorElement, haUrl: string | null): void {
     }
 }
 
+/**
+ * A bottom tab's contents: its icon in the wrapper the layout sizes, then its
+ * label. The label is set as text — extension views supply their own.
+ */
+function bottomTabContent(icon: IconName, label: string): HTMLElement[] {
+    const iconWrap = el("span", "af-bottom-tab-icon");
+    iconWrap.innerHTML = iconMarkup(icon, 20);
+    return [iconWrap, el("span", "af-bottom-tab-label", label)];
+}
+
+/** A header view button's contents: its icon, then its label as text. */
+function viewButtonContent(target: HTMLElement, icon: IconName, label: string): void {
+    target.innerHTML = iconMarkup(icon);
+    target.appendChild(el("span", "af-view-label", label));
+}
+
 /** The "Devices" entry is an external link to the HA UI (new tab), not a view. */
 function buildHaNavLink(haUrl: string | null, mobile: boolean): HTMLAnchorElement {
-    const a = document.createElement("a");
-    a.className = mobile ? "af-view-btn af-bottom-tab af-ha-nav-link" : "af-view-btn af-ha-nav-link";
-    a.target = "_blank";
-    a.rel = "noopener";
+    const a = externalLink(
+        "",
+        mobile ? "af-view-btn af-bottom-tab af-ha-nav-link" : "af-view-btn af-ha-nav-link",
+    );
     a.setAttribute("aria-label", "Open Home Assistant in a new tab");
-    a.innerHTML = mobile
-        ? `<span class="af-bottom-tab-icon">${iconMarkup("home", 20)}</span><span class="af-bottom-tab-label">Devices</span><span class="af-ha-ext" aria-hidden="true">↗</span>`
-        : `${iconMarkup("home")}<span class="af-view-label">Devices</span><span class="af-ha-ext" aria-hidden="true">↗</span>`;
+    if (mobile) {
+        a.append(...bottomTabContent("home", "Devices"));
+    } else {
+        viewButtonContent(a, "home", "Devices");
+    }
+    const ext = el("span", "af-ha-ext", "↗");
+    ext.setAttribute("aria-hidden", "true");
+    a.appendChild(ext);
     applyHaNavUrl(a, haUrl);
     return a;
 }
@@ -166,8 +187,7 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
  *  so it never shows a guess -- and it is the server's answer, not the bundle's,
  *  because `static/app` is committed and can lag the wheel serving it. */
 function buildVersion(): HTMLElement {
-    const version = document.createElement("span");
-    version.className = "af-version";
+    const version = el("span", "af-version");
     const running = safeStorage.get(VERSION_KEY);
     if (running) {
         version.textContent = running;
@@ -177,36 +197,25 @@ function buildVersion(): HTMLElement {
 }
 
 function buildHeaderLeft(connState: ConnState): HTMLElement {
-    const left = document.createElement("div");
-    left.className = "af-header-left";
+    const left = el("div", "af-header-left");
 
-    const icon = document.createElement("img");
+    const icon = el("img");
     icon.src = "./favicon.svg";
     icon.width = 22;
     icon.height = 22;
     icon.alt = "Wactorz";
     icon.style.opacity = "0.9";
 
-    const title = document.createElement("span");
-    title.className = "af-title";
-    title.textContent = "Wactorz";
-
-    const connBadge = document.createElement("span");
-    connBadge.className = `af-conn-badge af-conn-${connState}`;
-    connBadge.textContent = "○ Connecting…";
+    const title = el("span", "af-title", "Wactorz");
+    const connBadge = el("span", `af-conn-badge af-conn-${connState}`, "○ Connecting…");
 
     left.append(icon, title, buildVersion(), connBadge);
     return left;
 }
 
 /** A square icon-only header button, labelled for anyone not seeing the icon. */
-function iconButton(label: string, icon: IconName): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "af-view-btn af-view-btn-icon";
-    btn.title = label;
-    btn.setAttribute("aria-label", label);
-    btn.innerHTML = iconMarkup(icon);
-    return btn;
+function headerIconButton(label: string, icon: IconName): HTMLButtonElement {
+    return iconButton("af-view-btn af-view-btn-icon", label, iconMarkup(icon));
 }
 
 function buildHeaderRight(
@@ -215,30 +224,27 @@ function buildHeaderRight(
     haUrl: string | null,
     extraViews: { key: View; label: string; icon: IconName }[],
 ): HTMLElement {
-    const right = document.createElement("div");
-    right.className = "af-header-right";
+    const right = el("div", "af-header-right");
 
     const allViews = [...BUILTIN_VIEWS, ...extraViews, SETTINGS_VIEW];
     allViews.forEach(({ key, label, icon }) => {
-        const btn = document.createElement("button");
-        btn.className = `af-view-btn${key === view ? " active" : ""}`;
+        const btn = button(`af-view-btn${key === view ? " active" : ""}`);
         btn.dataset["view"] = key;
         if (key === view) {
             btn.setAttribute("aria-current", "page");
         }
-        // escapeHtml: `label` comes from `extraViews`, which extensions supply.
-        btn.innerHTML = `${iconMarkup(icon)}<span class="af-view-label">${escapeHtml(label)}</span>`;
+        viewButtonContent(btn, icon, label);
         btn.addEventListener("click", () => onSetView(key));
         right.appendChild(btn);
     });
     // Devices links out to the HA UI rather than embedding a controllable view.
     right.appendChild(buildHaNavLink(haUrl, false));
 
-    const audioBtn = iconButton("Audio settings", "volume");
+    const audioBtn = headerIconButton("Audio settings", "volume");
     right.appendChild(audioBtn);
     wirePopover(audioBtn, buildAudioPopover());
 
-    const resetBtn = iconButton("Clear stored state", "reset");
+    const resetBtn = headerIconButton("Clear stored state", "reset");
     right.appendChild(resetBtn);
     wirePopover(resetBtn, buildResetPopover(), pop => (pop as ResetPopover)._resetArmed());
 
@@ -251,15 +257,10 @@ function buildHeaderRight(
 
 /** Build the top header (logo, connection badge, health, view tabs, audio + reset popovers). */
 export function buildHeader(opts: HeaderOpts): HTMLElement {
-    const header = document.createElement("div");
-    header.className = "af-header";
+    const header = el("div", "af-header");
 
-    const center = document.createElement("div");
-    center.className = "af-header-center";
-    const health = document.createElement("span");
-    health.className = "af-health";
-    health.textContent = "0/0 wa healthy";
-    center.appendChild(health);
+    const center = el("div", "af-header-center");
+    center.appendChild(el("span", "af-health", "0/0 wa healthy"));
 
     header.append(
         buildHeaderLeft(opts.connState),
@@ -270,13 +271,12 @@ export function buildHeader(opts: HeaderOpts): HTMLElement {
 }
 
 function bottomTab(key: View, icon: IconName, label: string, view: View, extra: string): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = `af-view-btn af-bottom-tab${extra}${key === view ? " active" : ""}`;
+    const btn = button(`af-view-btn af-bottom-tab${extra}${key === view ? " active" : ""}`);
     btn.dataset["view"] = key;
     if (key === view) {
         btn.setAttribute("aria-current", "page");
     }
-    btn.innerHTML = `<span class="af-bottom-tab-icon">${iconMarkup(icon, 20)}</span><span class="af-bottom-tab-label">${label}</span>`;
+    btn.append(...bottomTabContent(icon, label));
     return btn;
 }
 
@@ -366,14 +366,11 @@ export function buildBottomNav(opts: {
     extraViews: { key: View; label: string; icon: IconName }[];
 }): HTMLElement {
     const { view, onSetView, haUrl, extraViews } = opts;
-    const nav = document.createElement("nav");
-    nav.className = "af-bottom-nav";
+    const nav = el("nav", "af-bottom-nav");
 
-    const sheet = document.createElement("div");
-    sheet.className = "af-bottom-sheet";
-    const moreBtn = document.createElement("button");
-    moreBtn.className = "af-bottom-tab af-bottom-more-btn";
-    moreBtn.innerHTML = `<span class="af-bottom-tab-icon">${iconMarkup("more", 20)}</span><span class="af-bottom-tab-label">More</span>`;
+    const sheet = el("div", "af-bottom-sheet");
+    const moreBtn = button("af-bottom-tab af-bottom-more-btn");
+    moreBtn.append(...bottomTabContent("more", "More"));
     wireMoreSheet(sheet, moreBtn);
 
     wirePrimaryBottomNav(nav, sheet, view, onSetView);

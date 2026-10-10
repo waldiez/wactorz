@@ -446,5 +446,5 @@ async def create_context() -> TUIContext:
 
     args = get_args()
     args.interface = "cli"
-    system, main_actor, _ = await build_system(args)
+    system, main_actor, _db, _orchestrator = await build_system(args)
     return TUIContext(main_actor=main_actor, system=system)

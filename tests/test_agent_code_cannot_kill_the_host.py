@@ -26,7 +26,6 @@ import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.core.actor import ActorState
-from wactorz.remote_runner import ProcessEscalated, _RemoteAgent
 
 EXITING_PROCESS = """
 async def process(agent):
@@ -242,78 +241,35 @@ class TestStoppingStillStops:
 # ── The node runner ───────────────────────────────────────────────────────────
 
 
-class _StubRunner:
-    """Stands in for the node's runner, recording what was published."""
-
-    node_name = "test-node"
-
-    def __init__(self) -> None:
-        self.events: list[tuple[str, Any]] = []
-
-    async def publish(self, topic: str, data: Any, retain: bool = False) -> None:
-        self.events.append((topic, data))
-
-
-def make_remote_agent(tmp_path: Path, code: str) -> Any:
-    """A node-side agent around the given program, no broker involved."""
-    agent = _RemoteAgent({"name": "exiter", "code": code}, _StubRunner(), state_dir=str(tmp_path))  # pyright: ignore[reportArgumentType]
-    assert agent._compile() is None
-    return agent
-
-
 class TestANodeIsCoveredToo:
-    """A node runs the same model-written programs; an exit ends the agent
-    there too, not the node. These paths await the program directly, so no
-    boxing is needed — but the catch has to be there."""
+    """A node runs the same programs, through the same loop.
 
-    async def test_a_process_that_exits_is_counted_and_the_node_lives(self, tmp_path: Path) -> None:
-        agent = make_remote_agent(tmp_path, EXITING_PROCESS)
-        agent._running = True
-        task = asyncio.create_task(agent._process_loop())
+    It used to run a second implementation of it, so an exit that was caught on
+    main could end the process on a Raspberry Pi. There is one loop now, which
+    the tests above cover; what is left to check here is that an agent built for
+    a node really does use it, and that the task path a node has and main does
+    not answers rather than escaping.
+    """
 
-        alive = {"ticks": 0}
+    def test_a_node_agent_runs_the_same_loop(self, tmp_path: Path) -> None:
+        from wactorz.node.agent import NodeAgent
+        from wactorz.node.runner import NodeRunner
 
-        async def bystander() -> None:
-            while True:
-                alive["ticks"] += 1
-                await asyncio.sleep(0)
+        runner = NodeRunner("localhost", 1883, "rpi", state_dir=str(tmp_path))
+        agent = NodeAgent({"name": "exiter", "code": EXITING_PROCESS}, runner)
 
-        other = asyncio.create_task(bystander())
-        try:
-            await until(lambda: any(topic.endswith("/errors") for topic, _ in agent._runner.events))
-            before = alive["ticks"]
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            assert alive["ticks"] > before, "the loop stopped running other work"
-        finally:
-            other.cancel()
-            agent._running = False
-            task.cancel()
-            await asyncio.gather(other, task, return_exceptions=True)
-
-    async def test_repeated_exits_escalate_as_an_error_not_an_exit(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The escalation the supervisor reads is a plain exception; a
-        SystemExit reaching it would end the node instead."""
-        real_sleep = asyncio.sleep
-
-        async def instant(_seconds: float) -> None:
-            await real_sleep(0)
-
-        monkeypatch.setattr("wactorz.remote_runner.asyncio.sleep", instant)
-
-        agent = make_remote_agent(tmp_path, EXITING_PROCESS)
-        agent._running = True
-        task = asyncio.create_task(agent._process_loop())
-
-        await asyncio.gather(task, return_exceptions=True)
-
-        assert isinstance(task.exception(), ProcessEscalated)
+        assert type(agent)._run_process_forever is DynamicAgent._run_process_forever
 
     async def test_a_handle_task_that_exits_answers_the_caller(self, tmp_path: Path) -> None:
-        agent = make_remote_agent(tmp_path, EXITING_HANDLE_TASK)
+        # The caller is waiting on an MQTT reply topic. An exit that escaped
+        # would end the node and leave it waiting out its timeout.
+        from wactorz.node.agent import NodeAgent
+        from wactorz.node.runner import NodeRunner
 
-        result = await agent.handle_task({"do": "something"})
+        runner = NodeRunner("localhost", 1883, "rpi", state_dir=str(tmp_path))
+        agent = NodeAgent({"name": "exiter", "code": EXITING_HANDLE_TASK}, runner)
+        assert agent._compile_code(agent._code) is None
+
+        result = await agent.run_task({"do": "something"})
 
         assert "error" in result

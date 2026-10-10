@@ -15,6 +15,7 @@ on.
 | --- | --- |
 | **Default install** | It listens on `127.0.0.1` only. Nothing off the machine can reach it. |
 | **Reachable install** | `API_KEY`. Binding to a reachable address without one refuses to start. |
+| **Compose stack** | `API_KEY` from `.env`, or one generated on first start. Every container on the stack's network can reach the app, so it never runs without one. |
 | **Home Assistant add-on** | Home Assistant's own login. The panel goes through ingress, and requests are verified as coming from the Supervisor. |
 
 The refusal is deliberate rather than a warning: a warning scrolls past in a
@@ -88,7 +89,10 @@ that text into a prompt. Nothing about that PDF is under your control. It
 reaches that agent's own model first and the main agent's context only
 indirectly, through the reply — two hops rather than a direct line to the
 spawner, which is why it is worth stating plainly rather than assuming the
-distance protects you.
+distance protects you. What it can fetch is bounded: only public web addresses,
+every redirect checked the same way, so a search result cannot send it to a
+router or a cloud metadata address on the network it runs in, and nothing past
+50 MB.
 
 Assume any document an agent reads can attempt to instruct it. Give agents the
 narrowest credentials that let them do their job.
@@ -102,20 +106,68 @@ the broker. Anything that can publish to it can drive Wactorz.
 
 - **Credentials are required.** The bundled broker refuses anonymous
   connections, and `docker compose` will not start without `MQTT_PASSWORD`.
-- **There is no TLS in the client.** Traffic is cleartext, so the broker and
-  everything talking to it belong on a network you trust. Do not route it across
-  the public internet without a tunnel or VPN.
+- **Edge nodes reach the broker over TLS where the broker serves it.** Wactorz
+  keeps a private CA in the state directory and issues the broker's certificate
+  from it; the compose stack and the add-on's embedded broker serve TLS on `8883`
+  beside plain `1883`. `/deploy` hands a node the CA and switches it to TLS only
+  after checking from the node that the broker answers it — a node that could not
+  stays on cleartext, and the deploy log says so. The server's own connection uses
+  TLS with `MQTT_TLS=1`, on the broker's TLS port.
+  The compose stack publishes plain `1883` to its own host only; set
+  `MQTT_EXTERNAL_BIND=0.0.0.0` for a node not yet on TLS, until it is deployed
+  again. The add-on's embedded broker publishes nothing unless you map a port.
+  The broker still belongs on a network you trust, and nothing here replaces a
+  tunnel or VPN across the public internet. See "Encrypted connections (TLS)" in `remote-nodes.md`.
 - **Edge nodes hold broker credentials.** `/deploy` writes them to the node over
-  SSH, and by default a node uses the server's own account. A stolen node
-  therefore holds full broker access; give a node its own account when that
-  matters.
+  SSH. On a broker Wactorz does not configure, a node uses the server's own account
+  unless told otherwise, so a stolen node holds full broker access.
+  `WACTORZ_NODE_ACCOUNTS=1` — the default in the compose files and the add-ons'
+  embedded broker — gives each node an account of its own instead, and on the
+  brokers Wactorz configures an access list that names what a node may use: its
+  own `nodes/<name>/...`, the shared agent traffic, and the data topics agents
+  publish under by convention. Every other node's topics, `agents/+/commands`,
+  `system/` and anything else on the broker — `zigbee2mqtt/`, Home Assistant's
+  discovery — are closed to it. `WACTORZ_NODE_TOPICS` opens more data topics to
+  every node. Once a node is deployed, an account the list does not name has no
+  access, so list any other system that shares the broker in
+  `WACTORZ_BROKER_ACCOUNTS`. It takes effect for a node at its next `/deploy`,
+  so rotate the shared password once the last one has moved. A node's agents
+  share its account: the boundary is the machine, not the agent. See "An account
+  per node" in `remote-nodes.md`.
+- **`/deploy` trusts a node's SSH host key the first time it connects.** The key is
+  recorded in `<WACTORZ_STATE_DIR>/known_hosts`, or wherever `DEPLOY_KNOWN_HOSTS`
+  points, and a later change fails the connection. The first connection is the
+  exposure: whatever answers at the node's address then is trusted, and is handed
+  the node's broker credentials and signing key. On a network you do not fully
+  trust, set `DEPLOY_STRICT_HOST_KEYS=1` and add each key yourself after checking
+  its fingerprint. See "Host key verification" in `remote-nodes.md`.
+- **Commands to an edge node are signed.** A node runs the code in a spawn it
+  receives, so broker access alone must not be enough to send one. Main signs
+  every command it sends a node with a key derived for that node, which `/deploy`
+  writes to the node with its broker credentials. With `WACTORZ_NODE_SIGNING=enforce`,
+  the default, a node refuses a command not signed for it; with `warn` it acts on
+  it and main says so in chat, to find out what sends unsigned commands before
+  refusing them. A node deployed before signing holds no key and checks nothing
+  until it is deployed again, and a node takes the mode at its next `/deploy`. Commands are what is signed: an
+  agent's own messages, and what an agent reads from the broker, are not.
+- **Main's LLM answers only the nodes it deployed.** An agent on a node asks main's
+  LLM over the broker (`main/llm_request`), and main answers with its own budget and
+  an account the broker lets write anywhere. So a request names its node and is
+  signed with that node's key, and main replies only on that node's own
+  `nodes/<name>/reply/...` topics: a request naming any other reply topic gets
+  nothing at all. An unsigned request follows `WACTORZ_NODE_SIGNING` like a command:
+  `enforce` answers it with an error, `warn` answers it and main says so in chat.
 
 ---
 
 ## Secrets, logs and stored data
 
 - **Logs are redacted** as they are written — known credential shapes are
-  scrubbed before anything is stored or served. This is a floor, not a
+  scrubbed before anything is stored or served: a secret named as one
+  (`password=`, `"api_key": …`), a `Bearer` header, credentials in a URL, a
+  private key, and tokens recognisable by their shape alone — a Telegram bot
+  token in the Bot API's URLs, a JSON web token such as Home Assistant's, and
+  `sk-`, `ghp_`, `github_pat_` and `xox?-` keys. This is a floor, not a
   guarantee: a log can carry a secret nobody chose to write into it. Treat the
   log view as shareable with care.
 - **Raising a library to `DEBUG`** puts request bodies and headers into that same
@@ -135,11 +187,25 @@ the broker. Anything that can publish to it can drive Wactorz.
 1. Keep the default `127.0.0.1` bind unless you need otherwise.
 2. If you need otherwise, set `API_KEY` to something generated —
    `openssl rand -hex 32`.
+   Behind a reverse proxy, list it in `WACTORZ_TRUSTED_PROXIES` and have it set
+   `X-Forwarded-Host` and `X-Forwarded-Proto` rather than append to them.
+   Forwarded headers from any other peer are ignored. Do not list a loopback
+   address: a page in a browser on the same machine connects from there too. For
+   a proxy on the same host, have it pass `Host` through instead.
 3. Put the broker on a trusted network segment, and set `MQTT_PASSWORD`.
-4. Give each edge node its own broker account if a stolen node would matter.
-5. Give Wactorz only the credentials the agents you run actually need.
-6. Restrict filesystem access to the state directory.
-7. Treat the ability to spawn agents as equivalent to shell access, and hand it
+4. Give each edge node its own broker account: the compose files and the add-ons'
+   embedded broker do by default; elsewhere set `WACTORZ_NODE_ACCOUNTS=1` once the
+   broker has the accounts. Deploy every node again, then rotate the account they
+   shared. Where another system shares that broker, name its account in
+   `WACTORZ_BROKER_ACCOUNTS`.
+5. Deploy every edge node again after upgrading, so it holds a signing key and
+   refuses unsigned commands (`WACTORZ_NODE_SIGNING=enforce`, the default).
+   Publish the broker's `8883` where nodes can reach it first, so the deploy puts
+   them on TLS, and check the deploy log says so.
+6. Give Wactorz only the credentials the agents you run actually need.
+7. Restrict filesystem access to the state directory — it also holds the secret
+   the node keys are derived from, and the key of the CA nodes trust the broker by.
+8. Treat the ability to spawn agents as equivalent to shell access, and hand it
    out on that basis.
 
 ---

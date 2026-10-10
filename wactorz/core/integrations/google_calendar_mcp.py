@@ -1,7 +1,5 @@
 """Google Calendar MCP integration client (hosted MCP + REST fallback)."""
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote

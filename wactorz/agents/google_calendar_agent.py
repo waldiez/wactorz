@@ -1,7 +1,5 @@
 """GoogleCalendarAgent - Read and manage Google Calendar events."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -113,7 +111,10 @@ class GoogleCalendarAgent(LLMAgent):
         try:
             action_payload = await self._resolve_action(payload)
             text = str(payload.get("text") or payload.get("message") or payload.get("query") or "")
-            action_payload = self._merge_calendar_followup(action_payload, text)
+            if not (payload.get("operation") or payload.get("action")):
+                # A request that names its operation says what it wants. Only
+                # one made in words can be the answer to a question just asked.
+                action_payload = self._merge_calendar_followup(action_payload, text)
             action = action_payload.get("action") or action_payload.get("operation") or "today"
 
             if action == "help":
@@ -194,11 +195,12 @@ class GoogleCalendarAgent(LLMAgent):
                 result = await self.client.call_tool("delete_event", {"eventId": event_id})
                 return {"result": result, "event_id": event_id}
 
-            return {"result": f"Unsupported calendar action: {action}"}
         except Exception as exc:
             self.metrics.tasks_failed += 1
             logger.warning("[%s] Calendar request failed: %s", self.name, exc)
             return {"result": f"Google Calendar error: {exc}", "error": str(exc)}
+        else:
+            return {"result": f"Unsupported calendar action: {action}"}
 
     async def _resolve_action(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = payload.get("operation") or payload.get("action")
@@ -238,16 +240,32 @@ class GoogleCalendarAgent(LLMAgent):
         return _fallback_parse(text)
 
     def _merge_calendar_followup(self, action_payload: dict[str, Any], text: str) -> dict[str, Any]:
+        """Complete the event being asked about, when ``text`` is the answer.
+
+        An event that lacked a title or a time is held, and the user is asked
+        for what is missing. Their reply is short -- "tomorrow 6pm to 7pm" --
+        and read on its own it looks like a request to list a day's events,
+        which is how it was just resolved. So it is taken as the answer when it
+        supplies something an event is made of, a time or a title, and the
+        request was read as a listing; anything else is a new request, and the
+        held event stays held.
+        """
         if not self._pending_create:
             return action_payload
         action = action_payload.get("action") or action_payload.get("operation")
-        if action not in (None, "today", "list_events"):
+        if action not in _LISTING_ACTIONS:
             return action_payload
         parsed = _parse_create_details(text)
-        if not parsed:
+        if not any(parsed.get(part) for part in ("summary", "start", "end")):
             return action_payload
         merged = {**self._pending_create, **parsed, "action": "create_event"}
         return {key: value for key, value in merged.items() if value}
+
+
+#: What a request is resolved to when it reads as "show me my events", or as
+#: nothing in particular. A short answer to a question about a held event --
+#: a day and a time -- resolves to one of these too.
+_LISTING_ACTIONS = (None, "today", "tomorrow", "week", "list_events")
 
 
 def _calendar_timezone() -> tuple[Any, str | None]:

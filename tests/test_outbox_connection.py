@@ -18,6 +18,7 @@ import asyncio
 import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -165,9 +166,15 @@ class TestTheCheckpointStaysOffTheLoop:
         pub._checkpoint = recording  # type: ignore[method-assign]
         pub.CHECKPOINT_INTERVAL_S = 0.01  # type: ignore[misc]
         task = asyncio.create_task(pub._checkpoint_loop())
-        await asyncio.sleep(0.1)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        # Until it has run, with a deadline generous enough for a loaded CI
+        # runner: worker threads can be slow to come round under xdist.
+        try:
+            deadline = time.monotonic() + 10
+            while not seen and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
         assert seen, "the timer never fired"
         assert all(t != loop_thread for t in seen)
@@ -193,7 +200,7 @@ class TestReplayStillWorksUnderWAL:
         second._load_pending_from_db()
 
         assert second.queue_depth == 1
-        topic, payload, _retain, qos, row_id = second._queue.get_nowait()
+        topic, payload, _retain, qos, row_id, _properties = second._queue.get_nowait()
         assert (topic, payload, qos) == ("nodes/alpha/spawn", "payload", 1)
         assert row_id > 0
 

@@ -14,6 +14,8 @@
  * back to the only control that dismisses it.
  */
 
+import { button, el } from "../dom";
+
 /** Elements inside the dialog that can hold focus, in tab order. */
 function focusables(root: HTMLElement): HTMLElement[] {
     return [...root.querySelectorAll<HTMLElement>("button, [href], [tabindex]:not([tabindex='-1'])")];
@@ -21,21 +23,17 @@ function focusables(root: HTMLElement): HTMLElement[] {
 
 /** The overlay, its image and its close button, assembled but not yet wired. */
 function buildOverlay(url: string, alt: string): { overlay: HTMLElement; closeBtn: HTMLButtonElement } {
-    const overlay = document.createElement("div");
-    overlay.className = "af-lightbox";
+    const overlay = el("div", "af-lightbox");
     overlay.setAttribute("role", "dialog");
     overlay.setAttribute("aria-modal", "true");
     overlay.setAttribute("aria-label", alt || "Image preview");
 
-    const img = document.createElement("img");
+    const img = el("img");
     img.src = url;
     img.alt = alt;
 
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "af-lightbox-close";
-    closeBtn.type = "button";
+    const closeBtn = button("af-lightbox-close", "✕");
     closeBtn.setAttribute("aria-label", "Close image preview");
-    closeBtn.textContent = "✕";
 
     overlay.append(img, closeBtn);
     return { overlay, closeBtn };

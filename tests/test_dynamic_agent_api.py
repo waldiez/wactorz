@@ -13,6 +13,7 @@ import pytest
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.agents.planner.validation import SYNC_METHODS
+from wactorz.core import paths
 
 
 @pytest.fixture(name="api")
@@ -123,3 +124,19 @@ class TestSubscribeCallbackContract:
     ) -> None:
         """Only what we can prove wrong is refused; the rest fails at runtime."""
         api.subscribe("sensors/x", print)
+
+
+class TestTheStateDirectoryName:
+    """`WACTORZ_STATE_DIR` in agent code is the directory this process uses."""
+
+    def test_a_directory_set_in_code_wins_over_the_environment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "from-the-environment"))
+        monkeypatch.setattr(paths, "_override", str(tmp_path / "set-in-code"))
+        actor = DynamicAgent(name="probe", code="", persistence_dir=str(tmp_path / "probe"))
+
+        assert actor._compile_code("") is None  # pyright: ignore[reportPrivateUsage]
+
+        namespace = actor._ns  # pyright: ignore[reportPrivateUsage]
+        assert namespace["WACTORZ_STATE_DIR"] == str(tmp_path / "set-in-code")

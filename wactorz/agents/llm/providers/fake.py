@@ -10,25 +10,29 @@ same run.
 shape and treat anything else as a parse failure: the intent classifier wants one
 of four tokens, and fact extraction wants JSON. An echo satisfies neither, so a
 system on an echoing provider takes a different branch each turn — the opposite
-of what a fake is for. Those two are matched against the prompt constants
-themselves, so rewording a prompt cannot silently stop the routing working.
+of what a fake is for. Those two are recognised by the opening words each
+prompt is defined to begin with, exported beside the prompts themselves, so a
+prompt assembled per installation is still recognised, and rewording the rest
+of it cannot silently stop the routing working.
 
 Anything else is conversation, and answers from a script: a mapping of substring
 to reply, with a default. Tests take the default; a recorded walkthrough loads a
 script whose answers read well. The provider is the same either way.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import AsyncGenerator, Mapping
 
-from ...prompts.main_actor_prompts import FACTS_EXTRACT_PROMPT, INTENT_CLASSIFIER_PROMPT
+from ...prompts.main_actor_prompts import (
+    FACTS_EXTRACT_MARKER,
+    INTENT_CLASSIFIER_MARKER,
+    INTENT_TOKENS,
+)
 from ..base import LLMProvider
 
-#: The only answers the intent classifier accepts. `OTHER` routes to ordinary
-#: chat, which is what nearly every scenario wants.
-INTENTS = ("ACTUATE", "HA", "PIPELINE", "OTHER")
+#: The only answers the intent classifier accepts, as the router defines them.
+#: `OTHER` routes to ordinary chat, which is what nearly every scenario wants.
+INTENTS = INTENT_TOKENS
 
 #: What fact extraction means by "nothing durable was stated".
 NO_FACTS = "{}"
@@ -80,9 +84,9 @@ class FakeProvider(LLMProvider):
     def _answer(self, messages: list[dict], system: str) -> str:
         """What this request gets, decided by which call site is asking."""
         self.calls.append((system, list(messages)))
-        if system == INTENT_CLASSIFIER_PROMPT:
+        if system.startswith(INTENT_CLASSIFIER_MARKER):
             return self.intent
-        if system == FACTS_EXTRACT_PROMPT:
+        if system.startswith(FACTS_EXTRACT_MARKER):
             return NO_FACTS
         return self._scripted(_last_user_text(messages))
 

@@ -9,20 +9,15 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { canDirectMessage, stateColor } from "./agentState";
+import { button, el } from "../dom";
 
 /** Create a sidebar row button that selects its agent on click. */
 function createRow(name: string, onSelect: (name: string) => void): HTMLButtonElement {
-    const row = document.createElement("button");
+    const row = button();
     row.dataset["name"] = name;
-    const dot = document.createElement("span");
-    dot.className = "af-chat-agent-dot";
-    const nm = document.createElement("span");
-    nm.className = "af-chat-agent-name";
-    nm.textContent = name;
-    const lock = document.createElement("span");
-    lock.className = "af-chat-agent-lock";
+    const lock = el("span", "af-chat-agent-lock");
     lock.setAttribute("aria-hidden", "true");
-    row.append(dot, nm, lock);
+    row.append(el("span", "af-chat-agent-dot"), el("span", "af-chat-agent-name", name), lock);
     row.addEventListener("click", () => onSelect(name));
     return row;
 }

@@ -10,10 +10,10 @@ Include the version, how the deployment is exposed (loopback, LAN, Home Assistan
 
 | Version | Supported |
 | ------- | --------- |
-| 0.6.x   | Yes       |
-| < 0.6   | No        |
+| 0.7.x   | Yes       |
+| < 0.7   | No        |
 
-Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below apply from 0.6.0 onwards.
+Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below are those of 0.7.0.
 
 ## The surfaces
 
@@ -26,6 +26,7 @@ A deployment can listen on three: the dashboard and its WebSocket (`WS_PORT`, 88
 - **`API_KEY` covers every route on the dashboard and the REST interface** except the health probe and the sign-in flow.
 - **Cross-origin state changes are rejected on the dashboard.** Its state-changing routes are `POST` or `DELETE`, and `Origin` is validated on those and on the WebSocket upgrade. A page in a browser cannot suppress that header, so it cannot drive the dashboard from another site. This does not extend to the REST interface — see below.
 - **The Home Assistant add-on trusts ingress and nothing else.** A request must both carry the Supervisor's ingress marker and arrive from its address range; either alone is not enough, and the bypass does not exist unless the add-on enables it.
+- **The add-on does not run as root.** Its start script drops to an unprivileged user before Wactorz starts, with no way back, and Home Assistant's configuration folder is mapped read-only. What agent code can change is the add-on's own data.
 - **Failed sign-in attempts are throttled.**
 - **Secrets stay server-side.** The Home Assistant token, LLM and broker credentials are not sent to the browser.
 
@@ -35,11 +36,10 @@ These are properties of the design rather than open defects. Read them as the co
 
 - **Agent code runs with the privileges of the process.** Agents generate and execute Python in the same process as the rest of the system, with the same environment and the same credentials. There is no sandbox and no privilege separation. Spawning an agent — or installing a recipe from anywhere you do not control — grants it everything the process can reach.
 - **Agents act on content they read.** They ingest email, calendar entries and web pages, and they can write and run code. Text arriving from any of those is untrusted input to something that can act, and nothing in the system separates instructions from data.
-- **Broker access is code execution.** MQTT can require credentials, but there is no per-topic authorization: a client the broker admits can publish to the topics that carry agent code to remote nodes, and a node runs what it receives. Run the broker on a network you trust, give it credentials shared with nothing else, and treat write access to it as equivalent to shell access on every node.
-- **The chat REST interface has no origin or host checking.** A page in a browser can make a cross-origin request to it. On a loopback deployment with no `API_KEY`, any page the operator visits can reach it. Set `API_KEY`, or do not run that interface.
-- **Transport is not encrypted by default.** Neither MQTT nor the dashboard's HTTP and WebSocket channels use TLS. On anything other than a single-host loopback deployment, terminate TLS in front of them.
+- **Broker access is still a large grant.** Commands to edge nodes are signed, and a node refuses one that is not. On the brokers Wactorz configures, each node has an account of its own that is kept out of the other nodes' topics. But the server's own account can publish anywhere, and agents act on the messages they read, which are not signed. Run the broker on a network you trust, give it credentials shared with nothing else, and treat the server's broker account as equivalent to shell access on every node.
+- **The dashboard and the REST API are not encrypted.** Their HTTP and WebSocket channels do not use TLS. On anything other than a single-host loopback deployment, terminate TLS in front of them, and list the proxy in `WACTORZ_TRUSTED_PROXIES`. MQTT uses TLS for edge nodes when the broker serves it, as the compose broker and the add-ons' embedded broker do, and for the server's own connection with `MQTT_TLS=1`. Plain `1883` stays cleartext.
 - **A loopback deployment trusts the local machine.** Any process on the same host reaches it without a token, and the state directory is deserialized on startup, so write access to it is code execution. An operator who wants more can set `API_KEY` on a loopback bind and restrict the state directory.
-- **There is no general request rate limiting** beyond the sign-in throttle, and none on the API-key header path. Uploads are capped per file but not pruned.
+- **There is no general request rate limiting** beyond the sign-in throttle, and none on the API-key header path. Uploads are capped per file but not in total. A file is deleted with the last chat message that refers to it, or a day after upload if it was never sent.
 
 ## Deploying it safely
 

@@ -8,8 +8,6 @@ fallback follows the same policy — it drafts, searches, reads and labels, but
 never sends.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import html

@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="active">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -296,8 +297,13 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 </tr>
 <tr>
 <td><code>GET</code></td>
-<td><code>/health</code></td>
-<td>System health check.</td>
+<td><code>/health</code>, <code>/healthz</code>, <code>/livez</code></td>
+<td>Liveness: 200 whenever the process can answer.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/ready</code>, <code>/readyz</code></td>
+<td>Readiness: 200 once agents, broker and database are up, 503 naming what is not.</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -347,9 +353,9 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 </code></pre></div>
 
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/chat<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: my-secret-key&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;message&quot;: &quot;turn off the lights&quot;}&#39;</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"X-API-Key: my-secret-key"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"message": "turn off the lights"}'</span>
 </code></pre></div>
 
 <hr />
@@ -386,7 +392,7 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 wactorz<span class="w"> </span>--interface<span class="w"> </span>rest<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 
 <span class="c1"># Terminal 2: smoke-test MCP tool discovery</span>
-python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import asyncio, wactorz.interfaces.mcp_server as s; print([t.name for t in asyncio.run(s.mcp.list_tools())])&quot;</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import asyncio, wactorz.interfaces.mcp_server as s; print([t.name for t in asyncio.run(s.mcp.list_tools())])"</span>
 </code></pre></div>
 
 <p>If your editable install does not have a <code>wactorz-mcp</code> script yet, use the module form:</p>
@@ -415,7 +421,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tr>
 <tr>
 <td><code>ask_agent(agent_name, message)</code></td>
-<td>Send a message through <code>/chat</code> with <code>agent_name</code> included in the payload.</td>
+<td>Send a message to one agent through <code>/chat</code>: main hands it over as an <code>@&lt;name&gt;</code> mention and returns that agent's reply.</td>
 </tr>
 <tr>
 <td><code>list_agents()</code></td>
@@ -477,12 +483,12 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 <p>Run <code>list_agents</code>, <code>ask_wactorz</code> with <code>/agents</code>, and read <code>wactorz://config</code> first. Try <code>ha_list_entities</code> only after <code>HA_URL</code> and <code>HA_TOKEN</code> are configured and reachable.</p>
 <h4 id="client-config-example">Client config example</h4>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;wactorz&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;-m&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;wactorz.interfaces.mcp_server&quot;</span><span class="p">],</span>
-<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;WACTORZ_URL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8000&quot;</span>
+<span class="w">  </span><span class="nt">"mcpServers"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"wactorz"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"python"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"-m"</span><span class="p">,</span><span class="w"> </span><span class="s2">"wactorz.interfaces.mcp_server"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"env"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"WACTORZ_URL"</span><span class="p">:</span><span class="w"> </span><span class="s2">"http://localhost:8000"</span>
 <span class="w">      </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
@@ -573,11 +579,13 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </ol>
 <h4 id="configuration_2">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">TWILIO_ACCOUNT_SID</span><span class="o">=</span>ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-<span class="nv">TWILIO_AUTH_TOKEN</span><span class="o">=</span>your_auth_token
+<span class="nv">TWILIO_AUTH_TOKEN</span><span class="o">=</span>your_auth_token<span class="w">               </span><span class="c1"># required — the webhook checks Twilio's signature with it</span>
 <span class="nv">TWILIO_WHATSAPP_NUMBER</span><span class="o">=</span>whatsapp:+14155238886
 <span class="nv">WHATSAPP_ALLOWED_NUMBERS</span><span class="o">=</span>+306912345678<span class="w">        </span><span class="c1"># required — comma-separate for several people</span>
 </code></pre></div>
 
+<p>The webhook will not start without both. It answers Twilio at once and replies
+to the message when the model has, so a slow answer is never delivered twice.</p>
 <blockquote>
 <p><strong>The allow-list is required.</strong> The webhook is a public HTTP endpoint, so without it the interface refuses to start. Messages from other numbers are dropped before reaching the LLM.</p>
 </blockquote>
@@ -660,21 +668,27 @@ wactorz<span class="w"> </span>--no-monitor
 
 <hr />
 <h2 id="adding-a-custom-interface">Adding a custom interface</h2>
-<p>All interfaces implement the same minimal pattern — call <code>process_user_input()</code> and stream or return the result. The simplest possible interface:</p>
-<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">MyInterface</span><span class="p">:</span>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">main_actor</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">main</span> <span class="o">=</span> <span class="n">main_actor</span>
+<p>All interfaces implement the same minimal pattern — hand the message to the orchestrator, saying which channel it came in on, and stream or return the answer. The orchestrator is main unless the deployment installed another (see <em>Your own orchestrator</em> in the library guide), so an interface never names main. The simplest possible interface:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.orchestration</span><span class="w"> </span><span class="kn">import</span> <span class="n">SOCIAL</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MyInterface</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">orchestrator</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">orchestrator</span> <span class="o">=</span> <span class="n">orchestrator</span>
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">async</span> <span class="k">for</span> <span class="n">message</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_receive_messages</span><span class="p">():</span>
-            <span class="c1"># Streaming response</span>
-            <span class="k">async</span> <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">process_user_input_stream</span><span class="p">(</span><span class="n">message</span><span class="p">):</span>
+        <span class="k">async</span> <span class="k">for</span> <span class="n">sender</span><span class="p">,</span> <span class="n">message</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_receive_messages</span><span class="p">():</span>
+            <span class="c1"># A public channel: the orchestrator answers with the restrictions</span>
+            <span class="c1"># that go with one. "dashboard", "cli" and "rest" are the operator's own.</span>
+            <span class="k">async</span> <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">orchestrator</span><span class="o">.</span><span class="n">handle_turn_stream</span><span class="p">(</span>
+                <span class="n">message</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="n">SOCIAL</span><span class="p">,</span> <span class="n">user</span><span class="o">=</span><span class="n">sender</span>
+            <span class="p">):</span>
                 <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_send</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
 
 
-<span class="c1"># Register in cli.py alongside the other interfaces</span>
-<span class="k">elif</span> <span class="n">interface</span> <span class="o">==</span> <span class="s2">&quot;my-interface&quot;</span><span class="p">:</span>
-    <span class="n">iface</span> <span class="o">=</span> <span class="n">MyInterface</span><span class="p">(</span><span class="n">main_actor</span><span class="p">)</span>
+<span class="c1"># Register in app.py alongside the other interfaces</span>
+<span class="k">elif</span> <span class="n">interface</span> <span class="o">==</span> <span class="s2">"my-interface"</span><span class="p">:</span>
+    <span class="n">iface</span> <span class="o">=</span> <span class="n">MyInterface</span><span class="p">(</span><span class="n">orchestrator</span><span class="p">)</span>
     <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">iface</span><span class="o">.</span><span class="n">run</span><span class="p">(),</span> <span class="n">system</span><span class="o">.</span><span class="n">run_forever</span><span class="p">())</span>
 </code></pre></div>
 

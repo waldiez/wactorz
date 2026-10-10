@@ -11,16 +11,74 @@ with redaction already attached, so no record reaches an unfiltered handler.
 and the Windows event-loop and encoding fixups.
 """
 
+import json
 import logging
 import logging.handlers
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
+from wactorz import config
 from wactorz.core.paths import resolve_state_dir
 
 from .log_redaction import install_redaction
 
 _FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+
+class JsonFormatter(logging.Formatter):
+    """One JSON object per record, on one line: JSON Lines.
+
+    For a collector that parses logs rather than a person who reads them: the
+    level and the logger are fields to filter on instead of text to match, and
+    a traceback stays inside the record it belongs to, where the text format
+    spreads it over lines a collector reads as separate events.
+
+    The time is UTC with an offset, so lines from a server and its nodes sort
+    together whatever zone each machine is in.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(
+                timespec="milliseconds"
+            ),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        # As `logging.Formatter` does: the traceback is rendered once and kept
+        # on the record, and a text already there -- the redacted one -- is used.
+        if record.exc_info and not record.exc_text:
+            record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            entry["exception"] = record.exc_text
+        if record.stack_info:
+            entry["stack"] = self.formatStack(record.stack_info)
+        return json.dumps(entry, ensure_ascii=False, default=str)
+
+
+def formatter() -> logging.Formatter:
+    """The formatter ``WACTORZ_LOG_FORMAT`` asks for: text unless it says ``json``."""
+    if config.log_format() == "json":
+        return JsonFormatter()
+    return logging.Formatter(_FORMAT)
+
+
+def setup_console_logging(level: int = logging.INFO) -> None:
+    """Log to the console alone, in the configured format.
+
+    For a process that keeps no log file of its own and has no dashboard to
+    feed: a node, whose output goes to its service's journal or to the file its
+    launcher redirects it into.
+    """
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter())
+    logging.basicConfig(level=level, handlers=[handler])
+    # A node is handed a broker password and a signing key, and runs agent
+    # code that logs what it likes: its console is read like the server's.
+    install_redaction()
+
 
 # 50 MB across all files. The log used to grow without bound, which on a
 # long-lived add-on or container ends as a full disk.
@@ -28,6 +86,44 @@ MAX_BYTES = 10 * 1024 * 1024
 BACKUP_COUNT = 5
 
 _configured = False
+
+#: The handler :func:`install_fallback` added, so :func:`uninstall_fallback` can
+#: take it away again, and only it.
+_fallback: logging.Handler | None = None
+
+
+def install_fallback(root: logging.Logger | None = None) -> logging.Handler | None:
+    """Keep warnings visible in a process whose root logger has no handler.
+
+    For a library call that leaves the host's logging alone. Python prints a
+    warning from a logger with no handler anywhere above it, through its
+    last-resort handler; the dashboard's buffer is a handler on the root
+    logger, and its presence alone turns that off, so every warning of ours
+    would vanish in a host that configured nothing. This adds what the
+    last-resort handler would have done, with the command's redaction, and
+    only when there is nothing there. Returns the handler added, or ``None``.
+    ``root`` is the process's root logger unless a test hands over another.
+    """
+    global _fallback
+    root = root if root is not None else logging.getLogger()
+    if _fallback is not None or root.handlers:
+        return None
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(formatter())
+    root.addHandler(handler)
+    install_redaction()
+    _fallback = handler
+    return handler
+
+
+def uninstall_fallback(root: logging.Logger | None = None) -> None:
+    """Take the fallback handler away, if one was added."""
+    global _fallback
+    root = root if root is not None else logging.getLogger()
+    if _fallback is not None:
+        root.removeHandler(_fallback)
+        _fallback = None
 
 
 def _file_handler() -> logging.Handler | None:
@@ -87,9 +183,9 @@ def setup_logging(level: int = logging.INFO) -> None:
         handlers.append(file_handler)
 
     root = logging.getLogger()
-    formatter = logging.Formatter(_FORMAT)
+    chosen = formatter()
     for handler in handlers:
-        handler.setFormatter(formatter)
+        handler.setFormatter(chosen)
         root.addHandler(handler)
     root.setLevel(level)
     install_redaction()

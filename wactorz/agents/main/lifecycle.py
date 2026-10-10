@@ -327,8 +327,13 @@ class LifecycleService:
                 actor_id = target.actor_id
                 sv = getattr(self.host._registry, "_supervisor_ref", None)
                 if sv is not None:
-                    sv.release(name)
+                    # Forgotten, not released: a deleted agent does not come
+                    # back, and a spawn under the same name starts afresh.
+                    sv.drop_supervised(name)
                 await self.host._registry.unregister(actor_id)
+                # Before the stop: an agent's own traces are its to remove, and
+                # stopping is what would otherwise have the last word on them.
+                await target.delete_own_traces()
                 await target.stop()
                 await self._purge_local_agent_persistence(target, name)
                 await self._clear_agent_manifest(name, actor_id)

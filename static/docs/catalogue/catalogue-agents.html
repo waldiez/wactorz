@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -153,7 +154,7 @@ so a plain-language request can auto-spawn the right one — or you can spawn it
 <p>Each catalogue agent has its own page in this section (see the sidebar).</p>
 <h2 id="spawning">Spawning</h2>
 <div class="highlight"><pre><span></span><code>@catalog list                    # show every available recipe
-@catalog info gmail-agent        # show one recipe&#39;s schema
+@catalog info gmail-agent        # show one recipe's schema
 @catalog spawn gmail-agent       # start it
 </code></pre></div>
 
@@ -221,8 +222,10 @@ A spawned agent is saved to the spawn registry and restored automatically on res
 directly. <strong>Dynamic</strong> agents ship as recipe code that's spawned as a <code>DynamicAgent</code>; any
 declared dependencies are <code>pip</code>-installed on first spawn.</p>
 <h2 id="adding-a-recipe">Adding a recipe</h2>
-<p>Create <code>wactorz/catalogue_agents/my_agent.py</code> exporting <code>AGENT_CODE = r'''…'''</code>, then add
-an entry to <code>_build_catalog()</code> in <code>wactorz/agents/catalog_agent.py</code>. It becomes available
+<p>Write the program as an ordinary module, <code>wactorz/catalogue_agents/my_agent.py</code>, defining
+the DynamicAgent functions (<code>setup</code>, <code>process</code>, <code>handle_task</code>, <code>cleanup</code>), then add an entry
+to <code>_build_catalog()</code> in <code>wactorz/agents/catalog_agent.py</code>. The module's source is what gets
+sent and exec'd, so it may import <code>wactorz</code> but must not rely on being imported. It becomes available
 on the next restart. See the <a href="../guide/agents.html">Agents reference</a> for the DynamicAgent
 API and code-safety rules.</p>
   </main>

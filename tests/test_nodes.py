@@ -69,6 +69,14 @@ class TestWhatTheNodeListingReports:
             "cpu_pct",
             "mem_used_mb",
             "mem_free_mb",
+            "swap_used_mb",
+            "load_1m",
+            "load_5m",
+            "disk_free_mb",
+            "temp_c",
+            "throttled",
+            "slow_retry",
+            "manifest",
         }
 
     def test_the_name_comes_from_the_key_not_the_value(self) -> None:
@@ -237,3 +245,31 @@ class TestTheTwoWindowsAreDifferentOnPurpose:
 
         assert not main._node_is_online("alpha")
         assert seen_ago < OFFLINE_GRACE_S
+
+
+class TestWhatTheMachineIs:
+    """A node's manifest is listed beside its heartbeat, and outlives it going quiet."""
+
+    def test_it_is_listed_with_the_node(self) -> None:
+        main = make_main(alpha=node())
+        main.nodes.node_manifests["alpha"] = {"manifest_v": 1, "arch": "aarch64"}
+
+        assert main.list_nodes()[0]["manifest"] == {"manifest_v": 1, "arch": "aarch64"}
+
+    def test_a_node_that_has_not_said_has_none(self) -> None:
+        assert make_main(alpha=node()).list_nodes()[0]["manifest"] is None
+
+    def test_a_manifest_alone_lists_no_node(self) -> None:
+        # Retained, it arrives for a node that may never heartbeat again.
+        main = make_main()
+        main.nodes.node_manifests["gone"] = {"manifest_v": 1}
+
+        assert main.list_nodes() == []
+
+    def test_forgetting_a_node_forgets_its_machine(self) -> None:
+        main = make_main(alpha=node())
+        main.nodes.node_manifests["alpha"] = {"manifest_v": 1}
+
+        main.nodes.forget("alpha")
+
+        assert (main.nodes.known, main.nodes.node_manifests) == ({}, {})

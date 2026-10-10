@@ -6,6 +6,7 @@ from typing import Any
 
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
+from ..retry import attempt_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,13 @@ class AnthropicProvider(LLMProvider):
     def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None):
         import anthropic
 
-        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+        # No retries of the SDK's own: `LLMProvider` retries, with one policy
+        # for every provider, and the two would multiply. The timeout is the
+        # configured one for the same reason: left to the SDK's default, a
+        # setting of "no limit" would still be cut off at the SDK's.
+        self.client = anthropic.AsyncAnthropic(
+            api_key=api_key, max_retries=0, timeout=attempt_timeout()
+        )
         self.model = model
 
     @classmethod
@@ -541,13 +548,14 @@ class AnthropicProvider(LLMProvider):
             async for item in self._stream_once(params):
                 started = True
                 yield item
-            return
         except Exception as exc:  # re-raised unless it is one of the cases we handle
             # The rejection lands on the opening request, before the first
             # chunk, so retrying cannot replay output the caller already saw.
             # `started` keeps that true even if a later release moves the error.
             if started or not self._degrade(exc, params):
                 raise
+        else:
+            return
         async for item in self._stream_once(params):
             yield item
 

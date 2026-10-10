@@ -234,10 +234,17 @@ input[type="color"]::-webkit-color-swatch {
   }
 }
 /* Stale agent — no heartbeat for 180 s */
-.af-card-stale {
+/* How long since the agent was heard from. Over the state's color, which the
+   card sets inline, hence !important; the card's "♥ 45s" says it in words. */
+.af-card-quiet {
   animation: none !important;
-  opacity: 0.35;
-  filter: grayscale(1);
+  background: #fbbf24 !important;
+  box-shadow: 0 0 8px #fbbf24 !important;
+}
+.af-card-missing {
+  animation: none !important;
+  background: #f87171 !important;
+  box-shadow: 0 0 8px #f87171 !important;
 }
 
 /* ── Classic (cd-card) layout ────────────────────────────────────────── */

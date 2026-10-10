@@ -16,6 +16,10 @@ The fastest way to get started — no repo clone or Python needed. See the dedic
 
 → **[Quickstart: Docker Hub](dockerhub.md)**
 
+The image comes in two sizes: `waldiez/wactorz:latest`, and `waldiez/wactorz:ultra` with
+PyTorch, Ultralytics, OpenCV and what the Reachy Mini SDK needs. [Which image](dockerhub.md#which-image)
+says when the larger one is the one to pull.
+
 ---
 
 ## Full Docker  (`compose.yaml`)
@@ -39,23 +43,78 @@ docker compose --profile python up -d
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
 
+Compose builds the image from the checkout. For vision agents or the Reachy Mini agent,
+build the larger one ([which image](dockerhub.md#which-image)) by setting
+`WACTORZ_FLAVOUR=ultra` in `.env`, then:
+
+```bash
+docker compose --profile python up -d --build
+```
+
+Both ask for the API key. With `API_KEY` blank in `.env`, the stack generates one
+on first start and keeps it in a volume. Read it with
+`docker compose exec wactorz-python cat /run/wactorz/api_key`, or follow the
+one-time sign-in link in `docker compose logs wactorz-python`. Set `API_KEY` in
+`.env` to choose your own.
+
 ### Services
 
 Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring up more services.
 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
-| _(all)_ | mosquitto | `mosquitto:1883` | `:1883` |
-| `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
-| `python` | monitor UI | `wactorz-python:8888` | `:8888` |
-| `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
-| `full` | home-assistant | `homeassistant:8123` | `:8123` |
+| _(all)_ | mosquitto | `mosquitto:1883` | `127.0.0.1:1883`, and `:8883` (TLS) |
+| `python` | wactorz-python | `wactorz-python:8000` | `127.0.0.1:8000` (REST API) |
+| `python` | monitor UI | `wactorz-python:8888` | `127.0.0.1:8888` |
+| `python` | prometheus | `wactorz-prometheus:9090` | `127.0.0.1:9090` |
+| `python` | alertmanager | `alertmanager:9093` | `127.0.0.1:9093` |
+| `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
+
+Every port except the broker's TLS one is published to this host only. Reach the
+dashboard and the API from elsewhere through a TLS proxy; `HA_EXTERNAL_BIND=0.0.0.0`
+opens Home Assistant to the network, and `MQTT_EXTERNAL_BIND=0.0.0.0` the plain
+broker port.
+
+Each container has a ceiling on memory and on process ids, so one that leaks is
+restarted instead of exhausting the host. The app's are settings, because what
+an agent loads varies: `WACTORZ_MEM_LIMIT` (default `8g`), `WACTORZ_PIDS_LIMIT`
+(`4096`, threads included) and `WACTORZ_CPUS` (cores; `0`, the default, is no
+limit). An app container that restarts under a heavy agent, with `OOMKilled` in
+`docker inspect`, needs `WACTORZ_MEM_LIMIT` raised. Home Assistant's container
+has none.
 
 ```bash
 # Python stack (most common)
 docker compose --profile python up -d
 # Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)
 ```
+
+### Health probes
+
+Both servers answer the same probes, with no key:
+
+- `/health` (also `/healthz`, `/livez`) is **liveness**. It fails only when the
+  process cannot answer, which is what the compose files and the image's
+  `HEALTHCHECK` restart on.
+- `/ready` (also `/readyz`) is **readiness**. It answers `503` while the agents
+  start or stop, and while the broker or the database is unreachable.
+
+On Kubernetes, point each probe at its own path, and give liveness a start
+period that covers startup:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /livez, port: 8888 }
+  initialDelaySeconds: 60
+  periodSeconds: 30
+readinessProbe:
+  httpGet: { path: /readyz, port: 8888 }
+  periodSeconds: 10
+```
+
+Never use `/ready` for liveness. A broker outage would then restart every
+replica in a loop, and restarting fixes nothing the broker's return would not.
+See [the API reference](api.md) for what each check means.
 
 ---
 
@@ -88,11 +147,27 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |
+| `WACTORZ_AGENTS` | — | Agents this deployment brings, as `package.module:attr` targets (an `Actor` subclass or a function declared with `@wactorz.agent`), comma separated. Supervised at startup beside the built-ins; see [Bringing your own agents](agents.md#bringing-your-own-agents) |
+| `WACTORZ_PIPELINES` | — | Pipelines this deployment brings, as `package.module:attr` targets of what `wactorz.pipeline()` returned, comma separated; their steps, schedule and rules are supervised at startup |
+| `WACTORZ_HA_AGENTS` | `auto` | Whether the Home Assistant agents start: `auto` starts them when `HA_URL` and `HA_TOKEN` are set, `on` and `off` decide outright |
+| `WACTORZ_MINIMAL` | `0` | Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as `wactorz --minimal` |
+| `WACTORZ_ORCHESTRATOR` | — | What answers chat, as one `package.module:attr` target: an object implementing `wactorz.Orchestrator`, or a class or factory called with the actor registry to build one. In place of main (the default when main runs) and of the model-free orchestrator of the minimal profile; a target that cannot be loaded or is not an orchestrator refuses to start. See *Your own orchestrator* in the library guide |
 | `WACTORZ_TZ` | _(unset)_ | Override the timezone used in agents' date/time context (e.g. `Europe/Athens`). Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` > host local zone. Blank or unknown values fall through to the next candidate |
+| `WACTORZ_LOG_FORMAT` | `text` | `json` writes each log record as one JSON object on one line (JSON Lines), to the console and to `wactorz.log`, for a collector that parses logs: fields `ts` (UTC), `level`, `logger`, `message`, and `exception` holding the whole traceback. Redaction applies as in text. The dashboard's log view is unaffected. A node reads the setting from its own environment |
 | `WACTORZ_RETENTION_CHAT_DAYS` | `365` | Days chat history is kept; `0` keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent |
 | `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
-| `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic |
+| `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
+| `WACTORZ_RETENTION_METRICS_DAYS` | `7` | Days the per-minute metrics history of every agent and node is kept (`/api/history/...`); `0` keeps it for ever. A metrics reset clears it |
+| `WACTORZ_MIGRATION_MAX_STATE_BYTES` | `8388608` | Largest agent state a `/migrate` ships, as JSON; a larger one is refused before the agent stops, and `--force` does not override it. Set on main, which sends it to the node it asks; `0` sets no limit |
+| `WACTORZ_MIGRATION_MAX_BLOB_BYTES` | `67108864` | Largest total of an agent's blobs (models, arrays, bytes) a `/migrate` carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; `0` sets no limit |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
+| `ALERTMANAGER_EXTERNAL_PORT` | `9093` | Alertmanager host port |
+| `ALERT_WEBHOOK_URL` | _(none)_ | Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See `prometheus.md` |
+| `ALERT_WEBHOOK_TOKEN` | _(none)_ | Compose only: sent to that webhook as a bearer token |
+| `HA_EXTERNAL_BIND` / `HA_EXTERNAL_PORT` | `127.0.0.1` / `8123` | Where compose publishes Home Assistant (profile `full`). `0.0.0.0` opens it to the network |
+| `WACTORZ_MEM_LIMIT` | `8g` | Compose only: the app container's memory ceiling |
+| `WACTORZ_PIDS_LIMIT` | `4096` | Compose only: the app container's ceiling on processes and threads |
+| `WACTORZ_CPUS` | `0` | Compose only: cores the app container may use; `0` is no limit |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
 | `DEPLOY_TARGETS` | _(unset)_ | Comma-separated remote node names `/deploy` may bootstrap; each needs a `DEPLOY_<NODE>_*` block — see [Remote nodes](remote-nodes.md) |
@@ -100,6 +175,27 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `DEPLOY_STRICT_HOST_KEYS` | `0` | `1` = never learn a host key on first contact; unknown hosts are refused |
 
 ---
+
+## Backing up and moving an install
+
+`wactorz-state` writes a state directory to one archive, and puts one back:
+
+```bash
+wactorz-state export                       # wactorz-state-<date>-<time>.tar.gz, here
+wactorz-state export backup.tar.gz --no-secrets
+wactorz-state import backup.tar.gz         # into WACTORZ_STATE_DIR, or ./state
+wactorz-state import backup.tar.gz --replace
+```
+
+Both read `WACTORZ_STATE_DIR` as the server does; `--state-dir` names another directory.
+
+- **What it holds:** the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
+- **What it leaves out:** logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.
+- **Export while it runs.** The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.
+- **Import with it stopped.** A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless `--replace` is given, which keeps what was there beside it as `<directory>.before-import-<date>-<time>`.
+- **An archive is code.** Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.
+
+A node's state is moved the same way, on the node: `wactorz-state export --state-dir ~/wactorz/state`, and an import there with the node stopped. The Home Assistant add-on's state is in `/data/state`, which Home Assistant's own backups already include.
 
 ## SSH key management
 

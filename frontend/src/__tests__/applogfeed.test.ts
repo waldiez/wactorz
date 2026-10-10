@@ -201,7 +201,10 @@ describe("records pushed by the server", () => {
     it("stop accumulating at the cap", () => {
         // `load()` replaces the list with a bounded response, but pushes append
         // — so without this a dashboard left open overnight keeps every line.
-        const feed = new AppLogFeed(host());
+        // Off screen, so nothing is drawn: this is the list the feed holds, and
+        // drawing each row into the test DOM costs seconds on a busy runner.
+        // The rows on screen have a cap of their own, pinned in feedview-applog.
+        const feed = new AppLogFeed(host(false));
 
         for (let i = 0; i < MAX_ENTRIES + 50; i++) {
             feed.receive([record(`line ${i}`, 1_700_000_000 + i)]);

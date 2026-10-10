@@ -30,18 +30,20 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 (``self.llm``), so the mixin rests on a stable shared surface.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
+import importlib
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from ...core.actor import Actor, MessageType
+from ...core.actor import Actor, ActorState, ask_through
 from ...core.paths import agent_state_dir
+from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.topics import topic_name_error
+from ...plugins import for_target
 from ..lookup import find_main_actor
+from ..rule_agent import RuleAgent, RuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,16 @@ class SpawnMixin(_Host):
             # outbox cannot send used to stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
             return None
+        try:
+            agent_state_dir(self._persistence_dir.parent, str(name))
+        except ValueError as exc:
+            # The name is also where the agent's state is kept, and one that
+            # would climb out of the state directory is refused there. Refused
+            # here first, before anything is written under it: a state shipped
+            # with a migration would otherwise be half applied and then lost
+            # when the agent failed to start.
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
+            return None
         return await self._spawn_local_named(
             config,
             name,
@@ -165,6 +177,10 @@ class SpawnMixin(_Host):
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
+        elif agent_type == "rule":
+            actor = await self._spawn_rule_agent(config, name)
+        elif agent_type == "module":
+            actor = await self._spawn_module_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
             # Implicit-llm route: a config with a system prompt but no code is
             # an LLM agent even if 'type' was left at the "dynamic" default.
@@ -312,14 +328,63 @@ class SpawnMixin(_Host):
                 schedule_spec.get("type"),
                 publish_topic,
             )
-            return actor
         except ValueError as e:
             # An expected rejection of user input, reported in full by the message.
-            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400, RUF100  # an expected rejection of user input, reported in full
+            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400  # an expected rejection of user input, reported in full
             return None
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
+        else:
+            return actor
+
+    async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""
+        try:
+            rule = RuleConfig.from_dict(config)
+        except ValueError as exc:
+            # An expected rejection of the config, reported in full by its message.
+            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
+            return None
+        logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
+        return await self.spawn(
+            RuleAgent,
+            config=rule,
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
+
+    async def _spawn_module_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn an agent this deployment brings, named by its ``target`` import path.
+
+        Only a target registered as a plugin -- a ``wactorz.agents`` entry
+        point, ``WACTORZ_AGENTS``, or ``wactorz.run(agents=...)`` -- is spawned.
+        A spawn config can be model-authored, and resolving an arbitrary
+        ``package.module:attr`` from one would run whatever that path reached.
+        ``options`` in the config reach the actor's constructor, or a decorated
+        function through ``agent.options``.
+        """
+        target = str(config.get("target") or "").strip()
+        plugin = for_target(target) if target else None
+        if plugin is None:
+            logger.error(
+                "[%s] Cannot spawn %r: target %r is not a registered agent. Name it in "
+                "WACTORZ_AGENTS, list it as a wactorz.agents entry point, or pass it to "
+                "wactorz.run(agents=...).",
+                self.name,
+                name,
+                target,
+            )
+            return None
+        options = config.get("options")
+        logger.info("[%s] Spawning %r from %s", self.name, name, target)
+        return await self.spawn(
+            cast("type[Actor]", plugin.build),
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+            llm_provider=self.llm,
+            options=dict(options) if isinstance(options, dict) else {},
+        )
 
     async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn an LLMAgent — chat, Q&A, reasoning. Applies any migrated state
@@ -365,7 +430,9 @@ class SpawnMixin(_Host):
         logger.info(
             "[%s] Scheduling background install+spawn for '%s': %s", self.name, name, needed
         )
-        asyncio.create_task(self._install_then_spawn(config, name, code, needed))
+        self.run_detached(
+            self._install_then_spawn(config, name, code, needed), name=f"install-{name}"
+        )
         return SpawnPlaceholder(name)
 
     async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
@@ -375,8 +442,6 @@ class SpawnMixin(_Host):
         activity feed still shows background installs/spawns. ``_mqtt_publish``
         is on the Actor base; guarded so the mixin stays testable without it.
         """
-        import time
-
         publish = getattr(self, "_mqtt_publish", None)
         try:
             if publish is not None:
@@ -389,6 +454,11 @@ class SpawnMixin(_Host):
                     },
                 )
             await self._install_packages(packages, agent_name=name)
+            if self.state == ActorState.STOPPED:
+                # An install can outlast the stop meant to cancel it. Spawning
+                # now would register an agent into a system that has shut down.
+                logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
+                return
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
                 self._register_spawn(config)
@@ -457,8 +527,6 @@ class SpawnMixin(_Host):
         import name often differs from the pip name (opencv-python → cv2), so
         this is a heuristic; re-installing an present package is a cheap no-op.
         """
-        import importlib
-
         needed = []
         for pkg in packages:
             import_name = pkg.replace("-", "_").split("[")[0]
@@ -493,48 +561,35 @@ class SpawnMixin(_Host):
             )
             return
 
-        import uuid
-
-        task_id = f"install_{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[task_id] = future
+        logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
         try:
-            logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-            await self.send(
-                installer.actor_id,
-                MessageType.TASK,
-                {
-                    "action": "install",
-                    "packages": needed,
-                    "task": task_id,
-                    "_task_id": task_id,
-                    "reply_to": self.actor_id,
-                },
+            result = await ask_through(
+                self, "installer", {"action": "install", "packages": needed}, timeout=120.0
             )
-            try:
-                result = await asyncio.wait_for(future, timeout=120.0)
-                logger.info(
-                    "[%s] Install result for '%s': %s",
-                    self.name,
-                    agent_name,
-                    result.get("message", result),
-                )
-                if result.get("failed"):
-                    logger.warning(
-                        "[%s] Failed to install: %s — '%s' may not work correctly",
-                        self.name,
-                        result["failed"],
-                        agent_name,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
-                    self.name,
-                    needed,
-                    agent_name,
-                )
-        finally:
-            self._result_futures.pop(task_id, None)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
+                self.name,
+                needed,
+                agent_name,
+            )
+            return
+        except RuntimeError as exc:
+            # A failed install, or an installer not taking messages: either way
+            # the agent is spawned and says so itself if the import fails.
+            logger.warning(
+                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
+            )
+            return
+        reported = result.get("message", result) if isinstance(result, dict) else result
+        logger.info("[%s] Install result for '%s': %s", self.name, agent_name, reported)
+        if isinstance(result, dict) and result.get("failed"):
+            logger.warning(
+                "[%s] Failed to install: %s — '%s' may not work correctly",
+                self.name,
+                result["failed"],
+                agent_name,
+            )
 
     # ── Migrated state ─────────────────────────────────────────────────────
 
@@ -546,39 +601,6 @@ class SpawnMixin(_Host):
         """
         snapshot = config.pop("_initial_state", None)
         if not snapshot or not isinstance(snapshot, dict):
-            return
-
-        try:
-            from ...core.persistence import (
-                PersistenceAPI,
-                get_db,
-                get_pickle_store,
-            )
-        except Exception as e:
-            logger.debug(
-                "[%s] PersistenceAPI not importable — legacy state injection for '%s': %s",
-                self.name,
-                name,
-                e,
-            )
-            try:
-                import pickle
-
-                pdir = agent_state_dir(self._persistence_dir.parent, name)
-                pdir.mkdir(parents=True, exist_ok=True)
-                with open(pdir / "state.pkl", "wb") as fh:
-                    pickle.dump(snapshot, fh)
-                logger.info(
-                    "[%s] Wrote %s migrated key(s) to %s for '%s' (legacy path)",
-                    self.name,
-                    len(snapshot),
-                    pdir / "state.pkl",
-                    name,
-                )
-            except Exception as e2:
-                logger.warning(
-                    "[%s] Legacy state injection failed for '%s': %s", self.name, name, e2
-                )
             return
 
         db, pkl = get_db(), get_pickle_store()
@@ -629,6 +651,12 @@ class SpawnMixin(_Host):
         logger.info("[%s] Replacing '%s' with updated code…", self.name, name)
         try:
             if self._registry:
+                # Forgotten before the stop: the replacement takes a fresh entry
+                # when it is spawned, and if that spawn fails, an entry left
+                # holding the stopped agent would stop it again at shutdown.
+                supervisor = getattr(self._registry, "_supervisor_ref", None)
+                if supervisor is not None:
+                    supervisor.drop_supervised(name)
                 await self._registry.unregister(existing.actor_id)
             await existing.stop()
             # Drop the cached manifest so a list query in the brief window before

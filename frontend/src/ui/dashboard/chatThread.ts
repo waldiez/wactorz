@@ -13,8 +13,8 @@ import { isImage, humanSize } from "./uploads";
 import { iconMarkup } from "./icons";
 import { MAIN_AGENT } from "../../agents/naming";
 import { openLightbox } from "./lightbox";
-import { escapeHtml } from "../escapeHtml";
 import { timeLabel } from "../../time";
+import { el, externalLink } from "../dom";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
  *  a single list for both is what let `data:` reach an anchor href. */
@@ -43,8 +43,7 @@ function safeAttachmentUrl(url: string, context: UrlContext): string {
 /** Clickable thumbnail that opens the lightbox; keyboard-operable (it's a button
  *  in spirit, kept as an <img> for layout). */
 function buildImageThumb(url: string, name: string): HTMLImageElement {
-    const img = document.createElement("img");
-    img.className = "af-chat-attach-thumb";
+    const img = el("img", "af-chat-attach-thumb");
     img.src = url;
     img.alt = name;
     img.loading = "lazy";
@@ -107,21 +106,17 @@ function buildAttachmentEl(att: Attachment): HTMLElement {
     // Not an image (or not renderable): a chip, linked only if the url is safe
     // to navigate to. Anything else degrades to an unlinked <span>.
     const url = att.url ? safeAttachmentUrl(att.url, "link") : "";
-    const el = url ? document.createElement("a") : document.createElement("span");
-    el.className = "af-chat-attach-file";
-    el.innerHTML = `${iconMarkup("file", 13)}<span>${escapeHtml(att.name)} · ${humanSize(att.size)}</span>`;
-    if (url && el instanceof HTMLAnchorElement) {
-        el.href = url;
-        el.target = "_blank";
-        el.rel = "noopener";
-    }
-    return el;
+    const chip = url ? externalLink(url, "af-chat-attach-file") : el("span", "af-chat-attach-file");
+    // The icon is fixed markup; the filename is whatever was uploaded, so it
+    // goes in as text.
+    chip.innerHTML = iconMarkup("file", 13);
+    chip.appendChild(el("span", "", `${att.name} · ${humanSize(att.size)}`));
+    return chip;
 }
 
 /** A row of attachment previews appended below a message's text. */
 function buildAttachments(attachments: Attachment[]): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.className = "af-chat-attachments";
+    const wrap = el("div", "af-chat-attachments");
     attachments.forEach(att => wrap.appendChild(buildAttachmentEl(att)));
     return wrap;
 }
@@ -129,8 +124,7 @@ function buildAttachments(attachments: Attachment[]): HTMLElement {
 /** The bubble body: agent replies render Markdown; user messages stay plain so
  *  stray *asterisks* / backticks they type are never reformatted. */
 function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
-    const bubble = document.createElement("div");
-    bubble.className = "af-chat-msg-bubble";
+    const bubble = el("div", "af-chat-msg-bubble");
     if (isUser) {
         bubble.textContent = msg.content;
     } else if (msg.content) {
@@ -147,11 +141,9 @@ export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
     const isUser = msg.from === "user";
     const surfaceLabel = msg.source === "voice" ? msg.surfaceLabel?.trim() || msg.surface?.trim() || "" : "";
 
-    const row = document.createElement("div");
-    row.className = `af-chat-msg af-chat-msg-${isUser ? "user" : "agent"}`;
+    const row = el("div", `af-chat-msg af-chat-msg-${isUser ? "user" : "agent"}`);
 
-    const from = document.createElement("div");
-    from.className = "af-chat-msg-from";
+    const from = el("div", "af-chat-msg-from");
     if (isUser) {
         const via = surfaceLabel ? ` · via ${surfaceLabel}` : "";
         from.textContent = `you${via} · ${timeLabel(msg.timestampMs)}`;
@@ -161,22 +153,25 @@ export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
 
     row.append(from, buildMsgBubble(msg, isUser));
     if (!isUser) {
-        const time = document.createElement("div");
-        time.className = "af-chat-msg-time";
-        time.textContent = timeLabel(msg.timestampMs);
-        row.append(time);
+        row.append(el("div", "af-chat-msg-time", timeLabel(msg.timestampMs)));
     }
     return row;
 }
 
 /** Placeholder shown when a thread has no messages yet. */
 export function buildChatEmptyState(chatTarget: string): HTMLElement {
-    const empty = document.createElement("div");
-    empty.className = "af-chat-empty";
-    empty.innerHTML =
-        chatTarget === MAIN_AGENT
-            ? `<p>Say hello to <strong>@main</strong> — the system orchestrator.</p>`
-            : `<p>No messages with <strong>@${escapeHtml(chatTarget)}</strong> yet.</p>
-           <p style="font-size:11px;opacity:0.5">New messages will be sent directly to this agent.</p>`;
+    const empty = el("div", "af-chat-empty");
+    const lead = el("p");
+    if (chatTarget === MAIN_AGENT) {
+        lead.append("Say hello to ", el("strong", "", "@main"), " — the system orchestrator.");
+        empty.appendChild(lead);
+        return empty;
+    }
+    // The agent's name is set as text: whoever spawned it chose it.
+    lead.append("No messages with ", el("strong", "", `@${chatTarget}`), " yet.");
+    const note = el("p", "", "New messages will be sent directly to this agent.");
+    note.style.fontSize = "11px";
+    note.style.opacity = "0.5";
+    empty.append(lead, note);
     return empty;
 }

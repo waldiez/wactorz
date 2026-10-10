@@ -251,7 +251,10 @@ describe("the list stays bounded", () => {
         // The survivors are the newest — an activity view that drops the latest
         // row is worse than one that grows.
         expect(rows[rows.length - 1]!.textContent).toContain(`line ${MAX_ROWS + 24}`);
-    });
+        // Drawing past the cap row by row is the point, and it is slow in the
+        // test DOM under coverage on a shared runner: a limit far above that,
+        // so only a hang fails it.
+    }, 60_000);
 });
 
 describe("the application log's own controls", () => {

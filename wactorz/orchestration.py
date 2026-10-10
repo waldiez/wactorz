@@ -45,18 +45,19 @@ if TYPE_CHECKING:
     from .agents.main import MainActor
     from .core.registry import ActorRegistry
 
-#: Where a message came from. The first three are the operator's own surfaces;
+#: Where a message came from. All but the last are the operator's own surfaces;
 #: anything else is treated as :data:`SOCIAL`, a public endpoint, and answered
 #: with the restrictions that go with one.
 DASHBOARD = "dashboard"
 CLI = "cli"
 REST = "rest"
+TUI = "tui"
 SOCIAL = "social"
 
 #: The channels whose sender is the operator. A channel not named here is
 #: answered as a social one: fail closed, since a new surface that forgot to
 #: say which it is should not be handed the admin commands by default.
-TRUSTED_CHANNELS = frozenset({DASHBOARD, CLI, REST})
+TRUSTED_CHANNELS = frozenset({DASHBOARD, CLI, REST, TUI})
 
 
 def is_trusted(channel: str) -> bool:
@@ -394,6 +395,7 @@ __all__ = [
     "REST",
     "SOCIAL",
     "TRUSTED_CHANNELS",
+    "TUI",
     "DirectOrchestrator",
     "MainOrchestrator",
     "Orchestrator",

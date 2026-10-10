@@ -458,7 +458,7 @@ they arrive, and yields the whole answer once when there is nothing to stream;
 handing it over.
 
 **The channel.** Every call says where the message came from: `"dashboard"`,
-`"cli"` and `"rest"` are the operator's own surfaces; `"social"` is Discord,
+`"cli"`, `"rest"` and `"tui"` are the operator's own surfaces; `"social"` is Discord,
 Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,
 and `user` is the sender's id there. Main answers a social message through its
 restricted path (conversation and device control, no spawning, deleting or

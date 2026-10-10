@@ -15,12 +15,14 @@ import sys
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
 
 from wactorz.core.persistence import chat_turn_recorded
+from wactorz.core.turns import current_turn
+from wactorz.orchestration import TUI, Orchestrator, is_trusted
 from wactorz.tui import context as ctx_mod
 from wactorz.tui.attachments import Staged
 from wactorz.tui.context import TUIContext, TUIView, _as_float, create_context
@@ -704,22 +706,114 @@ def test_something_without_refresh_view_does_not() -> None:
 async def test_create_context_builds_a_system_from_the_cli_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # pylint: disable=import-outside-toplevel
-    import wactorz.app
-    import wactorz.cli
-
     args = SimpleNamespace(interface="rest")
-    actor = object()
+    actor, orchestrator = object(), object()
     system = SimpleNamespace(registry=None)
 
     async def _build(passed: SimpleNamespace) -> tuple:
         assert passed is args
         assert passed.interface == "cli"  # the TUI forces the in-process path
-        return system, actor, None, None  # system, main, database, orchestrator
+        return system, actor, None, orchestrator  # system, main, database, orchestrator
 
-    monkeypatch.setattr(wactorz.cli, "get_args", lambda: args)
-    monkeypatch.setattr(wactorz.app, "build_system", _build)
+    monkeypatch.setattr(ctx_mod, "get_args", lambda: args)
+    monkeypatch.setattr(ctx_mod, "build_system", _build)
 
     ctx = await create_context()
     assert ctx.main_actor is actor
     assert ctx.system is system
+    assert ctx.orchestrator is orchestrator
+
+
+# ── who answers a turn ──────────────────────────────────────────────────────
+
+
+class _Orchestrator:
+    """An orchestrator that answers with fixed chunks and remembers how it was asked."""
+
+    def __init__(self, *chunks: str) -> None:
+        self.chunks = chunks or ("from", " the orchestrator")
+        self.asked: list[dict[str, Any]] = []
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        self.asked.append(
+            {"text": text, "channel": channel, "attachments": attachments, "turn": current_turn()}
+        )
+        for chunk in self.chunks:
+            yield chunk
+
+
+async def test_a_message_goes_to_the_orchestrator_as_an_operator_turn() -> None:
+    # As from the dashboard and the command line: an orchestrator of the
+    # deployment's own answers here too, with the operator's commands.
+    orchestrator, main = _Orchestrator(), _Main()
+    ctx = TUIContext(main_actor=main, orchestrator=cast(Orchestrator, orchestrator))
+
+    chunks = await _collect(ctx.chat_stream("what is running?"))
+
+    assert chunks == ["from", " the orchestrator"]
+    [asked] = orchestrator.asked
+    assert (asked["text"], asked["channel"]) == ("what is running?", TUI)
+    assert is_trusted(asked["channel"])
+    assert main.received == {}
+
+
+async def test_a_command_goes_to_the_orchestrator_too() -> None:
+    orchestrator = _Orchestrator("ok")
+    ctx = TUIContext(main_actor=_Main(), orchestrator=cast(Orchestrator, orchestrator))
+
+    await _collect(ctx.chat_stream("/agents"))
+
+    assert [a["text"] for a in orchestrator.asked] == ["/agents"]
+
+
+async def test_a_message_to_one_agent_goes_to_main_which_routes_it() -> None:
+    orchestrator, main = _Orchestrator(), _Main("counted 1")
+    ctx = TUIContext(main_actor=main, orchestrator=cast(Orchestrator, orchestrator))
+
+    chunks = await _collect(ctx.chat_stream("@counter one"))
+
+    assert chunks == ["counted 1"]
+    assert main.received["text"] == "@counter one"
+    assert orchestrator.asked == []
+
+
+async def test_without_main_the_orchestrator_takes_a_message_to_one_agent() -> None:
+    # The minimal profile: the model-free orchestrator is what reaches agents.
+    orchestrator = _Orchestrator("42")
+    ctx = TUIContext(system=_system(), orchestrator=cast(Orchestrator, orchestrator))
+
+    assert await _collect(ctx.chat_stream("@counter one")) == ["42"]
+
+
+async def test_files_reach_the_orchestrator_as_content_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_db(monkeypatch, _DB())
+    monkeypatch.setattr(
+        ctx_mod, "to_blocks", lambda records, _read: [{"doc": r["name"]} for r in records]
+    )
+    orchestrator = _Orchestrator("read it")
+    ctx = TUIContext(main_actor=_Main(), orchestrator=cast(Orchestrator, orchestrator))
+
+    await _collect(ctx.chat_stream("summarise", [RECORD]))
+
+    assert orchestrator.asked[0]["attachments"] == [{"doc": "report.pdf"}]
+
+
+async def test_a_turn_has_an_id_its_log_lines_carry() -> None:
+    orchestrator = _Orchestrator()
+    ctx = TUIContext(main_actor=_Main(), orchestrator=cast(Orchestrator, orchestrator))
+
+    await _collect(ctx.chat_stream("hello"))
+    await _collect(ctx.chat_stream("again"))
+
+    first, second = (a["turn"] for a in orchestrator.asked)
+    assert first and second and first != second
+    assert current_turn() == ""  # and none is left behind once it ends

@@ -915,7 +915,9 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
         _install_signal_handlers()
 
 
-async def _run_tui(system: Any, main_actor: Any, companion_runs: list[Any]) -> None:
+async def _run_tui(
+    system: Any, main_actor: Any, orchestrator: "Orchestrator", companion_runs: list[Any]
+) -> None:
     """Run the terminal UI over the system this process has already built.
 
     Handed that system rather than left to find one: the TUI's own entry point
@@ -927,12 +929,15 @@ async def _run_tui(system: Any, main_actor: Any, companion_runs: list[Any]) -> N
     try:
         from wactorz.tui.app import run_async  # optional dependency: the tui extra (textual)
         from wactorz.tui.context import TUIContext  # same package, imported with it
-    except ImportError:
-        logger.exception("TUI needs the 'tui' extra — pip install 'wactorz[tui]'")
-        sys.exit(1)
+    except ImportError as exc:
+        for run in companion_runs:
+            run.close()  # never started, so never awaited
+        raise StartupError(
+            "the tui interface needs the 'tui' extra: pip install 'wactorz[tui]'"
+        ) from exc
     bots = [asyncio.create_task(run) for run in companion_runs]
     try:
-        await run_async(TUIContext(main_actor=main_actor, system=system))
+        await run_async(TUIContext(main_actor=main_actor, system=system, orchestrator=orchestrator))
     finally:
         for bot in bots:
             bot.cancel()
@@ -971,7 +976,7 @@ async def _run_interface(
         iface = CLIInterface(orchestrator, main_actor)
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "tui":
-        await _run_tui(system, main_actor, _run_all(companions))
+        await _run_tui(system, main_actor, orchestrator, _run_all(companions))
     elif interface == "rest" and main_actor is not None:
         port = args.port or CONFIG.port
         iface = RESTInterface(
@@ -1027,7 +1032,7 @@ async def _run_interface(
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     else:
         raise StartupError(
-            f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
+            f"unknown interface {interface!r}: use cli, tui, rest, discord, whatsapp, "
             f"telegram or {HEADLESS}"
         )
 

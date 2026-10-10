@@ -209,6 +209,7 @@ class TestCommands:
 
     def test_trust_is_by_name(self) -> None:
         assert orchestration.is_trusted(orchestration.DASHBOARD)
+        assert orchestration.is_trusted(orchestration.TUI)
         assert not orchestration.is_trusted(orchestration.SOCIAL)
         assert not orchestration.is_trusted("anything-else")
 

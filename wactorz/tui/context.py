@@ -18,9 +18,13 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME
+from ..app import build_system
+from ..cli import get_args
 from ..config import CONFIG
 from ..core.persistence import chat_turn_recorded, get_db
+from ..core.turns import turn_scope
 from ..monitoring.log_redaction import redact
+from ..orchestration import TUI
 from ..web import uploads
 from ..web.chat import turn_attribution
 from .attachments import Staged, store_staged
@@ -29,6 +33,7 @@ from .snapshot import HostStats, Snapshot
 if TYPE_CHECKING:
     from wactorz.core.actor import Actor
     from wactorz.core.registry import ActorSystem
+    from wactorz.orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +73,11 @@ class TUIContext:
         *,
         main_actor: Actor | None = None,
         system: ActorSystem | None = None,
+        orchestrator: Orchestrator | None = None,
     ) -> None:
         self.main_actor = main_actor
         self.system = system
+        self.orchestrator = orchestrator
         self.registry = system.registry if system else None
 
         self.user = getpass.getuser()
@@ -81,6 +88,11 @@ class TUIContext:
 
         self._started = time.monotonic()
         self._net_last: tuple[float, int, int] | None = None  # (t, recv, sent)
+
+    @property
+    def has_system(self) -> bool:
+        """Whether this runs over a system, rather than standalone for UI work."""
+        return any(x is not None for x in (self.main_actor, self.system, self.orchestrator))
 
     # ── Identity / config (cheap, read once per render) ──────────────────────
 
@@ -124,7 +136,7 @@ class TUIContext:
         in either shows up in both. Empty when standalone or before a database is
         open, and a failed read is an empty tab rather than a broken one.
         """
-        db = get_db() if self.main_actor is not None else None
+        db = get_db() if self.has_system else None
         if db is None:
             return []
         try:
@@ -152,36 +164,38 @@ class TUIContext:
     ) -> AsyncIterator[str]:
         """Yield reply chunks for a user message, one piece at a time.
 
-        Routes through the main orchestrator, which streams text chunks and
-        emits a trailing marker dict (``system_msg`` etc.); ``@name`` targeting
-        and slash-commands are resolved there. Falls back to the non-streaming
-        call, and to a notice when no system is attached (standalone UI).
+        A message naming an agent goes to main, which routes it to that agent,
+        here or on a node. Everything else, commands included, goes to the
+        orchestrator as a turn from this operator surface, the way the other
+        surfaces send theirs. Standalone, with no system attached, it says so.
 
         Both halves of the turn are stored here, the way the dashboard's socket
         stores its own: marked as recorded, so an agent that also stores the
         turns it answers does not write this one a second time, and stored with
         the attachments, which only this side knows about.
         """
-        actor = self.main_actor
-        if actor is None:
+        if not self.has_system:
             yield "(no system attached — standalone UI)"
             return
 
         agent = self.attribution(text)
-        # Set inside the task that runs this turn, so the mark follows the call
-        # into the agent and no other turn sees it.
+        # Set inside the task that runs this turn, so the mark and the turn id
+        # follow the call into the agent and no other turn sees them.
         chat_turn_recorded.set(True)
-        await _record("user", text, agent, attachments)
-        said: list[str] = []
-        try:
-            async for chunk in _reply(actor, text, attachments or []):
-                said.append(chunk)
-                yield chunk
-        except Exception as exc:
-            said.append(f"\n[error] {exc}")
+        with turn_scope():
+            await _record("user", text, agent, attachments)
+            said: list[str] = []
+            try:
+                async for chunk in _reply(
+                    self.orchestrator, self.main_actor, text, attachments or []
+                ):
+                    said.append(chunk)
+                    yield chunk
+            except Exception as exc:
+                said.append(f"\n[error] {exc}")
+                await _record("assistant", "".join(said), agent)
+                raise
             await _record("assistant", "".join(said), agent)
-            raise
-        await _record("assistant", "".join(said), agent)
 
     # ── Snapshot ─────────────────────────────────────────────────────────────
 
@@ -324,8 +338,38 @@ class TUIContext:
         self._net_last = (now, io.bytes_recv, io.bytes_sent)
 
 
-async def _reply(actor: object, text: str, attachments: list[dict[str, Any]]) -> AsyncIterator[str]:
-    """The agent's answer to one turn, as the chunks the transcript shows."""
+async def _reply(
+    orchestrator: Orchestrator | None,
+    main: object | None,
+    text: str,
+    attachments: list[dict[str, Any]],
+) -> AsyncIterator[str]:
+    """The answer to one turn, as the chunks the transcript shows.
+
+    Main takes a message that names an agent, since routing one is its; the
+    orchestrator takes the rest. Without an orchestrator, main takes all of it.
+    """
+    if main is not None and (text.startswith("@") or orchestrator is None):
+        async for chunk in _from_main(main, text, attachments):
+            yield chunk
+        return
+    if orchestrator is None:
+        yield "(chat unavailable)"
+        return
+    unsent = _unsent_note(text, attachments, can_attach=True)
+    if unsent:
+        yield unsent
+    blocks = await _blocks(attachments) if attachments and not unsent else []
+    async for chunk in orchestrator.handle_turn_stream(
+        text, channel=TUI, attachments=blocks or None
+    ):
+        yield str(chunk)
+
+
+async def _from_main(
+    actor: object, text: str, attachments: list[dict[str, Any]]
+) -> AsyncIterator[str]:
+    """Main's own answer to one turn, as the chunks the transcript shows."""
     stream = getattr(actor, "process_user_input_stream", None)
     reply = getattr(actor, "process_user_input", None)
     unsent = _unsent_note(text, attachments, can_attach=stream is not None)
@@ -438,13 +482,7 @@ def _as_float(value: object) -> float:
 
 async def create_context() -> TUIContext:
     """Build a context from the CLI args, wiring up a real actor system."""
-    # Local imports: building the system is the heavy path, and only the
-    # standalone entry point needs it.
-    # pylint: disable=import-outside-toplevel
-    from wactorz.app import build_system
-    from wactorz.cli import get_args
-
     args = get_args()
     args.interface = "cli"
-    system, main_actor, _db, _orchestrator = await build_system(args)
-    return TUIContext(main_actor=main_actor, system=system)
+    system, main_actor, _db, orchestrator = await build_system(args)
+    return TUIContext(main_actor=main_actor, system=system, orchestrator=orchestrator)

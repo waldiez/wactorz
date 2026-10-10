@@ -43,6 +43,17 @@ LEFT_EMPTY = (
     "MQTT_TLS_CA",
     "MQTT_TLS_CHECK_HOSTNAME",
     "WACTORZ_LOG_FORMAT",
+    # Voice: on `host` the backend would speak every reply through this
+    # machine's speakers and hold each turn open until it had, and the other
+    # branches reach services this suite does not run.
+    "WACTORZ_STT",
+    "WACTORZ_STT_URI",
+    "WACTORZ_TTS",
+    "WACTORZ_TTS_URI",
+    "WACTORZ_WAKE",
+    "WACTORZ_WAKE_WORDS",
+    "WACTORZ_WAKE_MODEL",
+    "TTS_VOICE",
 )
 
 #: The line `_print_ready_banner` puts on stdout once everything is actually up.

@@ -27,7 +27,7 @@ import {
     stripLeadingMention,
     voiceThreadTarget,
 } from "./chatRouting";
-import { SpeechToText } from "../../io/SpeechToText";
+import { SpeechToText } from "../../ext/stt";
 import { safeStorage } from "../../safeStorage";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";

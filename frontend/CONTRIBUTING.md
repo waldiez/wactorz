@@ -26,16 +26,29 @@
 ### New extension
 
 Extensions live in `src/ext/<name>/` and mirror `wactorz/ext/<name>/` on the backend.
-TTS (`src/ext/tts/`) is the reference implementation. When adding one:
+TTS (`src/ext/tts/`) and STT (`src/ext/stt/`) are the two worked examples, and they differ
+in one way worth understanding before you copy either. TTS is told what to do and gets on
+with it, so nothing outside it holds a reference. STT hands the composer an object it
+drives — record, stop, transcribe — which an event bus carries badly, so the composer
+imports it. Which shape yours is decides two of the boxes below.
 
-- [ ] Create `src/ext/<name>/index.ts` — barrel exporting types + a `register(config)` function
-- [ ] `register(config)` is called once from `main.ts` during startup; it self-wires hooks,
-      probes the backend endpoint, and registers event listeners — no other file imports
-      the extension directly
-- [ ] Extension talks to other modules **only** via the typed event bus (`AppEventMap` in
-      `src/events.ts`) — never imports from other extensions or `ui/` directly
+- [ ] Create `src/ext/<name>/index.ts` — the barrel: types, config keys, and whatever core
+      is meant to reach for
+- [ ] `main.ts` imports the barrel during startup. Add a `register(config)` for it to call
+      only if there is something to bootstrap — TTS probes voices and needs one, STT has
+      nothing to start and does not. The import happens either way, because config entries
+      register at module load and seeding picks up only what is registered by then
+- [ ] Core may import the barrel where it drives the extension directly (`io/IOManager.ts`
+      and `ui/dashboard/popovers.ts` take the `tts` singleton; the composer takes STT's
+      recorder and its gate). Anything the extension announces rather than is asked for
+      goes over the typed event bus (`AppEventMap` in `src/events.ts`)
+- [ ] Never import another extension, or `ui/`, from inside an extension. Both directions
+      are load-bearing: extensions stay independent of each other, and an extension that
+      reaches into `ui/` cannot be removed without breaking it
 - [ ] Config fields (e.g. `available`, `url`) are registered from the barrel via
-      `registerConfigEntry()` from `config/serverConfig.ts` and read from `safeStorage`
+      `registerConfigEntry()` from `config/serverConfig.ts` and read from `safeStorage`.
+      A field core also reports under the same key is merged, not replaced — see
+      `collect_public_config` on the backend
 - [ ] Custom icons registered via `registerIcon()` from `ui/dashboard/icons.ts`
       before calling `dashboard.registerView()` — core never imports your icons
 - [ ] Unit test in `src/__tests__/ext/<name>/` mirroring the extension layout

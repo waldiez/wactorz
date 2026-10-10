@@ -16,22 +16,28 @@ describe("ext/tts barrel (index.ts)", () => {
         // TTSVoice is a type — it compiles if the import succeeds
     });
 
-    it("register calls setApiBase and conditionally calls init", async () => {
+    it("register passes on where the server is and whether it speaks", async () => {
         const mod = await import("../../../ext/tts");
         const spyApi = vi.spyOn(mod.tts, "setApiBase");
+        const spyServer = vi.spyOn(mod.tts, "setServerAvailable");
         const spyInit = vi.spyOn(mod.tts, "init").mockResolvedValue();
 
-        // available: false — init not called
         mod.register({ apiBase: "/ha", available: false });
+
+        // Init runs either way: a server that cannot speak still leaves this
+        // browser covering for it, and it needs its own voices to do that.
         expect(spyApi).toHaveBeenCalledWith("/ha");
-        expect(spyInit).not.toHaveBeenCalled();
+        expect(spyServer).toHaveBeenCalledWith(false);
+        expect(spyInit).toHaveBeenCalledOnce();
 
         spyApi.mockClear();
+        spyServer.mockClear();
         spyInit.mockClear();
 
-        // available: true — init called
         mod.register({ apiBase: "", available: true });
+
         expect(spyApi).toHaveBeenCalledWith("");
+        expect(spyServer).toHaveBeenCalledWith(true);
         expect(spyInit).toHaveBeenCalledOnce();
     });
 });
@@ -83,5 +89,34 @@ describe("ext/tts config seeding", () => {
         await seed({});
 
         expect(safeStorage.get("wactorz-tts-available")).toBe("0");
+    });
+
+    it("records the branch the backend names", async () => {
+        await seed({ tts: { available: true, mode: "browser" } });
+
+        expect(safeStorage.get("wactorz-tts-mode")).toBe("browser");
+    });
+
+    it("treats a branch it does not know as the one that speaks", async () => {
+        const { ttsMode } = await import("../../../ext/tts");
+        await seed({ tts: { available: true, mode: "quantum" } });
+
+        // An older bundle meeting a newer backend: speaking, with the browser
+        // covering what the server cannot, is what saying nothing has meant.
+        expect(ttsMode()).toBe("server");
+    });
+
+    it("reads an unset branch as the one that speaks", async () => {
+        const { ttsMode } = await import("../../../ext/tts");
+        await seed({ tts: { available: true } });
+
+        expect(ttsMode()).toBe("server");
+    });
+
+    it("reads silence back as silence", async () => {
+        const { ttsMode } = await import("../../../ext/tts");
+        await seed({ tts: { available: false, mode: "off" } });
+
+        expect(ttsMode()).toBe("off");
     });
 });

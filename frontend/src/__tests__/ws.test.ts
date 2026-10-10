@@ -192,6 +192,78 @@ describe("WSClient", () => {
         expect(spy).toHaveBeenCalledWith("part", "main", expect.any(Number));
     });
 
+    it("asks the server to listen, and to stop", () => {
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        ws().emit("open", {});
+
+        expect(c.startListening()).toBe(true);
+        expect(c.stopListening()).toBe(true);
+
+        const sent = ws().sent.map((raw: string) => JSON.parse(raw)["type"]);
+        expect(sent).toContain("stt_start");
+        expect(sent).toContain("stt_stop");
+    });
+
+    it("sends a frame as it is, without wrapping it", () => {
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        ws().emit("open", {});
+        const frame = new ArrayBuffer(64);
+
+        expect(c.sendAudio(frame)).toBe(true);
+        expect(ws().sent).toContain(frame);
+    });
+
+    it("drops a frame when the socket is not open", () => {
+        const c = new WSClient();
+        const frame = new ArrayBuffer(64);
+
+        // Stale audio is worth less than the delay of queueing it, so this is a
+        // drop rather than a buffer.
+        expect(c.sendAudio(frame)).toBe(false);
+    });
+
+    it("reports a partial reading as not final", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.onTranscript(spy);
+        c.connect("ws://localhost/ws");
+        ws().emit("message", {
+            data: JSON.stringify({ type: "stt_partial", text: "hello th", segment: 2 }),
+        });
+        expect(spy).toHaveBeenCalledWith("hello th", 2, false);
+    });
+
+    it("reports a settled reading as final", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.onTranscript(spy);
+        c.connect("ws://localhost/ws");
+        ws().emit("message", {
+            data: JSON.stringify({ type: "stt_final", text: "hello there", segment: 2 }),
+        });
+        expect(spy).toHaveBeenCalledWith("hello there", 2, true);
+    });
+
+    it("treats a reading without a segment as the first one", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.onTranscript(spy);
+        c.connect("ws://localhost/ws");
+        ws().emit("message", { data: JSON.stringify({ type: "stt_partial", text: "hi" }) });
+        expect(spy).toHaveBeenCalledWith("hi", 0, false);
+    });
+
+    it("explains a recognition failure, even a silent one", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.onTranscriptError(spy);
+        c.connect("ws://localhost/ws");
+        ws().emit("message", { data: JSON.stringify({ type: "stt_error" }) });
+        expect(spy).toHaveBeenCalledWith("recognition stopped");
+    });
+
     it("calls onStreamEnd for type='stream_end'", () => {
         const c = new WSClient();
         const spy = vi.fn();

@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildIobar, TURN_IDLE_TIMEOUT_MS, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
-import type { SpeechToText } from "../io/SpeechToText";
+import type { SpeechToText } from "../ext/stt";
 import { emit } from "../events";
 import type { ChatMessage } from "../types/agent";
 

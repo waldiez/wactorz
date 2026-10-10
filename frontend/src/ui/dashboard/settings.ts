@@ -3,11 +3,13 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Settings view: the LLM spend-limit panel. The panel delegates save/reset to
+ * Settings view: the LLM spend-limit panel, and the voice panel where this
+ * deployment listens or speaks. The spend panel delegates save/reset to
  * the dashboard via callbacks so it can hit the backend and re-render.
  */
 
 import { button, el, named, option } from "../dom";
+import { buildVoiceSection } from "./voiceSettings";
 
 export interface CostLimitInfo {
     limit_usd?: number;
@@ -131,11 +133,21 @@ function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallback
     return section;
 }
 
-/** Assemble the settings view (LLM spend-limit panel). */
-export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
+/** Assemble the settings view: the LLM spend limit, and voice where there is any. */
+export function buildSettingsView(
+    info: CostLimitInfo | null,
+    cb: CostLimitCallbacks,
+    apiBase = "",
+    onVoiceChanged: () => void = () => {},
+): HTMLElement {
     const view = el("div", "af-settings");
     view.appendChild(el("h2", "af-settings-title", "Settings"));
     view.appendChild(buildCostLimitSection(info, cb));
+    // Absent entirely when this deployment neither listens nor speaks.
+    const voice = buildVoiceSection(apiBase, onVoiceChanged);
+    if (voice) {
+        view.appendChild(voice);
+    }
     // No Home Assistant fields: the HA URL comes from /api/config and the Devices
     // nav button links straight to HA — the browser never holds a token.
     return view;

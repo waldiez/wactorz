@@ -10,11 +10,13 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from aiohttp import WSMsgType, web
 
 from ..core.persistence import chat_turn_recorded
+from ..ext.stt import service_uri, streaming
 from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, origins, runtime, uploads
 
@@ -244,17 +246,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # Current server↔broker state so the "live" badge is right immediately on load.
     await ws.send_str(json.dumps({"type": "mqtt_status", "connected": runtime.mqtt_connected}))
 
-    # Per-connection accumulator for streamed assistant replies.
-    # We only persist once at stream_end so chat_log gets one row per turn
-    # with the full content, not a row per chunk.
-    _stream_buffer: list[str] = []
-
-    # The agent the current turn is addressed to. Reply frames and chat_log are
-    # attributed to it instead of the generic "io-gateway" transport id, so the
-    # UI (and persisted/reloaded history) shows the agent that actually answered
-    # rather than the gateway. Set per turn from the user's @mention before
-    # routing; defaults to the gateway id until a chat turn arrives.
-    _reply_from = {"name": runtime.IO_GATEWAY_ID}
+    # This connection's recognition session, if it opens one.
+    listening = Listening()
 
     def _persist_chat(
         role: str,
@@ -281,66 +274,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         except Exception as exc:
             logger.warning("[ws] chat_log write failed: %s", exc)
 
-    async def ws_reply(text: str):
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "chat",
-                        "from": _reply_from["name"],
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Non-streamed replies (slash command output, errors, system
-            # messages) — persist immediately.
-            _persist_chat("assistant", text, _reply_from["name"])
-        except Exception:
-            logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
-
-    async def ws_stream_chunk(chunk: str):
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "stream_chunk",
-                        "from": _reply_from["name"],
-                        "content": chunk,
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Buffer for end-of-stream persistence; do NOT write per chunk.
-            if chunk:
-                _stream_buffer.append(chunk)
-        except Exception:
-            logger.debug("[ws] Could not deliver a stream chunk", exc_info=True)
-
-    async def ws_stream_end():
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "stream_end",
-                        "from": _reply_from["name"],
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Now persist the full assembled assistant turn — once.
-            if _stream_buffer:
-                full = "".join(_stream_buffer)
-                _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
-        except Exception:
-            # Even if the send_str failed, flush anything we accumulated
-            # so the user's session isn't lost on a transient ws hiccup.
-            if _stream_buffer:
-                full = "".join(_stream_buffer)
-                _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
-
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
@@ -358,6 +291,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     elif msg_type == "command":
                         await handle_command(data)
 
+                    elif msg_type == "stt_start":
+                        await listening.start(ws)
+
+                    elif msg_type == "stt_stop":
+                        await listening.finish()
+
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
                         # Ids only travel on the wire; the name and type come
@@ -373,14 +312,13 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             # ("not found") arrives where the user is looking and
                             # ends the turn there; attributed to the mention, it
                             # would name an agent no view has a thread for.
-                            _reply_from["name"] = chat.turn_attribution(
-                                content, str(data.get("agent_name") or "")
-                            )
+                            name = chat.turn_attribution(content, str(data.get("agent_name") or ""))
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
-                            _persist_chat("user", content, _reply_from["name"], files)
+                            _persist_chat("user", content, name, files)
+                            turn = TurnReplies(ws, name, _persist_chat)
 
-                            async def _safe_route(c=content, files=files):
+                            async def _safe_route(c=content, files=files, turn=turn):
                                 # Both halves of this turn are stored here — the
                                 # user's above, the reply once it has finished —
                                 # so an agent that also stores its own turns must
@@ -391,9 +329,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                 try:
                                     await chat.route_chat(
                                         c,
-                                        ws_reply,
-                                        stream_fn=ws_stream_chunk,
-                                        stream_end_fn=ws_stream_end,
+                                        turn.reply,
+                                        stream_fn=turn.chunk,
+                                        stream_end_fn=turn.end,
                                         attachments=files,
                                     )
                                 except asyncio.CancelledError:
@@ -402,8 +340,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                     # Without the stream-end the send control
                                     # stays disabled with nothing to re-enable it.
                                     try:
-                                        await ws_stream_end()
-                                        await ws_reply("⏹ Stopped.")
+                                        await turn.end()
+                                        await turn.reply("⏹ Stopped.")
                                     # The socket is already gone; that is why we are here.
                                     except Exception:  # noqa: S110
                                         pass
@@ -411,25 +349,186 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                 except Exception as exc:
                                     logger.exception("[ws] chat error")
                                     try:
-                                        await ws_reply(f"[error] {exc}")
-                                        await ws_stream_end()
+                                        await turn.reply(f"[error] {exc}")
+                                        await turn.end()
                                     # The socket is already gone; that is why we are here.
                                     except Exception:  # noqa: S110
                                         pass
 
                             chat.track_chat_task(asyncio.create_task(_safe_route()))
                         elif content:
-                            await ws_reply("[system] Chat unavailable — no actor registry.")
+                            await TurnReplies(ws, runtime.IO_GATEWAY_ID, _persist_chat).reply(
+                                "[system] Chat unavailable — no actor registry."
+                            )
 
                 except Exception as e:
                     logger.warning("[ws] Bad message: %s", e)
+            elif msg.type == WSMsgType.BINARY:
+                # Audio for an open recognition session. Frames only mean
+                # something while one is running; before `stt_start` there is
+                # nothing to feed and dropping them is the whole handling.
+                if listening.session is not None:
+                    await listening.session.feed(msg.data)
+
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
+        await listening.stop()
         runtime.ws_clients.discard(channel)
         await channel.close()
         logger.info("WebSocket client disconnected. Total: %d", len(runtime.ws_clients))
     return ws
+
+
+class TurnReplies:
+    """The callbacks one chat turn answers through, on one socket.
+
+    One per turn rather than one per socket: the turns on a socket run at the
+    same time, each in its own task, and a reply ends when its own turn does.
+    Shared, the first turn to end closes the stream of whichever one is still
+    answering, and files that one's text under its own name.
+
+    Replies are attributed to the agent the turn addressed rather than to the
+    transport, so the page and the reloaded history show who answered. A
+    streamed reply is stored once, whole, when it ends, rather than a row per
+    piece.
+    """
+
+    def __init__(
+        self,
+        ws: web.WebSocketResponse,
+        name: str,
+        persist: Callable[[str, str, str], None],
+    ) -> None:
+        self._ws = ws
+        self.name = name
+        self._persist = persist
+        self._streamed: list[str] = []
+
+    async def reply(self, text: str) -> None:
+        """Send one whole reply, and store it."""
+        try:
+            await self._send("chat", content=text)
+            self._persist("assistant", text, self.name)
+        except Exception:
+            logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
+
+    async def chunk(self, chunk: str) -> None:
+        """Send one piece of a reply that is still arriving."""
+        try:
+            await self._send("stream_chunk", content=chunk)
+            if chunk:
+                self._streamed.append(chunk)
+        except Exception:
+            logger.debug("[ws] Could not deliver a stream chunk", exc_info=True)
+
+    async def end(self) -> None:
+        """Close the streamed reply, and store it whole.
+
+        Stored even when the socket has gone, so a turn is not lost to a
+        hiccup on the way out.
+        """
+        try:
+            await self._send("stream_end")
+        except Exception:
+            logger.debug("[ws] Could not deliver the end of a stream", exc_info=True)
+        if self._streamed:
+            whole, self._streamed = "".join(self._streamed), []
+            self._persist("assistant", whole, self.name)
+
+    async def _send(self, kind: str, **fields: str) -> None:
+        await self._ws.send_str(
+            json.dumps({"type": kind, "from": self.name, **fields, "timestamp": time.time()})
+        )
+
+
+class Listening:
+    """One browser's recognition session, for as long as it keeps the socket.
+
+    Tied to the connection rather than kept globally: two browsers may listen at
+    once, and a session belongs to whoever opened it. A closed tab ends its own
+    session and nobody else's.
+    """
+
+    def __init__(self) -> None:
+        self.session: streaming.LiveTranscription | None = None
+        self._pump: asyncio.Task[None] | None = None
+
+    async def start(self, ws: web.WebSocketResponse) -> None:
+        """Open a session, or say why there is not going to be one."""
+        if self.session is not None:
+            return  # already listening; a second start is not an error
+
+        uri = service_uri()
+        if not streaming.is_streaming_uri(uri):
+            # A batch recogniser answers once, at the end. Saying so is better
+            # than opening a session that will never produce a partial.
+            await _send(ws, {"type": "stt_error", "message": "this recogniser does not stream"})
+            return
+
+        self.session = streaming.LiveTranscription(uri)
+        await self.session.__aenter__()
+        self._pump = asyncio.create_task(self._forward(ws, self.session))
+
+    async def finish(self) -> None:
+        """Tell the recogniser the audio has ended; readings settle on their own."""
+        if self.session is not None:
+            await self.session.finish()
+
+    async def stop(self) -> None:
+        """End the session, whether it finished or the socket simply went away."""
+        if self._pump is not None and not self._pump.done():
+            self._pump.cancel()
+            await asyncio.gather(self._pump, return_exceptions=True)
+        await self._release()
+
+    async def _release(self) -> None:
+        """Let go of the session, so the next `stt_start` opens a fresh one.
+
+        Idempotent, because both the forwarding task and `stop` reach it: a turn
+        that ends on its own frees the session there, and one cut short frees it
+        here. Without that the guard in `start` sees a spent session and quietly
+        refuses, leaving a socket good for exactly one utterance.
+        """
+        self._pump = None
+        if self.session is not None:
+            await self.session.close()
+            self.session = None
+
+    async def _forward(
+        self, ws: web.WebSocketResponse, session: streaming.LiveTranscription
+    ) -> None:
+        """Send every reading to the browser as it arrives.
+
+        Takes the session as an argument rather than reading the attribute: the
+        attribute is cleared when the turn ends, and this loop outlives that.
+        """
+        try:
+            async for reading in session.readings():
+                await _send(
+                    ws,
+                    {
+                        "type": "stt_final" if reading.final else "stt_partial",
+                        "text": reading.text,
+                        "segment": reading.segment,
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[ws] recognition ended: %s", exc)
+            await _send(ws, {"type": "stt_error", "message": "recognition stopped"})
+        # Reached when the turn ends on its own or fails and is reported, never
+        # when cancelled -- `stop` owns the session in that case.
+        await self._release()
+
+
+async def _send(ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
+    """Send one frame, tolerating a socket that has already gone."""
+    try:
+        await ws.send_str(json.dumps(payload))
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110
+        pass
 
 
 # ── Browser commands ───────────────────────────────────────────────────────

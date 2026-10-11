@@ -189,13 +189,33 @@ wactorz-state import backup.tar.gz --replace
 
 Both read `WACTORZ_STATE_DIR` as the server does; `--state-dir` names another directory.
 
-- **What it holds:** the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
+- **What it holds:** the database, each agent's state file and blobs, uploads, the models kept with `wactorz-artifacts`, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
 - **What it leaves out:** logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.
 - **Export while it runs.** The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.
 - **Import with it stopped.** A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless `--replace` is given, which keeps what was there beside it as `<directory>.before-import-<date>-<time>`.
 - **An archive is code.** Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.
 
 A node's state is moved the same way, on the node: `wactorz-state export --state-dir ~/wactorz/state`, and an import there with the node stopped. The Home Assistant add-on's state is in `/data/state`, which Home Assistant's own backups already include.
+
+## Models kept on main
+
+`wactorz-artifacts` keeps models and other large files that agents load, each under a name and a version:
+
+```bash
+wactorz-artifacts add detector.onnx imu-detector --meta dataset=imu-2026 --meta auc=0.93
+wactorz-artifacts add yolo-model/ yolo                       # a directory, kept as one archive
+wactorz-artifacts add model.pt imu-detector --format state_dict
+wactorz-artifacts list                                       # every name and version
+wactorz-artifacts show imu-detector:latest                   # one version, as JSON
+wactorz-artifacts remove imu-detector:1                      # one version
+wactorz-artifacts remove imu-detector --every-version
+wactorz-artifacts verify                                     # stored files still match their hashes
+```
+
+- **A name and a version name one file.** Each `add` of a name is its next version. A reference is `NAME` or `NAME:latest` for the newest, or `NAME:3` for the third; each resolves to the file's SHA-256, so what a machine fetches can be checked against it. The same bytes, under any names, are kept once.
+- **The format comes from the file's ending**: `.onnx`, `.safetensors`, `.npz`, `.npy`, `.gguf`, `.tflite`, `.skops`. `--format` names it where the ending does not say, as for a `.pt`, which may hold a `state_dict` or a whole module; `raw` keeps bytes as they are. A directory is kept as one archive of it, written the same way on every machine, so the same directory has the same hash wherever it is added; a link inside it is refused.
+- **Formats that run code when they load are refused** unless `--allow-code` is given: a pickle (`.pkl`), a joblib file and a whole torch module (`--format torch`). One stored anyway is marked as running code.
+- **Where:** `<state>/..artifacts/`, beside the rest of the state, in what `wactorz-state export` writes. `--state-dir` names another state directory. Adding and removing work while the server runs.
 
 ## SSH key management
 

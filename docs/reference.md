@@ -1355,11 +1355,13 @@ wactorz/
 ├── node/                                      Edge node runtime — `wactorz-node --node <name>`
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
+├── artifacts_cli.py                           `wactorz-artifacts` CLI — models kept on main, by name and version
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
 │   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │   ├── topic_bus.py                           TopicBus — TopicContract / TopicRegistry, schema introspection
+│   ├── artifacts.py                           ArtifactStore — files kept once by SHA-256, named by version
 │   └── persistence/                           SQLite + memory + Pickle three-tier persistence
 │
 ├── agents/

@@ -5,6 +5,8 @@ the agent still exists exactly where it was. That is what makes a failed
 migration recoverable: rollback is a re-spawn on the source, not a repair.
 """
 
+import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -59,10 +61,8 @@ class _Main:
         return token
 
 
-def ack(token: str = "tok") -> bytes:
-    import json
-
-    return json.dumps({"agent": "collector", "migration_token": token, "node": "nuc"}).encode()
+def ack(token: str = "tok", agent: str = "collector") -> bytes:
+    return json.dumps({"agent": agent, "migration_token": token, "node": "nuc"}).encode()
 
 
 @pytest.fixture(name="main")
@@ -159,6 +159,52 @@ class TestTheAck:
         await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack(token))
 
         assert len(main.saved) == 1
+
+
+class TestWhoMayConfirm:
+    """Only the target, about the agent it was handed, completes a migration.
+
+    The token travels in the spawn, in the clear. The topic is what a node
+    cannot choose: with an account of its own it writes under its own
+    `nodes/<node>/` alone.
+    """
+
+    async def test_an_ack_from_another_node_changes_nothing(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", ack(token))
+
+        assert not main.saved
+        assert not main.published
+
+    async def test_an_ack_naming_another_agent_changes_nothing(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack(token, agent="other"))
+
+        assert not main.saved
+        assert not main.published
+
+    async def test_a_misaddressed_ack_leaves_the_migration_waiting(self, main: _Main) -> None:
+        # Spent on the wrong answer, the token would turn the real one away.
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", ack(token))
+        assert token in main.migration.pending_spawns
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack(token))
+        assert token not in main.migration.pending_spawns
+        assert len(main.saved) == 1
+
+    async def test_a_misaddressed_ack_is_logged(
+        self, main: _Main, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        token = main.pending()
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.migration"):
+            await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", ack(token))
+
+        assert "'rpi'" in caplog.text and "'nuc'" in caplog.text
 
 
 class TestTheSweepHasATrigger:

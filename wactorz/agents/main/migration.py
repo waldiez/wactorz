@@ -281,10 +281,13 @@ class Migration:
             )
             return
 
-        started = self.pending_returns.pop(token)
+        started = self.pending_returns[token]
+        if _misaddressed(topic, data, started["agent_name"], started["from_node"]):
+            return
+        self.pending_returns.pop(token)
         self._save_pending()
-        agent_name = data.get("agent") or started.get("agent_name", "?")
-        from_node = started.get("from_node", "?")
+        agent_name = started["agent_name"]
+        from_node = started["from_node"]
         if data.get("refused"):
             # The node kept the agent running and said why on `migrate_result`
             # too, which is what the user is told; repeating it here would be a
@@ -505,11 +508,14 @@ class Migration:
 
         self._expire_tokens()
         token = data.get("migration_token", "")
-        pending = self.pending_spawns.pop(token, None) if token else None
-        self._save_pending()
+        pending = self.pending_spawns.get(token) if token else None
         if pending is None:
             logger.debug("[main] spawn_ack with unknown/expired token from %s — ignoring", topic)
             return
+        if _misaddressed(topic, data, pending["agent_name"], pending["target_node"]):
+            return
+        self.pending_spawns.pop(token)
+        self._save_pending()
 
         agent_name = pending["agent_name"]
         from_node = pending["from_node"]
@@ -1338,6 +1344,36 @@ class Migration:
             qos=1,
         )
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
+
+
+def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) -> bool:
+    """Whether a node's answer quoting a migration's token is not that migration's.
+
+    The token is one migration's: one agent, answered by one node -- the source
+    handing it back, or the target confirming it started. An answer naming
+    another agent, or arriving on another node's topics, is not the answer to
+    it. The topic is the part a node cannot choose: with an account of its own,
+    the broker lets it write under its own ``nodes/<node>/`` and nowhere else.
+
+    Asked before the token is spent, and that order is the point. The token
+    travels in the clear, so anyone who can read the topics it crosses can
+    quote it. Spending it on a misaddressed answer would let them cancel the
+    migration: the real answer, a moment later, would find nothing waiting.
+    Dropped without spending, the migration stands and the right answer lands.
+    """
+    parts = topic.split("/")
+    sender = parts[1] if len(parts) > 2 and parts[0] == "nodes" else ""
+    if data.get("agent") == agent and sender == node:
+        return False
+    logger.warning(
+        "[main] %s quotes the token for %r on %r but names %r on %r — ignoring",
+        parts[-1],
+        agent,
+        node,
+        data.get("agent"),
+        sender,
+    )
+    return True
 
 
 def _left_behind_note(keys: list[str] | None) -> str:

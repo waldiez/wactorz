@@ -338,3 +338,72 @@ class TestWhenTheTargetNeverConfirms:
         await main.migration.expire_pending_spawns()
 
         assert any("failed" in str(n.get("message", "")).lower() for n in main.notifications)
+
+
+def refusal(token: str = "tok", reason: str = "its program did not start (compile)") -> bytes:
+    return json.dumps(
+        {"agent": "collector", "migration_token": token, "node": "nuc", "refused": reason}
+    ).encode()
+
+
+class TestWhenTheTargetRefuses:
+    """A target that says the agent did not start is believed at once.
+
+    Waiting out the token instead leaves the agent down for nothing: the
+    answer is already in.
+    """
+
+    async def test_the_agent_goes_back_to_the_source_now(self, main: _Main) -> None:
+        token = main.pending(age_s=1.0)
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+
+        ((config, node, _save),) = main.spawned
+        assert node == "rpi" and config["node"] == "rpi"
+        assert "_migration_token" not in config
+        assert token not in main.migration.pending_spawns
+
+    async def test_nothing_is_committed(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+
+        assert not main.saved
+        assert "nodes/rpi/stop" not in [t for t, _ in main.published]
+
+    async def test_the_targets_copy_is_cleared(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+
+        assert (
+            "nodes/nuc/stop",
+            {"name": "collector", "delete": True, "keep_topics": True},
+        ) in main.published
+
+    async def test_the_reason_is_announced(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack", refusal(token, reason="its program did not start (compile)")
+        )
+
+        (note,) = main.notifications
+        assert "did not start (compile)" in note["message"]
+        assert "back on 'rpi'" in note["message"]
+
+    async def test_a_refusal_from_another_node_changes_nothing(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", refusal(token))
+
+        assert not main.spawned
+        assert token in main.migration.pending_spawns
+
+    async def test_the_sweep_does_not_put_it_back_twice(self, main: _Main) -> None:
+        token = main.pending(age_s=TOKEN_TTL_S + 1)
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+        await main.migration.expire_pending_spawns()
+
+        assert len(main.spawned) == 1

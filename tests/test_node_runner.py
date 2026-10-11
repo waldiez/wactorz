@@ -121,6 +121,97 @@ class TestSpawning:
         assert not runner.agents
 
 
+BROKEN = "async def process(agent)\n    pass\n"
+
+
+def answers(runner: RecordingRunner) -> list[dict[str, Any]]:
+    """What the node said to main about agents it was moving here."""
+    return [p for t, p, _ in runner.published if t.endswith("/spawn_ack")]
+
+
+@pytest.fixture(name="no_repair")
+def no_repair_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No model to repair a program with, so one that does not compile stays broken."""
+
+    async def unavailable(_self: NodeAgent, _code: str, _error: str) -> None:
+        return None
+
+    monkeypatch.setattr(NodeAgent, "_fix_syntax_with_llm", unavailable)
+
+
+class TestRefusingAMigration:
+    """An agent moving here that does not start is refused, not confirmed.
+
+    A confirmation is what lets main delete the source's copy. Given for a
+    program that never ran, the agent would be nowhere.
+    """
+
+    @pytest.mark.usefixtures("no_repair")
+    async def test_a_program_that_does_not_compile_is_refused(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": BROKEN, "_migration_token": "t"})
+
+        (answer,) = answers(runner)
+        assert answer["migration_token"] == "t"
+        assert answer["refused"] == "its program did not start (compile)"
+
+    @pytest.mark.usefixtures("no_repair")
+    async def test_it_is_stopped_rather_than_restarted(self, runner: RecordingRunner) -> None:
+        # Supervised, it would be compiled again on every restart, and fail the
+        # same way each time.
+        await runner.spawn_agent({"name": "collector", "code": BROKEN, "_migration_token": "t"})
+
+        assert runner.get("collector") is None
+        assert "collector" not in runner.supervisor._specs
+        assert "collector" not in runner._configs
+
+    @pytest.mark.usefixtures("no_repair")
+    async def test_outside_a_migration_it_is_left_to_supervision(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Nobody is waiting on an answer, and main spawned it here on purpose.
+        await runner.spawn_agent({"name": "collector", "code": BROKEN})
+
+        assert not answers(runner)
+        assert "collector" in runner.supervisor._specs
+
+    async def test_a_start_that_raises_is_refused(self, runner: RecordingRunner) -> None:
+        real_start = NodeAgent.start
+
+        async def failing_start(self: NodeAgent) -> None:
+            raise RuntimeError("the camera is not there")
+
+        NodeAgent.start = failing_start  # type: ignore[method-assign]
+        try:
+            await runner.spawn_agent({"name": "collector", "code": CODE, "_migration_token": "t"})
+        finally:
+            NodeAgent.start = real_start  # type: ignore[method-assign]
+
+        (answer,) = answers(runner)
+        assert answer["refused"] == "it failed to start: the camera is not there"
+
+    async def test_a_refused_install_list_is_refused(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent(
+            {
+                "name": "collector",
+                "code": CODE,
+                "install": ["numpy; rm -rf /"],
+                "_migration_token": "t",
+            }
+        )
+
+        (answer,) = answers(runner)
+        assert "not package names" in answer["refused"]
+        assert runner.get("collector") is None
+
+    async def test_a_program_that_starts_is_confirmed(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE, "_migration_token": "t"})
+
+        (answer,) = answers(runner)
+        assert "refused" not in answer
+
+
 class TestSupervision:
     """A node gets the same OTP supervision main does, from the same supervisor.
 

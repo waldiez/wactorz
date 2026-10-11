@@ -492,10 +492,12 @@ class Migration:
         )
 
     async def receive_spawn_ack(self, topic: str, payload: bytes | None) -> None:
-        """A target node confirms an agent it was handed is running.
+        """A target node confirms an agent it was handed is running, or says it is not.
 
-        Only now is the migration complete: the registry moves, both nodes'
-        desired state is rewritten, and the source is told to drop its copy.
+        Only a confirmation completes the migration: the registry moves, both
+        nodes' desired state is rewritten, and the source is told to drop its
+        copy. An answer carrying ``refused`` puts the agent back on its source
+        now, as the sweep would once the token ran out.
         """
         if not payload or self.host is None:
             return
@@ -516,6 +518,9 @@ class Migration:
             return
         self.pending_spawns.pop(token)
         self._save_pending()
+        if data.get("refused"):
+            await self._put_back(pending, str(data["refused"]))
+            return
 
         agent_name = pending["agent_name"]
         from_node = pending["from_node"]
@@ -644,48 +649,60 @@ class Migration:
                 continue
             self.pending_spawns.pop(token, None)
             self._save_pending()
-            agent_name = pending["agent_name"]
-            from_node = pending["from_node"]
-            target_node = pending["target_node"]
-            logger.warning(
-                "[%s] %r never confirmed on %r — putting it back on %r",
-                self.host.name,
-                agent_name,
-                target_node,
-                from_node,
-            )
-            # Clear the target first, best effort. The ack may have been lost
-            # rather than never sent, in which case the target is running the
-            # agent and putting it back on the source would leave two -- the
-            # duplicate this whole choreography exists to avoid. An agent that
-            # never started ignores the stop.
-            #
-            # Its retained topics are kept. An actor id comes from the name, so
-            # they are the topics of the copy being restored below: cleared, its
-            # manifest reads as that copy withdrawing, and the registry forgets
-            # the agent this rollback exists to keep.
-            await self.host._mqtt_publish(
-                f"nodes/{target_node}/stop",
-                {"name": agent_name, "delete": True, "keep_topics": True},
-                qos=1,
-            )
-            # The stop is a one-off, but placing the agent added it to the
-            # target's desired state, and that message is retained. Left there,
-            # the next time the node reboots it reconciles the agent back into
-            # existence beside the copy this rollback is restoring, and the two
-            # of them carry the same name and diverge from the same state.
-            await self.update_desired_state(target_node, remove_name=agent_name)
-            if from_node == LOCAL_SOURCE:
-                await self._restore_local(pending)
-            else:
-                restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
-                restored["node"] = from_node
-                await self.host._spawn_remote(restored, from_node, save=True)
-            self._announce(
-                f"Migration of '{agent_name}' to '{target_node}' failed — "
-                f"it is back on '{from_node}'.",
-                "warning",
-            )
+            await self._put_back(pending, None)
+
+    async def _put_back(self, pending: dict[str, Any], refused: str | None) -> None:
+        """Restore an agent on its source after its target did not take it.
+
+        ``refused`` is the target's reason when it said the agent did not start,
+        and None when it never answered.
+        """
+        if self.host is None:
+            return
+        agent_name = pending["agent_name"]
+        from_node = pending["from_node"]
+        target_node = pending["target_node"]
+        logger.warning(
+            "[%s] %r %s on %r — putting it back on %r",
+            self.host.name,
+            agent_name,
+            f"did not start ({refused})" if refused else "never confirmed",
+            target_node,
+            from_node,
+        )
+        # Clear the target first, best effort. The ack may have been lost
+        # rather than never sent, in which case the target is running the
+        # agent and putting it back on the source would leave two -- the
+        # duplicate this whole choreography exists to avoid. An agent that
+        # never started ignores the stop.
+        #
+        # Its retained topics are kept. An actor id comes from the name, so
+        # they are the topics of the copy being restored below: cleared, its
+        # manifest reads as that copy withdrawing, and the registry forgets
+        # the agent this rollback exists to keep.
+        await self.host._mqtt_publish(
+            f"nodes/{target_node}/stop",
+            {"name": agent_name, "delete": True, "keep_topics": True},
+            qos=1,
+        )
+        # The stop is a one-off, but placing the agent added it to the
+        # target's desired state, and that message is retained. Left there,
+        # the next time the node reboots it reconciles the agent back into
+        # existence beside the copy this rollback is restoring, and the two
+        # of them carry the same name and diverge from the same state.
+        await self.update_desired_state(target_node, remove_name=agent_name)
+        if from_node == LOCAL_SOURCE:
+            await self._restore_local(pending)
+        else:
+            restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
+            restored["node"] = from_node
+            await self.host._spawn_remote(restored, from_node, save=True)
+        self._announce(
+            f"Migration of '{agent_name}' to '{target_node}' failed"
+            + (f": {refused}" if refused else "")
+            + f" — it is back on '{from_node}'.",
+            "warning",
+        )
 
     async def _restore_local(self, pending: dict[str, Any]) -> None:
         """Start the agent here again after its target never confirmed.

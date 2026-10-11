@@ -27,7 +27,7 @@ from typing import Any
 
 from .. import __version__
 from ..config import CONFIG, MIGRATION_MAX_BLOB_BYTES
-from ..core.actor import Actor, SupervisorStrategy
+from ..core.actor import Actor, ActorState, SupervisorStrategy
 from ..core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsUnusable,
@@ -261,14 +261,18 @@ class NodeRunner:
                     "error",
                     f"Refused to spawn '{name}': these are not package names: {refused}",
                 )
+                await self._refuse_migration(
+                    name, config, f"these are not package names: {refused}"
+                )
                 return
 
         if not await self._receive_blobs(name, config):
+            await self._refuse_migration(name, config, "its models and other blobs did not arrive")
             return
 
         try:
             self._configs[name] = config
-            await self.supervisor.start_supervised(
+            agent = await self.supervisor.start_supervised(
                 name,
                 lambda: NodeAgent(config, self, state_dir=self.state_dir),
                 strategy=SupervisorStrategy.ONE_FOR_ONE,
@@ -280,6 +284,19 @@ class NodeRunner:
             logger.exception("[runner] Failed to start agent '%s'", name)
             self.forget(name)
             await self._log_to_dashboard("error", f"Failed to start '{name}': {e}")
+            await self._refuse_migration(name, config, f"it failed to start: {e}")
+            return
+
+        # The start returns once `on_start` has, and a program that did not
+        # compile -- after any repair -- or whose state could not be upgraded is
+        # FAILED by then. It never ran, so it is not an arrival: a migration is
+        # refused and the agent stopped here, rather than left to a supervisor
+        # that would compile it again on every restart. Outside a migration it
+        # stays supervised, as an agent main spawned here always has.
+        if config.get("_migration_token") and agent.state is ActorState.FAILED:
+            phase = getattr(agent, "_error_phase", "") or "start"
+            await self.stop_agent(name)
+            await self._refuse_migration(name, config, f"its program did not start ({phase})")
             return
 
         await self.publish(
@@ -310,13 +327,35 @@ class NodeRunner:
                 retain=False,
             )
 
+    async def _refuse_migration(self, name: str, config: dict[str, Any], reason: str) -> None:
+        """Tell main an agent it is moving here did not start, so it is put back at once.
+
+        Without this main learns only from silence, and the agent is down until
+        its migration's token runs out. A spawn that is not a migration has no
+        one waiting, and is not answered.
+        """
+        token = config.get("_migration_token")
+        if not token:
+            return
+        await self.publish(
+            f"nodes/{self.node_name}/spawn_ack",
+            {
+                "agent": name,
+                "migration_token": token,
+                "node": self.node_name,
+                "refused": reason,
+                "timestamp": time.time(),
+            },
+            retain=False,
+        )
+
     async def _receive_blobs(self, name: str, config: dict[str, Any]) -> bool:
         """Put the blobs an arriving agent's state refers to in its state. False if they never came.
 
         Main sends them beside the spawn, and the spawn -- signed by main -- is
         what names their hashes, so what arrives is used only if it matches.
-        An agent that would start without them is not started: main hears no
-        confirmation and puts the agent back where it came from.
+        An agent that would start without them is not started: main is told it
+        was refused and puts the agent back where it came from.
         """
         initial = config.get("_initial_state")
         if not isinstance(initial, dict):

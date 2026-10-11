@@ -520,7 +520,7 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 | `await agent.publish(topic, data)` | Publish to any MQTT topic via the shared broker. |
 | `await agent.log(message)` | Log to `agents/{id}/logs` — visible in the central dashboard. |
 | `await agent.alert(message, severity)` | Publish an alert. Levels: `info`, `warning`, `error`. |
-| `agent.persist(key, value)` | Write to `~/wactorz/state/<name>_state.json` (JSON, not pickle — portable, and what a migration carries). Bytes, numpy arrays, torch tensors and modules, and scikit-learn-family models are kept as files of their own beside it. Any other value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved. |
+| `agent.persist(key, value)` | Write to `~/wactorz/state/<name>_state.json` (JSON, not pickle — portable, and what a migration carries). Bytes, numpy arrays, torch tensors and modules, and scikit-learn-family models are kept as files of their own beside it. A `datetime`, `date`, `time` or `timedelta`, a `set` or `frozenset`, a tuple, and a dict whose keys are not strings are written in a marked form and come back as what they were. Any other value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved. |
 | `agent.recall(key)` | Read a persisted value. |
 | `agent.state` | In-memory dict, not persisted. |
 | `await agent.send_to(name, payload)` | Send a task to any agent (local or remote) via MQTT request/reply. Times out after 30 s by default. |
@@ -547,7 +547,7 @@ A node runs an agent whose program goes with it: generated code, or an LLM agent
 
 The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
 
-State travels as JSON, and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:
+State travels as JSON — a date, a set, a tuple or a dict keyed by numbers in the marked form that brings it back as it was — and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:
 
 - **its state holds a value that can go neither way** (an open capture, a socket, an object of the agent's own class). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
 - **it is on a node and keeps a value that runs code when it loads** — a torch module, a scikit-learn, XGBoost, LightGBM or CatBoost model saved with joblib. Main sends these to a node, which runs what main sends it anyway; it does not load them from a node, and one node does not pass them to another. They are refused like the values above, and `--force` leaves them on the node. Keep a model's `state_dict()` instead of the module, and it travels;

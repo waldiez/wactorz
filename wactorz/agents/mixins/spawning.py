@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, cast
 from ...core.actor import Actor, ActorState, ask_through
 from ...core.paths import agent_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
+from ...core.state_codec import decode_state
 from ...core.topics import topic_name_error
 from ...plugins import for_target
 from ..lookup import find_main_actor
@@ -613,7 +614,8 @@ class SpawnMixin(_Host):
             return
 
         api = PersistenceAPI(db, pkl, name)
-        applied = api.load_snapshot(snapshot, replace=True)
+        # As it travelled: a date or a set in its marked JSON form.
+        applied = api.load_snapshot(decode_state(snapshot), replace=True)
         logger.info(
             "[%s] Applied migrated state for '%s': %s SQLite, %s in-memory, %s pickle key(s)",
             self.name,

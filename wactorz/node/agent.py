@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
 from ..core.actor import forbidden
+from ..core.state_codec import decode_state
 from ..core.topic_bus import TopicContract
 from ..monitoring.agent_metrics import RecentDurations
 from .llm import BridgeProvider, request_over_mqtt
@@ -134,7 +135,8 @@ class NodeAgent(DynamicAgent):
                 len(initial),
             )
             self._state_file.delete()
-        self._persistent_state = dict(initial)
+        # As it travelled: a date or a set in its marked JSON form.
+        self._persistent_state = decode_state(initial)
         self._state_file.save(self._persistent_state)
         logger.info(
             "[%s] Restored %s state key(s) from migration: %s",

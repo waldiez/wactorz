@@ -401,6 +401,15 @@ class NodeManager:
             return []
         return [str(target) for target in agents if isinstance(target, str)]
 
+    def takes_bundles(self, node_name: str) -> bool:
+        """Whether `node_name` builds a library agent from code sent with its spawn.
+
+        From its manifest, which says so; a node from a release before bundles
+        does not, and is sent none.
+        """
+        manifest = self.node_manifests.get(node_name) or {}
+        return manifest.get("code_bundles") is True
+
     def forget(self, node_name: str) -> None:
         """Forget a node altogether, as removing it does: its heartbeat and its machine."""
         self.known.pop(node_name, None)

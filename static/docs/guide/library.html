@@ -300,24 +300,38 @@ restored after a restart, and may be spawned under another name with a
 because a spawn config can be written by the model.</p>
 <h2 id="on-a-node-and-moving-between-machines">On a node, and moving between machines</h2>
 <p>A registered agent can run on a <a href="../guide/remote-nodes.html">node</a> as well as on main,
-and move between the two with <code>/migrate</code>, as long as the node can build it.
-A node runs a dynamic agent from the program main sends it; a library agent
-it builds from a package installed there, exactly as main does, so the node
-needs the same two things main needed:</p>
+and move between the two with <code>/migrate</code>. Main sends its code with it, so
+nothing has to be copied to the node by hand, as long as the agent keeps to
+one rule.</p>
+<p><strong>An agent's own code lives in its own folder.</strong> What main sends is the folder
+its module is in -- every <code>.py</code> file in it and in the folders under it -- or,
+for a module inside a package, the package. Everything else the agent imports
+must be one of:</p>
 <ul>
-<li><strong>the code, importable where the runner starts</strong>: <code>pip install</code> your package
-  into the node's environment, or put its folder on <code>PYTHONPATH</code> there;</li>
-<li><strong>the registration</strong>: <code>WACTORZ_AGENTS=mypkg.agents:detect</code> in the runner's
-  environment (the <code>~/wactorz/.env</code> a deploy writes is read by its service),
-  or a <code>wactorz.agents</code> entry point in the installed package.</li>
+<li>the standard library, or <code>wactorz</code>;</li>
+<li>a package pip installs, listed in <code>requires={"packages": [...]}</code> on the
+  decorator (or <code>REQUIRES</code> on a class), which the node installs before it
+  builds the agent.</li>
 </ul>
-<p>A node says in its manifest which targets it can build, and main places a
-library agent only on a node that names its target; to any other it refuses
-the move, with what to install there. On the node the agent subscribes,
-publishes and persists as it does on main, answers tasks sent to it by name,
-and keeps its state under the node's state directory. It has no model there:
-<code>me.llm</code> is <code>None</code>, since a node makes no model calls.</p>
-<div class="highlight"><pre><span></span><code>/migrate imu-anomaly rpi-kitchen      # the node's manifest lists imu_anomaly.agent:detect
+<p>Code of your own from anywhere else -- a <code>mylab</code> package in another folder, on
+<code>PYTHONPATH</code> or installed with <code>pip install -e</code> -- would not be on the node, so
+the move is refused before anything stops, naming the import: move that code
+into the agent's folder, or publish it and list it in <code>requires</code>. Only <code>.py</code>
+files go, up to 1 MiB of them; a model goes as one of the agent's models
+(<code>models=</code>, above), and a folder that is hidden, a cache or a virtual
+environment is skipped. Two agents on one node cannot both have a module of
+the same name, so give an agent's module a name of its own (<code>imu_detector.py</code>
+rather than <code>agent.py</code>) when several will share a node.</p>
+<p>A node that has the agent installed itself -- the package in its environment
+and the target in <code>WACTORZ_AGENTS</code> there, or a <code>wactorz.agents</code> entry point --
+builds it from that instead, and is sent no code; that is how to run code that
+cannot follow the rule. A node from before this release takes no code from
+main, and is refused the move until it is deployed again.</p>
+<p>On the node the agent subscribes, publishes and persists as it does on main,
+answers tasks sent to it by name, and keeps its state under the node's state
+directory. It has no model there: <code>me.llm</code> is <code>None</code>, since a node makes no
+model calls.</p>
+<div class="highlight"><pre><span></span><code>/migrate imu-anomaly rpi-kitchen      # its code, packages and models go with it
 /migrate imu-anomaly local            # and back, with its state
 </code></pre></div>
 

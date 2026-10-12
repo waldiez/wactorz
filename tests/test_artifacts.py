@@ -186,7 +186,11 @@ class TestDirectories:
 
     def test_a_link_inside_is_refused(self, store: ArtifactStore, tmp_path: Path) -> None:
         directory = a_directory(tmp_path / "model")
-        (directory / "outside").symlink_to(tmp_path)
+        try:
+            (directory / "outside").symlink_to(tmp_path)
+        except OSError as exc:
+            # Windows lets only an administrator, or Developer Mode, make one.
+            pytest.skip(f"this machine cannot make a link: {exc}")
 
         with pytest.raises(ArtifactError, match="is a link"):
             store.add(directory, "yolo")

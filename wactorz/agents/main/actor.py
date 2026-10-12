@@ -1140,6 +1140,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """The library agents ``node_name`` says it can build, by import path."""
         return self.nodes.targets_of(node_name)
 
+    def _node_takes_bundles(self, node_name: str) -> bool:
+        """Whether ``node_name`` builds a library agent from code sent with its spawn."""
+        return self.nodes.takes_bundles(node_name)
+
     def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}

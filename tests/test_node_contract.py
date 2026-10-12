@@ -151,6 +151,8 @@ MANIFEST_FIELDS = frozenset(
         "packages",
         # The library agents the node can build, by import path.
         "agents",
+        # That it builds a library agent from code sent with its spawn.
+        "code_bundles",
     }
 )
 
@@ -181,6 +183,8 @@ SPAWN_CONFIG_FIELDS = frozenset(
         # and what its constructor or `agent.options` is given.
         "target",
         "options",
+        # Its code, when the node does not have it installed: see core/bundles.py.
+        "bundle",
     }
 )
 

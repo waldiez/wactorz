@@ -56,7 +56,7 @@ from ...core.mqtt import (
 from ...core.paths import resolve_state_dir
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from ...plugins import MODULE_TYPE, is_module_config
-from .spawns import why_a_node_cannot_run, without_transient_keys
+from .spawns import why_a_node_cannot_run, with_code_for, without_transient_keys
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -1122,9 +1122,11 @@ class Migration:
         # Before anything stops: a node handed a config with no program starts
         # an empty agent and confirms it, and the migration would then purge
         # the only copy that worked.
-        unrunnable = why_a_node_cannot_run(
-            dict(config or {}), self.host_nodes.targets_of(target_node)
+        targets = self.host_nodes.targets_of(target_node)
+        config, problem = await with_code_for(
+            dict(config or {}), targets, self.host_nodes.takes_bundles(target_node)
         )
+        unrunnable = problem or why_a_node_cannot_run(config, targets)
         if unrunnable:
             return {
                 "success": False,

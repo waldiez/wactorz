@@ -35,6 +35,7 @@ from ..config import (
     MIGRATION_MAX_BLOB_BYTES,
     NODE_ARTIFACT_CACHE_BYTES,
 )
+from ..core import bundles
 from ..core.actor import Actor, ActorState, SupervisorStrategy
 from ..core.artifacts import ArtifactError, pinned_in
 from ..core.blob_transfer import (
@@ -154,6 +155,15 @@ class NodeRunner:
             Path(self.state_dir) / INBOX_DIRNAME,
             _largest(MIGRATION_MAX_BLOB_BYTES, ARTIFACT_MAX_BYTES),
         )
+        #: Where the code library agents' spawns carry is written, one
+        #: directory per bundle, and imported from.
+        self._bundles_dir = Path(self.state_dir) / bundles.BUNDLES_DIRNAME
+        #: name -> the plugin built from the bundle its spawn carried, and the
+        #: directory that bundle is in, from the moment it is written.
+        self._bundled: dict[str, tuple[plugins.AgentPlugin, Path]] = {}
+        #: One bundle written and imported at a time: each changes `sys.path`
+        #: and `sys.modules`, and clears away the bundles no agent here uses.
+        self._bundle_lock = asyncio.Lock()
         #: The models agents here have named, kept across restarts.
         self.artifacts = ArtifactCache(
             Path(self.state_dir) / CACHE_DIRNAME, NODE_ARTIFACT_CACHE_BYTES
@@ -251,6 +261,7 @@ class NodeRunner:
     def forget(self, name: str) -> None:
         """Drop an agent that has ended itself, without stopping it again."""
         self._configs.pop(name, None)
+        self._bundled.pop(name, None)
         self.supervisor.drop_supervised(name)
 
     async def spawn_agent(self, config: Any) -> None:
@@ -301,6 +312,15 @@ class NodeRunner:
                 "error", f"Did not start '{name}' on {self.node_name}: {missing}"
             )
             await self._refuse_migration(name, config, missing)
+            return
+
+        unloaded = await self._take_bundle(str(name), config)
+        if unloaded:
+            logger.error("[runner] Not starting '%s': %s", name, unloaded)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {unloaded}"
+            )
+            await self._refuse_migration(name, config, unloaded)
             return
 
         factory = self._factory(config)
@@ -385,10 +405,53 @@ class NodeRunner:
         """
         if not plugins.is_module_config(config):
             return lambda: NodeAgent(config, self, state_dir=self.state_dir)
-        plugin = plugins.for_target(str(config.get("target") or ""))
+        if isinstance(config.get("bundle"), dict):
+            taken = self._bundled.get(str(config.get("name")))
+            plugin = taken[0] if taken else None
+        else:
+            plugin = plugins.for_target(str(config.get("target") or ""))
         if plugin is None:
             return None
         return lambda: self._build_hosted(plugin, config)
+
+    async def _take_bundle(self, name: str, config: dict[str, Any]) -> str | None:
+        """Write and import the code a library agent's spawn carries; why it could not, or None.
+
+        A spawn with no bundle is left to `_factory`, which builds from what is
+        installed here. Writing and importing read and write files and run the
+        module's own code: off the loop.
+        """
+        if not plugins.is_module_config(config) or not isinstance(config.get("bundle"), dict):
+            return None
+        try:
+            async with self._bundle_lock:
+                in_use = {d for n, (_p, d) in self._bundled.items() if n != name}
+                self._bundled[name] = await asyncio.to_thread(self._import_bundle, config, in_use)
+        except bundles.BundleError as exc:
+            return str(exc)
+        except Exception as exc:
+            # The module's own code ran, and raised: what it raised is the reason.
+            logger.exception("[runner] The code '%s' was sent with did not load", name)
+            return f"its code did not load: {exc}"
+        return None
+
+    def _import_bundle(
+        self, config: dict[str, Any], in_use: set[Path]
+    ) -> tuple[plugins.AgentPlugin, Path]:
+        """The plugin built from the bundle in ``config``, written here and imported.
+
+        ``in_use`` is the bundle directories the other agents here run from.
+        """
+        directory = bundles.write(config["bundle"], self._bundles_dir).resolve()
+        bundles.prepare_import(directory, self._bundles_dir, in_use)
+        target = str(config.get("target") or "")
+        obj = plugins.resolve_target(target)
+        module = sys.modules.get(target.partition(":")[0])
+        file = getattr(module, "__file__", None)
+        if not file or not Path(file).resolve().is_relative_to(directory):
+            raise bundles.BundleError(f"{target} was not loaded from the code its spawn carries")
+        bundles.trim(self._bundles_dir, in_use | {directory})
+        return plugins.plugin_from(obj, target), directory
 
     def _build_hosted(self, plugin: plugins.AgentPlugin, config: dict[str, Any]) -> Actor:
         """The library agent ``plugin`` builds, made this node's before it starts."""
@@ -558,6 +621,7 @@ class NodeRunner:
 
         await self.supervisor.stop_supervised(name)
         self._configs.pop(name, None)
+        self._bundled.pop(name, None)
 
         if delete:
             # After the agent is fully stopped: its own shutdown writes the
@@ -699,8 +763,10 @@ class NodeRunner:
                 **self._node_identity(),
                 **described,
                 # The library agents this node can build, by import path: main
-                # places one here only when its target is among them.
+                # places one here only when its target is among them, or when
+                # it sends the agent's code with the spawn, which this node takes.
                 "agents": plugins.targets(),
+                "code_bundles": True,
                 "timestamp": time.time(),
             },
             retain=True,

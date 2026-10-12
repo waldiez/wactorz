@@ -237,6 +237,8 @@ TYPE 3 — "dynamic"
   CRITICAL RULES FOR DYNAMIC AGENT CODE:
     NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()
     NEVER import or use aiomqtt directly — use agent.subscribe() instead
+    Import ONLY the standard library, wactorz and pip packages listed in "install" — NEVER a local
+    module or file of this machine: a step may run on a node, where only those exist
     NEVER hardcode MQTT broker hostnames or ports — agent.subscribe() handles this automatically
     NEVER use asyncio.create_task() for MQTT — agent.subscribe() already creates the background task
     agent.subscribe() is non-blocking — call it in setup() and return immediately

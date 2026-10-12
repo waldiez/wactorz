@@ -157,26 +157,43 @@ because a spawn config can be written by the model.
 ## On a node, and moving between machines
 
 A registered agent can run on a [node](remote-nodes.md) as well as on main,
-and move between the two with `/migrate`, as long as the node can build it.
-A node runs a dynamic agent from the program main sends it; a library agent
-it builds from a package installed there, exactly as main does, so the node
-needs the same two things main needed:
+and move between the two with `/migrate`. Main sends its code with it, so
+nothing has to be copied to the node by hand, as long as the agent keeps to
+one rule.
 
-- **the code, importable where the runner starts**: `pip install` your package
-  into the node's environment, or put its folder on `PYTHONPATH` there;
-- **the registration**: `WACTORZ_AGENTS=mypkg.agents:detect` in the runner's
-  environment (the `~/wactorz/.env` a deploy writes is read by its service),
-  or a `wactorz.agents` entry point in the installed package.
+**An agent's own code lives in its own folder.** What main sends is the folder
+its module is in -- every `.py` file in it and in the folders under it -- or,
+for a module inside a package, the package. Everything else the agent imports
+must be one of:
 
-A node says in its manifest which targets it can build, and main places a
-library agent only on a node that names its target; to any other it refuses
-the move, with what to install there. On the node the agent subscribes,
-publishes and persists as it does on main, answers tasks sent to it by name,
-and keeps its state under the node's state directory. It has no model there:
-`me.llm` is `None`, since a node makes no model calls.
+- the standard library, or `wactorz`;
+- a package pip installs, listed in `requires={"packages": [...]}` on the
+  decorator (or `REQUIRES` on a class), which the node installs before it
+  builds the agent.
+
+Code of your own from anywhere else -- a `mylab` package in another folder, on
+`PYTHONPATH` or installed with `pip install -e` -- would not be on the node, so
+the move is refused before anything stops, naming the import: move that code
+into the agent's folder, or publish it and list it in `requires`. Only `.py`
+files go, up to 1 MiB of them; a model goes as one of the agent's models
+(`models=`, above), and a folder that is hidden, a cache or a virtual
+environment is skipped. Two agents on one node cannot both have a module of
+the same name, so give an agent's module a name of its own (`imu_detector.py`
+rather than `agent.py`) when several will share a node.
+
+A node that has the agent installed itself -- the package in its environment
+and the target in `WACTORZ_AGENTS` there, or a `wactorz.agents` entry point --
+builds it from that instead, and is sent no code; that is how to run code that
+cannot follow the rule. A node from before this release takes no code from
+main, and is refused the move until it is deployed again.
+
+On the node the agent subscribes, publishes and persists as it does on main,
+answers tasks sent to it by name, and keeps its state under the node's state
+directory. It has no model there: `me.llm` is `None`, since a node makes no
+model calls.
 
 ```text
-/migrate imu-anomaly rpi-kitchen      # the node's manifest lists imu_anomaly.agent:detect
+/migrate imu-anomaly rpi-kitchen      # its code, packages and models go with it
 /migrate imu-anomaly local            # and back, with its state
 ```
 

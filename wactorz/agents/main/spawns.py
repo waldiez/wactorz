@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
 from ...core.artifacts import ArtifactError
+from ...core.bundles import BundleError, bundle_for
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 
@@ -74,18 +75,53 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
         return "it has no program to send there"
     if agent_type == MODULE_TYPE:
         target = str(config.get("target") or "").strip()
-        if target and target in node_targets:
+        if target and (target in node_targets or isinstance(config.get("bundle"), dict)):
             return None
         return (
             f"it is built from {target or 'a target it does not name'}, which that node has "
-            f"not said it has. Install the package on the node and name the agent in "
-            f"WACTORZ_AGENTS there, or list it as a wactorz.agents entry point"
+            f"not said it has, and its code could not be sent with it. Redeploy the node so it "
+            f"takes the code from main, or install the package there and name the agent in "
+            f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
         )
     return (
         f"it is a {agent_type} agent, built into this server, and a node runs only an "
         f"agent whose program goes with it: generated code, an LLM agent, or a library "
         f"agent from a package installed there"
     )
+
+
+async def with_code_for(
+    config: dict[str, Any], node_targets: Collection[str], takes_bundles: bool
+) -> tuple[dict[str, Any], str | None]:
+    """``config`` as a node can build it, and why its code cannot go, or None.
+
+    A library agent whose target the node has installed is built from that.
+    Otherwise, on a node that takes them, its code goes with the spawn as a
+    bundle -- the folder its module is in, see `wactorz.core.bundles` -- made
+    again from the code here each time, so the node runs what main runs, with
+    the packages the agent requires to be installed there. A config that is
+    not a library agent's is returned as it is.
+    """
+    if not is_module_config(config):
+        return config, None
+    target = str(config.get("target") or "").strip()
+    if not target or target in node_targets or not takes_bundles:
+        return config, None
+    plugin = for_target(target)
+    if plugin is None:
+        # Not built here, so there is nothing to send: a bundle the config
+        # already carries is the one it was placed with.
+        return config, None
+    try:
+        # It reads and parses every file in the folder: off the loop.
+        bundle = await asyncio.to_thread(bundle_for, target)
+    except BundleError as exc:
+        return config, str(exc)
+    bundled = {**config, "bundle": bundle}
+    packages = plugin.requires.get("packages")
+    if packages and not config.get("install"):
+        bundled["install"] = [str(p) for p in packages]
+    return bundled, None
 
 
 def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -721,7 +757,15 @@ class SpawnService:
             return
         # The node's targets are asked for only when they decide: a host that
         # cannot say -- a test's stand-in -- places code and LLM agents as before.
-        targets = self.host._node_targets(node) if is_module_config(config) else ()
+        targets: Collection[str] = ()
+        if is_module_config(config):
+            targets = self.host._node_targets(node)
+            config, problem = await with_code_for(
+                config, targets, self.host._node_takes_bundles(node)
+            )
+            if problem:
+                await self._refuse_remote_spawn(config, node, f"{problem}.")
+                return
         unrunnable = why_a_node_cannot_run(config, targets)
         if unrunnable:
             await self._refuse_remote_spawn(config, node, f"{unrunnable}.")

@@ -426,6 +426,9 @@ plain prose (the block itself is hidden from the user). Example:
 
 == RULES ==
 - Always import libraries INSIDE functions (not at module level)
+- Import ONLY the standard library, wactorz, and pip packages (installed first, see INSTALLING
+  PACKAGES). NEVER a local module, file or folder of this machine: the code runs on main or on a
+  node, where only those exist. Code it needs goes in the agent's own code.
 - Use agent.state to pass data between setup() and process()
 - Keep process() non-blocking — use asyncio.sleep() for waits
 - For blocking operations (cv2, torch inference) wrap in:

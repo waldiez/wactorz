@@ -14,14 +14,16 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from ..monitoring import actor_metrics
 from ..monitoring.agent_metrics import RecentDurations
+from . import models
+from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
@@ -478,6 +480,12 @@ class Actor(ABC):
         #: Resolved once this run's stop has finished; see stop(). Created by the
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
+        #: The models this actor names, each with the path it is read at here.
+        #: Filled when it starts, from `declared_models`, unless whoever built it
+        #: -- a node, a spawn of generated code -- already did.
+        self._artifacts: dict[str, dict[str, Any]] = {}
+        #: What `load_model` has loaded, by key, so a model is read once.
+        self._loaded_models: dict[str, Any] = {}
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -491,6 +499,7 @@ class Actor(ABC):
         await asyncio.to_thread(self._persistence_dir.mkdir, parents=True, exist_ok=True)
         await self._load_persistent_state()
         await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
+        await self._resolve_models()
         # Restore the message count from a previous run — but only into a fresh
         # instance. The supervisor restarts by building a new actor, whose count
         # is zero; the start command restarts *this* object, whose count is
@@ -1373,6 +1382,64 @@ class Actor(ABC):
                 self.name,
                 ", ".join(unpicklable),
             )
+
+    # ─── Models ───────────────────────────────────────────────────────────────
+
+    #: The models this agent loads, by the key it reads each under: references
+    #: to artifacts kept with ``wactorz-artifacts``, ``{"model": "imu-detector:3"}``.
+    #: Resolved before `on_start`, which can then read them; an agent whose
+    #: model is not there does not start. See `wactorz.core.models`.
+    MODELS: ClassVar[Mapping[str, Any]] = {}
+
+    def declared_models(self) -> Mapping[str, Any]:
+        """The models this agent names: `MODELS`, unless a subclass says otherwise."""
+        return self.MODELS
+
+    async def _resolve_models(self) -> None:
+        """Find each declared model in main's store, before the agent starts."""
+        declared = self.declared_models()
+        if not declared or self._artifacts:
+            return
+        try:
+            self._artifacts = await asyncio.to_thread(
+                models.resolve_in_store, declared, resolve_state_dir()
+            )
+        except ArtifactError as exc:
+            raise ArtifactError(f"{self.name} cannot start without its models: {exc}") from exc
+
+    @property
+    def artifacts(self) -> dict[str, dict[str, Any]]:
+        """Each model this agent names: its name, version, format, size and path here."""
+        return {key: dict(entry) for key, entry in self._artifacts.items()}
+
+    def artifact_path(self, key: str) -> str:
+        """Where the model this agent names as ``key`` is, on this host.
+
+        A file, or for a directory artifact the directory it unpacks to, for
+        whatever library reads it: ``onnxruntime.InferenceSession(me.artifact_path("model"))``.
+        """
+        return str(self._artifact(key)["path"])
+
+    async def load_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """The model named ``key``, loaded once and kept, off the event loop.
+
+        Reads the formats `wactorz.core.models` has a loader for; open any
+        other through `artifact_path`. ``allow_code`` loads a pickle, a joblib
+        file or a whole torch module, which run code from the file.
+        """
+        if key not in self._loaded_models:
+            entry = self._artifact(key)
+            self._loaded_models[key] = await asyncio.to_thread(
+                models.load, entry, allow_code=allow_code
+            )
+        return self._loaded_models[key]
+
+    def _artifact(self, key: str) -> dict[str, Any]:
+        entry = self._artifacts.get(key)
+        if entry is None:
+            named = ", ".join(sorted(self._artifacts)) or "none"
+            raise KeyError(f"no model {key!r} for {self.name} (it names: {named})")
+        return entry
 
     # ─── State versions ───────────────────────────────────────────────────────
 

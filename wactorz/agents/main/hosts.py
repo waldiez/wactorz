@@ -71,7 +71,7 @@ class SpawnHost(Protocol):
     _registry: Any
     _result_futures: dict[str, Any]
     #: Pins the artifacts a config names before it goes to a node.
-    artifacts: ArtifactService
+    artifact_service: ArtifactService
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:

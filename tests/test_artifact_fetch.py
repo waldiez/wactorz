@@ -185,7 +185,7 @@ class TestSpawningOnANode:
     @pytest.fixture(name="main")
     def main_fixture(self, store: ArtifactStore) -> SpawningMain:
         main = SpawningMain()
-        main.actor.artifacts = ArtifactService(main.actor)
+        main.actor.artifact_service = ArtifactService(main.actor)
         return main
 
     async def test_what_is_sent_and_saved_names_the_pinned_version(
@@ -214,7 +214,7 @@ class TestSpawningOnANode:
         await main.spawn({"name": "d", "code": CODE, "artifacts": {"model": "imu-detector"}})
 
         # Offered at once: the node may ask before the spawn is saved.
-        assert main.actor.artifacts.offered == {"rpi": {stored["sha256"]}}
+        assert main.actor.artifact_service.offered == {"rpi": {stored["sha256"]}}
 
     async def test_an_artifact_that_is_not_stored_sends_nothing(
         self, main: SpawningMain, store: ArtifactStore

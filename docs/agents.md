@@ -441,6 +441,7 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `agent.persist(key, value)` | **sync** | Write a value (routes to SQLite/memory/Pickle based on key) |
 | `agent.recall(key)` | **sync** | Read a persisted value |
 | `agent.artifact_path(key)` | **sync** | Where the artifact the spawn names as `key` is on this host — `"artifacts": {"model": "imu-detector:3"}` in the spawn, then `onnxruntime.InferenceSession(agent.artifact_path("model"))`. A file, or for a directory artifact the directory it unpacks to; a `str`. `KeyError` naming the keys the spawn gave for any other |
+| `await agent.load_model(key)` | async | The artifact named `key`, loaded once: a dict of numpy arrays for `npz` and `safetensors`, an array for `npy`, an `onnxruntime.InferenceSession` for `onnx`, tensors for a `state_dict`, bytes for `raw`. A pickle, joblib file or whole torch module only with `allow_code=True` |
 | `agent.artifacts` | — | Each artifact the spawn names: name, version, format, size and path |
 | `agent.state` | — | In-memory dict (not persisted) |
 | `agent.window(topic, seconds)` | **sync** | Create a sliding time window over an MQTT topic stream |

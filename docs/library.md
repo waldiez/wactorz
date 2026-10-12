@@ -222,6 +222,44 @@ itself, so what it shares between calls must cope with that; a model loaded
 once and read by every call is fine, a counter updated with `persist` is a
 race. A plain `def` under concurrency runs on that many worker threads.
 
+## Models
+
+A model kept with `wactorz-artifacts` (see the deployment guide) is named by the
+agent that loads it, under a key of its own:
+
+```python
+@wactorz.agent(subscribes="sensors/imu/#", models={"model": "imu-detector:3"})
+async def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None:
+    model = await me.load_model("model")  # {"mean": array, "inverse_covariance": array}
+    ...
+
+class Watcher(wactorz.Actor):
+    MODELS = {"detector": "yolo-onnx"}  # the newest, pinned when it starts
+
+    async def on_start(self) -> None:
+        self.session = onnxruntime.InferenceSession(self.artifact_path("detector"))
+```
+
+Each is found before `on_start`, and an agent whose model is not stored does
+not start. `artifact_path(key)` is where the file is on this machine (for a
+directory artifact, the directory it unpacks to), for whatever library reads
+it. `await load_model(key)` reads the formats that need only a well-known
+library, once, off the event loop, the way that runs no code from the file:
+
+| Format | `load_model` gives |
+| ------ | ------------------ |
+| `npz` | a dict of numpy arrays (`allow_pickle=False`) |
+| `npy` | the numpy array (`allow_pickle=False`) |
+| `safetensors` | a dict of numpy arrays, through `safetensors.numpy` |
+| `state_dict` | the tensors, through `torch.load(weights_only=True)` on the CPU |
+| `onnx` | an `onnxruntime.InferenceSession` |
+| `raw` | the bytes |
+
+A pickle, a joblib file and a whole torch module run code when they load, so
+`load_model` refuses them unless given `allow_code=True`. GGUF, TFLite, skops
+and directories are opened through `artifact_path` by the library that reads
+them. `me.artifacts` lists each model with its name, version, format and path.
+
 ## Your own files
 
 `me.state_dir` (or `self.state_dir` in a subclass) is the agent's own
@@ -230,7 +268,7 @@ local experiment log, anything too large or too un-JSON for `persist()`. It
 exists from construction, survives restarts, and is removed with the agent on
 a delete. What moves with a migration to another node is the persisted
 state, not these files; an agent that needs a file on another machine ships
-it.
+it, and a model it loads belongs among its models (above).
 
 ```python
 checkpointer = SqliteSaver.from_conn_string(str(me.state_dir / "graph.sqlite"))
@@ -566,6 +604,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
+| `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
 | `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.model_config` and `record_reply` | LangChain and AG2 beside the system |
 | `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |

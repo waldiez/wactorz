@@ -94,6 +94,10 @@ class AgentSpec:
     #: What the agent needs from the machine it runs on: RAM, packages, devices.
     #: Carried in its spawn record and manifest for whoever places it.
     requires: dict[str, Any] = field(default_factory=dict)
+    #: The models the function loads, by the key it reads each under:
+    #: ``{"model": "imu-detector:3"}``, read with ``me.artifact_path("model")``
+    #: or ``await me.load_model("model")``. See `wactorz.core.models`.
+    models: dict[str, Any] = field(default_factory=dict)
     #: Whether the agent is started with the system, or only when asked for.
     autostart: bool = True
     #: How many messages, and tasks, the function handles at once. One keeps
@@ -152,6 +156,7 @@ def agent(
     input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
     requires: dict[str, Any] | None = None,
+    models: dict[str, Any] | None = None,
     autostart: bool = True,
     concurrency: int = 1,
 ) -> Any:
@@ -161,6 +166,9 @@ def agent(
     ``__wactorz_spec__``; :mod:`wactorz.plugins` reads it from there, and
     ``spec.build()`` makes the actor. ``concurrency`` above one runs that many
     messages and tasks at once, out of order; see :class:`AgentSpec`.
+    ``models`` names the artifacts the function loads -- ``{"model":
+    "imu-detector:3"}`` -- which are found before the agent starts, and read
+    with ``me.artifact_path("model")`` or ``await me.load_model("model")``.
     """
     if concurrency < 1:
         raise ValueError(f"concurrency must be at least 1, got {concurrency}")
@@ -176,6 +184,7 @@ def agent(
             input_schema=dict(input_schema or {}),
             output_schema=dict(output_schema or {}),
             requires=dict(requires or {}),
+            models=dict(models or {}),
             concurrency=concurrency,
             autostart=autostart,
         )
@@ -261,6 +270,10 @@ class FunctionAgent(Actor):
         self.llm: Any = MeteredLLM(llm_provider, self) if llm_provider is not None else None
         #: Bounds the tasks in flight when the spec allows more than one.
         self._slots = asyncio.Semaphore(spec.concurrency)
+
+    def declared_models(self) -> dict[str, Any]:
+        """The models the decorator named, resolved before `on_start`."""
+        return self.spec.models
 
     async def on_start(self) -> None:
         publishes = [self.spec.publishes] if self.spec.publishes else []

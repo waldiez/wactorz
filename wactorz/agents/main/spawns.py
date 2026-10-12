@@ -728,7 +728,7 @@ class SpawnService:
             return
         if config.get("artifacts"):
             try:
-                pinned = await self.host.artifacts.pin_for_node(config["artifacts"], node)
+                pinned = await self.host.artifact_service.pin_for_node(config["artifacts"], node)
             except ArtifactError as exc:
                 await self._refuse_remote_spawn(
                     config, node, f"its artifacts cannot be sent: {exc}."

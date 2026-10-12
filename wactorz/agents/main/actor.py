@@ -160,7 +160,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
-        self.artifacts = ArtifactService(self)
+        self.artifact_service = ArtifactService(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.delegation = DelegationManager(self)
@@ -275,7 +275,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # holds the program they actually run
         self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
         # Send nodes the models their agents name, when they ask for them
-        self._tasks.append(asyncio.create_task(self.artifacts.listener()))
+        self._tasks.append(asyncio.create_task(self.artifact_service.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

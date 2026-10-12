@@ -420,16 +420,20 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         here and checked against its hash before the agent starts, on main and
         on a node alike. A string, which every loader takes.
         """
-        entry = self._actor._artifacts.get(key)
-        if entry is None:
-            named = ", ".join(sorted(self._actor._artifacts)) or "none"
-            raise KeyError(f"no artifact {key!r} in this agent's spawn (it names: {named})")
-        return str(entry["path"])
+        return self._actor.artifact_path(key)
+
+    async def load_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """The artifact named ``key``, loaded once: numpy arrays, safetensors, ONNX, raw bytes.
+
+        ``model = await agent.load_model("model")``. See `wactorz.core.models`
+        for what each format loads as; open any other through `artifact_path`.
+        """
+        return await self._actor.load_model(key, allow_code=allow_code)
 
     @property
     def artifacts(self) -> dict[str, dict[str, Any]]:
         """Each artifact this agent's spawn names: its name, version, format, size and path."""
-        return {key: dict(entry) for key, entry in self._actor._artifacts.items()}
+        return self._actor.artifacts
 
     def _agent_names(self) -> list[str]:
         """The agents in this process, by name."""

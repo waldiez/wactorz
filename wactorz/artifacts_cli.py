@@ -37,6 +37,7 @@ from wactorz.core.artifacts import (
     Artifact,
     ArtifactError,
     ArtifactStore,
+    CodeRefusedError,
     describe,
     parse_reference,
 )
@@ -89,13 +90,16 @@ _UNITS = ("KB", "MB", "GB")
 
 
 def _add(args: argparse.Namespace) -> None:
-    artifact = _store(args).add(
-        args.path,
-        args.name,
-        format_name=args.format,
-        metadata=_metadata(args.meta),
-        allow_code=args.allow_code,
-    )
+    try:
+        artifact = _store(args).add(
+            args.path,
+            args.name,
+            format_name=args.format,
+            metadata=_metadata(args.meta),
+            allow_code=args.allow_code,
+        )
+    except CodeRefusedError as exc:
+        raise ArtifactError(f"{exc}. Add --allow-code to store it anyway.") from exc
     logger.info("Stored %s (%s, %s)", artifact.pinned, artifact.format, _size(artifact.size))
     if artifact.runs_code:
         logger.warning(

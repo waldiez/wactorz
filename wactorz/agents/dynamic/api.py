@@ -404,6 +404,33 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
             return [{"node": self.node, "online": True, "agents": self._agent_names()}]
         return []
 
+    # ── Artifacts: models main keeps, named in the spawn ──────────────────
+
+    def artifact_path(self, key: str) -> str:
+        """Where the artifact this agent's spawn names as ``key`` is, on this host.
+
+        A spawn names models kept with ``wactorz-artifacts`` under keys of its
+        choosing -- ``"artifacts": {"model": "imu-detector:3"}`` -- and the
+        agent opens one with whatever loads it::
+
+            import onnxruntime
+            session = onnxruntime.InferenceSession(agent.artifact_path("model"))
+
+        A file, or for a directory artifact the directory it unpacks to. It is
+        here and checked against its hash before the agent starts, on main and
+        on a node alike. A string, which every loader takes.
+        """
+        entry = self._actor._artifacts.get(key)
+        if entry is None:
+            named = ", ".join(sorted(self._actor._artifacts)) or "none"
+            raise KeyError(f"no artifact {key!r} in this agent's spawn (it names: {named})")
+        return str(entry["path"])
+
+    @property
+    def artifacts(self) -> dict[str, dict[str, Any]]:
+        """Each artifact this agent's spawn names: its name, version, format, size and path."""
+        return {key: dict(entry) for key, entry in self._actor._artifacts.items()}
+
     def _agent_names(self) -> list[str]:
         """The agents in this process, by name."""
         registry = self._actor._registry

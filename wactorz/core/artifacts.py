@@ -36,12 +36,13 @@ import io
 import json
 import os
 import re
+import shutil
 import tarfile
 import time
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import IO, Any, cast
 
 from .atomic_io import write_text
@@ -49,6 +50,11 @@ from .state_lock import StateInUseError, StateLock
 
 #: The directory, inside the state directory, that artifacts are kept in.
 STORE_DIRNAME = "..artifacts"
+
+#: The directory, inside the state directory, a directory artifact is unpacked
+#: into for an agent to read, one directory per hash. Rebuilt from the archive
+#: whenever it is missing, so `wactorz-state export` leaves it out.
+UNPACKED_DIRNAME = "..unpacked-artifacts"
 
 #: The layout of the index this module writes, and the only one it reads.
 INDEX_FORMAT = 1
@@ -104,6 +110,10 @@ DIRECTORY_FORMAT = "dir"
 
 class ArtifactError(Exception):
     """An artifact could not be stored, found or read, and why."""
+
+
+class CodeRefusedError(ArtifactError):
+    """A format that runs code when it loads, offered where code is not allowed."""
 
 
 class ArtifactNotFoundError(ArtifactError):
@@ -194,6 +204,22 @@ class ArtifactStore:
     def path_of(self, artifact: Artifact) -> Path:
         """The file holding ``artifact``."""
         return self.objects / artifact.sha256
+
+    @property
+    def unpacked(self) -> Path:
+        """Where directory artifacts are unpacked, beside the store."""
+        return self.root.parent / UNPACKED_DIRNAME
+
+    def readable_path(self, entry: Mapping[str, Any]) -> Path:
+        """Where an agent reads the pinned artifact ``entry``: its file, or the directory it unpacks to.
+
+        Unpacks a directory the first time it is asked for. Raises
+        `ArtifactError` when the file is not held.
+        """
+        path = self.object_path(str(entry.get("sha256", "")))
+        if path is None:
+            raise ArtifactError(f"{entry.get('name')}:{entry.get('version')} is not held here")
+        return readable_path(path, entry, self.unpacked)
 
     def object_path(self, sha256: str) -> Path | None:
         """The file holding the bytes that hash to ``sha256``, or None when none does."""
@@ -297,8 +323,8 @@ class ArtifactStore:
             raise ArtifactError(f"{path} does not exist")
         fmt = _format_for(path, format_name)
         if fmt.runs_code and not allow_code:
-            raise ArtifactError(
-                f"{fmt.name} is {fmt.description}, which runs code when it loads: refused unless code is allowed"
+            raise CodeRefusedError(
+                f"{path.name} is {fmt.description}, which runs code when it loads: refused"
             )
         try:
             json.dumps(dict(metadata or {}))
@@ -363,6 +389,7 @@ class ArtifactStore:
                 if entry["sha256"] not in still_held:
                     with contextlib.suppress(FileNotFoundError):
                         (self.objects / entry["sha256"]).unlink()
+                    shutil.rmtree(self.unpacked / entry["sha256"], ignore_errors=True)
         return [_artifact(name, entry) for entry in gone]
 
     # ── Inside ────────────────────────────────────────────────────────────
@@ -486,6 +513,62 @@ def pinned_in(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     if not isinstance(wanted, Mapping):
         raise ArtifactError("its artifacts are not a mapping")
     return {str(key): check_pinned(entry) for key, entry in wanted.items()}
+
+
+def readable_path(file: Path, entry: Mapping[str, Any], unpacked: Path) -> Path:
+    """Where an agent reads ``entry``, held in ``file``: the file, or for a directory, its unpacked copy."""
+    if entry.get("format") != DIRECTORY_FORMAT:
+        return file
+    target = unpacked / str(entry["sha256"])
+    unpack_directory(file, target)
+    return target
+
+
+def unpack_directory(archive: Path, target: Path) -> None:
+    """Unpack the directory archive ``archive`` into ``target``, unless it is there already.
+
+    Only files and directories are taken, each at a path inside ``target``: a
+    link, a device, an absolute path or one that climbs out is refused, whoever
+    wrote the archive. Unpacked beside ``target`` and renamed into place, so a
+    directory that is there is a whole one.
+    """
+    if target.is_dir():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    work = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+    try:
+        work.mkdir()
+        with tarfile.open(archive) as tar:
+            for member in tar:
+                _unpack_member(tar, member, work)
+        try:
+            work.replace(target)
+        except OSError:
+            # Unpacked at the same moment by another caller, who got there first.
+            if not target.is_dir():
+                raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _unpack_member(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) -> None:
+    relative = PurePosixPath(member.name)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ArtifactError(f"the archive names {member.name!r}, outside where it unpacks")
+    if not relative.parts:
+        return
+    destination = into.joinpath(*relative.parts)
+    if member.isdir():
+        destination.mkdir(parents=True, exist_ok=True)
+        return
+    if not member.isfile():
+        raise ArtifactError(f"the archive holds {member.name!r}, which is not a file")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source = tar.extractfile(member)
+    if source is None:
+        raise ArtifactError(f"the archive cannot give {member.name!r}")
+    with source, destination.open("wb") as out:
+        shutil.copyfileobj(source, out, _CHUNK)
 
 
 def describe(artifact: Artifact) -> dict[str, Any]:

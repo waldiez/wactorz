@@ -87,6 +87,7 @@ SYNC_METHODS = (
     "capabilities",
     "increment_processed",
     "increment_errors",
+    "artifact_path",
 )
 _SYNC_AWAIT_RE = re.compile(r"\bawait\s+(agent\.(?:" + "|".join(SYNC_METHODS) + r")\s*\()")
 

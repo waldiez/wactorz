@@ -152,6 +152,7 @@ async def handle_task(agent, payload):
 | `await agent.log(msg)` | Publish a log event |
 | `await agent.publish(topic, data)` | Publish to an MQTT topic |
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
+| `agent.artifact_path(key)` | Where a model the spawn names in `artifacts` is, on main or on a node |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
 | `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |

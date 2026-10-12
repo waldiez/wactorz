@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import sys
+import tarfile
 import time
 import uuid
 from pathlib import Path
@@ -439,12 +440,32 @@ class NodeRunner:
                 return f"its artifacts did not arrive: {exc}"
             for sha, path in received.items():
                 await asyncio.to_thread(self.artifacts.take, sha, path)
+        try:
+            for entry in wanted.values():
+                await asyncio.to_thread(self.artifacts.readable_path, entry)
+        except (ArtifactError, OSError, tarfile.TarError) as exc:
+            return f"its artifacts could not be unpacked: {exc}"
         await asyncio.to_thread(self.artifacts.used, wanted)
         named = self._named_artifacts() | set(wanted)
         trimmed = await asyncio.to_thread(self.artifacts.trim, named)
         if trimmed:
             logger.info("[runner] Dropped %s artifact(s) no agent here names", len(trimmed))
         return None
+
+    def readable_artifacts(self, config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Each artifact ``config`` names, with the path an agent here reads it at.
+
+        For an agent being built: by then the spawn has fetched and unpacked
+        every one, so this only works out where they are.
+        """
+        try:
+            named = pinned_in(config)
+        except ArtifactError:
+            return {}
+        return {
+            key: {**entry, "path": str(self.artifacts.readable_path(entry))}
+            for key, entry in named.items()
+        }
 
     def _named_artifacts(self) -> set[str]:
         """Every hash an agent on this node names."""

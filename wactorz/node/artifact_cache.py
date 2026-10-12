@@ -19,8 +19,12 @@ import hashlib
 import logging
 import os
 import re
-from collections.abc import Iterable
+import shutil
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
+
+from ..core.artifacts import UNPACKED_DIRNAME, readable_path
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +39,22 @@ _CHUNK = 1 << 20
 class ArtifactCache:
     """The fetched artifacts under one directory, by hash."""
 
-    def __init__(self, directory: Path, max_bytes: int) -> None:
+    def __init__(self, directory: Path, max_bytes: int, unpacked: Path | None = None) -> None:
         self.directory = directory
         #: The most the cache keeps of files no agent names; 0 for no limit.
         self.max_bytes = max_bytes
+        #: Where a directory artifact is unpacked for an agent to read.
+        self.unpacked = unpacked or directory.parent / UNPACKED_DIRNAME
 
     def path(self, sha256: str) -> Path:
         return self.directory / sha256
+
+    def readable_path(self, entry: Mapping[str, Any]) -> Path:
+        """Where an agent reads the pinned ``entry``: its file, or the directory it unpacks to.
+
+        Unpacks a directory the first time.
+        """
+        return readable_path(self.path(str(entry["sha256"])), entry, self.unpacked)
 
     def usable(self, wanted: Iterable[str]) -> set[str]:
         """Those of ``wanted`` held here and still matching their hash.
@@ -60,6 +73,7 @@ class ArtifactCache:
                 "[artifacts] %s… no longer matches its hash; fetching it again", sha[:12]
             )
             path.unlink(missing_ok=True)
+            shutil.rmtree(self.unpacked / sha, ignore_errors=True)
         return usable
 
     def take(self, sha256: str, arrived: Path) -> Path:
@@ -92,6 +106,7 @@ class ArtifactCache:
             if path.name in named:
                 continue
             path.unlink(missing_ok=True)
+            shutil.rmtree(self.unpacked / path.name, ignore_errors=True)
             total -= size
             removed.append(path.name)
         return removed

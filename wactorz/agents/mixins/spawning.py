@@ -38,7 +38,8 @@ import time
 from typing import TYPE_CHECKING, cast
 
 from ...core.actor import Actor, ActorState, ask_through
-from ...core.paths import agent_state_dir
+from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
+from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.state_codec import decode_state
 from ...core.topics import topic_name_error
@@ -47,6 +48,34 @@ from ..lookup import find_main_actor
 from ..rule_agent import RuleAgent, RuleConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _store_here() -> ArtifactStore:
+    """Main's artifact store, where the state directory is at the time of asking."""
+    return ArtifactStore.in_state_dir(resolve_state_dir())
+
+
+def _pinned_here(wanted: object) -> tuple[dict[str, dict], str | None]:
+    """``wanted`` -- a config's ``artifacts`` -- pinned in main's store; or why it cannot be."""
+    try:
+        return _store_here().pin_all(wanted), None
+    except ArtifactError as exc:
+        return {}, str(exc)
+
+
+def _readable_here(config: dict) -> tuple[dict[str, dict], str | None]:
+    """Each artifact ``config`` names, with the path an agent here reads it at; or why not.
+
+    Unpacks a directory artifact the first time; call it off the event loop.
+    """
+    store = _store_here()
+    try:
+        return {
+            key: {**entry, "path": str(store.readable_path(entry))}
+            for key, entry in pinned_in(config).items()
+        }, None
+    except ArtifactError as exc:
+        return {}, str(exc)
 
 
 class SpawnPlaceholder:
@@ -166,6 +195,15 @@ class SpawnMixin(_Host):
                 )
                 return existing
             await self._stop_for_replace(existing, name)
+
+        if config.get("artifacts"):
+            pinned, problem = await asyncio.to_thread(_pinned_here, config["artifacts"])
+            if problem:
+                logger.error("[%s] Not spawning '%s': its artifacts: %s", self.name, name, problem)
+                return None
+            # What is saved then names the versions it runs, so a restart runs
+            # the same models. A copy: the caller's dict may be written elsewhere.
+            config = {**config, "artifacts": pinned}
 
         agent_type = config.get("type", "dynamic")
         code = config.get("code", "").strip()
@@ -483,6 +521,10 @@ class SpawnMixin(_Host):
         and registers a TopicContract when the config declares pub/sub topics so
         the agent is eligible for auto-wiring on the TopicBus.
         """
+        artifacts, problem = await asyncio.to_thread(_readable_here, config)
+        if problem:
+            logger.error("[%s] Not spawning '%s': its artifacts: %s", self.name, name, problem)
+            return None
         await self._apply_initial_state(name, config)
 
         from ..dynamic import DynamicAgent
@@ -498,6 +540,7 @@ class SpawnMixin(_Host):
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
             trusted=bool(config.get("trusted", False)),
+            artifacts=artifacts,
         )
 
         if actor is not None and (config.get("publishes") or config.get("subscribes")):

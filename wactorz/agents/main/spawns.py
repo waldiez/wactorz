@@ -22,6 +22,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
+from ...core.artifacts import ArtifactError
 from ...core.topics import topic_name_error
 
 if TYPE_CHECKING:
@@ -725,6 +726,18 @@ class SpawnService:
                 },
             )
             return
+        if config.get("artifacts"):
+            try:
+                pinned = await self.host.artifacts.pin_for_node(config["artifacts"], node)
+            except ArtifactError as exc:
+                await self._refuse_remote_spawn(
+                    config, node, f"its artifacts cannot be sent: {exc}."
+                )
+                return
+            # What is saved and what is sent then name the same versions, so an
+            # agent restarted from its record runs the model it ran. A copy, as
+            # for the bridge: the caller's dict may be written elsewhere too.
+            config = {**config, "artifacts": pinned}
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 

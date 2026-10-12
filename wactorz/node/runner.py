@@ -26,8 +26,14 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__
-from ..config import CONFIG, MIGRATION_MAX_BLOB_BYTES
+from ..config import (
+    ARTIFACT_MAX_BYTES,
+    CONFIG,
+    MIGRATION_MAX_BLOB_BYTES,
+    NODE_ARTIFACT_CACHE_BYTES,
+)
 from ..core.actor import Actor, ActorState, SupervisorStrategy
+from ..core.artifacts import ArtifactError, pinned_in
 from ..core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsUnusable,
@@ -62,6 +68,7 @@ from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
 from .agent import NodeAgent
+from .artifact_cache import CACHE_DIRNAME, ArtifactCache
 from .publishing import NodePublisher
 from .signing import (
     CLEARABLE_LEAVES,
@@ -137,8 +144,15 @@ class NodeRunner:
         #: spawn that names them uses them.
         #: Held from `run` until it returns, so nothing else runs on this state.
         self._state_lock = StateLock(self.state_dir)
+        # Large enough for either: an agent's own blobs on a migration, and the
+        # artifacts it names, which arrive the same way.
         self.inbox = Inbox(
-            Path(self.state_dir) / INBOX_DIRNAME, MIGRATION_MAX_BLOB_BYTES or sys.maxsize
+            Path(self.state_dir) / INBOX_DIRNAME,
+            _largest(MIGRATION_MAX_BLOB_BYTES, ARTIFACT_MAX_BYTES),
+        )
+        #: The models agents here have named, kept across restarts.
+        self.artifacts = ArtifactCache(
+            Path(self.state_dir) / CACHE_DIRNAME, NODE_ARTIFACT_CACHE_BYTES
         )
         # Read from the environment rather than a flag, like the broker
         # credentials, so the key appears in no process listing. Left in the
@@ -270,6 +284,15 @@ class NodeRunner:
             await self._refuse_migration(name, config, "its models and other blobs did not arrive")
             return
 
+        missing = await self._fetch_artifacts(name, config)
+        if missing:
+            logger.warning("[runner] Not starting '%s': %s", name, missing)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {missing}"
+            )
+            await self._refuse_migration(name, config, missing)
+            return
+
         try:
             self._configs[name] = config
             agent = await self.supervisor.start_supervised(
@@ -378,6 +401,60 @@ class NodeRunner:
         config["_initial_state"] = values
         await self.inbox.release(shas)
         return True
+
+    async def _fetch_artifacts(self, name: str, config: dict[str, Any]) -> str | None:
+        """Have every artifact ``config`` names here and checked; why not, or None.
+
+        Those already cached and still matching their hash are used as they
+        are. The rest are asked of main, which sends only what an agent placed
+        here names, and are used only if they hash to what the spawn -- signed
+        by main -- names.
+        """
+        try:
+            wanted = {entry["sha256"]: entry for entry in pinned_in(config).values()}
+        except ArtifactError as exc:
+            return f"its artifacts are not named properly: {exc}"
+        if not wanted:
+            return None
+        too_large = [
+            f"{e['name']}:{e['version']}"
+            for e in wanted.values()
+            if ARTIFACT_MAX_BYTES and e["size"] > ARTIFACT_MAX_BYTES
+        ]
+        if too_large:
+            return f"{', '.join(too_large)} is over this node's limit (WACTORZ_ARTIFACT_MAX_BYTES)"
+        missing = set(wanted) - await asyncio.to_thread(self.artifacts.usable, wanted)
+        if missing:
+            logger.info("[runner] Fetching %s artifact(s) for '%s'", len(missing), name)
+            await self.inbox.sweep(older_than_s=INBOX_KEEP_S)
+            await self.publish(
+                f"nodes/{self.node_name}/artifact_request",
+                {"agent": name, "sha256": sorted(missing)},
+            )
+            try:
+                received = await self.inbox.wait_for(
+                    missing, wait_for(sum(wanted[sha]["size"] for sha in missing))
+                )
+            except BlobsUnusable as exc:
+                return f"its artifacts did not arrive: {exc}"
+            for sha, path in received.items():
+                await asyncio.to_thread(self.artifacts.take, sha, path)
+        await asyncio.to_thread(self.artifacts.used, wanted)
+        named = self._named_artifacts() | set(wanted)
+        trimmed = await asyncio.to_thread(self.artifacts.trim, named)
+        if trimmed:
+            logger.info("[runner] Dropped %s artifact(s) no agent here names", len(trimmed))
+        return None
+
+    def _named_artifacts(self) -> set[str]:
+        """Every hash an agent on this node names."""
+        named: set[str] = set()
+        for config in self._configs.values():
+            try:
+                named.update(entry["sha256"] for entry in pinned_in(config).values())
+            except ArtifactError:
+                continue
+        return named
 
     async def stop_agent(self, name: str, delete: bool = False, keep_topics: bool = False) -> None:
         """Stop an agent, and with ``delete`` erase everything it leaves behind.
@@ -1319,6 +1396,11 @@ class NodeRunner:
 
 #: How long a blob that arrived and was never used is kept.
 INBOX_KEEP_S = 3600.0
+
+
+def _largest(*limits: int) -> int:
+    """The largest of byte limits where 0 means none: no limit if any is none."""
+    return sys.maxsize if not all(limits) else max(limits)
 
 
 def _positive_int(value: Any) -> int | None:

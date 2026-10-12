@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from ...core.actor import ActorState
     from ..llm_agent import LLMProvider
     from ..prompts.assemble import PromptFragment
+    from .artifact_service import ArtifactService
+    from .migration import Migration
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -68,6 +70,8 @@ class SpawnHost(Protocol):
     actor_id: str
     _registry: Any
     _result_futures: dict[str, Any]
+    #: Pins the artifacts a config names before it goes to a node.
+    artifacts: ArtifactService
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:
@@ -227,6 +231,22 @@ class CodeRefreshHost(ListenerHost, Protocol):
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
+class ArtifactHost(ListenerHost, Protocol):
+    """What sending nodes their agents' artifacts needs from the actor.
+
+    It reads where agents are placed -- the registry and the migrations in
+    flight -- to decide what a node may have, and publishes; it changes nothing.
+    """
+
+    migration: Migration
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...

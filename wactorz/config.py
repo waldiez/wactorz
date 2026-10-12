@@ -249,6 +249,18 @@ MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 10
 #: no limit.
 MIGRATION_MAX_BLOB_BYTES = _env_int("WACTORZ_MIGRATION_MAX_BLOB_BYTES", 64 * 1024 * 1024)
 
+#: Largest artifact -- a model kept with `wactorz-artifacts` -- main sends a node
+#: and a node accepts. It goes in chunks over MQTT and is written to disk as it
+#: arrives, so this bounds the disk and the time a transfer takes, not memory; a
+#: broker holding messages for a node that is away holds this much for it too.
+#: Read on main and on each node alike. 0 sets no limit.
+ARTIFACT_MAX_BYTES = _env_int("WACTORZ_ARTIFACT_MAX_BYTES", 256 * 1024 * 1024)
+
+#: How much a node keeps of the artifacts it has fetched. Past it, those no agent
+#: on the node names are deleted, the least recently used first; one an agent
+#: names is kept whatever the total. 0 keeps everything.
+NODE_ARTIFACT_CACHE_BYTES = _env_int("WACTORZ_NODE_ARTIFACT_CACHE_BYTES", 1024 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:

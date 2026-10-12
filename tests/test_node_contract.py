@@ -48,7 +48,8 @@ CONTROL_TOPICS = frozenset(
         # like the rest: it commands nothing, but main acting on the answer
         # rests on main having asked.
         "code_request",
-        # An agent's blob, in chunks, as main places it here. Not signed: the
+        # An agent's blob, in chunks, as main places it here, and an artifact an
+        # agent here names, as main answers `artifact_request`. Not signed: the
         # signed spawn names its hash, and only a match is used.
         "blob",
     }
@@ -71,6 +72,9 @@ REPORT_TOPICS = frozenset(
         # An agent's blob, in chunks, as the node hands it back. Its hash is
         # named by the state return that follows it.
         "blob_return",
+        # The artifacts an agent spawned here names and the node does not hold,
+        # by hash. Main answers on `blob` for those an agent placed here names.
+        "artifact_request",
     }
 )
 

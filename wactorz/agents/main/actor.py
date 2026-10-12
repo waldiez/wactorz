@@ -28,6 +28,7 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
+from .artifact_service import ArtifactService
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
@@ -159,6 +160,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
+        self.artifacts = ArtifactService(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.delegation = DelegationManager(self)
@@ -272,6 +274,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Follow agents that repaired themselves on a node, so the registry
         # holds the program they actually run
         self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
+        # Send nodes the models their agents name, when they ask for them
+        self._tasks.append(asyncio.create_task(self.artifacts.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

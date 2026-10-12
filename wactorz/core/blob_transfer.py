@@ -31,6 +31,7 @@ through main: one node is not trusted to run code on another.
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import struct
 import time
@@ -268,6 +269,23 @@ async def send(
         topic = topic_for(sha)
         for chunk in chunks(data):
             await publish(topic, chunk)
+
+
+async def send_file(path: Path, topic: str, publish: Publish) -> None:
+    """Publish the file at ``path`` in chunks on ``topic``, reading one chunk at a time.
+
+    For a file too large to hold whole, such as a model: what is in memory at
+    once is one chunk, whatever the size of the file.
+    """
+    file = await asyncio.to_thread(path.open, "rb")
+    try:
+        size = await asyncio.to_thread(lambda: os.fstat(file.fileno()).st_size)
+        count = max(1, -(-size // CHUNK_BYTES))
+        for index in range(count):
+            part = await asyncio.to_thread(file.read, CHUNK_BYTES)
+            await publish(topic, _HEADER.pack(index, count) + part)
+    finally:
+        file.close()
 
 
 # ── Receiving ─────────────────────────────────────────────────────────────────

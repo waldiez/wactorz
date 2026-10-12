@@ -53,6 +53,9 @@ STORE_DIRNAME = "..artifacts"
 #: The layout of the index this module writes, and the only one it reads.
 INDEX_FORMAT = 1
 
+#: A SHA-256, as a file in the store is named.
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
 #: A name: what a topic, a file name and a reference can all carry. `:` and `@`
 #: are left out because a reference uses them to name a version and a hash.
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -191,6 +194,45 @@ class ArtifactStore:
     def path_of(self, artifact: Artifact) -> Path:
         """The file holding ``artifact``."""
         return self.objects / artifact.sha256
+
+    def object_path(self, sha256: str) -> Path | None:
+        """The file holding the bytes that hash to ``sha256``, or None when none does."""
+        if not _SHA256.match(sha256):
+            return None
+        path = self.objects / sha256
+        return path if path.is_file() else None
+
+    def pin(self, wanted: Any) -> dict[str, Any]:
+        """What a spawn config names, as the exact version it is to run.
+
+        ``wanted`` is a reference -- ``name``, ``name:latest``, ``name:3`` --
+        or an entry pinned before, which must still name the same bytes: an
+        agent restarted from its record runs what it ran, or does not start.
+        Raises `ArtifactError` saying why it cannot be pinned.
+        """
+        if isinstance(wanted, str):
+            return pinned(self.resolve(wanted))
+        if isinstance(wanted, Mapping) and "sha256" in wanted:
+            entry = check_pinned(wanted)
+            held = self.resolve(f"{entry['name']}:{entry['version']}")
+            if held.sha256 != entry["sha256"]:
+                raise ArtifactError(f"{held.reference} no longer holds the bytes it was pinned to")
+            return pinned(held)
+        raise ArtifactError(f"{wanted!r} is not a reference to an artifact")
+
+    def pin_all(self, wanted: Any) -> dict[str, dict[str, Any]]:
+        """Each artifact a spawn config's ``artifacts`` names, pinned, by the name the agent uses."""
+        if not isinstance(wanted, Mapping):
+            raise ArtifactError(
+                "artifacts are named as a mapping, like {'model': 'imu-detector:3'}"
+            )
+        result: dict[str, dict[str, Any]] = {}
+        for key, value in wanted.items():
+            error = name_error(str(key))
+            if error:
+                raise ArtifactError(f"the key {error}")
+            result[str(key)] = self.pin(value)
+        return result
 
     # ── Reading ───────────────────────────────────────────────────────────
 
@@ -402,6 +444,48 @@ def _artifact(name: str, entry: Mapping[str, Any]) -> Artifact:
         added_at=float(entry["added_at"]),
         metadata=dict(entry.get("metadata") or {}),
     )
+
+
+def pinned(artifact: Artifact) -> dict[str, Any]:
+    """``artifact`` as a spawn config carries it: enough to fetch it and check it."""
+    return {
+        "name": artifact.name,
+        "version": artifact.version,
+        "sha256": artifact.sha256,
+        "format": artifact.format,
+        "size": artifact.size,
+        "runs_code": artifact.runs_code,
+    }
+
+
+def check_pinned(entry: Any) -> dict[str, Any]:
+    """``entry`` if it is a well-formed pinned artifact; `ArtifactError` saying why it is not.
+
+    Asked by a node of what main sent, before it fetches anything.
+    """
+    if not isinstance(entry, Mapping):
+        raise ArtifactError(f"{entry!r} is not a pinned artifact")
+    sha256, size, version = entry.get("sha256"), entry.get("size"), entry.get("version")
+    if not isinstance(sha256, str) or not _SHA256.match(sha256):
+        raise ArtifactError(f"{entry!r} does not name a SHA-256")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ArtifactError(f"{entry!r} does not say its size")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ArtifactError(f"{entry!r} does not say its version")
+    error = name_error(str(entry.get("name", "")))
+    if error:
+        raise ArtifactError(error)
+    if entry.get("format") not in FORMATS:
+        raise ArtifactError(f"{entry!r} is not in a format this release knows")
+    return dict(entry)
+
+
+def pinned_in(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """The pinned artifacts a spawn config names, checked, by the name the agent uses."""
+    wanted = config.get("artifacts") or {}
+    if not isinstance(wanted, Mapping):
+        raise ArtifactError("its artifacts are not a mapping")
+    return {str(key): check_pinned(entry) for key, entry in wanted.items()}
 
 
 def describe(artifact: Artifact) -> dict[str, Any]:

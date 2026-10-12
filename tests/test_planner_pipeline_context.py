@@ -459,7 +459,7 @@ class TestDecomposePipeline:
 
         await planner._decompose_pipeline("when the door opens", [])
 
-        assert "LIVE TOPIC SAMPLES" not in _prompt(planner)
+        assert "═══ LIVE TOPIC SAMPLES" not in _prompt(planner)
 
     async def test_an_infeasible_request_returns_the_refusal_without_designing(
         self, tmp_path: Path

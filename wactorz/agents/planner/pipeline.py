@@ -330,6 +330,9 @@ class PipelineMixin(_Host):
             )
 
         topic_bus_section, topic_samples_section = await self._gather_topic_bus_context()
+        topic_samples_section = with_named_samples(
+            topic_samples_section, await self._sample_named_topics(task)
+        )
 
         registered_section = self._gather_registered_agents()
 
@@ -1135,6 +1138,24 @@ def registered_agents_section(
         "  needs an answer rather than a stream.",
     ]
     return "\n".join(lines)
+
+
+def with_named_samples(samples_section: str, named: list[str]) -> str:
+    """``samples_section`` with the samples of the topics a request names added.
+
+    A topic an agent declares is already sampled there, under its publisher;
+    it is not repeated.
+    """
+    added = [
+        line
+        for line in named
+        if line.splitlines()[0].split("  (")[0] + "  (" not in samples_section
+    ]
+    if not added:
+        return samples_section
+    if not samples_section:
+        samples_section = "LIVE TOPIC SAMPLES (actual payloads — use THESE field names in code):"
+    return "\n".join([samples_section, *added])
 
 
 async def _stored_models_section() -> str:

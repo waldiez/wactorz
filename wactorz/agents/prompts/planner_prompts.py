@@ -248,6 +248,12 @@ TYPE 3 — "dynamic"
   MODELS: when the request names a trained model, or a model in STORED MODELS fits it, name it
     in "artifacts" and read it with agent.load_model("<key>") — never re-implement its maths.
     Name ONLY models listed under STORED MODELS; an agent naming another does not start.
+    Where STORED MODELS lists a model's arrays ("arrays mean[3], inverse_covariance[3x3]"),
+    read it by exactly those names and shapes: model["mean"], model["inverse_covariance"].
+  FIELDS: read a payload only by the field names LIVE TOPIC SAMPLES shows for its topic, or the
+    USER REQUEST gives. With neither, guess, and when a payload lacks the fields the code reads,
+    log its keys with agent.log() the first time, so a wrong guess shows in the logs instead of
+    the agent silently doing nothing.
 
 ═══ CANONICAL WIRING PATTERNS ═══
 

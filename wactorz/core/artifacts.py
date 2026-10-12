@@ -46,6 +46,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO, Any, cast
 
 from .atomic_io import write_text
+from .model_contents import stored_contents
 from .state_lock import StateInUseError, StateLock
 
 #: The directory, inside the state directory, that artifacts are kept in.
@@ -572,10 +573,12 @@ def _unpack_member(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) ->
 
 
 def summary(store: ArtifactStore, *, limit: int = 50) -> list[str]:
-    """One line per name in ``store``: its newest version, format, size and what was said of it.
+    """One line per name in ``store``: its newest version, format, size, arrays and what was said of it.
 
     For a person reading a list and for a model choosing one, so it says what
-    tells models apart and nothing that does not: no hashes, no times.
+    tells models apart and nothing that does not: no hashes, no times. The arrays
+    are the names code reads the model by, where the format has named arrays;
+    see `wactorz.core.model_contents`.
     """
     lines: list[str] = []
     for name in store.names()[:limit]:
@@ -588,6 +591,8 @@ def summary(store: ArtifactStore, *, limit: int = 50) -> list[str]:
             line += f", {len(versions)} versions"
         if newest.runs_code:
             line += ", runs code when it loads"
+        if held := _held_by(store, newest):
+            line += f"; arrays {held}"
         said = [
             f"{key}={value}"
             for key, value in newest.metadata.items()
@@ -597,6 +602,11 @@ def summary(store: ArtifactStore, *, limit: int = 50) -> list[str]:
             line += "; " + ", ".join(said)[:160]
         lines.append(line)
     return lines
+
+
+def _held_by(store: ArtifactStore, artifact: Artifact) -> str | None:
+    path = store.object_path(artifact.sha256)
+    return None if path is None else stored_contents(artifact.sha256, path, artifact.format)
 
 
 def human_size(size: int) -> str:

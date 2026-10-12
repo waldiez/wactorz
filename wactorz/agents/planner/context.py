@@ -181,6 +181,71 @@ class ContextMixin(_Host):
             )
         return sample_lines
 
+    async def _sample_named_topics(self, task: str) -> list[str]:
+        """One live payload from each MQTT topic ``task`` names, wildcards included.
+
+        A topic is sampled from its contract when an agent declares it; a device
+        or a script that publishes without being an agent declares nothing, and
+        its topic is known only from the request. Without a sample the model
+        writes field names it imagines, and code reading fields no payload has
+        does nothing at all.
+        """
+        named = topics_named_in(task)
+        if not named:
+            return []
+        received = await collect_one_payload_per_topic(
+            getattr(self, "_mqtt_broker", "localhost"),
+            getattr(self, "_mqtt_port", 1883),
+            [(topic, "") for topic in named],
+            self.name,
+            max_wait=NAMED_TOPIC_WAIT_S,
+        )
+        return [
+            _sample_line(topic, "named in the request", payload)
+            for topic, payload in received.items()
+        ]
+
+
+#: How many topics a request names are listened to, and for how long in all:
+#: long enough for a sensor that publishes every second or so, short enough not
+#: to hold up a plan for a topic nothing publishes on.
+NAMED_TOPICS = 3
+NAMED_TOPIC_WAIT_S = 4.0
+
+#: An MQTT topic as a request writes it: segments of letters, digits, ``_``,
+#: ``-`` and ``$``, a ``+`` standing for one segment and a final ``#`` for any.
+_TOPIC_SEGMENT = re.compile(r"^(?:[A-Za-z0-9_$-]+|\+|#)$")
+#: What surrounds a topic in a sentence, rather than being part of it.
+_AROUND_A_TOPIC = "`'\"()[]{}<>,;:!?."
+
+
+def topics_named_in(task: str) -> list[str]:
+    """The MQTT topics ``task`` names, in order, without repeats.
+
+    A word is one when it has at least two segments and each is a topic segment,
+    so a URL, a file name or a Windows path is not. ``#`` may only end one.
+    """
+    topics: list[str] = []
+    for word in task.split():
+        topic = word.strip(_AROUND_A_TOPIC)
+        segments = topic.split("/")
+        if (
+            len(segments) < 2
+            or not all(_TOPIC_SEGMENT.match(segment) for segment in segments)
+            or "#" in segments[:-1]
+            or topic in topics
+        ):
+            continue
+        topics.append(topic)
+        if len(topics) >= NAMED_TOPICS:
+            break
+    return topics
+
+
+def _sample_line(topic: str, source: str, payload: dict[str, Any]) -> str:
+    fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
+    return f"  Topic: {topic}  ({source})\n    Fields: {fields}\n    Example payload: {payload}"
+
 
 #: How many topics are listened to for a sample, and how many of them one
 #: agent may take: the wait is shared, so a few agents with many topics each
@@ -205,13 +270,21 @@ def topics_worth_sampling(bus: Any) -> list[tuple[str, str]]:
 
 
 async def collect_one_payload_per_topic(
-    broker: str, port: int, topics: list[tuple[str, str]], log_name: str
+    broker: str,
+    port: int,
+    topics: list[tuple[str, str]],
+    log_name: str,
+    *,
+    max_wait: float | None = None,
 ) -> dict[str, dict[str, Any]]:
     """First dict payload seen on each topic, within one shared deadline.
 
     One connection for all topics, and one global timeout rather than a
     per-topic one: the wait is for producers that publish every few seconds, so
-    a topic that is idle is skipped rather than holding up planning.
+    a topic that is idle is skipped rather than holding up planning. A topic may
+    be a filter with wildcards; what is kept is then keyed by the topic each
+    payload came on. ``max_wait`` overrides the deadline, which otherwise grows
+    with the number of topics.
     """
     received: dict[str, dict[str, Any]] = {}
 
@@ -234,7 +307,8 @@ async def collect_one_payload_per_topic(
         except Exception as e:
             logger.debug("[%s] _sample_live_topics connection error: %s", log_name, e)
 
-    max_wait = min(15.0, 5.0 + 2.0 * len(topics))
+    if max_wait is None:
+        max_wait = min(15.0, 5.0 + 2.0 * len(topics))
     try:
         await asyncio.wait_for(_collect(), timeout=max_wait)
     except asyncio.TimeoutError:
@@ -250,16 +324,11 @@ def describe_samples(
     lines = []
     for topic, payload in received.items():
         agent_name = topic_to_agent.get(topic, "?")
-        fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
         for contract in bus.registry.all_contracts():
             if topic in (contract.publishes or []):
                 contract.update_observed(topic, payload)
                 break
-        lines.append(
-            f"  Topic: {topic}  (published by {agent_name})\n"
-            f"    Fields: {fields}\n"
-            f"    Example payload: {payload}"
-        )
+        lines.append(_sample_line(topic, f"published by {agent_name}", payload))
     return lines
 
 

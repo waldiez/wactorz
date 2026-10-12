@@ -47,6 +47,13 @@ class TestWhatThePlannerIsTold:
         assert 'agent.artifact_path("key")' in PIPELINE_DESIGN_PROMPT
         assert '"artifacts": {"<key>": "<model>"}' in PIPELINE_DESIGN_PROMPT
 
+    def test_it_reads_a_model_by_the_arrays_listed_for_it(self) -> None:
+        assert "read it by exactly those names and shapes" in PIPELINE_DESIGN_PROMPT
+
+    def test_it_reads_a_payload_by_fields_it_was_shown(self) -> None:
+        assert "FIELDS: read a payload only by the field names" in PIPELINE_DESIGN_PROMPT
+        assert "log its keys with agent.log() the first time" in PIPELINE_DESIGN_PROMPT
+
     async def test_it_is_shown_the_models_that_are_kept(
         self, store: ArtifactStore, tmp_path: Path
     ) -> None:
@@ -113,3 +120,38 @@ class TestAPlanThatReadsAModel:
             validate_pipeline_code([a_step("x = 1")], "planner")
 
         assert not caplog.text
+
+
+class TestAKeyThatDoesNotMatch:
+    """The one model a spawn names, read by another key, is named under that key too."""
+
+    def test_it_is_named_under_the_key_the_code_reads(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        code = "async def setup(agent):\n    m = await agent.load_model('imu_model')\n"
+        step = a_step(code, {"model": "imu-detector"})
+
+        with caplog.at_level(logging.WARNING):
+            validate_pipeline_code([step], "planner")
+
+        assert step["spawn_config"]["artifacts"] == {
+            "model": "imu-detector",
+            "imu_model": "imu-detector",
+        }
+        assert "named in 'artifacts' as 'model': named under both" in caplog.text
+        assert "does not name" not in caplog.text
+
+    def test_with_two_models_named_it_is_only_reported(self) -> None:
+        step = a_step(LOADS.replace("'model'", "'third'"), {"a": "x", "b": "y"})
+
+        validate_pipeline_code([step], "planner")
+
+        assert step["spawn_config"]["artifacts"] == {"a": "x", "b": "y"}
+
+    def test_with_two_keys_read_it_is_only_reported(self) -> None:
+        code = 'a = await agent.load_model("a")\nb = await agent.load_model("b")\n'
+        step = a_step(code, {"model": "x"})
+
+        validate_pipeline_code([step], "planner")
+
+        assert step["spawn_config"]["artifacts"] == {"model": "x"}

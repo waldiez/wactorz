@@ -650,3 +650,20 @@ class TestTheProviderUnderTheMinimalProfile:
         # The message names both ways out.
         assert "wactorz[anthropic]" in str(refused.value)
         assert "LLM_PROVIDER=none" in str(refused.value)
+
+
+class TestWhatTheRegistryPlacesOnNodes:
+    """A library agent moved to a node is not started here as well."""
+
+    def test_entries_with_a_node_are_named_with_it(self) -> None:
+        registry = {
+            "imu-anomaly": {"type": "module", "node": "rpi-kitchen"},
+            "collector": {"code": "x = 1", "node": " "},
+            "helper": {"type": "llm"},
+            "junk": "not a config",
+        }
+
+        assert app_module.placed_on_nodes(registry) == {"imu-anomaly": "rpi-kitchen"}
+
+    def test_no_registry_places_nothing(self) -> None:
+        assert app_module.placed_on_nodes(None) == {}

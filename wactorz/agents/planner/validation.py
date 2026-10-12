@@ -80,6 +80,8 @@ SYNC_METHODS = (
     "window",
     "persist",
     "recall",
+    "persist_bytes",
+    "recall_bytes",
     "declare_contract",
     "agents",
     "nodes",

@@ -322,6 +322,24 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         value = self._actor.recall(key)
         return value if value is not None else default
 
+    def persist_bytes(self, key: str, data: bytes) -> Any:
+        """Save raw bytes -- model weights, a pickled estimator, an ONNX file --
+        as text, so they are kept on a node and travel with a migration like
+        any other value. Keep it to a model: the whole state has to fit a
+        migration's size limit.
+
+        Synchronous, like persist(); safe to await by mistake.
+        """
+        self._actor.persist_bytes(key, data)
+        return AWAITABLE_NONE
+
+    def recall_bytes(self, key: str) -> bytes | None:
+        """What persist_bytes() saved under `key`, or None when nothing is there.
+
+        Synchronous -- do NOT use await.
+        """
+        return self._actor.recall_bytes(key)
+
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
     def agents(self) -> list[dict[str, Any]]:

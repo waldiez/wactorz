@@ -333,3 +333,28 @@ imu-anomaly = "imu_anomaly.agent:detect"
 
 Either way the agent is supervised at startup, listed by `@catalog list`, and
 chat can ask it for a verdict on a reading: `@imu-anomaly {"ax": 9.0, "ay": 0, "az": 1}`.
+
+## On a node
+
+The detector runs on a [node](../../docs/remote-nodes.md) too, and moves there
+and back with its model. The node builds it from this folder, so the folder
+has to be on the node, on the runner's path, and named in its environment —
+the same two things main needed:
+
+```bash
+PYTHONPATH=/home/pi/imu_anomaly WACTORZ_AGENTS=agent:detect wactorz-node --node rpi-kitchen --mqtt-broker 192.168.1.10
+```
+
+Under a deploy, put both lines in the node's `~/wactorz/.env`. The node then
+lists `agent:detect` in its manifest, and from chat:
+
+```text
+/migrate imu-anomaly rpi-kitchen
+/migrate imu-anomaly local
+```
+
+The node fetches `imu-detector` from main before it builds the agent, and
+keeps it, so the model is never copied by hand; the counter goes with the agent
+each way. The node needs numpy, as main does. A node that does not list the
+target refuses the move and says what to install. On the node the agent has no
+model API: `me.llm` is `None` there, which this detector never uses.

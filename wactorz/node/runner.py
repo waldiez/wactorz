@@ -7,7 +7,8 @@ reconcile against a desired state after a reboot, hand an agent's state back so
 main can move it somewhere else.
 
 The agents themselves are ordinary :class:`~wactorz.agents.DynamicAgent`
-instances (see :mod:`.agent`), registered in an ordinary
+instances (see :mod:`.agent`), or library agents built from a package installed
+here, each with :class:`~.hosted.NodeHosted` in front of its own class, registered in an ordinary
 :class:`~wactorz.core.registry.ActorRegistry` and watched by the ordinary
 :class:`~wactorz.core.registry.Supervisor`. So a node gets the same OTP
 restart semantics as main, agents on one node reach each other in process
@@ -23,10 +24,11 @@ import sys
 import tarfile
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import __version__
+from .. import __version__, plugins
 from ..config import (
     ARTIFACT_MAX_BYTES,
     CONFIG,
@@ -70,6 +72,7 @@ from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
 from .agent import NodeAgent
 from .artifact_cache import CACHE_DIRNAME, ArtifactCache
+from .hosted import NodeHosted
 from .publishing import NodePublisher
 from .signing import (
     CLEARABLE_LEAVES,
@@ -199,15 +202,21 @@ class NodeRunner:
     # ── The agents running here ───────────────────────────────────────────────
 
     @property
-    def agents(self) -> dict[str, NodeAgent]:
+    def agents(self) -> dict[str, NodeHosted]:
         """The node's agents by name, as the control plane thinks of them."""
         return {
             actor.name: actor
             for actor in self.registry.all_actors()
-            if isinstance(actor, NodeAgent)
+            if isinstance(actor, NodeHosted)
         }
 
+    def hosted(self, name: str) -> NodeHosted | None:
+        """The agent this node runs under ``name``: generated code or a library agent."""
+        actor = self.registry.find_by_name(name)
+        return actor if isinstance(actor, NodeHosted) else None
+
     def get(self, name: str) -> NodeAgent | None:
+        """The agent running generated code here under ``name``; see `hosted` for any."""
         actor = self.registry.find_by_name(name)
         return actor if isinstance(actor, NodeAgent) else None
 
@@ -250,7 +259,7 @@ class NodeRunner:
             return
         name = config.get("name", f"agent-{uuid.uuid4().hex[:6]}")
         logger.info("[runner] Spawning agent '%s'...", name)
-        if self.get(name) is not None:
+        if self.hosted(name) is not None:
             if config.get("replace", False):
                 logger.info("[runner] Replacing agent '%s'", name)
                 await self.stop_agent(name)
@@ -294,11 +303,25 @@ class NodeRunner:
             await self._refuse_migration(name, config, missing)
             return
 
+        factory = self._factory(config)
+        if factory is None:
+            target = config.get("target") or "a target it does not name"
+            reason = (
+                f"this node cannot build {target}: install its package here and name it in "
+                "WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
+            )
+            logger.error("[runner] Not starting '%s': %s", name, reason)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {reason}"
+            )
+            await self._refuse_migration(name, config, reason)
+            return
+
         try:
             self._configs[name] = config
             agent = await self.supervisor.start_supervised(
                 name,
-                lambda: NodeAgent(config, self, state_dir=self.state_dir),
+                factory,
                 strategy=SupervisorStrategy.ONE_FOR_ONE,
                 max_restarts=int(config.get("max_restarts", 5)),
                 restart_delay=float(config.get("restart_delay", 3.0)),
@@ -350,6 +373,39 @@ class NodeRunner:
                 },
                 retain=False,
             )
+
+    def _factory(self, config: dict[str, Any]) -> Callable[[], Actor] | None:
+        """What builds the agent ``config`` describes here, or None when this node cannot.
+
+        Generated code becomes a `NodeAgent`. A library agent (`type: module`)
+        is built from the plugin installed here under its target, with
+        `NodeHosted` in front of its own class and the models its spawn names
+        already in place, so it does not look for them in a store this node
+        does not have.
+        """
+        if not plugins.is_module_config(config):
+            return lambda: NodeAgent(config, self, state_dir=self.state_dir)
+        plugin = plugins.for_target(str(config.get("target") or ""))
+        if plugin is None:
+            return None
+        return lambda: self._build_hosted(plugin, config)
+
+    def _build_hosted(self, plugin: plugins.AgentPlugin, config: dict[str, Any]) -> Actor:
+        """The library agent ``plugin`` builds, made this node's before it starts."""
+        options = config.get("options")
+        actor = plugin.build(
+            name=str(config["name"]),
+            persistence_dir=self.state_dir,
+            options=dict(options) if isinstance(options, dict) else None,
+            mixin=NodeHosted,
+        )
+        if not isinstance(actor, NodeHosted):
+            raise TypeError(f"{plugin.target} did not build an agent this node can host")
+        actor.host_on(self, config, self.state_dir)
+        readable = self.readable_artifacts(config)
+        if readable:
+            actor._artifacts = readable
+        return actor
 
     async def _refuse_migration(self, name: str, config: dict[str, Any], reason: str) -> None:
         """Tell main an agent it is moving here did not start, so it is put back at once.
@@ -492,7 +548,7 @@ class NodeRunner:
         subscriber that connects afterwards -- which is what made a deleted
         agent come back on the next restart.
         """
-        agent = self.get(name)
+        agent = self.hosted(name)
         if agent is None:
             if delete:
                 await self._delete_leftovers(name)
@@ -639,7 +695,14 @@ class NodeRunner:
         described = await asyncio.to_thread(machine.describe, Path(self.state_dir))
         await self.publish(
             f"nodes/{self.node_name}/manifest",
-            {**self._node_identity(), **described, "timestamp": time.time()},
+            {
+                **self._node_identity(),
+                **described,
+                # The library agents this node can build, by import path: main
+                # places one here only when its target is among them.
+                "agents": plugins.targets(),
+                "timestamp": time.time(),
+            },
             retain=True,
         )
 
@@ -765,7 +828,7 @@ class NodeRunner:
             missing = [
                 str(config.get("name"))
                 for config in desired
-                if config.get("name") and self.get(config["name"]) is None
+                if config.get("name") and self.hosted(config["name"]) is None
             ]
             if server is not None and missing:
                 await self._refuse_agents_from(server, missing)
@@ -775,7 +838,7 @@ class NodeRunner:
             aname = agent_config.get("name")
             if not aname:
                 continue
-            if self.get(aname) is not None:
+            if self.hosted(aname) is not None:
                 logger.info("[runner] '%s' already running, skipping.", aname)
             else:
                 logger.info("[runner] Reconcile: starting missing agent '%s'", aname)
@@ -799,7 +862,7 @@ class NodeRunner:
     async def _stop_unlisted(self, listed: set[str]) -> None:
         """Stop every agent running here that ``listed`` leaves out, keeping its state."""
         for name, config in list(self._configs.items()):
-            if name in listed or config.get("_migration_token") or self.get(name) is None:
+            if name in listed or config.get("_migration_token") or self.hosted(name) is None:
                 continue
             logger.info("[runner] '%s' is no longer in the desired state; stopping it.", name)
             await self.stop_agent(name)
@@ -915,7 +978,8 @@ class NodeRunner:
         name = str(data.get("agent") or "")
         agent = self.get(name)
         if agent is None:
-            logger.info("[runner] code_request for '%s', which is not running here", name)
+            # Not here, or a library agent, whose program is its package.
+            logger.info("[runner] code_request for '%s', which runs no code here", name)
             return
         await self.publish(
             f"nodes/{self.node_name}/code_return",
@@ -960,7 +1024,7 @@ class NodeRunner:
         if len(parts) < 4:
             return
         agent_name = parts[2]
-        agent = self.get(agent_name)
+        agent = self.hosted(agent_name)
         if agent is None or not isinstance(data, dict):
             return
 
@@ -982,7 +1046,7 @@ class NodeRunner:
         agent._tasks.append(task)
         task.add_done_callback(lambda t, _ts=agent._tasks: _ts.remove(t) if t in _ts else None)
 
-    async def _run_task(self, agent: NodeAgent, payload: Any, reply_topic: str | None) -> None:
+    async def _run_task(self, agent: NodeHosted, payload: Any, reply_topic: str | None) -> None:
         """Run one task and publish the answer where the caller asked for it.
 
         Inside the turn the task was sent in, so what the agent does about it,
@@ -1243,7 +1307,7 @@ class NodeRunner:
             logger.warning("[runner] migrate: missing 'name' or 'target_node' in payload")
             return
 
-        agent = self.get(str(name))
+        agent = self.hosted(str(name))
         if agent is None:
             logger.warning("[runner] migrate: agent '%s' not running here", name)
             await self.publish(
@@ -1287,7 +1351,7 @@ class NodeRunner:
             },
         )
 
-    async def _return_to_main(self, agent: NodeAgent, payload: dict[str, Any]) -> None:
+    async def _return_to_main(self, agent: NodeHosted, payload: dict[str, Any]) -> None:
         """Stop an agent and publish its config and state for main to re-place.
 
         Whether the state can travel is asked before the stop, so a refusal
@@ -1380,7 +1444,7 @@ class NodeRunner:
         )
         logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
 
-    async def _refuse_return(self, agent: NodeAgent, payload: dict[str, Any], reason: str) -> None:
+    async def _refuse_return(self, agent: NodeHosted, payload: dict[str, Any], reason: str) -> None:
         """Tell main the agent is staying, and why, without stopping it.
 
         Answered on `state_return` as well as `migrate_result`, so main can let

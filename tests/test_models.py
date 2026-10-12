@@ -247,6 +247,17 @@ class TestADecoratedFunction:
         finally:
             await agent.stop()
 
+    async def test_one_never_started_finds_its_models_on_the_first_load(
+        self, imu: dict[str, np.ndarray], tmp_path: Path
+    ) -> None:
+        # Built in a notebook or a test and called as a function, with no system around it.
+        spec = spec_of(score)
+        assert spec is not None
+        agent = spec.build(persistence_dir=str(tmp_path / "agents"))
+
+        assert await score({"az": 9.81}, agent) == {"distance": pytest.approx(0.0)}
+        assert agent.artifacts["model"]["version"] == 1
+
 
 # ── Generated code ────────────────────────────────────────────────────────────
 

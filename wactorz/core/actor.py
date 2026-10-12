@@ -1426,8 +1426,13 @@ class Actor(ABC):
         Reads the formats `wactorz.core.models` has a loader for; open any
         other through `artifact_path`. ``allow_code`` loads a pickle, a joblib
         file or a whole torch module, which run code from the file.
+
+        An agent that was built but never started -- a function agent called
+        from a notebook or a test -- finds its declared models here, on the
+        first load, as `start` would have.
         """
         if key not in self._loaded_models:
+            await self._resolve_models()
             entry = self._artifact(key)
             self._loaded_models[key] = await asyncio.to_thread(
                 models.load, entry, allow_code=allow_code

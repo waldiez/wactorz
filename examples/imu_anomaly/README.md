@@ -9,8 +9,8 @@ language model.
 
 | File | Role |
 | ---- | ---- |
-| `model.py` | The model class, in a module of its own so its pickle loads from any process. |
-| `train.py` | Fits it on synthetic "normal" motion and writes `imu_model.pkl`. Stands in for your own training. |
+| `model.py` | The model: fitting it to normal motion, as two named arrays, and scoring a reading with them. |
+| `train.py` | Fits it on synthetic "normal" motion, writes `imu_model.npz` and keeps it on main as `imu-detector`. Stands in for your own training. |
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
 | `run.py` | Starts Wactorz with that agent, in the minimal profile; `--with-main` starts main, the planner and the catalogue around it. |
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
@@ -26,10 +26,15 @@ repository root works) and the package installed (`pip install wactorz`).
 
 ```bash
 cd examples/imu_anomaly
-python train.py          # writes imu_model.pkl
+python train.py          # writes imu_model.npz, stores it as imu-detector
 python run.py            # dashboard on http://localhost:8888/
 python publish_imu.py    # in another terminal
 ```
+
+`train.py` keeps the model where Wactorz keeps models, in the `state/` folder
+beside these scripts, which is the state directory they all run with. Each run
+stores a new version, and the agent loads the newest. Without one stored, the
+agent does not start, and the error names the model it looked for.
 
 The agent card on the dashboard shows the detector running and its message
 counter climbing. The feed shows a `Listening on sensors/imu/#` line at start and
@@ -165,14 +170,42 @@ the call is the same on the actor, `await me.ask("imu-anomaly", {...})`.
     publishes="anomalies/imu",
     description="Flags IMU readings the trained model calls abnormal.",
     requires={"ram_mb": 128},
+    models={"model": "imu-detector"},
 )
-def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None: ...
+async def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None:
+    model = await me.load_model("model")
+    ...
 ```
 
-The function is called once per reading, on a worker thread so a slow model
-never holds the event loop. Returning `None` publishes nothing. The second
-parameter is the actor, used here to load the model once and keep a count
-across restarts with `persist`/`recall`.
+The function is called once per reading. Returning `None` publishes nothing.
+The second parameter is the actor, used here to load the model and to keep a
+count across restarts with `persist`/`recall`.
+
+`models=` names the model by the name it is stored under, and the agent reads
+it by its own key, `"model"`. Before the agent starts, Wactorz finds the newest
+`imu-detector` among the models kept on main; `me.load_model("model")` loads it
+once, off the event loop, and keeps it. An `.npz` loads as a dict of its
+arrays, with pickles refused, so loading the model runs nothing from the file.
+`imu-detector:2` instead names one version. On a node, the node fetches the
+model by name before the agent starts, so nothing is copied there by hand.
+
+## The model
+
+The model is two arrays, the mean of normal motion and the inverse of its
+covariance, and a reading's score is its distance from that mean in units of
+the spread. `/artifacts` in chat, or `wactorz-artifacts list --state-dir state`
+in a terminal, lists what is kept, with the arrays each model holds:
+
+```text
+imu-detector — newest imu-detector:1 (npz, 626 B); arrays mean[3], inverse_covariance[3x3]
+```
+
+To use your own, save the arrays your scoring reads and store the file under the
+name the agent gives:
+
+```bash
+wactorz-artifacts add my_model.npz imu-detector --state-dir state
+```
 
 `run.py` hands the function to `wactorz.run()`, which supervises it beside the
 monitor, restarts it if it crashes, and serves the dashboard. Inside a program
@@ -207,7 +240,7 @@ cancels:
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir="./state"))
+    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir=STATE_DIR))
     await asyncio.sleep(0)
     if task.done():
         task.result()  # a refused start fails the app now, not at shutdown
@@ -270,13 +303,18 @@ Keep `run.py` out of it and name the agent in the environment of a normal
 folder has to be on the Python path; a `wactorz` start does not add the current
 directory the way `python run.py` adds the script's:
 
+The model has to be kept in that installation's state directory, which is
+`WACTORZ_STATE_DIR` or `./state` where `wactorz` starts:
+
 ```bash
+python examples/imu_anomaly/train.py --state-dir state
 PYTHONPATH=examples/imu_anomaly WACTORZ_AGENTS=agent:detect wactorz
 ```
 
 In PowerShell:
 
 ```powershell
+python examples\imu_anomaly\train.py --state-dir state
 $env:PYTHONPATH = "examples\imu_anomaly"
 $env:WACTORZ_AGENTS = "agent:detect"
 wactorz

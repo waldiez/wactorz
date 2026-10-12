@@ -413,6 +413,32 @@ class TestTheNodeFetching:
         assert not requests_made(runner)
         assert runner.get("detector") is None
 
+    async def test_the_desired_state_arriving_meanwhile_does_not_start_it_twice(
+        self, runner: RecordingRunner, stored: dict[str, Any]
+    ) -> None:
+        """Main sends a spawn and the desired state listing it at once; both arrive here.
+
+        The second must not start the agent again while the first waits on its
+        model: the two would wait on the same file, which only one receives,
+        and the other would report a start that failed.
+        """
+        spawn = spawn_naming(stored, _migration_token="t")
+        first = asyncio.create_task(runner.spawn_agent(spawn))
+        await until(lambda: requests_made(runner), "the node to ask for the model")
+
+        await runner.spawn_agent(dict(spawn))
+        await deliver(runner, MODEL)
+        await first
+
+        assert runner.get("detector") is not None
+        assert len(requests_made(runner)) == 1
+        (ack,) = [p for t, p, _ in runner.published if t.endswith("/spawn_ack")]
+        assert "refused" not in ack
+        errors = [
+            p for t, p, _ in runner.published if t.endswith("/logs") and p.get("type") == "error"
+        ]
+        assert not errors
+
     async def test_an_agent_naming_none_starts_as_before(self, runner: RecordingRunner) -> None:
         await runner.spawn_agent({"name": "plain", "code": CODE})
 

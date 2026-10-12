@@ -143,6 +143,8 @@ class NodeRunner:
         self.registry._supervisor_ref = self.supervisor
         #: name → the config it was spawned from, so a restart can use it again.
         self._configs: dict[str, dict] = {}
+        #: The agents being started now: installing, fetching, not yet running.
+        self._starting: set[str] = set()
         state_path = self._resolve_state_dir(state_dir)
         self.state_dir = str(state_path)
         #: Where the blobs of an agent main is placing here arrive, before the
@@ -265,10 +267,28 @@ class NodeRunner:
         self.supervisor.drop_supervised(name)
 
     async def spawn_agent(self, config: Any) -> None:
+        """Start the agent ``config`` describes here, unless it is being started already.
+
+        Main sends a spawn and, at the same moment, the desired state that lists
+        the agent, and both arrive here. A start that installs packages or
+        fetches models takes a while, and the agent is not running until it
+        ends: without this, the second message starts it again beside the
+        first, and the two wait on the same model, which only one receives.
+        """
         if not isinstance(config, dict):
             logger.warning("[runner] spawn_agent: invalid config type %s, ignoring.", type(config))
             return
         name = config.get("name", f"agent-{uuid.uuid4().hex[:6]}")
+        if name in self._starting:
+            logger.info("[runner] '%s' is already being started; not starting it twice", name)
+            return
+        self._starting.add(name)
+        try:
+            await self._spawn_now(name, config)
+        finally:
+            self._starting.discard(name)
+
+    async def _spawn_now(self, name: str, config: dict[str, Any]) -> None:
         logger.info("[runner] Spawning agent '%s'...", name)
         if self.hosted(name) is not None:
             if config.get("replace", False):

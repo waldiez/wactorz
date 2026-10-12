@@ -449,7 +449,30 @@ class TestTheCommand:
     ) -> None:
         code, out = self.run("list", "--state-dir", str(tmp_path), capsys=capsys)
 
-        assert code == 0 and "No artifacts" in out
+        assert code == 0 and "none." in out
+        assert str((tmp_path / STORE_DIRNAME).resolve()) in out, "which store, so a wrong one shows"
+
+    def test_adding_names_the_store_it_went_to(
+        self, tmp_path: Path, model: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        state = tmp_path / "state"
+        state.mkdir()
+
+        code, out = self.run("add", str(model), "imu", "--state-dir", str(state), capsys=capsys)
+
+        assert code == 0 and str((state / STORE_DIRNAME).resolve()) in out
+        assert "no state directory" not in out
+
+    def test_adding_to_a_state_directory_that_was_not_there_warns(
+        self, tmp_path: Path, model: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Usually a command run from another folder than Wactorz's own.
+        code, out = self.run(
+            "add", str(model), "imu", "--state-dir", str(tmp_path / "elsewhere"), capsys=capsys
+        )
+
+        assert code == 0
+        assert "There was no state directory" in out and "WACTORZ_STATE_DIR" in out
 
 
 def test_describe_is_json() -> None:

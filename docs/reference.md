@@ -748,6 +748,7 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/memory forget <key>` | Remove a specific stored fact |
 | `/webhook <service> <url>` | Store a notification webhook URL |
 | `/topics` | List known MQTT topics and their publishing agents |
+| `/artifacts [name]` | List the models kept on main with `wactorz-artifacts`, or every version of one. Main's model is told the same list, so an agent it writes names a model that is there |
 | `/cost` | Show per-agent token usage and cost breakdown |
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |

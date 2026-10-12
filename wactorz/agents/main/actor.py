@@ -32,6 +32,7 @@ from .artifact_service import ArtifactService
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
+from .commands.info import terminal_command, terminal_command_reply
 from .delegation import DelegationManager
 from .lifecycle import LifecycleService
 from .llm_bridge import LLMBridge
@@ -585,6 +586,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # ── Direct API intercepts — handle without LLM round-trip ──────────
         stripped = text.strip().rstrip("()")
 
+        # A Wactorz program typed into chat runs nowhere; said so here, before a
+        # model can claim it ran.
+        terminal = await terminal_command_reply(text)
+        if terminal is not None:
+            await self._record_external_exchange(text, terminal, ts_user=ts_user)
+            return note_prefix + terminal
+
         # ── Commands ────────────────────────────────────────────────────────
         # Every command lives in the registry; registration order is dispatch
         # order, so a command answers where the chain this replaced answered it.
@@ -644,6 +652,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Refresh the system prompt with live registry + facts before any LLM call.
         # This ensures the LLM never answers from a stale view of which agents exist.
+        await self._refresh_stored_models()
         self._rebuild_system_prompt()
 
         # Belt-and-braces: also inject the live agent list as a prefix on the
@@ -742,6 +751,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
             await self._record_external_exchange(text, reply, ts_user=ts_user)
             return note_prefix + reply
+        terminal = await terminal_command_reply(stripped)
+        if terminal is not None:
+            await self._record_external_exchange(text, terminal, ts_user=ts_user)
+            return note_prefix + terminal
 
         # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
         intent = await self._classify_intent(text)
@@ -772,6 +785,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return note_prefix + response
 
         # OTHER: converse, but run no action executors.
+        await self._refresh_stored_models()
         self._rebuild_system_prompt()
         prefixed_text = self._prefix_with_live_context(text)
         response = await self.chat(prefixed_text)
@@ -836,10 +850,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # All slash-commands and direct API intercepts are handled by process_user_input
         # Route them there to avoid duplicating all that logic here
         _stripped = text.strip().rstrip("()")
-        _is_command = _stripped.startswith(("/", "@")) or _stripped in (
-            "list_nodes",
-            "main.list_nodes",
-            "rules",
+        _is_command = (
+            _stripped.startswith(("/", "@"))
+            or _stripped in ("list_nodes", "main.list_nodes", "rules")
+            or terminal_command(_stripped) is not None
         )
         if _is_command:
             # /deploy streams its progress as it goes (the name lookup, the
@@ -892,6 +906,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Refresh the system prompt with live registry + facts before any LLM call.
         # This ensures the LLM never answers from a stale view of which agents exist.
+        await self._refresh_stored_models()
         self._rebuild_system_prompt()
 
         # Belt-and-braces: inject live agent list as a prefix on the user message.

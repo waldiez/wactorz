@@ -39,6 +39,7 @@ from wactorz.core.artifacts import (
     ArtifactStore,
     CodeRefusedError,
     describe,
+    human_size,
     parse_reference,
 )
 from wactorz.core.paths import resolve_state_dir
@@ -78,20 +79,17 @@ def _line(artifact: Artifact) -> str:
     )
 
 
-def _size(size: int) -> str:
-    if size < 1024:
-        return f"{size} B"
-    # Whole powers of 1024, counted exactly: 1 MiB is 1.0 MB, not 1024.0 KB.
-    power = min((size.bit_length() - 1) // 10, len(_UNITS))
-    return f"{size / 1024**power:.1f} {_UNITS[power - 1]}"
-
-
-_UNITS = ("KB", "MB", "GB")
+_size = human_size
 
 
 def _add(args: argparse.Namespace) -> None:
+    store = _store(args)
+    # Asked before adding: the add makes it. A state directory that is not
+    # there yet is usually one the server never reads, from a command run in
+    # another folder, and the model would land where nothing looks for it.
+    new_state_dir = not store.root.parent.is_dir()
     try:
-        artifact = _store(args).add(
+        artifact = store.add(
             args.path,
             args.name,
             format_name=args.format,
@@ -101,6 +99,14 @@ def _add(args: argparse.Namespace) -> None:
     except CodeRefusedError as exc:
         raise ArtifactError(f"{exc}. Add --allow-code to store it anyway.") from exc
     logger.info("Stored %s (%s, %s)", artifact.pinned, artifact.format, _size(artifact.size))
+    logger.info("in %s", store.root.resolve())
+    if new_state_dir:
+        logger.warning(
+            "There was no state directory at %s, so a new one was made. Wactorz reads its "
+            "models from its own state directory: run this where Wactorz runs, or pass "
+            "--state-dir, or set WACTORZ_STATE_DIR for both.",
+            store.root.parent.resolve(),
+        )
     if artifact.runs_code:
         logger.warning(
             "It runs code when it loads: load it only where you would run its maker's code."
@@ -111,8 +117,9 @@ def _list(args: argparse.Namespace) -> None:
     store = _store(args)
     names = [parse_reference(args.name)[0]] if args.name else store.names()
     found = [artifact for name in names for artifact in store.versions(name)]
+    logger.info("Models in %s:", store.root.resolve())
     if not found:
-        logger.info("No artifacts%s.", f" named {args.name!r}" if args.name else "")
+        logger.info("  none%s.", f" named {args.name!r}" if args.name else "")
         return
     for artifact in found:
         logger.info("%s", _line(artifact))

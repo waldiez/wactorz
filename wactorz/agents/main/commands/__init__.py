@@ -20,6 +20,7 @@ from .agents import (
 )
 from .dispatch import Command, CommandContext, CommandRegistry, command, registry
 from .info import (
+    show_artifacts,
     show_bus,
     show_help,
     show_mqtt_status,
@@ -39,6 +40,7 @@ from .state import (
 
 registry.add(show_nodes)
 registry.add(show_topics)
+registry.add(show_artifacts)
 registry.add(show_mqtt_status)
 registry.add(show_bus)
 registry.add(show_help)

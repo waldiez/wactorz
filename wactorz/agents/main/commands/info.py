@@ -5,11 +5,14 @@ handler that cannot do damage is one whose move can be judged on whether the
 text still matches.
 """
 
+import asyncio
 import time
 from typing import Any
 
 from ...._version import __version__
+from ....core.artifacts import ArtifactError, ArtifactStore, human_size, summary
 from ....core.compatibility import compatible
+from ....core.paths import resolve_state_dir
 from .dispatch import CommandContext, command
 
 #: Every command, as the help text lists them. Kept as data rather than one
@@ -40,6 +43,10 @@ HELP_LINES: tuple[str, ...] = (
     "                             come from the environment, not chat)",
     "  /migrate <agent> <node> [--force] — move an agent to a different node (state preserved)",
     "  /agents restart <name>  — restart an agent (local or remote, state preserved)",
+    "",
+    "**Models**",
+    "  /artifacts              — list the models kept on main (wactorz-artifacts)",
+    "  /artifacts <name>       — every version of one model",
     "",
     "**Pipelines & Plans**",
     "  /plans                  — list pending pipeline proposals (dry-run)",
@@ -218,6 +225,72 @@ async def show_topics(ctx: CommandContext, argument: str) -> str:
         )
         lines.append(f"  {t['topic']:40s} ← {agent_strs}")
     return "\n".join(lines)
+
+
+@command(
+    "/artifacts",
+    exact=("/artifacts",),
+    prefixes=("/artifacts ",),
+    summary="list the models kept on main",
+)
+async def show_artifacts(_ctx: CommandContext, argument: str) -> str:
+    """The models kept on main, or every version of one."""
+    return await stored_models_text(argument)
+
+
+async def stored_models_text(name: str = "") -> str:
+    """The models kept on main, or every version of ``name``, as `/artifacts` shows them."""
+    store = ArtifactStore.in_state_dir(resolve_state_dir())
+    try:
+        if name:
+            return await asyncio.to_thread(_versions_of, store, name)
+        lines = await asyncio.to_thread(summary, store)
+    except ArtifactError as exc:
+        return f"Cannot list models: {exc}"
+    if not lines:
+        return "No models are kept here. Add one with `wactorz-artifacts add <file> <name>`."
+    return "Models kept on main:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def _versions_of(store: ArtifactStore, name: str) -> str:
+    versions = store.versions(name)
+    if not versions:
+        return f"No model named '{name}'. /artifacts lists them."
+    lines = [f"Versions of '{name}':"]
+    for artifact in versions:
+        code = ", runs code when it loads" if artifact.runs_code else ""
+        lines.append(
+            f"  {artifact.reference:28s} {artifact.format:12s} {human_size(artifact.size):>10s}{code}"
+        )
+    return "\n".join(lines)
+
+
+#: Wactorz's own programs. Each runs in a terminal on the machine it acts on,
+#: and nothing in chat can run one. Typed into chat, one is answered by
+#: `terminal_command_reply` before any model sees it: a model asked to run a
+#: command it has no way to run tends to say that it did.
+TERMINAL_COMMANDS = ("wactorz-artifacts", "wactorz-state", "wactorz-reset", "wactorz-node")
+
+
+def terminal_command(text: str) -> str | None:
+    """The Wactorz program ``text`` runs, if it is a terminal command; else None."""
+    words = text.split(maxsplit=1)
+    return words[0] if words and words[0] in TERMINAL_COMMANDS else None
+
+
+async def terminal_command_reply(text: str) -> str | None:
+    """What main says to a terminal command typed into chat, or None for anything else."""
+    program = terminal_command(text)
+    if program is None:
+        return None
+    reply = (
+        f"`{program}` is a command for a terminal on the machine Wactorz runs on, not for chat, "
+        "so nothing was run. Open a terminal there, in the environment Wactorz is installed "
+        f"in, and run it as typed:\n\n    {text.strip()}"
+    )
+    if program == "wactorz-artifacts":
+        reply += "\n\nWhat is kept now:\n" + await stored_models_text()
+    return reply
 
 
 @command(

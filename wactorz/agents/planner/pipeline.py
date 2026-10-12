@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from ... import plugins
 from ...config import CONFIG
 from ...core.actor import ask_through
+from ...core.artifacts import ArtifactError, ArtifactStore, summary
+from ...core.paths import resolve_state_dir
 from ...plugins import AgentPlugin
 from ..lookup import find_main_actor
 from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
@@ -333,6 +335,8 @@ class PipelineMixin(_Host):
 
         notif_section = await self._gather_notification_urls(task)
 
+        models_section = await _stored_models_section()
+
         if ha_available and ha_entities_text and not skips_ha_feasibility(task):
             verdict = await self._check_ha_feasibility(task, ha_section, topic_bus_section)
             if verdict is not None:
@@ -379,6 +383,9 @@ class PipelineMixin(_Host):
             *home_assistant_parts,
             "═══ NOTIFICATION URLS ═══",
             notif_section,
+            "",
+            "═══ STORED MODELS ═══",
+            models_section,
             "",
             "═══ OUTPUT FORMAT ═══",
             "JSON array. Each element:",
@@ -1128,3 +1135,23 @@ def registered_agents_section(
         "  needs an answer rather than a stream.",
     ]
     return "\n".join(lines)
+
+
+async def _stored_models_section() -> str:
+    """The models a spawn may name in ``artifacts``, read off the event loop.
+
+    A store that cannot be read is said to hold none rather than failing the
+    plan: the user asked for a pipeline, not for the store.
+    """
+    store = ArtifactStore.in_state_dir(resolve_state_dir())
+    try:
+        lines = await asyncio.to_thread(summary, store)
+    except (ArtifactError, OSError) as exc:
+        logger.warning("Could not list the stored models for the planner: %s", exc)
+        lines = []
+    if not lines:
+        return 'STORED MODELS: none. A step must not name "artifacts".'
+    return "\n".join(
+        ['STORED MODELS (name one in "artifacts" by its name, or name:version):']
+        + [f"  {line}" for line in lines]
+    )

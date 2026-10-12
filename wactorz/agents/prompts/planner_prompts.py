@@ -228,6 +228,10 @@ TYPE 3 — "dynamic"
     agent.persist("key", value)                       — save persisted value (SYNC, NO await!)
     agent.declare_contract(...)                        — register topic contract (SYNC, NO await!)
     agent.state["key"]                                — in-memory dict (cleared on restart)
+    await agent.load_model("key")                     — a model named in "artifacts", loaded once (ASYNC, must await):
+                                                        npz → dict of numpy arrays, npy → array, safetensors → dict
+                                                        of arrays, onnx → onnxruntime session, state_dict → tensors
+    agent.artifact_path("key")                        — where that model's file is, as a str (SYNC, NO await!)
   CRITICAL RULES FOR DYNAMIC AGENT CODE:
     NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()
     NEVER import or use aiomqtt directly — use agent.subscribe() instead
@@ -239,7 +243,11 @@ TYPE 3 — "dynamic"
     "description": "<what this does>"
     "install": ["<pip-package>", ...]       — packages to install before running
     "poll_interval": <seconds>              — how often process(agent) runs
+    "artifacts": {"<key>": "<model>"}       — models from STORED MODELS below, read by that key
     "code": "<full python source as single string with \\n for newlines>"
+  MODELS: when the request names a trained model, or a model in STORED MODELS fits it, name it
+    in "artifacts" and read it with agent.load_model("<key>") — never re-implement its maths.
+    Name ONLY models listed under STORED MODELS; an agent naming another does not start.
 
 ═══ CANONICAL WIRING PATTERNS ═══
 

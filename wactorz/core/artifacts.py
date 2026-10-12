@@ -571,6 +571,46 @@ def _unpack_member(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) ->
         shutil.copyfileobj(source, out, _CHUNK)
 
 
+def summary(store: ArtifactStore, *, limit: int = 50) -> list[str]:
+    """One line per name in ``store``: its newest version, format, size and what was said of it.
+
+    For a person reading a list and for a model choosing one, so it says what
+    tells models apart and nothing that does not: no hashes, no times.
+    """
+    lines: list[str] = []
+    for name in store.names()[:limit]:
+        versions = store.versions(name)
+        if not versions:
+            continue
+        newest = versions[-1]
+        line = f"{name} — newest {newest.reference} ({newest.format}, {human_size(newest.size)})"
+        if len(versions) > 1:
+            line += f", {len(versions)} versions"
+        if newest.runs_code:
+            line += ", runs code when it loads"
+        said = [
+            f"{key}={value}"
+            for key, value in newest.metadata.items()
+            if key != "source" and isinstance(value, (str, int, float))
+        ]
+        if said:
+            line += "; " + ", ".join(said)[:160]
+        lines.append(line)
+    return lines
+
+
+def human_size(size: int) -> str:
+    """``size`` bytes in the unit that reads best."""
+    if size < 1024:
+        return f"{size} B"
+    # Whole powers of 1024, counted exactly: 1 MiB is 1.0 MB, not 1024.0 KB.
+    power = min((size.bit_length() - 1) // 10, len(_UNITS))
+    return f"{size / 1024**power:.1f} {_UNITS[power - 1]}"
+
+
+_UNITS = ("KB", "MB", "GB")
+
+
 def describe(artifact: Artifact) -> dict[str, Any]:
     """``artifact`` as plain JSON, with its references."""
     return {**asdict(artifact), "reference": artifact.reference, "pinned": artifact.pinned}

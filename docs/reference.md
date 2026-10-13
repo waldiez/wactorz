@@ -1037,10 +1037,10 @@ No changes to `cli.py` or any other file needed. On next restart the recipe is a
 
 Converts a PDF or TXT document into a polished PowerPoint presentation in four steps:
 
-1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT)
+1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT), from a document folder or a chat upload (see [Doc → PPTX agent](catalogue-doc-to-pptx.md))
 2. **Extract images** — pulls real embedded images from the PDF using PyMuPDF; filters out small decorations (configurable minimum size); assigns images to slides by source-page proximity
 3. **LLM outline** — calls the LLM to produce a structured JSON outline: slide titles, bullets, theme colors, and per-slide image prompts
-4. **Build** — generates and runs a `pptxgenjs` Node.js script that assembles the final `.pptx` with two-column layouts (text left, image right) for content slides
+4. **Build** — assembles the `.pptx` with `python-pptx`, with two-column layouts (text left, image right) for content slides
 
 Slides that received a real PDF image skip NIM generation. Slides without one fall back to `image-gen-agent` (if running) or remain text-only.
 

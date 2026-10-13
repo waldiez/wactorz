@@ -96,6 +96,10 @@ EXAMPLES:
   → file path is present → delegate immediately
   → report the result
 
+  User attaches a file, shown as [attachment: report.pdf (upload <id>)], and asks for a deck
+  → delegate with the id, not a path: agent.send_to("doc-to-pptx-agent", {"file_id": "<id>"})
+  → it reads and writes only in the user's document folders; if it refuses a path, relay why
+
   User: "monitor my CPU temperature"
   → agent.capabilities() finds nothing suitable
   → write a new dynamic agent for it

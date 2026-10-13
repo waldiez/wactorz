@@ -97,6 +97,8 @@ dev       = [
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
+    # So the doc-to-pptx agent's deck is built for real in its tests.
+    "python-pptx>=1.0.2",
     "prek>=0.5.3",
     "coverage>=7.13.5",
     "watchdog>=6.0.0",

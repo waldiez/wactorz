@@ -1,25 +1,62 @@
 """The doc-to-pptx agent: reading a document, placing its images, and building the deck.
 
-`test_pptx_theme_colors.py` holds the generated script to six-digit colours and
-`test_doc_to_pptx_blocking.py` keeps its subprocesses off the event loop; this
-covers the rest. The program is exec'd as it is at spawn and driven through a
-stand-in `agent` with a scripted model. PyMuPDF and pdfplumber are stand-ins in
-`sys.modules`, and `npm` and `node` are a stand-in runner that writes the deck
-the script names, so nothing here needs either installed.
+`test_pptx_theme_colors.py` holds the palette to six-digit colours,
+`test_doc_to_pptx_blocking.py` keeps the build off the event loop and
+`test_documents.py` the paths it may use; this covers the rest. The program is
+exec'd as it is at spawn and driven through a stand-in `agent` with a scripted
+model. PyMuPDF and pdfplumber are stand-ins in `sys.modules`; the deck is built
+by python-pptx for real and read back.
 """
 
 import json
-import subprocess
 import sys
+import tempfile
 import types
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from tests.programs import program_namespace
+from wactorz.documents import DOCUMENT_DIRS_ENV
+from wactorz.web.uploads import UPLOADS_DIRNAME
 
 NS = program_namespace("doc_to_pptx_agent.py")
+
+UPLOAD_ID = "0f3c9a5e4b2d4c1e8a7b6c5d4e3f2a1b"
+
+
+def _png(path: Path, size: tuple[int, int] = (800, 600)) -> Path:
+    Image.new("RGB", size, "teal").save(path, format="PNG")
+    return path
+
+
+def _pictures(slide: Any) -> list[Any]:
+    return [s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE]
+
+
+def _bullets_of(slide: Any) -> Any:
+    """The text box holding a content slide's bullets, which `_outline` makes "one", "two"."""
+    return next(s for s in slide.shapes if s.has_text_frame and s.text_frame.text.startswith("one"))
+
+
+@pytest.fixture(name="docs", autouse=True)
+def docs_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A document folder and a temp folder of the test's own.
+
+    Nothing reads the real Documents, and a deck with no `output_path`, which
+    goes to a fresh temp folder, is not left behind in the real one.
+    """
+    folder = tmp_path / "docs"
+    folder.mkdir()
+    monkeypatch.setenv(DOCUMENT_DIRS_ENV, str(folder))
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    return folder
 
 
 def _outline(slides: int = 3, **overrides: Any) -> dict[str, Any]:
@@ -75,43 +112,9 @@ class _Agent:
         if isinstance(answer, Exception):
             raise answer
         if answer == "made":
-            Path(payload["output_path"]).write_bytes(b"png")
+            _png(Path(payload["output_path"]))
             return {"image_path": payload["output_path"]}
         return answer
-
-
-class _Runner:
-    """`npm` and `node` as `_run_blocking` would run them."""
-
-    def __init__(self) -> None:
-        self.commands: list[list[str]] = []
-        self.npm = 0
-        self.node = 0
-        self.node_writes = True
-        self.missing: set[str] = set()
-        self.cwds: list[str] = []
-
-    async def __call__(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        self.commands.append(cmd)
-        self.cwds.append(str(kwargs.get("cwd", "")))
-        if cmd[0] in self.missing:
-            raise FileNotFoundError(2, "No such file or directory", cmd[0])
-        if cmd[0] == "npm":
-            return subprocess.CompletedProcess(cmd, self.npm, "", "ERESOLVE" if self.npm else "")
-        if cmd[0] == "node" and cmd[1:] != ["--version"]:
-            script = Path(cmd[1]).read_text(encoding="utf-8")
-            target = json.loads(script.split("fileName:", 1)[1].split(" })", 1)[0])
-            if self.node == 0 and self.node_writes:
-                Path(target).write_bytes(b"P" * 4096)
-            return subprocess.CompletedProcess(cmd, self.node, "", "TypeError" if self.node else "")
-        return subprocess.CompletedProcess(cmd, 0, "v22.0.0", "")
-
-
-@pytest.fixture(name="runner")
-def runner_fixture(monkeypatch: pytest.MonkeyPatch) -> _Runner:
-    runner = _Runner()
-    monkeypatch.setitem(NS, "_run_blocking", runner)
-    return runner
 
 
 # ── PyMuPDF and pdfplumber ─────────────────────────────────────────────────────
@@ -122,7 +125,7 @@ class _Pixmap:
         self.width, self.height, self.n, self.alpha = width, height, n, alpha
 
     def save(self, path: str) -> None:
-        Path(path).write_bytes(b"png")
+        _png(Path(path), (self.width, self.height))
 
 
 class _Page:
@@ -207,8 +210,23 @@ class TestReading:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setitem(sys.modules, "pdfplumber", _pdfplumber([" One ", None, "Three"]))
+        pdf = tmp_path / "a.PDF"
+        pdf.write_bytes(b"%PDF-1.4")
 
-        assert NS["_read_document"](str(tmp_path / "a.PDF")) == "One\n\nThree"
+        assert NS["_read_document"](str(pdf)) == "One\n\nThree"
+
+    def test_a_pdf_is_known_by_its_bytes_not_its_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An upload is stored under an id, with no extension to go by."""
+        monkeypatch.setitem(sys.modules, "pdfplumber", _pdfplumber(["From the PDF"]))
+        unnamed = tmp_path / UPLOAD_ID
+        unnamed.write_bytes(b"%PDF-1.7")
+        named = tmp_path / "notes.pdf"
+        named.write_text("Plain text", encoding="utf-8")
+
+        assert NS["_read_document"](str(unnamed)) == "From the PDF"
+        assert NS["_read_document"](str(named)) == "Plain text"
 
     def test_text_in_no_encoding_it_knows_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -319,36 +337,79 @@ class TestTheOutline:
         assert "x" * 4001 not in llm.prompts[0]
 
 
-class TestTheScript:
-    def test_each_kind_of_slide_with_and_without_its_picture(self) -> None:
-        outline = _outline(4)
-        pictured = {0: "/img/t.png", 1: "/img/c.png", 2: None, 3: "/img/z.png"}
+class TestTheDeck:
+    @staticmethod
+    def _build(tmp_path: Path, outline: dict[str, Any], pictured: dict[int, Any]) -> Any:
+        out = tmp_path / "deck.pptx"
+        NS["_build_deck"](outline, pictured, str(out))
+        return Presentation(str(out))
 
-        script = NS["_build_js"](outline, pictured, "/out/deck.pptx")
-        bare = NS["_build_js"](_outline(3), {}, "/out/deck.pptx")
+    def test_each_kind_of_slide_with_and_without_its_picture(self, tmp_path: Path) -> None:
+        picture = str(_png(tmp_path / "p.png"))
+        pictured = {0: picture, 1: picture, 2: None, 3: picture}
 
-        assert script.count("s.addImage(") == 3
-        assert "w:4.7" in script  # text beside the picture
-        assert "w:9.3" in script  # text across a slide without one
-        assert "transparency:55" in script
-        assert "s.addImage(" not in bare
-        assert 'fileName:"/out/deck.pptx"' in script
+        deck = self._build(tmp_path, _outline(4), pictured)
+
+        slides = list(deck.slides)
+        assert [len(_pictures(s)) for s in slides] == [1, 1, 0, 1]
+        assert (deck.slide_width, deck.slide_height) == (9144000, 5143500)
+        assert deck.core_properties.title == "Quarterly Review"
+
+    def test_text_sits_beside_a_picture_and_across_a_slide_without_one(
+        self, tmp_path: Path
+    ) -> None:
+        picture = str(_png(tmp_path / "p.png"))
+
+        deck = self._build(tmp_path, _outline(4), {1: picture, 2: None})
+
+        widths = [_bullets_of(slide).width for slide in list(deck.slides)[1:3]]
+        assert widths == [NS["_emu"](4.7), NS["_emu"](9.3)]
+
+    def test_bullets_are_bullets(self, tmp_path: Path) -> None:
+        deck = self._build(tmp_path, _outline(3), {})
+
+        assert _bullets_of(list(deck.slides)[1]).element.xml.count("<a:buChar") == 2
+
+    def test_a_picture_is_cropped_to_its_box_not_stretched(self, tmp_path: Path) -> None:
+        tall = str(_png(tmp_path / "tall.png", (400, 900)))
+
+        deck = self._build(tmp_path, _outline(3), {1: tall})
+
+        [picture] = _pictures(list(deck.slides)[1])
+        assert picture.crop_left == picture.crop_right == 0
+        assert picture.crop_top == picture.crop_bottom > 0
+
+    def test_the_closing_picture_is_faded(self, tmp_path: Path) -> None:
+        picture = str(_png(tmp_path / "p.png"))
+
+        deck = self._build(tmp_path, _outline(3), {2: picture})
+
+        [faded] = _pictures(list(deck.slides)[2])
+        assert '<a:alphaModFix amt="45000"/>' in faded.element.xml
+
+    def test_a_picture_that_cannot_be_read_leaves_a_text_slide(self, tmp_path: Path) -> None:
+        broken = tmp_path / "broken.png"
+        broken.write_bytes(b"not a picture")
+
+        deck = self._build(tmp_path, _outline(3), {1: str(broken)})
+
+        assert _pictures(list(deck.slides)[1]) == []
 
 
 # ── The whole conversion ───────────────────────────────────────────────────────
 
 
 def _txt(tmp_path: Path) -> Path:
-    path = tmp_path / "report.txt"
+    path = tmp_path / "docs" / "report.txt"
     path.write_text("Revenue grew. Costs fell. " * 50, encoding="utf-8")
     return path
 
 
 class TestConverting:
-    async def test_a_text_document_becomes_a_deck(self, tmp_path: Path, runner: _Runner) -> None:
+    async def test_a_text_document_becomes_a_deck(self, tmp_path: Path) -> None:
         agent = _Agent(_Llm(json.dumps(_outline(3))))
         agent.images = {"picture 0": "made", "picture 1": "made", "picture 2": "made"}
-        out = tmp_path / "out" / "deck.pptx"
+        out = tmp_path / "docs" / "out" / "deck.pptx"
         out.parent.mkdir()
 
         result = await NS["handle_task"](
@@ -358,14 +419,14 @@ class TestConverting:
         assert result["error"] is None
         assert result["pptx_path"] == str(out)
         assert (result["slide_count"], result["images_generated"]) == (3, 3)
-        assert [c[0] for c in runner.commands] == ["npm", "node"]
-        assert out.exists()
+        deck = Presentation(str(out))
+        assert [len(_pictures(s)) for s in deck.slides] == [1, 1, 1]
 
     async def test_a_pdf_brings_its_own_pictures(
-        self, tmp_path: Path, runner: _Runner, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        pdf = tmp_path / "report.pdf"
-        pdf.write_bytes(b"%PDF")
+        pdf = tmp_path / "docs" / "report.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
         monkeypatch.setitem(sys.modules, "pdfplumber", _pdfplumber(["Revenue grew."]))
         monkeypatch.setitem(
             sys.modules,
@@ -384,10 +445,10 @@ class TestConverting:
         assert Path(result["pptx_path"]).exists()
 
     async def test_without_pymupdf_a_pdf_is_converted_without_its_pictures(
-        self, tmp_path: Path, runner: _Runner, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        pdf = tmp_path / "report.pdf"
-        pdf.write_bytes(b"%PDF")
+        pdf = tmp_path / "docs" / "report.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
         monkeypatch.setitem(sys.modules, "pdfplumber", _pdfplumber(["Revenue grew."]))
         monkeypatch.setitem(sys.modules, "fitz", None)
         agent = _Agent(_Llm(json.dumps(_outline(3))))
@@ -399,7 +460,7 @@ class TestConverting:
         assert any("PyMuPDF not installed" in line for line in agent.logs)
         assert any("text-only" in line for line in agent.logs)
 
-    async def test_the_request_may_arrive_as_text(self, tmp_path: Path, runner: _Runner) -> None:
+    async def test_the_request_may_arrive_as_text(self, tmp_path: Path) -> None:
         agent = _Agent(_Llm(json.dumps(_outline(3))))
         request = json.dumps({"file_path": str(_txt(tmp_path)), "nim_fallback": False})
 
@@ -409,16 +470,61 @@ class TestConverting:
         assert as_string["error"] is None
         assert in_text["error"] is None
 
-    @pytest.mark.parametrize(
-        "request_", [{}, "convert something", {"file_path": "/no/such/file.txt"}]
-    )
-    async def test_a_missing_file_is_said(self, request_: Any, runner: _Runner) -> None:
+    @pytest.mark.parametrize("request_", [{}, "convert something"])
+    async def test_a_request_naming_no_file_is_said(self, request_: Any) -> None:
         result = await NS["handle_task"](_Agent(), request_)
+
+        assert result["error"].startswith("Name the file")
+
+    async def test_a_missing_file_is_said(self, docs: Path) -> None:
+        result = await NS["handle_task"](_Agent(), {"file_path": str(docs / "gone.txt")})
 
         assert result["error"].startswith("File not found")
 
-    async def test_an_empty_document_is_said(self, tmp_path: Path, runner: _Runner) -> None:
-        empty = tmp_path / "empty.txt"
+    async def test_a_file_outside_the_document_folders_is_not_read(self, tmp_path: Path) -> None:
+        secret = tmp_path / "secret.txt"
+        secret.write_text("the deploy key", encoding="utf-8")
+        llm = _Llm(json.dumps(_outline(3)))
+
+        result = await NS["handle_task"](_Agent(llm), {"file_path": str(secret)})
+
+        assert "outside the document folders" in result["error"]
+        assert llm.prompts == []
+
+    @pytest.mark.parametrize(
+        ("where", "said"),
+        [
+            ("elsewhere.pptx", "outside the document folders"),
+            ("docs/.bashrc", "must end in .pptx"),
+            ("state/agent.pptx", "outside the document folders"),
+        ],
+    )
+    async def test_a_deck_is_not_written_where_it_may_not_go(
+        self, where: str, said: str, tmp_path: Path
+    ) -> None:
+        llm = _Llm(json.dumps(_outline(3)))
+
+        result = await NS["handle_task"](
+            _Agent(llm), {"file_path": str(_txt(tmp_path)), "output_path": str(tmp_path / where)}
+        )
+
+        assert said in result["error"]
+        assert llm.prompts == []
+        assert not (tmp_path / where).exists()
+
+    async def test_an_attached_file_is_converted_by_its_id(self, tmp_path: Path) -> None:
+        stored = tmp_path / "state" / UPLOADS_DIRNAME / UPLOAD_ID
+        stored.parent.mkdir(parents=True)
+        stored.write_text("Revenue grew. " * 20, encoding="utf-8")
+        agent = _Agent(_Llm(json.dumps(_outline(3))))
+
+        result = await NS["handle_task"](agent, {"file_id": UPLOAD_ID, "nim_fallback": False})
+
+        assert result["error"] is None
+        assert len(Presentation(result["pptx_path"]).slides) == 3
+
+    async def test_an_empty_document_is_said(self, tmp_path: Path) -> None:
+        empty = tmp_path / "docs" / "empty.txt"
         empty.write_text("   ", encoding="utf-8")
 
         result = await NS["handle_task"](_Agent(), {"file_path": str(empty)})
@@ -433,7 +539,7 @@ class TestConverting:
         ],
     )
     async def test_an_outline_that_cannot_be_used_is_said(
-        self, reply: str, said: str, tmp_path: Path, runner: _Runner
+        self, reply: str, said: str, tmp_path: Path
     ) -> None:
         agent = _Agent(_Llm(reply))
 
@@ -443,17 +549,19 @@ class TestConverting:
         assert agent.alerts[0][0] == "error"
 
     @pytest.mark.parametrize(
-        ("npm", "node", "writes", "said"),
+        ("failure", "said"),
         [
-            (1, 0, True, "npm install pptxgenjs failed: ERESOLVE"),
-            (0, 1, True, "pptxgenjs failed: TypeError"),
-            (0, 0, False, "pptxgenjs failed: Unknown error"),
+            (RuntimeError("disk full"), "Building the deck failed: disk full"),
+            (ImportError("pptx"), "python-pptx is not installed: pip install python-pptx"),
         ],
     )
     async def test_a_failed_build_is_said(
-        self, npm: int, node: int, writes: bool, said: str, tmp_path: Path, runner: _Runner
+        self, failure: Exception, said: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        runner.npm, runner.node, runner.node_writes = npm, node, writes
+        def fails(*_args: Any) -> None:
+            raise failure
+
+        monkeypatch.setitem(NS, "_build_deck", fails)
         agent = _Agent(_Llm(json.dumps(_outline(3))))
 
         result = await NS["handle_task"](
@@ -462,45 +570,45 @@ class TestConverting:
 
         assert result["error"] == said
         assert result["pptx_path"] is None
+        assert result["slide_count"] == 3
 
     @pytest.mark.parametrize("field", ["slide_count", "min_img_width", "min_img_height"])
-    async def test_a_number_that_is_not_one_is_said(
-        self, field: str, tmp_path: Path, runner: _Runner
-    ) -> None:
+    async def test_a_number_that_is_not_one_is_said(self, field: str, tmp_path: Path) -> None:
+        llm = _Llm(json.dumps(_outline(3)))
+
         result = await NS["handle_task"](
-            _Agent(), {"file_path": str(_txt(tmp_path)), field: "many"}
+            _Agent(llm), {"file_path": str(_txt(tmp_path)), field: "many"}
         )
 
         assert result["error"] == f"{field} must be a whole number"
-        assert runner.commands == []
+        assert llm.prompts == []
 
     async def test_the_working_files_are_removed_and_the_deck_kept(
-        self, tmp_path: Path, runner: _Runner, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
-        (tmp_path / "tmp").mkdir()
-        monkeypatch.setattr(NS["tempfile"], "tempdir", None)
+        scratch = tmp_path / "tmp"
         agent = _Agent(_Llm(json.dumps(_outline(3))))
+        agent.images = {"picture 0": "made"}
 
-        done = await NS["handle_task"](
-            agent, {"file_path": str(_txt(tmp_path)), "nim_fallback": False}
-        )
-        runner.npm = 1
-        failed = await NS["handle_task"](
-            agent, {"file_path": str(_txt(tmp_path)), "nim_fallback": False}
-        )
+        done = await NS["handle_task"](agent, {"file_path": str(_txt(tmp_path))})
 
-        work_dirs = {Path(cwd) for cwd in runner.cwds if cwd}
-        assert work_dirs and not any(d.exists() for d in work_dirs)
+        def fails(*_args: Any) -> None:
+            raise RuntimeError("disk full")
+
+        monkeypatch.setitem(NS, "_build_deck", fails)
+        failed = await NS["handle_task"](agent, {"file_path": str(_txt(tmp_path))})
+
         assert Path(done["pptx_path"]).exists()
         assert failed["pptx_path"] is None
+        # Only the decks' own folders are left: the generated pictures are gone.
+        assert all(p.name.startswith("wactorz-pptx-") for p in scratch.iterdir())
 
 
 class TestStarting:
-    async def test_a_ready_machine_is_said_once(
-        self, runner: _Runner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        for name in ("fitz", "pdfplumber", "PIL"):
+    _MODULES = ("pptx", "fitz", "pdfplumber", "PIL")
+
+    async def test_a_ready_machine_is_said_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in self._MODULES:
             monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
         agent = _Agent()
 
@@ -509,35 +617,17 @@ class TestStarting:
         assert agent.alerts == []
         assert "ready" in agent.logs[0]
 
-    async def test_what_is_missing_is_alerted_node_included(
-        self, runner: _Runner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        for name in ("fitz", "pdfplumber", "PIL"):
+    async def test_what_is_missing_is_alerted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in self._MODULES:
             monkeypatch.setitem(sys.modules, name, None)
-        runner.missing.add("node")
         agent = _Agent()
 
         await NS["setup"](agent)
 
         [(severity, message)] = agent.alerts
         assert severity == "warning"
+        assert "pip install python-pptx" in message
         assert "pip install pymupdf" in message
-        assert "Node.js not found" in message
-
-    async def test_a_node_that_fails_counts_as_missing(
-        self, runner: _Runner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        async def failing(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-            return subprocess.CompletedProcess(cmd, 1, "", "")
-
-        for name in ("fitz", "pdfplumber", "PIL"):
-            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-        monkeypatch.setitem(NS, "_run_blocking", failing)
-        agent = _Agent()
-
-        await NS["setup"](agent)
-
-        assert "Node.js not found" in agent.alerts[0][1]
 
     async def test_there_is_nothing_to_poll(self, monkeypatch: pytest.MonkeyPatch) -> None:
         slept: list[float] = []

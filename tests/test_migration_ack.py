@@ -279,7 +279,11 @@ class TestWhenTheTargetNeverConfirms:
 
         await main.migration.expire_pending_spawns()
 
-        assert ("nodes/nuc/stop", {"name": "collector", "delete": True}) in main.published
+        # The topics are kept: they are the restored copy's too.
+        assert (
+            "nodes/nuc/stop",
+            {"name": "collector", "delete": True, "keep_topics": True},
+        ) in main.published
 
     async def test_the_failure_is_announced(self, main: _Main) -> None:
         # An operator asked for this; silence would leave them guessing.

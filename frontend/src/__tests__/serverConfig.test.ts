@@ -3,7 +3,12 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { seedServerConfig, seedKeyFromServer, registerConfigEntry } from "../config/serverConfig";
+import {
+    clearKeyFromServer,
+    seedServerConfig,
+    seedKeyFromServer,
+    registerConfigEntry,
+} from "../config/serverConfig";
 
 describe("seedKeyFromServer", () => {
     beforeEach(() => localStorage.clear());
@@ -34,6 +39,18 @@ describe("seedKeyFromServer", () => {
         expect(seedKeyFromServer("k", "server2")).toBe(true); // .env changed → overwrite
         expect(localStorage.getItem("k")).toBe("server2");
         expect(localStorage.getItem("k__server")).toBe("server2");
+    });
+});
+
+describe("clearKeyFromServer", () => {
+    beforeEach(() => localStorage.clear());
+
+    it("forgets the value and its baseline, and says whether there was one", () => {
+        localStorage.setItem("k", "v");
+        localStorage.setItem("k__server", "v");
+        expect(clearKeyFromServer("k")).toBe(true);
+        expect([localStorage.getItem("k"), localStorage.getItem("k__server")]).toEqual([null, null]);
+        expect(clearKeyFromServer("k")).toBe(false);
     });
 });
 
@@ -113,6 +130,34 @@ describe("seedServerConfig", () => {
 
         expect(await seedServerConfig()).toBe(false);
         expect(localStorage.getItem("wactorz-ha-url")).toBeNull();
+    });
+
+    it("forgets the HA URL once the server runs without Home Assistant", async () => {
+        // The browser saw a server with Home Assistant; the server dropped it.
+        // Kept, the Devices link would still point at the old Home Assistant.
+        localStorage.setItem("wactorz-ha-url", "http://ha.local");
+        localStorage.setItem("wactorz-ha-url__server", "http://ha.local");
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ ha: { url: "" } }),
+        })) as unknown as typeof fetch;
+
+        expect(await seedServerConfig()).toBe(true);
+        expect(localStorage.getItem("wactorz-ha-url")).toBeNull();
+        expect(localStorage.getItem("wactorz-ha-url__server")).toBeNull();
+    });
+
+    it("still ignores an empty value for a key a person may set", async () => {
+        registerConfigEntry("test-user-key", c => c["userValue"] as string | undefined);
+        localStorage.setItem("test-user-key", "mine");
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ userValue: "" }),
+        })) as unknown as typeof fetch;
+
+        await seedServerConfig();
+
+        expect(localStorage.getItem("test-user-key")).toBe("mine");
     });
 
     it("returns false on a non-OK response", async () => {

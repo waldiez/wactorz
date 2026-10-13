@@ -15,6 +15,7 @@ through the registry, and there is no second supervisor to keep in step.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -24,11 +25,23 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import psutil
-
 from .. import __version__
-from ..config import CONFIG
+from ..config import CONFIG, MIGRATION_MAX_BLOB_BYTES
 from ..core.actor import Actor, SupervisorStrategy
+from ..core.blob_transfer import (
+    INBOX_DIRNAME,
+    BlobsUnusable,
+    Inbox,
+    blob_bytes,
+    cannot_travel,
+    json_part,
+    pack,
+    references,
+    send,
+    sha256_of_topic,
+    unpack,
+    wait_for,
+)
 from ..core.cancellation import cancel_all_until_done
 from ..core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
@@ -39,10 +52,15 @@ from ..core.mqtt import (
 )
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
+from ..core.paths import agent_state_dir
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
+from ..core.state_lock import StateLock
+from ..core.state_snapshot import why_it_cannot_travel
+from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
+from . import machine, resources
 from .agent import NodeAgent
 from .publishing import NodePublisher
 from .signing import (
@@ -52,7 +70,7 @@ from .signing import (
     server_mismatch,
     user_properties,
 )
-from .state import flush_states, json_safe
+from .state import JsonState, agent_state, flush_states, state_path
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +133,13 @@ class NodeRunner:
         self._configs: dict[str, dict] = {}
         state_path = self._resolve_state_dir(state_dir)
         self.state_dir = str(state_path)
+        #: Where the blobs of an agent main is placing here arrive, before the
+        #: spawn that names them uses them.
+        #: Held from `run` until it returns, so nothing else runs on this state.
+        self._state_lock = StateLock(self.state_dir)
+        self.inbox = Inbox(
+            Path(self.state_dir) / INBOX_DIRNAME, MIGRATION_MAX_BLOB_BYTES or sys.maxsize
+        )
         # Read from the environment rather than a flag, like the broker
         # credentials, so the key appears in no process listing. Left in the
         # environment: a restart re-executes this process and needs it again.
@@ -221,6 +246,9 @@ class NodeRunner:
         packages = config.get("install", [])
         if packages:
             refused = await self._install_packages(packages)
+            if not refused:
+                # Whatever pip did, the installed packages may have changed.
+                self._background(self._publish_manifest(), "Publishing this node's manifest")
             if refused:
                 # Abort, unlike the pip-failure path below it, which warns and
                 # carries on. A pip failure can be transient and may still leave
@@ -234,6 +262,9 @@ class NodeRunner:
                     f"Refused to spawn '{name}': these are not package names: {refused}",
                 )
                 return
+
+        if not await self._receive_blobs(name, config):
+            return
 
         try:
             self._configs[name] = config
@@ -279,8 +310,43 @@ class NodeRunner:
                 retain=False,
             )
 
-    async def stop_agent(self, name: str, delete: bool = False) -> None:
+    async def _receive_blobs(self, name: str, config: dict[str, Any]) -> bool:
+        """Put the blobs an arriving agent's state refers to in its state. False if they never came.
+
+        Main sends them beside the spawn, and the spawn -- signed by main -- is
+        what names their hashes, so what arrives is used only if it matches.
+        An agent that would start without them is not started: main hears no
+        confirmation and puts the agent back where it came from.
+        """
+        initial = config.get("_initial_state")
+        if not isinstance(initial, dict):
+            return True
+        refs = references(initial)
+        if not refs:
+            return True
+        await self.inbox.sweep(older_than_s=INBOX_KEEP_S)
+        shas = {ref["sha256"] for ref in refs.values()}
+        try:
+            received = await self.inbox.wait_for(shas, wait_for(blob_bytes(initial)))
+            # Main may send what runs code: this node runs what main sends.
+            values, _ = await asyncio.to_thread(unpack, initial, received, code_allowed=True)
+        except BlobsUnusable as exc:
+            logger.warning("[runner] Not starting '%s': its state is incomplete: %s", name, exc)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {exc}"
+            )
+            return False
+        config["_initial_state"] = values
+        await self.inbox.release(shas)
+        return True
+
+    async def stop_agent(self, name: str, delete: bool = False, keep_topics: bool = False) -> None:
         """Stop an agent, and with ``delete`` erase everything it leaves behind.
+
+        ``keep_topics`` keeps its retained topics through a delete, for an agent
+        that lives on elsewhere: its actor id comes from its name, so those
+        topics are the other copy's too, and clearing them reads as it
+        withdrawing. A rolled-back migration sends it.
 
         A plain stop flushes the agent's state to disk and leaves it there, so
         the next spawn or runner restart picks it back up. A delete also removes
@@ -291,6 +357,8 @@ class NodeRunner:
         """
         agent = self.get(name)
         if agent is None:
+            if delete:
+                await self._delete_leftovers(name)
             return
         # Remembered before the stop, in case the agent clears attributes.
         actor_id = agent.actor_id
@@ -302,8 +370,36 @@ class NodeRunner:
             # After the agent is fully stopped: its own shutdown writes the
             # state file, and a supervisor restart could recreate it.
             agent.delete_state()
-            await self._purge_agent_retained(actor_id)
+            if not keep_topics:
+                await self._purge_agent_retained(actor_id)
             logger.info("[runner] Agent '%s' permanently deleted from this node.", name)
+
+    async def _delete_leftovers(self, name: str) -> None:
+        """Erase the files an agent that is no longer running left here.
+
+        The delete that ends a migration always meets one: the agent was stopped
+        when it was handed back, and kept its state file so a failed migration
+        had something to return to. The file and the agent's empty directory go.
+
+        Its retained topics stay. An actor id comes from the name, so they are
+        the topics of the copy now running elsewhere too: cleared from here, its
+        manifest reads as that copy withdrawing, and main forgets it.
+        """
+        try:
+            removed = agent_state(self.state_dir, name).delete()
+        except ValueError:
+            # A name that cannot be a directory: it never had blobs either.
+            removed = JsonState(state_path(self.state_dir, name), name).delete()
+        with contextlib.suppress(OSError, ValueError):
+            # Empty only, as `NodeAgent.delete_state` does: anything unexpected
+            # inside survives to be looked at. ValueError: a name that cannot be
+            # a directory never had one.
+            agent_state_dir(self.state_dir, name).rmdir()
+        logger.info(
+            "[runner] '%s' was not running; deleted what it left here%s.",
+            name,
+            "" if removed else " (no state file)",
+        )
 
     async def _purge_agent_retained(self, actor_id: str) -> None:
         """Clear the retained topics of an agent that has just been deleted.
@@ -396,19 +492,29 @@ class NodeRunner:
         """
         return {"node": self.node_name, "version": __version__, "runtime": NODE_RUNTIME}
 
+    async def _publish_manifest(self) -> None:
+        """Say what this machine is, retained, for whatever decides where agents go.
+
+        Sent when the node starts and after an install, the two times it can
+        change. Retained, so main learns it on connecting however long ago it
+        was sent; the heartbeat carries what changes from moment to moment.
+        """
+        described = await asyncio.to_thread(machine.describe, Path(self.state_dir))
+        await self.publish(
+            f"nodes/{self.node_name}/manifest",
+            {**self._node_identity(), **described, "timestamp": time.time()},
+            retain=True,
+        )
+
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself, so the node appears."""
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.node.{self.node_name}"))
         while self._running:
             try:
                 agent_names = list(self.agents)
-                try:
-                    cpu_pct = psutil.cpu_percent(interval=None)
-                    vm = psutil.virtual_memory()
-                    mem_used = vm.used // (1024 * 1024)
-                    mem_free = vm.available // (1024 * 1024)
-                except Exception:
-                    cpu_pct = mem_used = mem_free = 0
+                # How close this machine is to running out, read off the loop:
+                # some of it is files, and on a Pi a firmware command.
+                readings = await asyncio.to_thread(resources.read, Path(self.state_dir))
                 await self.publish(
                     f"nodes/{self.node_name}/heartbeat",
                     {
@@ -420,9 +526,7 @@ class NodeRunner:
                         "broker": self.broker,
                         "pid": os.getpid(),
                         "uptime_s": round(time.time() - self._start_time, 1),
-                        "cpu_pct": cpu_pct,
-                        "mem_used_mb": mem_used,
-                        "mem_free_mb": mem_free,
+                        **readings,
                         # Whether this node checks what main sends it, and how
                         # often something arrived that was not signed for it.
                         "signing": self._control.mode,
@@ -490,7 +594,7 @@ class NodeRunner:
             await self._on_task(topic_str, data, msg)
 
     async def _on_desired_state(self, topic_str: str, data: Any, msg: Any) -> None:
-        """Start any agent named in the desired state that is not running.
+        """Make what runs here what the desired state lists.
 
         The copy the broker retained, handed over when this node subscribes, is
         what brings a node's agents back after a reboot: those ran here before,
@@ -498,10 +602,23 @@ class NodeRunner:
         while the node is up is the server changing the list now, and an agent
         it adds is a spawn by another route, refused from a server on another
         release as a spawn is.
+
+        An agent running here that the list leaves out is stopped, its state
+        kept: the server moved it elsewhere or let it go, and a copy left running
+        answers beside the real one. The exception is an agent a migration placed
+        here that the server has not yet confirmed, which the list may leave out
+        until it does; see `_confirm_migrations`.
         """
         if not msg.payload or not isinstance(data, dict):
             return
-        desired = data.get("agents", [])
+        listed = data.get("agents")
+        if not isinstance(listed, list):
+            # Malformed: nothing to act on, and nothing to stop on its say-so.
+            logger.warning("[runner] Ignoring a desired state with no list of agents.")
+            return
+        desired = [c for c in listed if isinstance(c, dict)]
+        self._confirm_migrations(desired)
+        await self._stop_unlisted({str(c["name"]) for c in desired if c.get("name")})
         if not desired:
             return
         logger.info("[runner] Reconciling desired state: %s", [a.get("name") for a in desired])
@@ -526,6 +643,29 @@ class NodeRunner:
             else:
                 logger.info("[runner] Reconcile: starting missing agent '%s'", aname)
                 self._background(self.spawn_agent(agent_config), "reconcile")
+
+    def _confirm_migrations(self, desired: list[dict[str, Any]]) -> None:
+        """Forget the migration token of each agent the server now lists without one.
+
+        An agent a migration placed here is spawned with a token, and the server
+        lists it with that token too until this node confirms it started; then it
+        lists the committed config, without. Until that point the agent is the
+        server's to roll back, so `_stop_unlisted` leaves it alone; from it, the
+        agent is an ordinary one, stopped like any other when it is left out.
+        """
+        for config in desired:
+            name = config.get("name")
+            held = self._configs.get(str(name)) if name else None
+            if held is not None and not config.get("_migration_token"):
+                held.pop("_migration_token", None)
+
+    async def _stop_unlisted(self, listed: set[str]) -> None:
+        """Stop every agent running here that ``listed`` leaves out, keeping its state."""
+        for name, config in list(self._configs.items()):
+            if name in listed or config.get("_migration_token") or self.get(name) is None:
+                continue
+            logger.info("[runner] '%s' is no longer in the desired state; stopping it.", name)
+            await self.stop_agent(name)
 
     async def _on_spawn(self, topic_str: str, data: Any, msg: Any) -> None:
         if not msg.payload:  # empty = retain-clear message, ignore
@@ -567,16 +707,22 @@ class NodeRunner:
           {"name": "foo"}                 plain stop, state preserved
           {"name": "foo", "delete": true} permanent delete: wipes the state file
                                           and the retained MQTT topics
+          {"name": "foo", "delete": true, "keep_topics": true}
+                                          wipes the state file only: the agent
+                                          lives on elsewhere, and shares them
           "foo"                           legacy bare name, plain stop
         """
         if isinstance(data, dict):
             name = data.get("name")
             do_delete = bool(data.get("delete", False))
+            keep_topics = bool(data.get("keep_topics", False))
         else:
             name = str(data)
-            do_delete = False
+            do_delete = keep_topics = False
         if name:
-            self._background(self.stop_agent(name, delete=do_delete), "stop_agent")
+            self._background(
+                self.stop_agent(name, delete=do_delete, keep_topics=keep_topics), "stop_agent"
+            )
 
     async def _on_migrate(self, topic_str: str, data: Any, msg: Any) -> None:
         """Move a running agent to another node.
@@ -700,9 +846,14 @@ class NodeRunner:
         task.add_done_callback(lambda t, _ts=agent._tasks: _ts.remove(t) if t in _ts else None)
 
     async def _run_task(self, agent: NodeAgent, payload: Any, reply_topic: str | None) -> None:
-        """Run one task and publish the answer where the caller asked for it."""
+        """Run one task and publish the answer where the caller asked for it.
+
+        Inside the turn the task was sent in, so what the agent does about it,
+        and logs, belongs to that turn here as it would on the server.
+        """
         try:
-            result = await agent.run_task(payload)
+            with working_on(turn_of(payload), agent.name):
+                result = await agent.run_task(payload)
         except Exception as e:
             logger.exception("[runner] handle_task error for '%s'", agent.name)
             result = {"error": str(e), "agent": agent.name}
@@ -753,6 +904,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/list",
             f"nodes/{self.node_name}/code_request",
             f"nodes/{self.node_name}/reply/#",
+            f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
             "agents/by-name/+/task",
         ]
 
@@ -774,6 +926,10 @@ class NodeRunner:
 
                     async for msg in client.messages:
                         topic_str = str(msg.topic)
+                        if topic_str.startswith(self._blob_prefix):
+                            # Binary, and never a command: before any decoding.
+                            await self._accept_blob(topic_str, msg.payload)
+                            continue
                         try:
                             data = json.loads(msg.payload.decode())
                         except Exception:
@@ -790,11 +946,31 @@ class NodeRunner:
                     )
                     await asyncio.sleep(reconnect_wait(3.0))
 
+    @property
+    def _blob_prefix(self) -> str:
+        return f"nodes/{self.node_name}/blob/"
+
+    def _blob_return_topic(self, sha256: str) -> str:
+        """Where this node sends main the blob ``sha256``."""
+        return f"nodes/{self.node_name}/blob_return/{sha256}"
+
+    async def _accept_blob(self, topic: str, payload: Any) -> None:
+        sha = sha256_of_topic(topic)
+        if sha is None or not isinstance(payload, (bytes, bytearray)):
+            return
+        try:
+            await self.inbox.accept(sha, bytes(payload))
+        except OSError as exc:
+            logger.warning("[runner] Could not keep a blob that arrived: %s", exc)
+
     # ── Main run loop ─────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        # Before anything reads the state directory: a second node on it would
+        # write back over the first, and an import into it would be undone.
+        # Raises `StateInUseError` when another process holds it.
+        self._state_lock.acquire()
         self._running = True
-        Path(self.state_dir).mkdir(parents=True, exist_ok=True)
         logger.info(
             "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port
         )
@@ -811,6 +987,7 @@ class NodeRunner:
         # The queue has to exist before anything publishes into it, and it is
         # created inside the publisher's own task so it belongs to this loop.
         await publisher_ready.wait()
+        self._background(self._publish_manifest(), "Publishing this node's manifest")
         await self.supervisor.start()
         tasks.append(asyncio.create_task(self._subscriber_loop()))
         logger.info("[runner] Node '%s' online.", self.node_name)
@@ -834,6 +1011,7 @@ class NodeRunner:
             self._loop_lag.stop()
             self._configs.clear()
             self.publisher.stop()
+            self._state_lock.release()
             for t in tasks:
                 t.cancel()
             self._loops = []
@@ -916,10 +1094,11 @@ class NodeRunner:
 
         Only values that survive JSON travel — counters, calibration values,
         thresholds, timestamps, everything a typical agent stores. A numpy array
-        or a cv2 capture is dropped with a warning; neither would survive a
-        process restart either.
+        or a cv2 capture cannot, and neither would survive a process restart
+        either; see `_return_to_main` for what happens to an agent holding one.
 
-        payload: {"name": "agent-name", "target_node": "rpi-bedroom"}
+        payload: {"name": "agent-name", "target_node": "@main",
+                  "return_token": "...", "force": false, "max_state_bytes": 8388608}
         """
         name = payload.get("name")
         target_node = payload.get("target_node")
@@ -941,19 +1120,10 @@ class NodeRunner:
             )
             return
 
-        safe_state, dropped = json_safe(dict(agent._persistent_state))
-        if dropped:
-            logger.warning(
-                "[runner] migrate '%s': dropping non-JSON state keys %s — they cannot "
-                "travel over MQTT",
-                name,
-                dropped,
-            )
-
         # `@main` is the sentinel from MainActor: do not spawn anywhere, stop
         # the agent and return its state, and main will place it itself.
         if target_node == "@main":
-            await self._return_to_main(agent, payload, safe_state, dropped)
+            await self._return_to_main(agent, payload)
             return
 
         # Node-to-node migration used to happen here: this runner published
@@ -980,27 +1150,33 @@ class NodeRunner:
             },
         )
 
-    async def _return_to_main(
-        self,
-        agent: NodeAgent,
-        payload: dict[str, Any],
-        safe_state: dict[str, Any],
-        dropped: list[str],
-    ) -> None:
-        """Stop an agent and publish its config and state for main to re-place."""
+    async def _return_to_main(self, agent: NodeAgent, payload: dict[str, Any]) -> None:
+        """Stop an agent and publish its config and state for main to re-place.
+
+        Whether the state can travel is asked before the stop, so a refusal
+        leaves the agent running here. The snapshot itself is taken after the
+        stop: the agent's ``on_stop`` and the save that follows it are its last
+        writes, and a snapshot taken earlier would leave them behind in a file
+        that is deleted once the agent is confirmed elsewhere.
+        """
         name = agent.name
-        logger.info(
-            "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
-            name,
-            self.node_name,
-            len(safe_state),
-        )
+        force = bool(payload.get("force", False))
+        max_bytes = _positive_int(payload.get("max_state_bytes"))
+        max_blob_bytes = _positive_int(payload.get("max_blob_bytes"))
+        values = dict(agent._persistent_state)
+        # Main does not load from a node what runs code when it loads.
+        left = cannot_travel(values, code_allowed=False)
+        refusal = why_it_cannot_travel(json_part(values), left, force=force, max_bytes=max_bytes)
+        if refusal:
+            await self._refuse_return(agent, payload, refusal)
+            return
         # The config is taken before the stop, and says where it came from so
         # main can see the origin and strip it.
         return_config = dict(self._configs.get(name, agent._config))
         return_config["node"] = self.node_name
         return_config.pop("_initial_state", None)
         return_config.pop("replace", None)
+        restart_config = dict(self._configs.get(name, agent._config))
         # Stopped, but the state file is kept. Main deletes it with an explicit
         # `stop {"delete": true}` once the agent is confirmed running somewhere
         # else. Deleting here would mean a migration that fails after this point
@@ -1008,6 +1184,39 @@ class NodeRunner:
         # copy, and a dropped message would lose the agent outright.
         await self.stop_agent(name)
         await asyncio.sleep(0.3)
+        packed = await asyncio.to_thread(pack, dict(agent._persistent_state), code_allowed=False)
+        too_large = why_it_cannot_travel(
+            packed.state,
+            [],
+            force=True,
+            max_bytes=max_bytes,
+            blob_bytes=packed.blob_bytes,
+            max_blob_bytes=max_blob_bytes,
+        )
+        if too_large:
+            # Known only once its blobs are encoded, after the stop: started
+            # again here, from the state file the stop kept.
+            await self.spawn_agent(restart_config)
+            await self._refuse_return(agent, payload, too_large)
+            return
+        safe_state, dropped = packed.state, packed.left_behind
+        if dropped:
+            # Only what the agent wrote while stopping can land here: anything
+            # earlier was refused above unless the caller forced the move.
+            logger.warning(
+                "[runner] migrate '%s': %s cannot go with it and is left behind",
+                name,
+                ", ".join(dropped),
+            )
+        # Ahead of the state return, on the same queue: main has them, or
+        # most of them, by the time it reads the references.
+        await send(packed.blobs, self._blob_return_topic, self.publish)
+        logger.info(
+            "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
+            name,
+            self.node_name,
+            len(safe_state),
+        )
         await self.publish(
             f"nodes/{self.node_name}/state_return",
             {
@@ -1033,3 +1242,48 @@ class NodeRunner:
             },
         )
         logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
+
+    async def _refuse_return(self, agent: NodeAgent, payload: dict[str, Any], reason: str) -> None:
+        """Tell main the agent is staying, and why, without stopping it.
+
+        Answered on `state_return` as well as `migrate_result`, so main can let
+        go of the migration it is waiting on rather than keep it until it times
+        out and restart an agent that never stopped.
+        """
+        name = agent.name
+        dropped = cannot_travel(dict(agent._persistent_state), code_allowed=False)
+        logger.warning("[runner] Not migrating '%s': %s", name, reason)
+        await self.publish(
+            f"nodes/{self.node_name}/state_return",
+            {
+                "agent": name,
+                "return_token": payload.get("return_token", ""),
+                "config": {},
+                "state": {},
+                "state_keys_dropped": dropped,
+                "refused": reason,
+                "from_node": self.node_name,
+                "timestamp": time.time(),
+            },
+        )
+        await self.publish(
+            f"nodes/{self.node_name}/migrate_result",
+            {
+                "success": False,
+                "error": f"'{name}' stays on {self.node_name}: {reason}",
+                "agent": name,
+                "from_node": self.node_name,
+                "timestamp": time.time(),
+            },
+        )
+
+
+#: How long a blob that arrived and was never used is kept.
+INBOX_KEEP_S = 3600.0
+
+
+def _positive_int(value: Any) -> int | None:
+    """``value`` when it is a positive whole number, else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None

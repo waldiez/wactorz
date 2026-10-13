@@ -26,6 +26,11 @@ Agents run indefinitely, reacting to events via MQTT
 
 ## Creating a pipeline
 
+A pipeline can also be declared in code with `wactorz.pipeline(...)`, steps,
+schedule and rules together, with the wiring checked before anything starts;
+see [Using Wactorz as a library](library.md#a-pipeline). What follows is the
+chat path, where the planner builds one from a request.
+
 Just describe what you want. The intent classifier recognises pipeline requests from natural language:
 
 ```

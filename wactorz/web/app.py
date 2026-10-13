@@ -17,6 +17,7 @@ from aiohttp.typedefs import Handler
 from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from ..core.paths import ensure_state_dir
+from ..monitoring import http_metrics
 from . import (
     api_actors,
     api_log_capture,
@@ -28,6 +29,8 @@ from . import (
     chat,
     log_stream,
     login,
+    metrics,
+    metrics_history,
     mqtt,
     origins,
     probes,
@@ -55,11 +58,12 @@ async def check_ws_port() -> bool:
         server = await asyncio.start_server(lambda r, w: None, CONFIG.bind_host, runtime.WS_PORT)
         server.close()
         await server.wait_closed()
-        return True
     except OSError as exc:
         # The message is the whole story; a bind traceback adds nothing actionable.
-        logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)  # noqa: TRY400, RUF100  # the message is the whole story; a bind traceback adds nothing
+        logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)  # noqa: TRY400  # the message is the whole story; a bind traceback adds nothing
         return False
+    else:
+        return True
 
 
 def build_app() -> web.Application:
@@ -95,9 +99,17 @@ def build_app() -> web.Application:
             logger.debug("[cors] Could not set headers for %s", origin, exc_info=True)
         return response
 
+    # Read when `/metrics` is rendered, so it is the count at that moment.
+    http_metrics.WS_CONNECTIONS.set_function(lambda: len(runtime.ws_clients))
     app = web.Application(
-        # Order matters only for which refusal a caller sees first; both run.
-        middlewares=[cors_middleware, auth.auth_middleware],
+        # The metrics first, so a request either check refuses is counted too.
+        # Between the other two, order matters only for which refusal a caller
+        # sees first; both run.
+        middlewares=[
+            http_metrics.middleware_for(http_metrics.DASHBOARD),
+            cors_middleware,
+            auth.auth_middleware,
+        ],
         client_max_size=MAX_REQUEST_BYTES,
     )
     # Expose the registry to extensions (via app.get) before setup_all() runs.
@@ -111,6 +123,16 @@ def build_app() -> web.Application:
         app.router.add_get(path, probes.liveness_handler)
     for path in sorted(probes.READINESS_PATHS):
         app.router.add_get(path, api_system.readiness_handler)
+    # Here as well as on the REST interface, which runs only when it is the
+    # chosen interface; behind the same key check as every other route.
+    app.router.add_get("/metrics", metrics.handler_for(metrics.build_monitor()))
+    for prefix in ("/api", ""):
+        app.router.add_get(f"{prefix}/nodes", api_system.nodes_handler)
+        app.router.add_get(f"{prefix}/history/agents", metrics_history.agents_field_handler)
+        app.router.add_get(
+            f"{prefix}/history/agents/{{name}}", metrics_history.agent_history_handler
+        )
+        app.router.add_get(f"{prefix}/history/nodes/{{name}}", metrics_history.node_history_handler)
     # Sign-in. Exempt from the key check and from nothing else — `POST /login`
     # stays inside the origin gate, which is what stands in for a CSRF token.
     app.router.add_get("/login", login.login_page_handler)
@@ -266,15 +288,19 @@ async def main(exit_on_failure: bool = False) -> None:
     # broadcaster — a sleep and a broadcast — so it unwinds on cancel just as
     # quickly.
     log_task = asyncio.create_task(log_stream.log_push_loop())
+    # The metrics history: a sleep and a write handed to a worker thread.
+    history_task = asyncio.create_task(metrics_history.record_loop())
     try:
         await mqtt.mqtt_listener()
     finally:
         # cancel() only requests it; awaiting is what makes shutdown mean the
         # task has actually unwound. No timeout needed here — unlike an actor's
-        # tasks, these are a sleep and a broadcast, so they stop immediately.
+        # tasks, these are a sleep and a broadcast or a write, so they stop
+        # immediately.
         totals_task.cancel()
         log_task.cancel()
-        await asyncio.gather(totals_task, log_task, return_exceptions=True)
+        history_task.cancel()
+        await asyncio.gather(totals_task, log_task, history_task, return_exceptions=True)
         # Closes the listening socket and every open connection. Without it the
         # port stays bound until the process exits, so an embedding application
         # that stops the monitor cannot start it again.

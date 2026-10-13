@@ -4,7 +4,7 @@ The regression this pins: every other test calls ``init_persistence`` with
 ``run_migration=False``, so the migration branch had no coverage at all. A wrong
 relative import inside it — resolving ``.migrations`` to a sibling module rather
 than the migration runner — raised ImportError, which the code caught and logged
-at DEBUG. Schema upgrades, state upgrades and spawn validation stopped running
+at DEBUG. Schema upgrades and state upgrades stopped running
 on every startup, and the full suite stayed green.
 
 Two things follow, and both are asserted below: the runner must be reached, and
@@ -46,7 +46,7 @@ class TestMigrationsAreReached:
             db: persistence.WactorzDB, pickle_store: str | None = None
         ) -> dict[str, list[Any]]:
             calls.append((db, pickle_store))
-            return {"spawn_issues": []}
+            return {}
 
         monkeypatch.setattr(
             "wactorz.core.persistence.lifecycle.run_migrations", fake_run_migrations
@@ -62,7 +62,7 @@ class TestMigrationsAreReached:
         calls: list[tuple[Any, ...]] = []
         monkeypatch.setattr(
             "wactorz.core.persistence.lifecycle.run_migrations",
-            lambda *a, **k: calls.append(a) or {"spawn_issues": []},
+            lambda *a, **k: calls.append(a) or {},
         )
         persistence.init_persistence(state_dir=str(tmp_path), run_migration=False)
         assert calls == []
@@ -90,19 +90,3 @@ class TestMigrationFailuresDoNotStopStartup:
             db, _pickle = persistence.init_persistence(state_dir=str(tmp_path), run_migration=True)
         assert db is not None, "startup must survive a failing migration"
         assert any("Migration runner failed" in r.message for r in caplog.records)
-
-    def test_spawn_issues_are_surfaced(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        monkeypatch.setattr(
-            "wactorz.core.persistence.lifecycle.run_migrations",
-            lambda *a, **k: {
-                "spawn_issues": [{"severity": "error", "agent": "broken", "message": "bad recipe"}]
-            },
-        )
-        with caplog.at_level(logging.WARNING):
-            persistence.init_persistence(state_dir=str(tmp_path), run_migration=True)
-        assert any("broken" in r.message for r in caplog.records)

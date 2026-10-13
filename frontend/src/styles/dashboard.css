@@ -5,5 +5,6 @@
 /* Dashboard styles, split by area. Imported in cascade order (do not reorder). */
 @import "./dashboard-shell.css";
 @import "./dashboard-overview.css";
+@import "./dashboard-trends.css";
 @import "./dashboard-feed.css";
 @import "./dashboard-chat.css";

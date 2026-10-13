@@ -87,6 +87,44 @@ BACKUP_COUNT = 5
 
 _configured = False
 
+#: The handler :func:`install_fallback` added, so :func:`uninstall_fallback` can
+#: take it away again, and only it.
+_fallback: logging.Handler | None = None
+
+
+def install_fallback(root: logging.Logger | None = None) -> logging.Handler | None:
+    """Keep warnings visible in a process whose root logger has no handler.
+
+    For a library call that leaves the host's logging alone. Python prints a
+    warning from a logger with no handler anywhere above it, through its
+    last-resort handler; the dashboard's buffer is a handler on the root
+    logger, and its presence alone turns that off, so every warning of ours
+    would vanish in a host that configured nothing. This adds what the
+    last-resort handler would have done, with the command's redaction, and
+    only when there is nothing there. Returns the handler added, or ``None``.
+    ``root`` is the process's root logger unless a test hands over another.
+    """
+    global _fallback
+    root = root if root is not None else logging.getLogger()
+    if _fallback is not None or root.handlers:
+        return None
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(formatter())
+    root.addHandler(handler)
+    install_redaction()
+    _fallback = handler
+    return handler
+
+
+def uninstall_fallback(root: logging.Logger | None = None) -> None:
+    """Take the fallback handler away, if one was added."""
+    global _fallback
+    root = root if root is not None else logging.getLogger()
+    if _fallback is not None:
+        root.removeHandler(_fallback)
+        _fallback = None
+
 
 def _file_handler() -> logging.Handler | None:
     """A handler writing to the state directory, or ``None`` if it is unwritable.

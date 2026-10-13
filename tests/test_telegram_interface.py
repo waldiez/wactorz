@@ -21,6 +21,7 @@ import contextlib
 import logging
 import sys
 import types
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -29,15 +30,30 @@ from wactorz.interfaces.chat.telegram import TelegramInterface
 
 
 class _Recorder:
-    """A main actor that records what it was asked, and answers a fixed string."""
+    """An orchestrator that records what it was asked, and answers a fixed string."""
 
     def __init__(self, reply: str = "an answer") -> None:
         self.reply = reply
         self.asked: list[str] = []
+        self.channels: list[tuple[str, str | None]] = []
 
-    async def process_user_input_restricted(self, text: str) -> str:
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
         self.asked.append(text)
+        self.channels.append((channel, user))
         return self.reply
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
 
 
 class _Message:
@@ -237,6 +253,8 @@ class TestWhoItAnswers:
         await handlers["message"](_Update(_User(7), message, _Chat()), _Context())
 
         assert actor.asked == ["what is the weather"]
+        # A public endpoint: the orchestrator is told so, and who is asking.
+        assert actor.channels == [("social", "7")]
         assert message.replies == ["an answer"]
 
     async def test_an_unlisted_user_is_ignored_silently(
@@ -269,7 +287,7 @@ class TestWhoItAnswers:
     async def test_the_singular_allowed_id_is_folded_in(self, actor: _Recorder) -> None:
         """The older single-user setting still has to grant access, or upgrading
         silently locks the one configured user out."""
-        interface = TelegramInterface(actor, token="t", allowed_user_id=7)  # type: ignore[arg-type]
+        interface = TelegramInterface(actor, token="t", allowed_user_id=7)
         handlers = await _handlers(interface)
         message = _Message()
 
@@ -284,7 +302,7 @@ class TestSetupMode:
     ) -> None:
         """With no allow-list the bot is a way to *learn* your id, and nothing
         more — it is the only thing it will do until one is configured."""
-        interface = TelegramInterface(actor, token="t")  # type: ignore[arg-type]
+        interface = TelegramInterface(actor, token="t")
         handlers = await _handlers(interface)
         message = _Message()
 
@@ -296,7 +314,7 @@ class TestSetupMode:
     async def test_an_unconfigured_bot_answers_no_message(self, actor: _Recorder) -> None:
         """It says so rather than going quiet — an unconfigured bot that ignores
         everything is indistinguishable from a broken one."""
-        interface = TelegramInterface(actor, token="t")  # type: ignore[arg-type]
+        interface = TelegramInterface(actor, token="t")
         handlers = await _handlers(interface)
         message = _Message("do something")
 
@@ -373,8 +391,8 @@ class TestThrottlingAndLongReplies:
         """Released in a `finally`, or one failed turn throttles that user for
         good — the limiter would still be holding a slot nothing will return."""
 
-        class _Boom:
-            async def process_user_input_restricted(self, _text: str) -> str:
+        class _Boom(_Recorder):
+            async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
                 raise RuntimeError("model unavailable")
 
         interface = TelegramInterface(_Boom(), token="t", allowed_user_ids=[7])  # type: ignore[arg-type]

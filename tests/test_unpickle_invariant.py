@@ -13,10 +13,14 @@ three reasons rather than one:
    names the server generates.
 
 Layers 1 and 2 are code, and code that is already tested. Layer 3 is a *convention*,
-and it is the one a future feature can break without noticing: a backup import, a
-state-restore endpoint, an SFTP pull — anything that writes a caller-influenced path
-under the state directory. So does adding a *new* unpickle site somewhere less
-guarded.
+and it is the one a future feature can break without noticing: a state-restore
+endpoint, an SFTP pull — anything that writes a caller-influenced path under the
+state directory. The one that exists, `wactorz-state import`, is deliberate about
+it: only into a directory nothing runs on, only the files its manifest lists, each
+matching its hash, at a path inside the directory, and it says an archive is code
+(`tests/test_state_archive.py`). So does adding a *new* unpickle site somewhere less
+guarded. A blob in a format that loads by unpickling -- joblib, a whole torch
+module -- is the same thing by another name, so its loaders are counted too.
 
 These tests exist to make either of those fail in CI rather than in the field.
 """
@@ -34,23 +38,25 @@ PACKAGE = Path(__file__).resolve().parents[1] / "wactorz"
 #: not fail this, while a *new* call anywhere — including a sixth one in a file
 #: already listed — does.
 ALLOWED_UNPICKLE_SITES = {
-    "core/actor.py": 2,  # legacy state, and the legacy file on the new path
-    "core/persistence/legacy_pickle.py": 1,  # one-time import into SQLite
-    "core/persistence/pickle_store.py": 1,  # the store itself
-    "core/persistence/migrations.py": 1,  # baselines upgrade
+    # The store's reader, which everything else that reads a state file calls:
+    # the file itself, then each value in it.
+    "core/persistence/pickle_store.py": 2,
+    # A blob's loaders, reading from the agent's own directory, which is built
+    # through agent_state_dir like the state file beside it.
+    "core/blobs.py": 2,
 }
+
+#: The modules whose `load` reads a file by unpickling it.
+UNPICKLERS = {"pickle", "joblib", "torch"}
 
 
 def _unpickle_sites() -> dict[str, int]:
-    """Every stdlib unpickle call under `wactorz/`, counted per file.
+    """Every call that unpickles under `wactorz/`, counted per file.
 
     Parsed rather than grepped, because `PersistenceAPI` calls
     `self.pickle.load(...)` — that is `PickleStore.load`, nothing to do with the
     stdlib, and a text search reports four of them. A tripwire that cries wolf is
     one that gets deleted.
-
-    Does not see inside `catalogue_agents`' `AGENT_CODE`, which is a string
-    literal here and runs on a node rather than against this state tree.
     """
     found: dict[str, int] = {}
     for path in sorted(PACKAGE.rglob("*.py")):
@@ -62,7 +68,7 @@ def _unpickle_sites() -> dict[str, int]:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in {"load", "loads"}
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "pickle"
+            and node.func.value.id in UNPICKLERS
         ]
         if calls:
             found[path.relative_to(PACKAGE).as_posix()] = len(calls)

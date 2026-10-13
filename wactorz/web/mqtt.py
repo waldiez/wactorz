@@ -134,19 +134,6 @@ async def mqtt_listener() -> None:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
 
-                    if runtime.registry is not None:
-                        await client.publish(
-                            f"agents/{runtime.IO_GATEWAY_ID}/spawn",
-                            json.dumps(
-                                {
-                                    "agentId": runtime.IO_GATEWAY_ID,
-                                    "agentName": runtime.IO_GATEWAY_ID,
-                                    "agentType": "gateway",
-                                    "timestamp": time.time(),
-                                }
-                            ),
-                        )
-
                     for topic in runtime.MQTT_TOPICS:
                         await client.subscribe(topic, qos=1)
 

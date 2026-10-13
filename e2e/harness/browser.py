@@ -23,10 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from . import waiting
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, ConsoleMessage, Locator, Page
+
+#: How long to look for a chat target that was on the list a moment ago before
+#: taking it as gone. Long enough for a list being redrawn; far short of the wait
+#: that a missing option otherwise costs.
+GONE_MS = 2_000
 
 WIDTH, HEIGHT = 1280, 800
 
@@ -45,6 +52,70 @@ LOGIN_KEY = "#key"
 LOGIN_SUBMIT = "button[type=submit]"
 NAV_BUTTON = ".af-view-btn[data-view='{view}']"
 AGENT_CARD = ".af-card[data-id]"
+
+#: Installed in the page by `Dashboard.watch_card`: records each change in
+#: whether a card for the agent is on the page. Transitions rather than DOM
+#: nodes, so the overview replacing a card with a fresh one in one step is not
+#: counted as a going and a coming.
+_WATCH_CARD = """
+name => {
+    const events = [];
+    (window.__cardEvents = window.__cardEvents || {})[name] = events;
+    const selector = `.af-card[data-name="${CSS.escape(name)}"]`;
+    let present = document.querySelector(selector) !== null;
+    if (present) {
+        events.push("present");
+    }
+    new MutationObserver(() => {
+        const now = document.querySelector(selector) !== null;
+        if (now !== present) {
+            events.push(now ? "added" : "removed");
+            present = now;
+        }
+    }).observe(document.body, { childList: true, subtree: true });
+}
+"""
+#: As `_WATCH_CARD`, for every card whose name starts with a prefix: for agents
+#: whose names are made up as they start, such as a planner's.
+_WATCH_CARDS_LIKE = """
+prefix => {
+    const seen = {};
+    (window.__cardsLike = window.__cardsLike || {})[prefix] = seen;
+    const named = () => new Set(
+        [...document.querySelectorAll(".af-card[data-name]")]
+            .map(card => card.dataset.name)
+            .filter(name => name.startsWith(prefix)),
+    );
+    let present = named();
+    present.forEach(name => { seen[name] = ["present"]; });
+    new MutationObserver(() => {
+        const now = named();
+        now.forEach(name => { if (!present.has(name)) (seen[name] = seen[name] || []).push("added"); });
+        present.forEach(name => { if (!now.has(name)) (seen[name] = seen[name] || []).push("removed"); });
+        present = now;
+    }).observe(document.body, { childList: true, subtree: true });
+}
+"""
+#: The agents each row of the nodes panel lists, by row: `local`, then each node.
+_NODE_ROWS = """
+() => {
+    const listed = text => {
+        const value = (text || "").trim();
+        return value === "" || value === "no agents" ? [] : value.split(", ");
+    };
+    const rows = {};
+    for (const row of document.querySelectorAll("#af-node-list .af-node-item")) {
+        rows[row.querySelector(".af-node-name").textContent.trim()] =
+            listed(row.querySelector(".af-node-meta")?.textContent);
+    }
+    for (const card of document.querySelectorAll("#af-node-list .af-node-card")) {
+        rows[card.dataset.node] = listed(card.querySelector(".af-node-agents")?.textContent);
+    }
+    return rows;
+}
+"""
+HISTORY_BUTTON = "button:has-text('History')"
+HISTORY_PANEL = ".af-trend-panel"
 CHAT_INPUT = "#af-iobar-input"
 SEND_BUTTON = ".af-send-btn"
 TARGET_SELECT = "#af-target-select"
@@ -164,6 +235,31 @@ class Dashboard:
         )
         return self
 
+    def watch_card(self, name: str) -> Dashboard:
+        """Start recording every time the agent's card appears or goes, on the overview.
+
+        Recorded in the page, on every change to it, so a card that goes and
+        comes back between two polls is caught. Read with `card_comings_and_goings`;
+        stay on the overview meanwhile, since another view takes the cards away.
+        """
+        self.show("overview")
+        self.page.evaluate(_WATCH_CARD, name)
+        return self
+
+    def card_comings_and_goings(self, name: str) -> list[str]:
+        """What `watch_card` recorded for ``name``: "present", "added" and "removed", in order."""
+        return list(self.page.evaluate("name => (window.__cardEvents || {})[name] || []", name))
+
+    def watch_cards_named_like(self, prefix: str) -> Dashboard:
+        """As `watch_card`, for every card whose name starts with ``prefix``."""
+        self.show("overview")
+        self.page.evaluate(_WATCH_CARDS_LIKE, prefix)
+        return self
+
+    def cards_named_like(self, prefix: str) -> dict[str, list[str]]:
+        """What `watch_cards_named_like` recorded: each matching name's comings and goings."""
+        return dict(self.page.evaluate("p => (window.__cardsLike || {})[p] || {}", prefix))
+
     def wait_for_no_card(self, name: str, *, timeout: float = 60.0) -> Dashboard:
         self.show("overview")
         waiting.until(
@@ -250,6 +346,49 @@ class Dashboard:
         names = self.page.locator(f"{NODE_LIST} .af-node-name").all_inner_texts()
         return {name.strip() for name in names}
 
+    def node_rows(self) -> dict[str, list[str]]:
+        """The agents each row of the nodes panel lists: `local`, then each node by name."""
+        self.show("overview")
+        return dict(self.page.evaluate(_NODE_ROWS))
+
+    def rows_listing(self, agent: str) -> set[str]:
+        """The rows of the nodes panel that list ``agent``: `local`, a node's name, or none."""
+        return {row for row, agents in self.node_rows().items() if agent in agents}
+
+    def node_machine(self, name: str) -> str:
+        """What the node's card says its machine is, or "" before its manifest arrives."""
+        self.show("overview")
+        machine = self.page.locator(f'.af-node-card[data-node="{name}"] .af-node-machine')
+        return machine.inner_text().strip() if machine.count() else ""
+
+    # ── History ─────────────────────────────────────────────────────────────
+
+    def open_history(self, name: str, *, node: bool = False) -> str:
+        """Open an agent's or a node's history from its card's History button.
+
+        Returns what the panel shows once it has loaded: the titles of its
+        charts, or the sentence it says instead when there is nothing to draw.
+        """
+        self.show("overview")
+        card = self.page.locator(f'.af-node-card[data-node="{name}"]') if node else self._card(name)
+        card.locator(HISTORY_BUTTON).click()
+        self.page.wait_for_selector(HISTORY_PANEL, state="visible")
+        self.page.wait_for_function(
+            "() => !document.querySelector('.af-trend-body')?.textContent?.startsWith('Loading')"
+        )
+        titles = self.page.locator(f"{HISTORY_PANEL} figcaption").all_inner_texts()
+        return ", ".join(titles) or self.page.locator(".af-trend-body").inner_text().strip()
+
+    def history_title(self) -> str:
+        """The name the open history panel is about."""
+        return self.page.locator(f"{HISTORY_PANEL} h3").inner_text().strip()
+
+    def close_history(self) -> Dashboard:
+        """Close the history panel as a person would, with Escape."""
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_selector(HISTORY_PANEL, state="detached")
+        return self
+
     # ── The chat ────────────────────────────────────────────────────────────
 
     def say(self, message: str, *, to: str) -> Dashboard:
@@ -316,10 +455,15 @@ class Dashboard:
         threads: dict[str, list[Said]] = {}
         for agent in self._targets():
             # An agent can leave the list between reading it and choosing it:
-            # one on a node goes when the node does.
+            # one on a node goes when the node does. Checking first narrows that
+            # window without closing it, so a choice that finds the option gone
+            # moves on rather than waiting out Playwright's default for it.
             if agent not in self._targets():
                 continue
-            self.read_thread_of(agent)
+            try:
+                self.page.locator(TARGET_SELECT).select_option(agent, timeout=GONE_MS)
+            except PlaywrightTimeoutError:
+                continue
             threads[agent] = self.said()
         if was in self._targets():
             self.read_thread_of(was)

@@ -2,6 +2,7 @@
 
 from .catalog_agent import CatalogAgent
 from .dynamic import DynamicAgent
+from .function_agent import FunctionAgent, agent
 from .gmail_agent import GmailAgent
 from .google_calendar_agent import GoogleCalendarAgent
 from .home_assistant_actuator_agent import HomeAssistantActuatorAgent
@@ -14,12 +15,14 @@ from .main import MainActor
 from .monitor_agent import MonitorActor
 from .one_off_actuator_agent import OneOffActuatorAgent
 from .planner import PlannerAgent
+from .rule_agent import RuleAgent
 from .scheduled_agent import ScheduledAgent
 
 __all__ = [
     "AnthropicProvider",
     "CatalogAgent",
     "DynamicAgent",
+    "FunctionAgent",
     "GmailAgent",
     "GoogleCalendarAgent",
     "HomeAssistantActuatorAgent",
@@ -35,5 +38,7 @@ __all__ = [
     "OneOffActuatorAgent",
     "OpenAIProvider",
     "PlannerAgent",
+    "RuleAgent",
     "ScheduledAgent",
+    "agent",
 ]

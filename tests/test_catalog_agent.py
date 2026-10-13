@@ -20,10 +20,12 @@ from typing import Any
 
 import pytest
 
+from wactorz import catalogue_agents
 from wactorz.agents import catalog_agent
 from wactorz.agents.catalog_agent import (
     CatalogAgent,
     _dependency_is_satisfied,
+    _load_embedded_recipe,
     _load_recipe,
     get_native_factory,
 )
@@ -39,15 +41,15 @@ class _Actor:
 
 
 class _Installer(_Actor):
-    """Answers every install request straight away, through main's future.
+    """Answers every install request straight away, through the asker's future.
 
     Or, when told to, behaves as an installer does otherwise: takes the request
     and never answers, or has no room for it in its mailbox.
     """
 
-    def __init__(self, main: "_Main", answers: bool = True, takes: bool = True) -> None:
+    def __init__(self, asker: CatalogAgent, answers: bool = True, takes: bool = True) -> None:
         super().__init__("installer")
-        self._main = main
+        self._asker = asker
         self._answers = answers
         self._takes = takes
         self.requests: list[Message] = []
@@ -57,7 +59,7 @@ class _Installer(_Actor):
             return False
         self.requests.append(msg)
         if self._answers:
-            self._main._result_futures[msg.payload["_task_id"]].set_result({"ok": True})
+            self._asker._result_futures[msg.payload["_task_id"]].set_result({"ok": True})
         return True
 
 
@@ -67,6 +69,13 @@ class _Registry:
 
     def find_by_name(self, name: str) -> _Actor | None:
         return next((a for a in self._actors if a.name == name), None)
+
+    async def deliver(self, target_id: str, msg: Message) -> bool:
+        """What the catalogue's own `send` reaches: the target's mailbox."""
+        actor = next((a for a in self._actors if a.actor_id == target_id), None)
+        if actor is None:
+            return False
+        return await actor.receive(msg)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class _Main(_Actor):
@@ -176,18 +185,34 @@ class TestRecipeLoading:
         assert isinstance(code, str)
         assert "async def" in code
 
-    def test_a_file_that_cannot_be_imported_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_recipe_is_the_source_of_its_file(self) -> None:
+        path = Path(catalogue_agents.__file__).parent / "manual_agent.py"
+
+        assert _load_recipe("manual_agent.py") == path.read_text(encoding="utf-8")
+
+    def test_an_embedded_recipe_yields_the_string_it_holds(self) -> None:
+        code = _load_embedded_recipe("reachy_mini_agent.py")
+
+        assert isinstance(code, str)
+        assert "AGENT_CODE" not in code
+        assert "async def" in code
+
+    def test_an_embedded_recipe_that_cannot_be_imported_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *_a: None)
 
-        assert _load_recipe("anomaly_detector_agent.py") is None
+        assert _load_embedded_recipe("reachy_mini_agent.py") is None
 
-    def test_a_file_that_raises_on_import_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_an_embedded_recipe_that_raises_on_import_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         def _boom(*_args: Any) -> Any:
             raise SyntaxError("bad recipe")
 
         monkeypatch.setattr(importlib.util, "spec_from_file_location", _boom)
 
-        assert _load_recipe("anomaly_detector_agent.py") is None
+        assert _load_embedded_recipe("reachy_mini_agent.py") is None
 
     def test_native_factories_are_found_by_name(self) -> None:
         assert get_native_factory("weather-agent") is WeatherAgent
@@ -435,7 +460,7 @@ class TestDynamicSpawn:
     async def test_installed_dependencies_skip_the_installer(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        installer = _Installer(main)
+        installer = _Installer(catalog)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
         monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda _req: True)
         _spawner(catalog, monkeypatch)
@@ -447,7 +472,7 @@ class TestDynamicSpawn:
     async def test_missing_dependencies_are_installed_before_spawning(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        installer = _Installer(main)
+        installer = _Installer(catalog)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
         monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
         spawner = _spawner(catalog, monkeypatch)
@@ -456,8 +481,9 @@ class TestDynamicSpawn:
 
         (request,) = installer.requests
         assert request.payload["packages"] == ["numpy"]
-        assert request.reply_to == main.actor_id
-        assert main._result_futures == {}
+        # Asked by the catalogue itself: the reply comes back to it.
+        assert request.payload["_reply_to"] == catalog.actor_id
+        assert catalog._result_futures == {}
         assert result["ok"] is True
         assert len(spawner.calls) == 1
 
@@ -470,7 +496,7 @@ class TestDynamicSpawn:
     ) -> None:
         # Its mailbox refused the request, so no result can come: waiting the
         # install timeout out would only delay a spawn that goes ahead anyway.
-        installer = _Installer(main, takes=False)
+        installer = _Installer(catalog, takes=False)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
         monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
         monkeypatch.setattr(catalog_agent, "INSTALL_WAIT_S", 600.0)
@@ -478,8 +504,8 @@ class TestDynamicSpawn:
 
         result = await asyncio.wait_for(catalog._action_spawn("anomaly-detector", {}), timeout=5)
 
-        assert "installer is not taking messages" in caplog.text
-        assert main._result_futures == {}
+        assert "is not taking messages" in caplog.text
+        assert catalog._result_futures == {}
         assert result["ok"] is True
         assert len(spawner.calls) == 1
 
@@ -490,7 +516,7 @@ class TestDynamicSpawn:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        installer = _Installer(main, answers=False)
+        installer = _Installer(catalog, answers=False)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
         monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
         monkeypatch.setattr(catalog_agent, "INSTALL_WAIT_S", 0.05)
@@ -499,7 +525,7 @@ class TestDynamicSpawn:
         result = await catalog._action_spawn("anomaly-detector", {})
 
         assert "Install timeout" in caplog.text
-        assert main._result_futures == {}, "the request it gave up on is not kept"
+        assert catalog._result_futures == {}, "the request it gave up on is not kept"
         assert result["ok"] is True
         assert len(spawner.calls) == 1
 

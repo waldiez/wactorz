@@ -35,16 +35,34 @@ def test_the_api_answers_nobody_without_the_key(app: backend.Backend) -> None:
 
 
 def test_signed_in_the_dashboard_shows_what_the_server_runs(
-    dashboard: browser.Dashboard,
+    dashboard: browser.Dashboard, app: backend.Backend
 ) -> None:
     dashboard.show("overview")
 
-    assert dashboard.card_names() >= STARTED_BY_THE_SERVER
+    assert app.started_with >= STARTED_BY_THE_SERVER
+    assert dashboard.card_names() == app.started_with
+
+
+def test_home_assistants_agents_start_only_when_it_is_configured(app: backend.Backend) -> None:
+    # This run configures no Home Assistant (the backend's environment empties
+    # HA_URL and HA_TOKEN), so none of its agents has anything to talk to.
+    assert not {name for name in app.started_with if name.startswith("home-assistant")}
 
 
 def test_every_view_draws(dashboard: browser.Dashboard) -> None:
     for view in browser.VIEWS:
         dashboard.show(view)
+
+
+def test_an_agents_history_opens_from_its_card(dashboard: browser.Dashboard) -> None:
+    # A fresh server has sampled nothing yet, or a minute at most: either the
+    # panel says there is nothing in the window, or it draws what there is.
+    # What it must not say is that there is no history to read.
+    shown = dashboard.open_history("main")
+
+    assert dashboard.history_title() == "main"
+    assert "not available" not in shown, shown
+    dashboard.close_history()
 
 
 def test_starting_wrote_none_of_its_secrets_down(app: backend.Backend, run: Run) -> None:

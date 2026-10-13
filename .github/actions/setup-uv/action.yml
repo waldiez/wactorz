@@ -1,0 +1,33 @@
+name: Set up uv
+description: >-
+  Install the uv the app image is built with, and the Python asked for. The
+  version is read from the Dockerfile's `AS uv` line, which is the one place it
+  is written: Dependabot updates that line, and every job follows it.
+
+inputs:
+  python-version:
+    description: The Python to install and make the environment with.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Read the uv the image is built with
+      id: uv
+      shell: bash
+      run: |
+        version=$(sed -nE 's#^FROM ghcr\.io/astral-sh/uv:([^@[:space:]]+)@sha256:[0-9a-f]{64} AS uv$#\1#p' Dockerfile)
+        if [ -z "$version" ]; then
+          echo "::error file=Dockerfile::no 'FROM ghcr.io/astral-sh/uv:<version>@sha256:<digest> AS uv' line to read the uv version from"
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    # No cache: one restored from another run could hand a job packages the
+    # lockfile did not choose, and a release build restores nothing anyway.
+    - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      with:
+        version: ${{ steps.uv.outputs.version }}
+        python-version: ${{ inputs.python-version }}
+        activate-environment: true
+        enable-cache: false

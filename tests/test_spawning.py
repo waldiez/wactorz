@@ -11,6 +11,7 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 
 import asyncio
 import json
+import logging
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -374,6 +375,48 @@ def test_install_fast_path_no_send(main_host):
     main_host._registry.add(FakeActor("installer"))
     run(main_host._install_packages(["os", "json"], agent_name="x"))
     assert not main_host.sent
+
+
+def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_host, caplog):
+    # The agent is spawned regardless and says so itself if the import fails.
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _never(*_args, **_kwargs):
+        raise asyncio.TimeoutError("'installer' did not answer within 120s")
+
+    monkeypatch.setattr(spawning, "ask_through", _never)
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Install timed out" in caplog.text
+
+
+def test_an_install_the_installer_refuses_is_a_warning(monkeypatch, main_host, caplog):
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _refused(*_args, **_kwargs):
+        raise RuntimeError("'installer' answered with an error: pip exited with 1")
+
+    monkeypatch.setattr(spawning, "ask_through", _refused)
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Install failed: 'installer' answered with an error" in caplog.text
+
+
+def test_packages_the_installer_could_not_install_are_named(main_host, caplog):
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _send(target_id, msg_type, payload):
+        fut = main_host._result_futures[payload["_task_id"]]
+        fut.set_result({"message": "partly", "failed": ["totally_missing_pkg_zzz"]})
+        return True
+
+    main_host.send = _send
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Failed to install: ['totally_missing_pkg_zzz']" in caplog.text
 
 
 # ── Flags / wiring ───────────────────────────────────────────────────────────

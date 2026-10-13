@@ -1,11 +1,12 @@
 """One-time migration of pre-SQLite pickle state."""
 
 import logging
-import pickle
 from pathlib import Path
 
 from .api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .db import WactorzDB
+from .json_value import NotJsonError
+from .pickle_store import read_state_file
 from .stores import get_memory_store
 
 logger = logging.getLogger(__name__)
@@ -34,27 +35,38 @@ def migrate_from_pickle(state_dir: str, db: WactorzDB) -> None:
 
         agent_name = agent_dir.name
         try:
-            with open(pkl_path, "rb") as f:
-                # Our own state file, written by this app under the state dir.
-                state = pickle.load(f)  # noqa: S301
+            decoded = read_state_file(pkl_path)
         except Exception as e:
             logger.warning("[Migration] Failed to read %s: %s", pkl_path, e)
             continue
-
-        if not isinstance(state, dict):
-            continue
+        if decoded.unreadable:
+            # Left in the file, where the store keeps them; said here because
+            # this pass would otherwise move fewer keys than the file holds
+            # without a word.
+            logger.warning(
+                "[Migration] Skipped %s in %s: %s",
+                ", ".join(sorted(decoded.unreadable)),
+                pkl_path,
+                "; ".join(f"{k}: {r}" for k, r in sorted(decoded.reasons.items())),
+            )
+        state = decoded.values
 
         for key, value in state.items():
-            if key in SQLITE_KEYS:
-                # Skip if SQLite already has this key — SQLite wins over stale pickle
-                if db.kv_get(agent_name, key) is not None:
-                    continue
-                db.kv_set(agent_name, key, value)
-                migrated += 1
-            elif key in EPHEMERAL_KEYS:
-                get_memory_store().set(f"{agent_name}:{key}", value)
-                migrated += 1
-            # Pickle keys stay in .pkl — no migration needed
+            try:
+                if key in SQLITE_KEYS:
+                    # Skip if SQLite already has this key — SQLite wins over stale pickle
+                    if db.kv_get(agent_name, key) is not None:
+                        continue
+                    db.kv_set(agent_name, key, value)
+                    migrated += 1
+                elif key in EPHEMERAL_KEYS:
+                    get_memory_store().set(f"{agent_name}:{key}", value)
+                    migrated += 1
+                # Pickle keys stay in .pkl — no migration needed
+            except NotJsonError as exc:
+                # Left in the pickle, where it is still readable; the rest of
+                # this file and every other agent's still move.
+                logger.warning("[Migration] Not moved from %s: %s", pkl_path, exc)
 
     if migrated:
         logger.info("[Migration] Migrated %s key(s) from pickle", migrated)

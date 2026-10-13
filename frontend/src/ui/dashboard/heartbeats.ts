@@ -14,7 +14,11 @@
  * Owns the timestamps because it is what reads them. The overview asks for one
  * when it draws a card, which is the only other use.
  */
-import { relTime, STALE_MS } from "./agentState";
+import { QUIET_MS, relTime, STALE_MS } from "./agentState";
+
+/** How a card's dot says how long since its agent was heard from. */
+const QUIET = "af-card-quiet";
+const MISSING = "af-card-missing";
 
 export class Heartbeats {
     private _lastSeen = new Map<string, number>();
@@ -81,17 +85,33 @@ export class Heartbeats {
             return;
         }
         if (!options.pulse) {
-            dot.classList.toggle("af-card-stale", now - timestampMs > STALE_MS);
+            paintFreshness(dot, card.dataset["state"] === "stopped" ? 0 : now - timestampMs);
             return;
         }
-        // A heartbeat clears stale outright rather than re-deriving it from the
-        // timestamp: hearing from an agent is the fact, and a clock skewed the
-        // wrong way should not leave a live agent greyed out.
-        dot.classList.remove("af-card-pulse", "af-card-stale");
+        // A heartbeat clears the warning outright rather than re-deriving it
+        // from the timestamp: hearing from an agent is the fact, and a clock
+        // skewed the wrong way should not leave a live agent marked missing.
+        paintFreshness(dot, 0);
+        dot.classList.remove("af-card-pulse");
         // Restarted rather than added: re-adding a class already present does
         // not replay the animation, so a steady heartbeat would pulse once and
         // then look dead.
         void dot.offsetWidth;
         dot.classList.add("af-card-pulse");
     }
+}
+
+/**
+ * Mark a dot for how long its agent has been unheard: yellow past `QUIET_MS`,
+ * red past `STALE_MS`, the state's own color before that. A stopped agent is
+ * expected to be quiet and is given an age of zero by the caller.
+ *
+ * The card's "♥ 45s" line says the same in words, so the color is never the
+ * only sign.
+ */
+export function paintFreshness(dot: HTMLElement, ageMs: number): void {
+    const missing = ageMs > STALE_MS;
+    dot.classList.toggle(MISSING, missing);
+    dot.classList.toggle(QUIET, !missing && ageMs > QUIET_MS);
+    dot.title = missing ? "not heard from for minutes" : ageMs > QUIET_MS ? "not heard from lately" : "";
 }

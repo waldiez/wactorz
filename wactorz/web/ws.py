@@ -78,9 +78,10 @@ class Channel:
         """
         try:
             self._queue.put_nowait(payload)
-            return
         except asyncio.QueueFull:
             pass
+        else:
+            return
 
         self.dropped += 1
         while not self._queue.empty():

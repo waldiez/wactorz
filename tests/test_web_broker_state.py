@@ -329,7 +329,9 @@ class TestListener:
             await mqtt.mqtt_listener()
 
         assert client.connections == 2
-        assert client.published == [f"agents/{runtime.IO_GATEWAY_ID}/spawn"]
+        # The chat transport is not announced as an agent: one that is reaches
+        # the dashboard's agent list and is offered as someone to talk to.
+        assert client.published == []
         assert client.subscribed == list(runtime.MQTT_TOPICS)
         assert runtime.state["agents"]["a1"]["name"] == "weather"
         assert runtime.mqtt_client_ref is None

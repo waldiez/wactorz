@@ -441,14 +441,15 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | Topic | Direction | Description |
 |-------|-----------|-------------|
 | `nodes/{name}/spawn` | → runner | Spawn a new agent. Payload: full agent config dict. Not retained — a node that was away catches up from `desired_state`. Signed. |
-| `nodes/{name}/desired_state` | → runner | Every agent the node should be running. Retained; the runner starts any that are missing when it connects. Signed. |
-| `nodes/{name}/stop` | → runner | Stop a named agent. Payload: `{"name": "agent-name"}`. Signed. |
+| `nodes/{name}/desired_state` | → runner | Every agent the node should be running. Retained; the runner starts any that are missing when it connects, and stops (keeping its state) any it runs that the list leaves out, except one a migration placed there and main has not confirmed yet. Signed. |
+| `nodes/{name}/stop` | → runner | Stop a named agent. Payload: `{"name": "agent-name"}`; `"delete": true` also removes its state file and clears its retained topics, and `"keep_topics": true` keeps those for an agent that lives on elsewhere under the same id, as a rolled-back migration does. Signed. |
 | `nodes/{name}/stop_all` | → runner | Stop all agents and shut down the runner. Signed. |
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
-| `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands. |
-| `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. Signed. |
-| `nodes/{name}/migrate_result` | ← runner | Result of a migration request. |
+| `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, whether the node checks signed commands, and how close the machine is to running out: CPU, memory (within a container's or a unit's memory limit), swap, load, free disk where the state is kept, the CPU's temperature and, on a Raspberry Pi, what is throttling it. A reading the node cannot take is `null`. |
+| `nodes/{name}/manifest` | ← runner | What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, and the installed packages. Sent when the runner starts and after an install; cleared by `/nodes remove`. |
+| `nodes/{name}/migrate` | → runner | Hand a running agent back to main, which places it. Payload: `{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}`. Signed. |
+| `nodes/{name}/migrate_result` | ← runner | Result of a migration request. A failure, including a refusal, is shown on the dashboard. |
 | `nodes/{name}/code_changed` | ← runner | An agent here repaired its own program. Carries the agent's name and no code. |
 | `nodes/{name}/code_request` | → runner | Asks for the program an agent is actually running. Payload: `{"agent": "...", "token": "..."}`. Signed. |
 | `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
@@ -519,7 +520,7 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 | `await agent.publish(topic, data)` | Publish to any MQTT topic via the shared broker. |
 | `await agent.log(message)` | Log to `agents/{id}/logs` — visible in the central dashboard. |
 | `await agent.alert(message, severity)` | Publish an alert. Levels: `info`, `warning`, `error`. |
-| `agent.persist(key, value)` | Write to `/tmp/agentflow_{name}_state.json` (JSON, not pickle — portable). |
+| `agent.persist(key, value)` | Write to `~/wactorz/state/<name>_state.json` (JSON, not pickle — portable, and what a migration carries). Bytes, numpy arrays, torch tensors and modules, and scikit-learn-family models are kept as files of their own beside it. Any other value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved. |
 | `agent.recall(key)` | Read a persisted value. |
 | `agent.state` | In-memory dict, not persisted. |
 | `await agent.send_to(name, payload)` | Send a task to any agent (local or remote) via MQTT request/reply. Times out after 30 s by default. |
@@ -532,15 +533,29 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 
 ## Agent migration
 
-A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.
+A running agent can be moved between main and a node, or from one node to another, from the chat:
 
-```bash
-# From the main machine, publish to MQTT:
-mosquitto_pub -h localhost -t "nodes/rpi-livingroom/migrate" \
-  -m '{"name": "temp-sensor-agent", "target_node": "rpi-bedroom"}'
+```text
+/migrate temp-sensor rpi-bedroom     # to a node
+/migrate temp-sensor local           # back to main
+/migrate temp-sensor rpi-bedroom --force
 ```
 
-Or trigger it from agent code using `agent.send_to()` if you build a migration manager. The result is published to `nodes/{source_node}/migrate_result`.
+Main routes every migration; a node never spawns on another node.
+
+A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled, rule or module agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+
+The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
+
+State travels as JSON, and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:
+
+- **its state holds a value that can go neither way** (an open capture, a socket, an object of the agent's own class). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
+- **it is on a node and keeps a value that runs code when it loads** — a torch module, a scikit-learn, XGBoost, LightGBM or CatBoost model saved with joblib. Main sends these to a node, which runs what main sends it anyway; it does not load them from a node, and one node does not pass them to another. They are refused like the values above, and `--force` leaves them on the node. Keep a model's `state_dict()` instead of the module, and it travels;
+- **its state is larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES`** (8 MiB by default, set on main), **or its blobs together are larger than `WACTORZ_MIGRATION_MAX_BLOB_BYTES`** (64 MiB by default, read on main and on each node). `--force` does not change this. The blobs' size is known only once they are encoded, after the agent stops, so an agent over it is started again where it was.
+
+A destination waits for an agent's blobs before starting it, for at least a minute and longer for large ones. One that does not arrive leaves the agent where it was, as a destination that never confirms does.
+
+A node checks its own agents against the same two terms, which main sends with the request. A node running an earlier release does not check them: it sends what it can, and main names the keys it could not send.
 
 ---
 

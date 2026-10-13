@@ -124,19 +124,28 @@ def _bare_actor(state_dir: Path, persistence_api: Any) -> Any:
 
 
 class TestActorLegacyLoad:
-    """Both branches read the same legacy pickle, and both dropped it."""
+    """An actor without a store reads its own state file."""
 
-    @pytest.mark.parametrize("persistence_api", [None, object()])
-    async def test_a_corrupt_legacy_pickle_is_kept(
-        self, tmp_path: Path, persistence_api: Any
-    ) -> None:
-        actor = _bare_actor(tmp_path, persistence_api)
+    async def test_a_corrupt_legacy_pickle_is_kept(self, tmp_path: Path) -> None:
+        actor = _bare_actor(tmp_path, None)
         _corrupt(tmp_path / "state.pkl")
 
         await actor._load_persistent_state()
 
         assert not actor._persistent_state
         assert _quarantined(tmp_path), "nothing was kept"
+
+    async def test_with_a_store_the_file_is_left_to_the_store(self, tmp_path: Path) -> None:
+        # Read here as well, one value that no longer unpickles moved the whole
+        # file aside before the store could save the rest of it.
+        actor = _bare_actor(tmp_path, object())
+        _corrupt(tmp_path / "state.pkl")
+
+        await actor._load_persistent_state()
+
+        assert not actor._persistent_state
+        assert (tmp_path / "state.pkl").exists()
+        assert not _quarantined(tmp_path)
 
     async def test_a_readable_legacy_pickle_still_loads(self, tmp_path: Path) -> None:
         actor = _bare_actor(tmp_path, None)

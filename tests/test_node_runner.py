@@ -14,9 +14,11 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import until
 from wactorz.core.actor import ActorState
 from wactorz.node.agent import NodeAgent
 from wactorz.node.runner import NodeRunner
+from wactorz.node.state import flush_states
 
 CODE = "async def process(agent):\n    pass\n"
 REPAIRED = "async def process(agent):\n    pass  # repaired by the LLM\n"
@@ -396,6 +398,77 @@ class TestStopping:
         await runner.stop_agent("never-existed")
 
 
+class TestDeletingWhatIsNotRunning:
+    """The delete that ends a migration meets an agent the hand-back already stopped.
+
+    It kept its state file so a failed migration had something to return to.
+    Returning early left the file behind for good.
+    """
+
+    async def test_its_state_file_goes(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("count", 3)
+        await runner.stop_agent("collector")
+        assert agent._state_file.path.exists()
+
+        await runner.stop_agent("collector", delete=True)
+
+        assert not agent._state_file.path.exists()
+
+    async def test_its_retained_topics_are_left_to_the_copy_running_elsewhere(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The actor id comes from the name, so these are the topics of the copy
+        # that moved: an empty manifest cleared from here read as that copy
+        # withdrawing, and main dropped it from its spawn registry.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        actor_id = agent.actor_id
+        await runner.stop_agent("collector")
+        before = len(runner.published)
+
+        await runner.stop_agent("collector", delete=True)
+
+        assert not [
+            topic
+            for topic, _payload, _retain in runner.published[before:]
+            if topic.startswith(f"agents/{actor_id}/")
+        ]
+
+    async def test_a_delete_that_keeps_topics_wipes_the_state_only(
+        self, runner: RecordingRunner
+    ) -> None:
+        # A rolled-back migration: the agent lives on elsewhere, under the same
+        # actor id, so its retained topics are not this node's to clear.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("count", 3)
+        flush_states()
+        assert agent._state_file.path.exists()
+        actor_id = agent.actor_id
+        before = len(runner.published)
+
+        await runner._on_stop(
+            "nodes/rpi/stop",
+            {"name": "collector", "delete": True, "keep_topics": True},
+            _Message(),
+        )
+        await until(lambda: runner.get("collector") is None, "the agent to be stopped")
+        await until(lambda: not agent._state_file.path.exists(), "its state to be wiped")
+        assert not [
+            topic
+            for topic, _payload, _retain in runner.published[before:]
+            if topic.startswith(f"agents/{actor_id}/") and _payload == b""
+        ]
+
+    async def test_one_never_seen_here_is_not_an_error(self, runner: RecordingRunner) -> None:
+        await runner.stop_agent("never-existed", delete=True)
+
+
 class TestReconciling:
     async def test_a_desired_state_starts_what_is_missing(self, runner: RecordingRunner) -> None:
         # This is what brings a node's agents back after it reboots.
@@ -424,6 +497,86 @@ class TestReconciling:
         await _settle()
 
         assert runner.get("collector") is first
+
+    async def test_an_agent_the_list_leaves_out_is_stopped_with_its_state_kept(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The server moved it elsewhere or let it go; a copy left running here
+        # answers beside the real one.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("count", 3)
+
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": []}, _Message(payload=b"{}")
+        )
+        await _settle()
+
+        assert runner.get("collector") is None
+        assert agent._state_file.path.exists(), "a stop, not a delete"
+
+    async def test_a_migration_not_yet_confirmed_is_left_running(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The server lists it only once this node says it started; until then a
+        # list written for another reason leaves it out, and it is the server's
+        # to roll back, not this node's to stop.
+        await runner.spawn_agent({"name": "collector", "code": CODE, "_migration_token": "t1"})
+
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": []}, _Message(payload=b"{}")
+        )
+        await _settle()
+
+        assert runner.get("collector") is not None
+
+    async def test_once_confirmed_it_is_stopped_like_any_other(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE, "_migration_token": "t1"})
+        committed = {"name": "collector", "code": CODE}
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": [committed]}, _Message(payload=b"{}")
+        )
+
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": []}, _Message(payload=b"{}")
+        )
+        await _settle()
+
+        assert runner.get("collector") is None
+
+    async def test_listed_with_its_token_it_is_still_unconfirmed(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Placing a migration target lists it at once, token and all: listed is
+        # not confirmed.
+        placed = {"name": "collector", "code": CODE, "_migration_token": "t1"}
+        await runner.spawn_agent(dict(placed))
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": [placed]}, _Message(payload=b"{}")
+        )
+
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": []}, _Message(payload=b"{}")
+        )
+        await _settle()
+
+        assert runner.get("collector") is not None
+
+    @pytest.mark.parametrize("agents", [None, "collector", {"name": "collector"}])
+    async def test_a_desired_state_with_no_list_stops_nothing(
+        self, runner: RecordingRunner, agents: object
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+
+        await runner._on_desired_state(
+            "nodes/rpi/desired_state", {"agents": agents}, _Message(payload=b"{}")
+        )
+        await _settle()
+
+        assert runner.get("collector") is not None
 
     async def test_an_empty_payload_is_a_retained_message_being_cleared(
         self, runner: RecordingRunner
@@ -561,7 +714,29 @@ class TestMigration:
         (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
         assert returned["config"]["code"] == REPAIRED
 
-    async def test_state_that_cannot_travel_is_named_rather_than_dropped_silently(
+    async def test_state_that_cannot_travel_keeps_the_agent_here(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Shipped without the key, the agent would arrive missing it and
+        # nothing on the other side could tell.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent._persistent_state = {"count": 3, "capture": object()}
+
+        await runner._migrate_agent(
+            {"name": "collector", "target_node": "@main", "return_token": "tok-9"}
+        )
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert "capture" in returned["refused"]
+        assert returned["return_token"] == "tok-9", "main must be able to let go of it"
+        assert returned["state_keys_dropped"] == ["capture"]
+        (result,) = [p for t, p, _ in runner.published if t.endswith("/migrate_result")]
+        assert result["success"] is False
+        assert runner.get("collector") is agent, "a refused agent must keep running"
+
+    async def test_a_forced_move_ships_the_rest_and_names_what_it_left(
         self, runner: RecordingRunner
     ) -> None:
         await runner.spawn_agent({"name": "collector", "code": CODE})
@@ -569,11 +744,49 @@ class TestMigration:
         assert agent is not None
         agent._persistent_state = {"count": 3, "capture": object()}
 
+        await runner._migrate_agent({"name": "collector", "target_node": "@main", "force": True})
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert "refused" not in returned
+        assert returned["state"] == {"count": 3}
+        assert returned["state_keys_dropped"] == ["capture"]
+        assert runner.get("collector") is None
+
+    async def test_state_over_the_limit_main_sets_keeps_the_agent_here(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("history", "x" * 200)
+
+        await runner._migrate_agent(
+            {"name": "collector", "target_node": "@main", "force": True, "max_state_bytes": 100}
+        )
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert "limit" in returned["refused"], "forcing does not make it fit"
+        assert runner.get("collector") is agent
+
+    async def test_what_the_agent_writes_while_stopping_goes_with_it(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The source's file is deleted once the agent is confirmed elsewhere,
+        # so a write left in it is gone.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("turns", 1)
+
+        async def last_turn() -> None:
+            agent.persist("turns", 2)
+
+        agent.on_stop = last_turn  # pyright: ignore[reportAttributeAccessIssue]
+
         await runner._migrate_agent({"name": "collector", "target_node": "@main"})
 
         (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
-        assert returned["state"] == {"count": 3}
-        assert returned["state_keys_dropped"] == ["capture"]
+        assert returned["state"] == {"turns": 2}
 
     async def test_node_to_node_migration_is_refused(self, runner: RecordingRunner) -> None:
         # It was a lateral path: generated code on one node spawning code on

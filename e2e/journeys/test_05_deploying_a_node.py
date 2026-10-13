@@ -43,6 +43,24 @@ def test_the_dashboard_shows_the_node(dashboard: browser.Dashboard) -> None:
     )
 
 
+def test_the_nodes_card_says_what_its_machine_is(dashboard: browser.Dashboard) -> None:
+    # From the manifest the node publishes, which the overview reads from the
+    # server's node listing about once a minute.
+    waiting.until(
+        lambda: dashboard.node_machine(NODE_NAME),
+        what=f"node {NODE_NAME!r}'s card naming its machine",
+        timeout=90,
+    )
+
+
+def test_the_nodes_history_opens_from_its_card(dashboard: browser.Dashboard) -> None:
+    shown = dashboard.open_history(NODE_NAME, node=True)
+
+    assert dashboard.history_title() == NODE_NAME
+    assert "not available" not in shown, shown
+    dashboard.close_history()
+
+
 def test_the_node_runs_what_the_server_runs(app: backend.Backend) -> None:
     listed = next(n for n in app.rest.nodes() if (n.get("node") or n.get("name")) == NODE_NAME)
 

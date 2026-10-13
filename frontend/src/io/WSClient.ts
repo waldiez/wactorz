@@ -13,7 +13,7 @@
 import { log } from "./logger";
 import { toMs } from "../time";
 import { emit } from "../events";
-import { MAIN_AGENT } from "../agents/naming";
+import { IO_GATEWAY, MAIN_AGENT } from "../agents/naming";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
 export type ChatHandler = (
@@ -350,7 +350,9 @@ export class WSClient {
     private _handleReset(data: Record<string, unknown>): void {
         const scope = asStr(data["scope"]);
         if (scope === "all") {
-            emit("af-wipe-all");
+            const patch = data["state"] as StatePatch | undefined;
+            const survivors = (patch?.agents ?? []).map(a => a.agent_id).filter((id): id is string => !!id);
+            emit("af-wipe-all", { survivors });
             // The reset frame carries the survivors itself — the server rebuilds
             // from the registry before broadcasting — so apply it rather than
             // sitting on an empty list until the next heartbeat.
@@ -394,8 +396,8 @@ export class WSClient {
         // agent the user addressed. Re-attribute it to that agent so the thread,
         // feed and toasts are consistent live and after a reload. The proper fix
         // is server-side — the reply frame should carry the real agent name.
-        const rawFrom = asStr(data["from"], "io-gateway");
-        const from = rawFrom === "io-gateway" ? this._lastAgentName : rawFrom;
+        const rawFrom = asStr(data["from"], IO_GATEWAY);
+        const from = rawFrom === IO_GATEWAY ? this._lastAgentName : rawFrom;
         const ts = toMs(data["timestamp"]);
 
         if (data["type"] === "chat") {

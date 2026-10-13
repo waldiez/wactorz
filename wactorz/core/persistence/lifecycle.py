@@ -33,18 +33,9 @@ def init_persistence(
         # 1. Migrate legacy pickle data to new stores
         migrate_from_pickle(_state_dir, wactorz_db)
 
-        # 2. Run framework migrations (schema upgrades, state upgrades, spawn validation)
+        # 2. Run framework migrations (schema upgrades, state upgrades)
         try:
-            migration_result = run_migrations(wactorz_db, pickle_store)
-
-            # Log spawn issues as startup warnings
-            for issue in migration_result.get("spawn_issues", []):
-                if issue["severity"] == "error":
-                    logger.warning(
-                        "[Persistence] Spawn registry issue: %s — %s",
-                        issue["agent"],
-                        issue["message"],
-                    )
+            run_migrations(wactorz_db, pickle_store)
         except Exception as e:
             # A failing migration must not stop startup — but a *missing* one is a
             # wiring bug, so ImportError is deliberately not caught here: swallowing

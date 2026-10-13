@@ -25,6 +25,7 @@ import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";
 import { timeLabel } from "../../time";
 import { button, el, option } from "../dom";
+import { agentPicker, listenForPicks, paintActive, tagRow, turnPicker } from "./feedPicks";
 
 const TYPE_CLASS: Record<string, string> = {
     spawn: "af-feed-spawn",
@@ -77,14 +78,11 @@ function isUserTurn(item: FeedItem): boolean {
  *  the resolved agent name. Chat turns are persisted under the agent's name, so
  *  without the role check every line would read as the agent. */
 function buildAgentSpan(item: FeedItem): HTMLElement {
-    const agent = el("span", "af-feed-agent");
     if (isUserTurn(item)) {
-        agent.textContent = "you";
-        agent.classList.add("af-feed-agent-user");
-    } else {
-        agent.textContent = displayName(item.agentName);
+        const you = el("span", "af-feed-agent af-feed-agent-user", "you");
+        return you;
     }
-    return agent;
+    return agentPicker(displayName(item.agentName), "af-feed-agent");
 }
 
 /** Split a feed label into an optional `@<agent>` routing mention and the body.
@@ -155,7 +153,11 @@ export function feedItemEl(container: HTMLElement, item: FeedItem): void {
     icon.innerHTML = iconName ? iconMarkup(iconName, 14) : "·";
 
     const { mention, body } = splitMention(item);
+    tagRow(row, item.turn, isUserTurn(item) ? undefined : displayName(item.agentName));
     row.append(icon, timeSpan(item.timestamp), buildAgentSpan(item), buildTextSpan(mention, body));
+    if (item.turn) {
+        row.appendChild(turnPicker(item.turn));
+    }
     if (needsExpanding(body)) {
         attachExpander(row, mention ? `${mention} ${body}` : body, "af-feed-full-prose");
     }
@@ -181,7 +183,15 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
 
     const text = el("span", "af-feed-text af-feed-log-text", summaryLine(item.text));
 
-    row.append(icon, timeSpan(item.ts * 1000), origin, text);
+    tagRow(row, item.turn, item.agent);
+    row.append(icon, timeSpan(item.ts * 1000), origin);
+    if (item.agent) {
+        row.appendChild(agentPicker(item.agent, "af-feed-agent-chip"));
+    }
+    row.appendChild(text);
+    if (item.turn) {
+        row.appendChild(turnPicker(item.turn));
+    }
 
     if (needsExpanding(item.text)) {
         attachExpander(row, item.text);
@@ -297,6 +307,10 @@ export interface FeedFilters {
     /** Case-insensitive substring over the row's visible text. */
     search: string;
     hideHeartbeats: boolean;
+    /** Only the rows of this chat turn; "" for every turn. Set from a row's turn chip. */
+    turn: string;
+    /** Only the rows of this agent; "" for every agent. Set from a row's agent name. */
+    agent: string;
 }
 
 export const DEFAULT_FILTERS: FeedFilters = {
@@ -304,6 +318,8 @@ export const DEFAULT_FILTERS: FeedFilters = {
     level: "INFO",
     search: "",
     hideHeartbeats: true,
+    turn: "",
+    agent: "",
 };
 
 export interface FeedViewOptions {
@@ -317,8 +333,21 @@ export interface FeedViewOptions {
     following?: boolean;
 }
 
+/** Whether a row is of the turn and the agent the feed is narrowed to, if it is. */
+function belongs(row: HTMLElement, filters: FeedFilters): boolean {
+    // Exact: a turn id is picked from a row, not typed, and an agent's name is
+    // matched whole so `weather` is not also `weather-2`.
+    if (filters.turn && row.dataset["turn"] !== filters.turn) {
+        return false;
+    }
+    return !filters.agent || row.dataset["agent"] === filters.agent;
+}
+
 /** Whether one already-rendered row survives the current filters. */
 function rowMatches(row: HTMLElement, filters: FeedFilters): boolean {
+    if (!belongs(row, filters)) {
+        return false;
+    }
     const source = row.dataset["source"] === "app" ? "app" : "agent";
     if (filters.source !== "all" && filters.source !== source) {
         return false;
@@ -512,6 +541,19 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
         changed();
     });
 
+    const active = el("div", "af-feed-active");
+    const narrow = (patch: Partial<Pick<FeedFilters, "turn" | "agent">>): void => {
+        Object.assign(filters, patch);
+        // A turn is mostly in the application log, which "agents" hides.
+        if (patch.turn) {
+            filters.source = "all";
+            source.value = "all";
+        }
+        paintActive(active, filters, narrow);
+        changed();
+    };
+    listenForPicks(feed, narrow);
+
     const toolbar = el("div", "af-feed-toolbar");
     toolbar.append(
         labelled("show", source),
@@ -519,7 +561,9 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
         labelled("find", search),
         heartbeats,
         ...logActions(opts),
+        active,
     );
+    paintActive(active, filters, narrow);
     syncControlRelevance(filters, level, heartbeats);
     return toolbar;
 }

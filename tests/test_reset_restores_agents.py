@@ -34,7 +34,6 @@ def _actor(name: str, protected: bool = False, actor_id: str | None = None) -> A
             "actor_id": aid,
             "name": name,
             "state": "running",
-            "cpu": 1.5,
             "memory_mb": 32,
             "task": "idle",
             "protected": protected,
@@ -75,7 +74,6 @@ class TestRebuildFromRegistry:
 
         entry = runtime.state["agents"]["id-worker"]
         assert entry["state"] == "running"
-        assert entry["cpu"] == 1.5
         assert entry["mem"] == 32
         assert entry["task"] == "idle"
 

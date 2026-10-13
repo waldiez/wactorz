@@ -29,9 +29,9 @@ import logging
 import pathlib
 import re
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
+from .. import plugins
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
 from .lookup import find_main_actor
@@ -109,11 +109,28 @@ def _wants_experimental(text: str) -> bool:
     return any(word in low for word in _EXPERIMENTAL_REVEAL_WORDS)
 
 
-def _load_recipe(filename: str) -> str | None:
-    path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
-    if not path.exists():
-        logger.warning("[catalog] Recipe file not found: %s", path)
+#: Where the catalogue's programs live. A program is an ordinary module of this
+#: package; its source travels, as text, in the spawn config's `code`, and is
+#: compiled into a DynamicAgent wherever the agent runs.
+_PROGRAMS = pathlib.Path(__file__).parent.parent / "catalogue_agents"
+
+
+def _load_recipe(relative: str) -> str | None:
+    """The source of the catalogue program at `relative`, or None if it cannot be read."""
+    path = _PROGRAMS / relative
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("[catalog] Could not read recipe %s: %s", path, e)
         return None
+
+
+def _load_embedded_recipe(relative: str) -> str | None:
+    """The `AGENT_CODE` string a module under the catalogue holds as its program.
+
+    For a program not yet moved out of its string into a module of its own.
+    """
+    path = _PROGRAMS / relative
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
         if spec is None or spec.loader is None:
@@ -123,7 +140,7 @@ def _load_recipe(filename: str) -> str | None:
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
     except Exception as e:
-        logger.warning("[catalog] Could not load recipe from %s: %s", filename, e)
+        logger.warning("[catalog] Could not load recipe from %s: %s", relative, e)
         return None
 
 
@@ -272,6 +289,17 @@ def _build_native_catalog() -> dict:
     except ImportError as e:
         logger.warning("[catalog] gmail-agent unavailable: %s", e)
 
+    # The agents this deployment brings, beside the packaged ones: listed,
+    # described and spawned the same way, and restored from the registry by
+    # name through `get_native_factory`.
+    for plugin in plugins.discover().values():
+        if plugin.name in native:
+            logger.warning(
+                "[catalog] Plugin %r is shadowed by a packaged recipe of the same name",
+                plugin.name,
+            )
+            continue
+        native[plugin.name] = plugin.recipe()
     return native
 
 
@@ -439,7 +467,7 @@ def _build_catalog() -> dict:
         logger.info("[catalog] Loaded manual-agent recipe")
 
     # ── reachy-mini ──────────────────────────────────────────────────────────
-    code = _load_recipe("reachy_mini_agent.py")
+    code = _load_embedded_recipe("reachy_mini_agent.py")
     if code:
         catalog["reachy-mini"] = {
             "name": "reachy-mini",
@@ -923,44 +951,28 @@ class CatalogAgent(Actor):
                         logger.info(
                             "[%s] Installing missing deps for '%s': %s", self.name, name, needed
                         )
-                        task_id = f"cat_install_{uuid.uuid4().hex[:8]}"
-                        future = asyncio.get_running_loop().create_future()
-                        main = find_main_actor(self._registry)
-                        if main:
-                            main._result_futures[task_id] = future
-                        # Send with reply_to=main.actor_id so the installer's RESULT goes
-                        # directly to main where the future is registered.
-                        install_msg = Message(
-                            type=MessageType.TASK,
-                            sender_id=self.actor_id,
-                            reply_to=main.actor_id if main else self.actor_id,
-                            payload={
-                                "action": "install",
-                                "packages": needed,
-                                "task": task_id,
-                                "_task_id": task_id,
-                            },
-                        )
+                        # Asked by the catalogue itself: a reply it waits for is
+                        # settled as it arrives, so its own busy mailbox loop is
+                        # not in the way.
                         try:
-                            if await installer.receive(install_msg) is False:
-                                # Its mailbox had no room, so no result is
-                                # coming to wait for.
-                                logger.warning(
-                                    "[%s] installer is not taking messages — skipping dep "
-                                    "install for '%s'",
-                                    self.name,
-                                    name,
-                                )
-                            else:
-                                await asyncio.wait_for(future, timeout=INSTALL_WAIT_S)
+                            await self.ask(
+                                "installer",
+                                {"action": "install", "packages": needed},
+                                timeout=INSTALL_WAIT_S,
+                            )
                         except asyncio.TimeoutError:
                             logger.warning(
                                 "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
                             )
-                        finally:
-                            # Answered or not, nothing waits on it any more.
-                            if main:
-                                main._result_futures.pop(task_id, None)
+                        except RuntimeError as exc:
+                            # Not taking messages, or a failed install: the agent
+                            # is spawned either way and reports an import it lacks.
+                            logger.warning(
+                                "[%s] installer: %s — proceeding with '%s' anyway",
+                                self.name,
+                                exc,
+                                name,
+                            )
                     else:
                         logger.warning(
                             "[%s] installer not found — skipping dep install for '%s'",
@@ -1003,12 +1015,13 @@ class CatalogAgent(Actor):
                     {"type": "log", "message": msg, "timestamp": time.time()},
                 )
                 return {"ok": True, "message": msg, "agent": resolved}
-            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
             logger.exception("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
+        else:
+            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
     # Public API ─────────────────────────────────────────────────────────────
 

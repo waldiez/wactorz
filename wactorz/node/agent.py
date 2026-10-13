@@ -27,8 +27,9 @@ from typing import TYPE_CHECKING, Any
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
 from ..core.actor import forbidden
 from ..core.topic_bus import TopicContract
+from ..monitoring.agent_metrics import RecentDurations
 from .llm import BridgeProvider, request_over_mqtt
-from .state import JsonState, flush_states, state_path
+from .state import agent_state, flush_states
 
 if TYPE_CHECKING:
     from .runner import NodeRunner
@@ -73,8 +74,39 @@ class NodeAgent(DynamicAgent):
         #: the agent's own code has declared or published anything.
         self.capabilities = list(config.get("capabilities") or [])
         self._spawn_contract = TopicContract.from_spawn_config({**config, "node": self._node})
-        self._state_file = JsonState(state_path(directory, str(name)), str(name))
+        self._state_file = agent_state(directory, str(name))
+        #: What this agent's model requests took, there through main and back,
+        #: and how many main never answered in time. Reported in the metrics
+        #: frame, since a node serves no `/metrics`.
+        self._llm_round_trips = RecentDurations()
+        self._llm_timeouts = 0
+        self._llm_unsent = 0
         self._apply_initial_state(config)
+
+    def llm_round_trip(self, seconds: float, *, answered: bool) -> None:
+        """Record one model request sent to main: what it took, and whether it was answered."""
+        self._llm_round_trips.add(seconds)
+        if not answered:
+            self._llm_timeouts += 1
+
+    def llm_unsent(self) -> None:
+        """Record one model request that could not be sent to main at all."""
+        self._llm_unsent += 1
+
+    def _build_metrics(self) -> dict:
+        """The generated agent's frame, plus its model requests' round trips through main.
+
+        The model call itself is timed on main, where it is made; this is the
+        whole wait this agent sees, the broker both ways included, which is
+        what a slow answer on a node is made of.
+        """
+        metrics = super()._build_metrics()
+        summary = self._llm_round_trips.summary("llm_round_trip")
+        if summary or self._llm_unsent:
+            metrics.update(summary)
+            metrics["llm_timeouts"] = self._llm_timeouts
+            metrics["llm_unsent"] = self._llm_unsent
+        return metrics
 
     # ── State ─────────────────────────────────────────────────────────────────
 
@@ -121,11 +153,19 @@ class NodeAgent(DynamicAgent):
         state and keeps this file to roll back to, and a stop is rare enough
         to wait for the disk.
         """
-        self._state_file.save(self._persistent_state)
+        self._state_file.save(self._persistent_state, changed=())
         flush_states()
 
     def persist(self, key: str, value: Any) -> None:
         self._persistent_state[key] = value
+        self._state_file.save(self._persistent_state, changed=(key,))
+
+    def _own_state(self) -> dict[str, Any]:
+        """Everything in the node's state file is the agent's own."""
+        return dict(self._persistent_state)
+
+    def _replace_own_state(self, old: dict[str, Any], new: dict[str, Any]) -> None:
+        self._persistent_state = dict(new)
         self._state_file.save(self._persistent_state)
 
     def recall(self, key: str, default: Any = None) -> Any:

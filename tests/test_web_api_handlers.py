@@ -308,13 +308,15 @@ class TestReads:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "weather")))
-        runtime.state["agents"]["r1"] = {"messages_processed": 3, "cpu": 1.5, "cost_usd": 0.2}
+        runtime.state["agents"]["r1"] = {"messages_processed": 3, "mem": 12.5, "cost_usd": 0.2}
 
         local = await (await client.get("/api/actors/a1/metrics")).json()
         remote = await (await client.get("/api/actors/r1/metrics")).json()
 
         assert (local["messages_processed"], local["cost_usd"]) == (5, 0.5)
-        assert (remote["messages_processed"], remote["cpu"], remote["cost_usd"]) == (3, 1.5, 0.2)
+        assert (remote["messages_processed"], remote["mem"], remote["cost_usd"]) == (3, 12.5, 0.2)
+        # Agents share one process, so one CPU figure: the monitor's, on system/host.
+        assert "cpu" not in remote
         assert (await client.get("/api/actors/zz/metrics")).status == 404
 
     async def test_without_a_registry_the_list_comes_from_reported_state(

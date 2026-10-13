@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
     from wactorz.core.persistence import WactorzDB
     from wactorz.core.registry import ActorRegistry, ActorSystem
+    from wactorz.orchestration import Orchestrator
 
 # ── Injected config (app.py overwrites these at boot from CLI/env) ───────────
 MQTT_BROKER = "localhost"
@@ -44,6 +45,11 @@ system: "ActorSystem | None" = None
 
 # Used to query historical cost data for deleted agents.
 db: "WactorzDB | None" = None
+
+# What answers a chat turn that names no agent: main's adapter in the full
+# profile, a model-free one in the minimal profile, or whatever the deployment
+# supplied. None until the system that owns it has started.
+orchestrator: "Orchestrator | None" = None
 
 mqtt_client_ref: "aiomqtt.Client | None" = None
 
@@ -129,3 +135,9 @@ def set_db(value) -> None:
     """Inject the persistence DB handle."""
     global db
     db = value
+
+
+def set_orchestrator(value: "Orchestrator | None") -> None:
+    """Inject what answers chat turns; None when nothing does."""
+    global orchestrator
+    orchestrator = value

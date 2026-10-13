@@ -35,14 +35,15 @@ import hashlib
 import importlib
 import logging
 import time
-import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from ...core.actor import Actor, ActorState, MessageType
+from ...core.actor import Actor, ActorState, ask_through
 from ...core.paths import agent_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.topics import topic_name_error
+from ...plugins import for_target
 from ..lookup import find_main_actor
+from ..rule_agent import RuleAgent, RuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class SpawnMixin(_Host):
             # here first, before anything is written under it: a state shipped
             # with a migration would otherwise be half applied and then lost
             # when the agent failed to start.
-            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
             return None
         return await self._spawn_local_named(
             config,
@@ -176,6 +177,10 @@ class SpawnMixin(_Host):
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
+        elif agent_type == "rule":
+            actor = await self._spawn_rule_agent(config, name)
+        elif agent_type == "module":
+            actor = await self._spawn_module_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
             # Implicit-llm route: a config with a system prompt but no code is
             # an LLM agent even if 'type' was left at the "dynamic" default.
@@ -323,14 +328,63 @@ class SpawnMixin(_Host):
                 schedule_spec.get("type"),
                 publish_topic,
             )
-            return actor
         except ValueError as e:
             # An expected rejection of user input, reported in full by the message.
-            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400, RUF100  # an expected rejection of user input, reported in full
+            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400  # an expected rejection of user input, reported in full
             return None
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
+        else:
+            return actor
+
+    async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""
+        try:
+            rule = RuleConfig.from_dict(config)
+        except ValueError as exc:
+            # An expected rejection of the config, reported in full by its message.
+            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
+            return None
+        logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
+        return await self.spawn(
+            RuleAgent,
+            config=rule,
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
+
+    async def _spawn_module_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn an agent this deployment brings, named by its ``target`` import path.
+
+        Only a target registered as a plugin -- a ``wactorz.agents`` entry
+        point, ``WACTORZ_AGENTS``, or ``wactorz.run(agents=...)`` -- is spawned.
+        A spawn config can be model-authored, and resolving an arbitrary
+        ``package.module:attr`` from one would run whatever that path reached.
+        ``options`` in the config reach the actor's constructor, or a decorated
+        function through ``agent.options``.
+        """
+        target = str(config.get("target") or "").strip()
+        plugin = for_target(target) if target else None
+        if plugin is None:
+            logger.error(
+                "[%s] Cannot spawn %r: target %r is not a registered agent. Name it in "
+                "WACTORZ_AGENTS, list it as a wactorz.agents entry point, or pass it to "
+                "wactorz.run(agents=...).",
+                self.name,
+                name,
+                target,
+            )
+            return None
+        options = config.get("options")
+        logger.info("[%s] Spawning %r from %s", self.name, name, target)
+        return await self.spawn(
+            cast("type[Actor]", plugin.build),
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+            llm_provider=self.llm,
+            options=dict(options) if isinstance(options, dict) else {},
+        )
 
     async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn an LLMAgent — chat, Q&A, reasoning. Applies any migrated state
@@ -507,46 +561,35 @@ class SpawnMixin(_Host):
             )
             return
 
-        task_id = f"install_{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[task_id] = future
+        logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
         try:
-            logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-            await self.send(
-                installer.actor_id,
-                MessageType.TASK,
-                {
-                    "action": "install",
-                    "packages": needed,
-                    "task": task_id,
-                    "_task_id": task_id,
-                    "reply_to": self.actor_id,
-                },
+            result = await ask_through(
+                self, "installer", {"action": "install", "packages": needed}, timeout=120.0
             )
-            try:
-                result = await asyncio.wait_for(future, timeout=120.0)
-                logger.info(
-                    "[%s] Install result for '%s': %s",
-                    self.name,
-                    agent_name,
-                    result.get("message", result),
-                )
-                if result.get("failed"):
-                    logger.warning(
-                        "[%s] Failed to install: %s — '%s' may not work correctly",
-                        self.name,
-                        result["failed"],
-                        agent_name,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
-                    self.name,
-                    needed,
-                    agent_name,
-                )
-        finally:
-            self._result_futures.pop(task_id, None)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
+                self.name,
+                needed,
+                agent_name,
+            )
+            return
+        except RuntimeError as exc:
+            # A failed install, or an installer not taking messages: either way
+            # the agent is spawned and says so itself if the import fails.
+            logger.warning(
+                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
+            )
+            return
+        reported = result.get("message", result) if isinstance(result, dict) else result
+        logger.info("[%s] Install result for '%s': %s", self.name, agent_name, reported)
+        if isinstance(result, dict) and result.get("failed"):
+            logger.warning(
+                "[%s] Failed to install: %s — '%s' may not work correctly",
+                self.name,
+                result["failed"],
+                agent_name,
+            )
 
     # ── Migrated state ─────────────────────────────────────────────────────
 

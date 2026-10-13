@@ -42,6 +42,17 @@ class _Llm:
         raise RuntimeError("model overloaded")
 
 
+class _Echo:
+    """A provider that answers with what it was asked, and records each request."""
+
+    def __init__(self) -> None:
+        self.sent: list[list[dict[str, Any]]] = []
+
+    async def complete(self, messages: list[dict[str, Any]], **_kwargs: Any) -> Any:
+        self.sent.append([dict(m) for m in messages])
+        return f"echo: {messages[-1]['content']}", {}
+
+
 class _Actor:
     def __init__(self, name: str, **attrs: Any) -> None:
         self.name = name
@@ -150,6 +161,91 @@ class TestLLMInterface:
             "again",
             "hi again",
         ]
+
+    async def test_converse_history_survives_a_restart(self, tmp_path: Path) -> None:
+        # Kept only in agent.state, a chat agent forgot everything on a restart
+        # and on a migration.
+        first = _api(tmp_path, llm=_Echo())
+        assert first.llm is not None
+        await first.llm.converse("my name is Ada")
+
+        again = _api(tmp_path, llm=(echo := _Echo()))
+        await again._actor._load_persistent_state()
+        assert again.llm is not None
+        await again.llm.converse("what is my name?")
+
+        (sent,) = echo.sent
+        assert [m["content"] for m in sent] == [
+            "my name is Ada",
+            "echo: my name is Ada",
+            "what is my name?",
+        ]
+
+    async def test_converse_keeps_only_the_last_turns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(api_mod, "CONVERSE_MAX_TURNS", 2)
+        api = _api(tmp_path, llm=_Echo())
+        assert api.llm is not None
+
+        for text in ("one", "two", "three"):
+            await api.llm.converse(text)
+
+        kept = [m["content"] for m in api.state["_chat_history"]]
+        assert kept == ["two", "echo: two", "three", "echo: three"]
+        assert api._actor.recall("_chat_history") == api.state["_chat_history"]
+
+    async def test_trimming_never_starts_the_history_with_a_reply(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A history the agent edited itself can hold a message out of pairs.
+        monkeypatch.setattr(api_mod, "CONVERSE_MAX_TURNS", 2)
+        api = _api(tmp_path, llm=_Echo())
+        assert api.llm is not None
+        api.state["_chat_history"] = [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "a"},
+            {"role": "assistant", "content": "an afterthought"},
+        ]
+
+        await api.llm.converse("hello")
+
+        assert [m["content"] for m in api.state["_chat_history"]] == ["hello", "echo: hello"]
+
+    async def test_a_stored_value_that_is_not_a_history_is_ignored(self, tmp_path: Path) -> None:
+        api = _api(tmp_path, llm=(echo := _Echo()))
+        api._actor.persist("_chat_history", "not a list")
+        assert api.llm is not None
+
+        await api.llm.converse("hello")
+
+        assert [m["content"] for m in echo.sent[0]] == ["hello"]
+
+    async def test_a_failed_converse_leaves_the_history_as_it_was(self, tmp_path: Path) -> None:
+        # A question with no answer, followed by the next one, is two user
+        # turns in a row, which some providers refuse outright.
+        api = _api(tmp_path, llm=_Llm())
+        assert api.llm is not None
+
+        with pytest.raises(RuntimeError):
+            await api.llm.converse("hello")
+
+        assert api.state["_chat_history"] == []
+
+    async def test_a_history_the_agent_set_itself_is_the_one_continued(
+        self, tmp_path: Path
+    ) -> None:
+        first = _api(tmp_path, llm=_Echo())
+        assert first.llm is not None
+        await first.llm.converse("old")
+
+        again = _api(tmp_path, llm=(echo := _Echo()))
+        await again._actor._load_persistent_state()
+        again.state["_chat_history"] = [{"role": "user", "content": "seeded"}]
+        assert again.llm is not None
+        await again.llm.converse("new")
+
+        assert [m["content"] for m in echo.sent[0]] == ["seeded", "new"]
 
     async def test_chat_on_the_api_accepts_a_bare_string_or_a_list(self, tmp_path: Path) -> None:
         api = _api(tmp_path, llm=FakeProvider(script={"ping": "pong"}))

@@ -74,6 +74,8 @@ class _Run:
         self.notifications: list[dict[str, Any]] = []
         self.published: list[tuple[str, Any]] = []
         self.spawn_error: Exception | None = None
+        #: What was started on a node: (config, node), as a failed return restarts it.
+        self.spawned_remote: list[tuple[dict[str, Any], str]] = []
 
     @property
     def only_spawn(self) -> dict[str, Any]:
@@ -134,10 +136,18 @@ async def run_listener(
     async def _publish(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
         run.published.append((topic, payload))
 
+    async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        run.spawned_remote.append((cfg, node))
+
     setattr(main, "_mqtt_publish", _publish)
     setattr(main, "_spawn_from_config", _spawn)
+    setattr(main, "_spawn_remote", _spawn_remote)
     setattr(main, "_queue_notification", run.notifications.append)
     setattr(main, "_restore_earned_trust", lambda name, cfg: False)
+    # The registry the source node's desired state is rebuilt from: empty, as
+    # it is for an agent coming home, whose entry no longer names the node.
+    setattr(main, "_get_spawn_registry", dict)
+    setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
 
     def _stop() -> None:
         main.state = ActorState.STOPPED
@@ -170,6 +180,51 @@ class TestTheSourcesCopy:
         run = await run_listener(monkeypatch, [state_return()], pending=waiting())
 
         assert ("nodes/rpi/stop", {"name": "collector", "delete": True}) in run.published
+
+    async def test_the_source_stops_listing_it_once_it_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The list is retained and read again whenever the node reconnects: an
+        # agent left in it came back there, beside the copy now running here.
+        run = await run_listener(monkeypatch, [state_return()], pending=waiting())
+
+        desired = [p for t, p in run.published if t == "nodes/rpi/desired_state"]
+        assert desired, "the source's desired state was never rewritten"
+        assert [a.get("name") for a in desired[-1]["agents"]] == []
+
+    async def test_a_failed_spawn_leaves_the_source_listing_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The source's stopped copy is the only one left, and what brings it back.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not [t for t, _ in run.published if t.endswith("/desired_state")]
+
+    async def test_a_failed_spawn_starts_it_again_on_the_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Stopped there and running nowhere, it would wait for someone to notice.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        ((restored, node),) = run.spawned_remote
+        assert node == "rpi" and restored["node"] == "rpi"
+        assert "_initial_state" not in restored, "the source starts from its own state file"
+
+    async def test_a_failed_spawn_that_left_a_copy_here_leaves_the_source_stopped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Started there as well, there would be two.
+        monkeypatch.setattr(Migration, "_placed", lambda _self, _name: True)
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not run.spawned_remote
+        assert "FAILED" in run.messages[0]
 
     async def test_a_rejected_hand_back_deletes_nothing(
         self, monkeypatch: pytest.MonkeyPatch
@@ -405,3 +460,61 @@ class TestMessagesThatCannotBeUsed:
         )
 
         assert len(run.spawned) == 1
+
+
+class TestARefusedHandBack:
+    """The node kept the agent, because its state could not travel.
+
+    It says so on `state_return` so main lets go of the migration now, rather
+    than waiting it out and restarting an agent that never stopped.
+    """
+
+    @staticmethod
+    def refused() -> _Message:
+        return state_return(
+            config={}, state={}, state_keys_dropped=["capture"], refused="it holds capture"
+        )
+
+    async def test_it_spawns_and_deletes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_listener(monkeypatch, [self.refused()], pending=waiting())
+
+        assert not run.spawned
+        assert not run.published, "the node is still running the agent"
+
+    async def test_main_stops_waiting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_listener(monkeypatch, [self.refused()], pending=waiting())
+
+        assert not run.main.migration.pending_returns
+
+    async def test_it_is_announced_once_by_the_node_not_here(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The node's `migrate_result` carries the reason to the user.
+        run = await run_listener(monkeypatch, [self.refused()], pending=waiting())
+
+        assert not run.notifications
+
+
+class TestStateLeftBehind:
+    async def test_the_keys_a_node_could_not_send_are_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A forced move, or a node older than the refusal, still arrives; what
+        # it could not bring has to be said rather than found missing later.
+        run = await run_listener(
+            monkeypatch, [state_return(state_keys_dropped=["model"])], pending=waiting()
+        )
+
+        assert run.only_spawn["_initial_state"] == {"count": 7}
+        assert run.notifications[0]["severity"] == "warning"
+        assert "model" in run.messages[0]
+
+    async def test_nothing_left_behind_says_nothing_about_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(state_keys_dropped=[])], pending=waiting()
+        )
+
+        assert run.notifications[0]["severity"] == "info"
+        assert "Left behind" not in run.messages[0]

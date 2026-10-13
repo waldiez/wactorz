@@ -19,7 +19,17 @@ SCHEMA_VERSION = 1
 SCHEMA_SQL = """
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
+    version           INTEGER NOT NULL,
+    framework_version INTEGER DEFAULT 1   -- how far the migrations have brought it
+);
+
+-- Every migration that has succeeded, SQL and state alike. Only successes are
+-- written, which makes it the record of what is done.
+CREATE TABLE IF NOT EXISTS migration_history (
+    version     INTEGER NOT NULL,
+    applied_at  REAL NOT NULL,
+    description TEXT DEFAULT '',
+    duration_ms INTEGER DEFAULT 0
 );
 
 -- Key-value store for structured agent data (replaces most pickle usage)
@@ -30,59 +40,6 @@ CREATE TABLE IF NOT EXISTS kv_store (
     value   TEXT NOT NULL,           -- JSON-encoded
     updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0),
     PRIMARY KEY (agent, key)
-);
-
--- Spawn registry — which agents should be running and their configs
-CREATE TABLE IF NOT EXISTS spawn_registry (
-    name       TEXT PRIMARY KEY,
-    config     TEXT NOT NULL,         -- JSON spawn config
-    node       TEXT DEFAULT '',       -- remote node name (empty = local)
-    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0),
-    updated_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Pipeline rules — reactive rules with their agent lists
-CREATE TABLE IF NOT EXISTS pipeline_rules (
-    rule_id    TEXT PRIMARY KEY,
-    task       TEXT NOT NULL,          -- original user request
-    agents     TEXT NOT NULL,          -- JSON array of agent names
-    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- User facts — durable facts extracted from conversations
-CREATE TABLE IF NOT EXISTS user_facts (
-    key     TEXT PRIMARY KEY,
-    value   TEXT NOT NULL,
-    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Topic contracts — TopicBus registry (survives restarts without retained MQTT)
-CREATE TABLE IF NOT EXISTS topic_contracts (
-    name             TEXT PRIMARY KEY,
-    publishes        TEXT DEFAULT '[]',   -- JSON array
-    subscribes       TEXT DEFAULT '[]',   -- JSON array
-    triggers_when    TEXT DEFAULT '{}',   -- JSON dict
-    produces_schema  TEXT DEFAULT '{}',   -- JSON dict
-    consumes_schema  TEXT DEFAULT '{}',   -- JSON dict
-    observed_samples TEXT DEFAULT '{}',   -- JSON dict
-    node             TEXT DEFAULT '',
-    actor_id         TEXT DEFAULT '',
-    updated          REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Notification webhook URLs
-CREATE TABLE IF NOT EXISTS webhook_urls (
-    service TEXT PRIMARY KEY,          -- discord, slack, telegram
-    url     TEXT NOT NULL,
-    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Plan cache — cached planner decompositions (with TTL)
-CREATE TABLE IF NOT EXISTS plan_cache (
-    cache_key  TEXT PRIMARY KEY,
-    plan       TEXT NOT NULL,          -- JSON array of steps
-    workers    TEXT DEFAULT '[]',      -- JSON array of worker names at cache time
-    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
 );
 
 -- ══════════════════════════════════════════════════════════════════════════
@@ -135,6 +92,7 @@ CREATE TABLE IF NOT EXISTS ha_state_changes (
     context   TEXT DEFAULT ''          -- HA context_id for correlation
 );
 
+CREATE INDEX IF NOT EXISTS idx_ha_ts        ON ha_state_changes (ts);
 CREATE INDEX IF NOT EXISTS idx_ha_entity_ts ON ha_state_changes (entity_id, ts);
 CREATE INDEX IF NOT EXISTS idx_ha_domain_ts ON ha_state_changes (domain, ts);
 
@@ -169,4 +127,44 @@ CREATE TABLE IF NOT EXISTS chat_log (
 
 CREATE INDEX IF NOT EXISTS idx_chatlog_ts          ON chat_log (ts);
 CREATE INDEX IF NOT EXISTS idx_chatlog_agent_ts    ON chat_log (agent_name, ts);
+
+-- Metrics history — a sample of every agent and node, about once a minute, so
+-- a trend survives a restart and an install without Prometheus has one at all.
+-- Pruned by the retention job (WACTORZ_RETENTION_METRICS_DAYS).
+CREATE TABLE IF NOT EXISTS agent_metrics_history (
+    ts                 REAL NOT NULL,
+    agent              TEXT NOT NULL,
+    node               TEXT DEFAULT '',      -- empty for an agent on main
+    state              TEXT DEFAULT '',
+    memory_mb          REAL,
+    messages_processed INTEGER,
+    errors             INTEGER,
+    tasks_completed    INTEGER,
+    tasks_failed       INTEGER,
+    cost_usd           REAL,
+    queue_wait_p95_s   REAL,
+    message_p95_s      REAL,
+    task_p95_s         REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_history_ts       ON agent_metrics_history (ts);
+CREATE INDEX IF NOT EXISTS idx_agent_history_agent_ts ON agent_metrics_history (agent, ts);
+
+CREATE TABLE IF NOT EXISTS node_metrics_history (
+    ts          REAL NOT NULL,
+    node        TEXT NOT NULL,
+    online      INTEGER NOT NULL,
+    cpu_pct     REAL,
+    mem_used_mb REAL,
+    mem_free_mb REAL,
+    agents      INTEGER,
+    swap_used_mb REAL,
+    load_1m      REAL,
+    disk_free_mb REAL,
+    temp_c       REAL,
+    throttled    TEXT      -- a JSON list of flags, '[]' for none, NULL where not known
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_history_ts      ON node_metrics_history (ts);
+CREATE INDEX IF NOT EXISTS idx_node_history_node_ts ON node_metrics_history (node, ts);
 """

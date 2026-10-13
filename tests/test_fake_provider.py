@@ -24,8 +24,11 @@ from wactorz.agents.llm.providers.fake import (
     parse_script,
 )
 from wactorz.agents.prompts.main_actor_prompts import (
+    FACTS_EXTRACT_MARKER,
     FACTS_EXTRACT_PROMPT,
+    INTENT_CLASSIFIER_MARKER,
     INTENT_CLASSIFIER_PROMPT,
+    INTENT_TOKENS,
     ORCHESTRATOR_PROMPT,
 )
 
@@ -84,17 +87,43 @@ class TestTheContractBoundCallSites:
         assert reply == NO_FACTS
         assert json.loads(reply) == {}
 
-    def test_the_routing_is_on_the_prompt_constants_not_on_wording(self) -> None:
-        """Matching the constant means rewording a prompt cannot break routing.
+    def test_the_prompts_begin_with_the_markers_the_provider_matches(self) -> None:
+        """The marker is the contract: a prompt that stops beginning with it is
+        a prompt the fake no longer recognises, and every scenario that drives
+        the router would then take the conversation branch instead.
+        """
+        assert INTENT_CLASSIFIER_PROMPT.startswith(INTENT_CLASSIFIER_MARKER)
+        assert FACTS_EXTRACT_PROMPT.startswith(FACTS_EXTRACT_MARKER)
 
-        A substring match on prose would, and the failure would look like the
-        classifier misbehaving rather than like a moved string.
+    def test_a_classifier_prompt_assembled_from_fragments_is_still_recognised(self) -> None:
+        """What follows the marker may differ per installation: an installation
+        without Home Assistant will send a shorter classifier prompt than one
+        with it. The provider recognises the call site, not one exact text.
+        """
+        provider = FakeProvider(intent="PIPELINE")
+        assembled = INTENT_CLASSIFIER_MARKER + " for a multi-agent system.\nPIPELINE or OTHER."
+        reply, _ = asyncio.run(provider.complete(user("when X do Y"), system=assembled))
+        assert reply == "PIPELINE"
+
+    def test_a_prompt_that_merely_mentions_the_marker_is_conversation(self) -> None:
+        """Recognition is by how the prompt opens, not by a substring anywhere
+        in it, so a system prompt that quotes the classifier's wording is still
+        answered from the script.
         """
         provider = FakeProvider()
-        near_miss = INTENT_CLASSIFIER_PROMPT + "\n"
-        reply, _ = asyncio.run(provider.complete(user("hello"), system=near_miss))
+        quoting = (
+            "You are an assistant.\n" + INTENT_CLASSIFIER_MARKER + " is what another agent is."
+        )
+        reply, _ = asyncio.run(provider.complete(user("hello"), system=quoting))
         assert reply not in INTENTS
         assert reply == DEFAULT_REPLY
+
+    def test_the_intents_are_the_ones_the_router_accepts(self) -> None:
+        """One tuple on both sides, so an intent added to the router is one the
+        fake can be told to answer, and one it refuses is one the router would
+        have read as OTHER anyway.
+        """
+        assert INTENTS == INTENT_TOKENS
 
 
 class TestOrdinaryConversation:

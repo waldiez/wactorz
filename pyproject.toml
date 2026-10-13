@@ -69,14 +69,21 @@ cron      = ["croniter>=2.0.0"]
 flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
+# A LangGraph graph or a LangChain chain as an agent, with its spend reported
+# through `wactorz.core.integrations.langchain`.
+langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
+# AG2 agents as a Wactorz agent, on the system's model, with their spend
+# reported through `wactorz.core.integrations.ag2`. AG2 1.x (`import ag2`);
+# the provider's own SDK comes from the matching Wactorz extra.
+ag2       = ["ag2>=1.1"]
 docs      = [
     # Pinned exactly, not floored: both decide the bytes of the HTML committed
     # under static/docs, which CI checks against the sources. Pygments in
     # particular classifies box-drawing characters differently between minor
     # versions, so a floating floor makes the freshness check fail on every pull
     # request the day a new one is released, for a page nobody touched.
-    "markdown==3.10.2",
-    "pygments==2.20.0",
+    "markdown==3.10.3",
+    "pygments==2.21.0",
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
@@ -84,6 +91,8 @@ docs      = [
 # The pre-built static/docs/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "wactorz[docs]",
+    # So the LangChain cost callback and the LangGraph example are tested.
+    "wactorz[langgraph]",
     # Test-only support for optional catalogue-agent media paths. These stay out
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
@@ -114,7 +123,7 @@ dev       = [
 # suite - and with no dependency lock in this project, nothing else would catch
 # that. Same reasoning as the `docs` extra above pins markdown and pygments: the
 # dependency decides the thing being compared.
-e2e       = ["playwright==1.62.0"]
+e2e       = ["playwright==1.63.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
@@ -135,6 +144,7 @@ wactorz         = "wactorz.cli:main"
 wactorz-node    = "wactorz.node.cli:main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
+wactorz-state   = "wactorz.state_archive:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
@@ -153,6 +163,14 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # is what the `ultra` image installs. On macOS and Windows the PyPI build is
 # the CPU one already. A machine with a GPU installs with pip, or names the
 # CUDA index for itself.
+[tool.uv]
+# Releases younger than a week are not locked, as Dependabot's cooldown does
+# not propose them: a compromised release is usually found and pulled within
+# days. Without it, `make lock` takes yesterday's releases, and Dependabot then
+# proposes older ones in their place. Kept in the lockfile as a span, so
+# `uv sync --locked` holds as the days pass.
+exclude-newer = "7 days"
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
@@ -267,6 +285,10 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
+    "TRY300",  # a try guards the call that can fail; the success return goes in its else
+    "TRY301",  # a raise inside a try that catches it: control flow by exception
+    "TRY400",  # logger.error in an except drops the traceback; log after the handler
+    "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -284,14 +306,9 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, pathlib, security) stay
-# advisory via `make lint-py` until each is triaged and gated. One member of the
-# pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
-# is already a Path, and the convention here is that a path is a Path — which
-# those call sites satisfy — not that every read goes through `Path.open`. It is
-# declined on the `make lint-py` line itself rather than in the `ignore` above,
-# which a CLI `--extend-select` outranks; the per-file entries below still apply,
-# which is why the exemptions there work. Logging moved out
+# Further families (exception style, complexity, prints) stay advisory via
+# `make lint-py` until each is triaged and gated. Pathlib moved out once the tree
+# reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
 # debug line in production, and the message loses the structure that lets a log
@@ -307,8 +324,9 @@ ignore = [
 # mechanism rather than a guard stripped under `-O`, the credentials are fixture
 # strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
 # a path a test asserts about rather than writes to, and `exec` is how the
-# catalogue programs get parsed. None of it reaches an installed wheel.
-"tests/*" = ["B", "E402", "D", "S"]
+# catalogue programs get parsed. None of it reaches an installed wheel. A test
+# raises inside a `try` to produce the exception, or the rollback, it examines.
+"tests/*" = ["B", "E402", "D", "S", "TRY301"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
@@ -382,7 +400,10 @@ reportMissingTypeStubs = false
 [tool.coverage.run]
 source = ["wactorz"]
 branch = true
-omit = ["wactorz/_version.py", "tests/*"]
+omit = [
+    "wactorz/_version.py",
+    "tests/*",
+]
 
 [tool.coverage.report]
 show_missing = true
@@ -394,7 +415,7 @@ exclude_also = [
     "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 90
+fail_under = 92
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

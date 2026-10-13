@@ -9,7 +9,7 @@ import logging
 import re
 import socket
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any, ClassVar
 
 from ...config import (
@@ -21,12 +21,13 @@ from ...config import (
 from ...core.actor import Actor, Message, MessageType
 from ...core.node_signing import node_control_properties
 from ...core.persistence import chat_turn_recorded
+from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
 from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
-from ..prompts.main_actor_prompts import (
-    ORCHESTRATOR_PROMPT,
-)
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.main_actor_prompts import orchestrator_prompt
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
@@ -130,11 +131,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def __init__(
         self,
         llm_provider: LLMProvider | None = None,
+        prompt_fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS,
         **kwargs: Any,
     ) -> None:
+        """``prompt_fragments`` are the integrations main's prompts speak of and
+        its router accepts intents for: every one by default, so a main built
+        directly behaves as one on a fully configured installation; what the
+        configuration says when built by ``build_system``. The planners main
+        spawns inherit them.
+        """
         kwargs.setdefault("name", "main")
-        kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
+        fragments = tuple(prompt_fragments)
+        kwargs.setdefault("system_prompt", orchestrator_prompt(fragments))
         super().__init__(llm_provider=llm_provider, **kwargs)
+        self._prompt_fragments = fragments
         self._result_futures: dict[str, asyncio.Future] = {}
         # Queued monitor notifications — prepended to next user response, and
         # capped at MAX_PENDING_NOTIFICATIONS: they drain only when someone
@@ -536,6 +546,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.persist("conversation_history", self._conversation_history)
 
     async def process_user_input(self, text: str) -> str:
+        """Answer one message from a person, as one turn (see `wactorz.core.turns`)."""
+        with turn_scope(), acting_as(self.name):
+            return await self._process_user_input(text)
+
+    async def _process_user_input(self, text: str) -> str:
         ts_user = time.time()
         note_prefix = self._drain_notifications()
 
@@ -693,6 +708,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return cleaned.strip(), had
 
     async def process_user_input_restricted(self, text: str) -> str:
+        """Answer one message from an untrusted channel, as one turn."""
+        with turn_scope(), acting_as(self.name):
+            return await self._process_user_input_restricted(text)
+
+    async def _process_user_input_restricted(self, text: str) -> str:
         """Social-channel (Discord/Telegram) entry point — the untrusted-surface
         counterpart of process_user_input.
 
@@ -818,9 +838,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             "rules",
         )
         if _is_command:
-            # /deploy is the one slash command that needs to stream progress
-            # messages mid-execution (subnet scan, deploy phases). Other commands
-            # go through process_user_input which is request/response.
+            # /deploy streams its progress as it goes (the name lookup, the
+            # install). Other commands go through process_user_input, which
+            # answers once.
             if _stripped.startswith("/deploy"):
                 async for chunk in self._slash_deploy_stream(_stripped):
                     yield chunk
@@ -1182,10 +1202,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             /deploy <node>
 
         where ``<node>`` names a target configured in the environment
-        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). The older
-        ``/deploy <node> <host> <user> <password> [broker]`` form is refused:
-        the password reached the reply stream and the persisted conversation
-        history, and running with no host port-scanned the local /24 for SSH.
+        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). Anything after the
+        name is refused and never echoed: a host and credentials typed into chat
+        would reach the reply stream and the persisted conversation history.
+        Every chat channel's /deploy comes here.
         """
         parts = stripped.split()
         if len(parts) < 2:
@@ -1260,9 +1280,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         else:
             yield f"[FAIL] Deploy failed: {result.get('error', result)}"
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
+    async def migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool = False
+    ) -> dict[str, Any]:
         """Move a running agent to a different node. Owned by `self.migration`."""
-        return await self.migration.migrate_agent(agent_name, target_node)
+        return await self.migration.migrate_agent(agent_name, target_node, force=force)
 
     async def _node_heartbeat_listener(self) -> None:
         """Follow node heartbeats. Owned by `self.nodes`."""

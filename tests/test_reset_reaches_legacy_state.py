@@ -1,22 +1,10 @@
-"""A wipe has to reach the legacy pickle copy, in memory and on disk.
+"""A wipe has to reach an agent's state in memory as well as on disk.
 
-`Actor._load_persistent_state` loads a legacy `state.pkl` into
-`_persistent_state` **even on the new store path** — "will migrate on first
-persist" — and `Actor.recall` falls back to that dict whenever the new store
-returns `None`. Nothing ever removed it, so a key that exists in a legacy pickle
-survived a factory reset for as long as the process lived: the wipe emptied the
-database, `recall` then found nothing there, fell through, and handed back the
-value the user had just asked to destroy.
-
-Found from the other end. A test constructing a `MainActor` without a
-`persistence_dir` wrote its scripted conversation into the developer's real
-`state/main/state.pkl`, and it then showed up in the running dashboard as a chat
-nobody had had — surviving every wipe.
-
-Note `None` and `[]` are not the same to that fallback, which is why a *chat*
-reset appeared to work: it leaves an empty list in the store, and an empty list
-is a value, so the fallback is never reached. A full wipe deletes the row
-outright, so it is.
+An actor without a persistence store holds its state in `_persistent_state` and
+writes the whole of it back on every `persist`, so a key a reset removed from
+disk returns with the next write unless it is removed from memory too. An actor
+with a store keeps nothing there: `recall` asks the store alone, so a wiped key
+reads as wiped.
 """
 
 from pathlib import Path
@@ -38,27 +26,32 @@ class _Actor(Actor):
 
 
 def _actor_with_legacy_state(tmp_path: Path, **state: Any) -> Actor:
-    """An actor whose new store knows nothing and whose legacy dict knows all.
-
-    The state a wipe leaves behind: the pickle file is gone from disk, its
-    contents are still in the process.
-    """
+    """An actor with no store, whose state is the dict it holds in memory."""
     actor = _Actor.__new__(_Actor)
     actor.name = "main"
     actor._persistence_dir = tmp_path
     actor._persistent_state = dict(state)
-    actor._persistence_api = _StoreThatKnowsNothing()  # pyright: ignore[reportAttributeAccessIssue]
+    actor._unreadable_state = {}
+    actor._persistence_api = None
     return actor
 
 
 class _StoreThatKnowsNothing:
-    """A wiped store: every key returns None, which is what triggers the fallback."""
+    """A wiped store: every key reads as absent."""
 
     def get(self, _key: str, default: Any = None) -> Any:
         return None
 
     def set(self, _key: str, _value: Any) -> None:
         return None
+
+
+class TestAnActorWithAStore:
+    def test_recall_reads_the_store_and_nothing_held_beside_it(self, tmp_path: Path) -> None:
+        actor = _actor_with_legacy_state(tmp_path, conversation_history=TURNS)
+        actor._persistence_api = _StoreThatKnowsNothing()  # pyright: ignore[reportAttributeAccessIssue]
+
+        assert actor.recall(CHAT, []) == []
 
 
 class TestAFactoryResetClearsTheLegacyCopy:
@@ -110,8 +103,9 @@ class TestAChatResetClearsOnlyTheChatKeys:
 class TestTheChatResetReachesTheFileToo:
     """Clearing the database alone let a restart bring the conversation back.
 
-    `Actor` loads a legacy `state.pkl` at start, so a conversation left in one
-    is read again on the next boot however thoroughly the database was cleared.
+    A `state.pkl` written before the per-key store can hold its own
+    conversation, which the start-up migration copies into an empty database,
+    so a conversation left in one returns on the next boot.
     """
 
     def test_the_conversation_is_removed_from_the_legacy_file(self, tmp_path: Path) -> None:

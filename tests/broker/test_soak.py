@@ -10,8 +10,9 @@ entry for an agent that is gone, a file descriptor, memory.
 What counts as a failure is decided here, before the run:
 
 - every question is answered, and every spawn and delete completes;
-- after each round the registries, the supervisors, the node's agent list, the
-  pending replies and the outbox are exactly as they were before it;
+- after each round the registries, the supervisors, the node's agent list and
+  the pending replies are exactly as they were before it, and the outbox
+  empties;
 - nothing was dropped from the outbox or refused by a mailbox;
 - the event loop never stopped for as long as the lag monitor reports on, at
   any point in a round and not only when the round was looked at;
@@ -26,6 +27,7 @@ the samples to.
 """
 
 import asyncio
+import faulthandler
 import json
 import os
 import threading
@@ -50,6 +52,10 @@ pytestmark = [
     # The run itself, and room to start, settle and stop around it.
     pytest.mark.timeout(SECONDS + 300),
 ]
+
+#: How long after the soak's own length every thread's stack is printed, as a
+#: hang is reported: the suite's `faulthandler_timeout` is for tests of seconds.
+STACKS_AFTER_S = 240.0
 
 #: Rounds before the numbers are taken as the ones to hold to: imports, caches
 #: and connection pools fill up during the first few, and that is not a leak.
@@ -199,7 +205,6 @@ def _problems(samples: list[Sample]) -> list[str]:
         "node_supervised",
         "spawn_registry",
         "pending_replies",
-        "outbox",
     ):
         wrong = [s for s in samples if getattr(s, name) != getattr(first, name)]
         if wrong:
@@ -207,6 +212,9 @@ def _problems(samples: list[Sample]) -> list[str]:
                 f"{name} was {getattr(first, name)} before the first round and "
                 f"{getattr(wrong[0], name)} after round {wrong[0].round}"
             )
+    # Not the outbox: a heartbeat can be queued between the outbox being seen
+    # empty and the sample being taken. That it empties after every round is
+    # held by `_settled`, which fails the run when it does not.
     for name in ("outbox_lost", "mailbox_refused"):
         if getattr(last, name):
             problems.append(f"{name} ended at {getattr(last, name)}")
@@ -247,6 +255,12 @@ def _report(samples: list[Sample], problems: list[str]) -> str:
 
 
 async def test_nothing_grows_while_agents_come_and_go(main: MainActor, node: FastNode) -> None:
+    # The suite prints every thread's stack once a test has run for most of a
+    # minute, which is what a stuck unit test looks like and not what this one
+    # does: it runs for as long as it was asked to. Its own deadline instead, so
+    # a soak that really hangs is still shown where. pytest cancels it after.
+    faulthandler.cancel_dump_traceback_later()
+    faulthandler.dump_traceback_later(SECONDS + STACKS_AFTER_S)
     process = psutil.Process()
     lag = LoopLagMonitor(interval=0.5)
     lag.start()

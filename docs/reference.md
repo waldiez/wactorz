@@ -154,6 +154,7 @@ async def handle_task(agent, payload):
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
+| `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
 | `agent.send_to(name, payload)` | Send a task to another agent by name |
 | `agent.delegate(name, payload)` | Same, with cleaner syntax |
 | `agent.send_to_many(tasks)` | Fan-out to multiple agents in parallel |
@@ -350,8 +351,32 @@ What that means in practice:
 
 - A stop, a restart of the agent, a migration and a clean shutdown (Ctrl+C included) all write what is waiting before they finish. Nothing is lost.
 - A process that is killed outright, or a machine that loses power, can lose what was persisted in the last second.
+- The keys kept in SQLite or in memory (the ones listed above) are stored as JSON. A value JSON cannot represent — a `datetime`, a numpy number, a `set` — raises a `TypeError` naming the key, and nothing is written; convert it first (`.isoformat()`, `.item()`, `list(...)`). An agent's own keys are pickled and take any Python object.
+- `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
 - `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
-- A value that cannot be pickled no longer fails the call. The agent keeps it in memory, and the log names the file that was not written.
+- A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
+- Bytes, numpy arrays, torch tensors, `state_dict()`s and modules, and scikit-learn-family models are kept as files of their own under `blobs/` in the agent's directory, written when their key is persisted rather than with every other key. A value changed in place is saved by persisting it again. A blob that cannot be read back — its library not installed, its file gone — is missing at the next start like an unpicklable value, and kept for when it can be.
+- Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
+
+**Changing what an agent stores.** When a new version of an agent keeps its state in a different shape, it declares a version and how to upgrade to it, and the state is brought up to date when the agent starts, before its own code runs:
+
+```python
+STATE_VERSION = 2
+
+def upgrade_state(state, from_version):
+    if from_version == 0:
+        state["celsius"] = state.pop("temp")       # renamed in version 1
+    elif from_version == 1:
+        state["fahrenheit"] = state["celsius"] * 9 / 5 + 32
+    return state
+```
+
+A native `Actor` subclass sets `state_version = 2` and defines the same `upgrade_state(self, state, from_version)` method. The function is called once for each version still owed, in order, and may be `async`.
+
+- The version is kept in the state, under `_state_version`, so it goes with the agent when it migrates. State without one is at version 0.
+- Only the agent's own keys are passed in. The ones Wactorz keeps in SQLite or memory are not.
+- The steps run on a copy, and the result is written once all of them have worked. A step that raises leaves the stored state as it was, and the agent does not start: a generated agent is marked failed with the step named, and a native one's `start()` raises `StateUpgradeError`.
+- State newer than the code (after going back to an older version of the agent) is left alone, with a warning.
 
 Used internally for:
 
@@ -727,7 +752,7 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/clear-plans` | Wipe the planner's plan cache |
 | `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
 | `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
-| `/migrate <agent> <node>` | Move a running agent to a different node |
+| `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
 | `/help` | Show all available commands |
 | `@agent-name` | Route your next message directly to a specific agent |
 
@@ -956,7 +981,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Direct (from CLI):**
 
 ```text
-@catalog spawn image-gen-agent
+@catalog spawn weather-agent
 @catalog spawn doc-to-pptx-agent
 @catalog list
 @catalog info doc-to-pptx-agent
@@ -965,7 +990,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Natural language via main:**
 
 ```text
-"spawn the image generation agent"
+"spawn the weather agent"
 "what agents can you spawn for me?"
 "I need to convert a PDF to PowerPoint"
 ```
@@ -984,14 +1009,11 @@ Spawned agents are registered in main's spawn registry — they survive restarts
 
 ### Built-in Recipes
 
-| Recipe | Description | Key Dependencies |
-|--------|-------------|-----------------|
-| `image-gen-agent` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path. | `requests`, NIM API key |
-| `doc-to-pptx-agent` | Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from the PDF first; falls back to NIM FLUX generation for slides without images. | `pymupdf`, `pdfplumber`, `pptxgenjs` (Node.js) |
+Every recipe, what it does and what it needs, is listed in [Catalogue agents](catalogue-agents.md), with a page per recipe.
 
 ### Adding New Recipes
 
-Drop a Python file into `catalogue_agents/` with an `AGENT_CODE` string (the same format as any dynamic agent), then add its entry to `catalog_agent.py`:
+Drop a Python module into `catalogue_agents/` holding the program itself (the same functions as any dynamic agent's code), then add its entry to `catalog_agent.py`. The module's source is what gets sent and exec'd:
 
 ```python
 # In catalog_agent.py — _build_catalog()
@@ -1010,30 +1032,6 @@ if code:
 ```
 
 No changes to `cli.py` or any other file needed. On next restart the recipe is available system-wide.
-
-### image-gen-agent
-
-Generates images from text prompts via NVIDIA NIM FLUX.1-dev and saves them as PNG files. Requires a free NIM API key (1000 credits/month at [build.nvidia.com](https://build.nvidia.com)).
-
-**Setup:**
-
-```text
-@main remember nim_api_key = nvapi-xxxxxxxxxxxxxxxx
-```
-
-**Task payload:**
-
-```json
-{
-  "prompt": "minimalist flat illustration of renewable energy",
-  "output_path": "C:/Users/you/Documents/slide.png",
-  "width": 1024,
-  "height": 576,
-  "steps": 20
-}
-```
-
-**Result:** `{ "image_path": "...", "width": 1024, "height": 576, "size_kb": 312, "error": null }`
 
 ### doc-to-pptx-agent
 
@@ -1377,14 +1375,17 @@ wactorz/
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)
 │   ├── home_assistant_map_agent.py            HomeAssistantMapAgent — live entity/location map via HA WebSocket
 │   ├── home_assistant_state_bridge_agent.py   HomeAssistantStateBridgeAgent — HA state_changed → MQTT bridge
-│   ├── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
-│   └── timeseries_collector.py                TimeSeriesCollector — buffered MQTT → SQLite time-series tables
+│   └── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
 │
 ├── catalogue_agents/                          Pre-built recipe files (loaded by CatalogAgent at startup)
-│   ├── image_gen_agent.py                     NIM FLUX.1-dev image generation
-│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
 │   ├── anomaly_detector_agent.py              Statistical anomaly detection over HA + Sinergym streams
-│   └── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
+│   ├── flic_agent.py                          Flic 2 buttons over Bluetooth
+│   ├── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── reachy_mini_agent.py                   Reachy Mini robot: voice, gestures, camera
+│   ├── smart_energy_agent.py                  Smart-plug power, energy and guarded power-down rules
+│   ├── timeseries_collector_agent.py          Buffered MQTT → SQLite time-series tables
+│   └── weather_agent.py                       Weather by place, no API key
 │
 └── interfaces/
     ├── chat_interfaces.py                     CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
@@ -1393,7 +1394,9 @@ wactorz/
 state/                                         Persisted agent state (auto-created, never commit to git)
 ├── wactorz.db                                 SQLite — spawn registry, pipeline rules, user facts, conversation, time-series
 ├── mqtt_outbox.db                             SQLite — durable MQTT publish queue
-└── {agent-name}/state.pkl                     Per-agent pickle fallback (large/binary state)
+└── {agent-name}/
+    ├── state.pkl                              Per-agent pickle (the agent's own keys)
+    └── blobs/                                 One file per model, array or bytes value
 ```
 
 ---

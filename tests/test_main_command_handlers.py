@@ -20,6 +20,7 @@ from wactorz._version import __version__
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands import info, state
+from wactorz.agents.main.commands import nodes as node_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
 from wactorz.config import CONFIG
@@ -62,9 +63,13 @@ class _Registry:
 class _Nodes:
     def __init__(self, online: list[str]) -> None:
         self._online = online
+        self.forgotten: list[str] = []
 
     def online_names(self) -> list[str]:
         return list(self._online)
+
+    def forget(self, node_name: str) -> None:
+        self.forgotten.append(node_name)
 
 
 class _Main:
@@ -148,7 +153,8 @@ class _Main:
     async def _spawn_from_config(self, config: dict[str, Any], **kwargs: Any) -> None:
         self.calls.append(("spawn", (config, kwargs)))
 
-    async def migrate_agent(self, name: str, node: str) -> Any:
+    async def migrate_agent(self, name: str, node: str, *, force: bool = False) -> Any:
+        self.calls.append(("migrate", (name, node, force)))
         if isinstance(self.migrate_result, Exception):
             raise self.migrate_result
         return self.migrate_result
@@ -390,6 +396,123 @@ class TestHelpAndNodes:
         assert f"|  v{__version__}  |" in rows["same"]
         assert "v0.0.1 ≠ server, redeploy" in rows["behind"]
 
+    async def test_an_online_node_says_how_close_it_is_to_running_out(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "rpi",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "cpu_pct": 12.4,
+                "load_1m": 0.5,
+                "mem_free_mb": 700,
+                "disk_free_mb": 3277,
+                "temp_c": 61.0,
+                "throttled": ["under_voltage"],
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert (
+            "cpu 12% · load 0.50 · 700 MB memory free · 3.2 GB disk free · 61°C · ⚠ under voltage"
+        ) in text
+
+    async def test_a_reading_the_node_did_not_send_is_left_out(self, main: _Main) -> None:
+        # Not shown as zero: "0 MB free" would read as a node about to fall over.
+        main._registry = None
+        main.node_list = [
+            {"node": "old", "online": True, "agents": [], "last_seen": time.time(), "cpu_pct": 3.0}
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "cpu 3%  |  last heartbeat" in text
+        assert "free" not in text
+
+    async def test_an_offline_nodes_last_readings_are_not_shown(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "gone",
+                "online": False,
+                "agents": [],
+                "last_seen": time.time() - 90,
+                "mem_free_mb": 700,
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "memory free" not in text
+
+    async def test_a_node_says_what_its_machine_is_beneath_its_row(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "rpi",
+                "online": False,
+                "agents": [],
+                "last_seen": time.time() - 90,
+                "manifest": {
+                    "manifest_v": 1,
+                    "model": "Raspberry Pi 5 Model B Rev 1.0",
+                    "arch": "aarch64",
+                    "os_release": "Debian GNU/Linux 12 (bookworm)",
+                    "python": "3.12.3",
+                    "cpu_count": 4,
+                    "ram_total_mb": 8064,
+                    "container": False,
+                    "gpu": [{"kind": "hailo", "name": "Hailo"}],
+                    "devices": ["bluetooth", "gpio"],
+                },
+            }
+        ]
+
+        lines = (await info.show_nodes(_ctx(main), "")).splitlines()
+
+        # Shown offline too: what the machine is does not change while it is away.
+        row = next(i for i, line in enumerate(lines) if line.lstrip().startswith("rpi"))
+        assert lines[row + 1].strip() == (
+            "Raspberry Pi 5 Model B Rev 1.0 · aarch64 · Debian GNU/Linux 12 (bookworm) · "
+            "Python 3.12.3 · 4 CPUs · 7.9 GB memory · Hailo · bluetooth, gpio"
+        )
+
+    async def test_a_field_that_is_not_a_number_is_left_out(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "odd",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "manifest": {"manifest_v": 1, "arch": "aarch64", "cpu_count": True},
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "aarch64" in text
+        assert "CPUs" not in text
+
+    async def test_a_node_without_a_manifest_has_no_machine_line(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [{"node": "old", "online": True, "agents": [], "last_seen": time.time()}]
+
+        lines = (await info.show_nodes(_ctx(main), "")).splitlines()
+
+        row = next(i for i, line in enumerate(lines) if line.lstrip().startswith("old"))
+        assert lines[row + 1].startswith("To remove")
+
+    async def test_removing_a_node_clears_its_retained_manifest(self, main: _Main) -> None:
+        # Left retained, it would describe a machine that is gone to every main
+        # that connects afterwards.
+        await node_cmds.remove_node(_ctx(main), "rpi")
+
+        assert ("nodes/rpi/manifest", b"") in main.published
+        assert main.nodes.forgotten == ["rpi"]
+
     async def test_no_remote_nodes_suggests_deploying_one(self, main: _Main) -> None:
         main._registry = None
 
@@ -522,6 +645,19 @@ class TestMigrate:
         main.migrate_result = result
 
         assert await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor rpi") == reply
+
+    @pytest.mark.parametrize(
+        ("argument", "force"),
+        [("sensor rpi", False), ("sensor rpi --force", True), ("--force sensor rpi", True)],
+    )
+    async def test_force_is_passed_on_wherever_it_is_written(
+        self, main: _Main, argument: str, force: bool
+    ) -> None:
+        main.migrate_result = {"success": True, "message": "moved"}
+
+        await agent_cmds.migrate_agent_cmd(_ctx(main), argument)
+
+        assert ("migrate", ("sensor", "rpi", force)) in main.calls
 
 
 class TestRestart:

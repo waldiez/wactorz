@@ -11,8 +11,9 @@ import pytest
 
 from tests.waiting import quiet
 from wactorz.core import deferred_write
+from wactorz.core.state_snapshot import json_safe
 from wactorz.node import state as node_state
-from wactorz.node.state import JsonState, json_safe, state_path
+from wactorz.node.state import JsonState, state_path
 
 #: The delay these tests give the node's writer, in place of the real one.
 DELAY_S = 0.1

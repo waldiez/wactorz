@@ -147,11 +147,19 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |
+| `WACTORZ_AGENTS` | — | Agents this deployment brings, as `package.module:attr` targets (an `Actor` subclass or a function declared with `@wactorz.agent`), comma separated. Supervised at startup beside the built-ins; see [Bringing your own agents](agents.md#bringing-your-own-agents) |
+| `WACTORZ_PIPELINES` | — | Pipelines this deployment brings, as `package.module:attr` targets of what `wactorz.pipeline()` returned, comma separated; their steps, schedule and rules are supervised at startup |
+| `WACTORZ_HA_AGENTS` | `auto` | Whether the Home Assistant agents start: `auto` starts them when `HA_URL` and `HA_TOKEN` are set, `on` and `off` decide outright |
+| `WACTORZ_MINIMAL` | `0` | Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as `wactorz --minimal` |
+| `WACTORZ_ORCHESTRATOR` | — | What answers chat, as one `package.module:attr` target: an object implementing `wactorz.Orchestrator`, or a class or factory called with the actor registry to build one. In place of main (the default when main runs) and of the model-free orchestrator of the minimal profile; a target that cannot be loaded or is not an orchestrator refuses to start. See *Your own orchestrator* in the library guide |
 | `WACTORZ_TZ` | _(unset)_ | Override the timezone used in agents' date/time context (e.g. `Europe/Athens`). Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` > host local zone. Blank or unknown values fall through to the next candidate |
 | `WACTORZ_LOG_FORMAT` | `text` | `json` writes each log record as one JSON object on one line (JSON Lines), to the console and to `wactorz.log`, for a collector that parses logs: fields `ts` (UTC), `level`, `logger`, `message`, and `exception` holding the whole traceback. Redaction applies as in text. The dashboard's log view is unaffected. A node reads the setting from its own environment |
 | `WACTORZ_RETENTION_CHAT_DAYS` | `365` | Days chat history is kept; `0` keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent |
 | `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
 | `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
+| `WACTORZ_RETENTION_METRICS_DAYS` | `7` | Days the per-minute metrics history of every agent and node is kept (`/api/history/...`); `0` keeps it for ever. A metrics reset clears it |
+| `WACTORZ_MIGRATION_MAX_STATE_BYTES` | `8388608` | Largest agent state a `/migrate` ships, as JSON; a larger one is refused before the agent stops, and `--force` does not override it. Set on main, which sends it to the node it asks; `0` sets no limit |
+| `WACTORZ_MIGRATION_MAX_BLOB_BYTES` | `67108864` | Largest total of an agent's blobs (models, arrays, bytes) a `/migrate` carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; `0` sets no limit |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `ALERTMANAGER_EXTERNAL_PORT` | `9093` | Alertmanager host port |
 | `ALERT_WEBHOOK_URL` | _(none)_ | Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See `prometheus.md` |
@@ -167,6 +175,27 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `DEPLOY_STRICT_HOST_KEYS` | `0` | `1` = never learn a host key on first contact; unknown hosts are refused |
 
 ---
+
+## Backing up and moving an install
+
+`wactorz-state` writes a state directory to one archive, and puts one back:
+
+```bash
+wactorz-state export                       # wactorz-state-<date>-<time>.tar.gz, here
+wactorz-state export backup.tar.gz --no-secrets
+wactorz-state import backup.tar.gz         # into WACTORZ_STATE_DIR, or ./state
+wactorz-state import backup.tar.gz --replace
+```
+
+Both read `WACTORZ_STATE_DIR` as the server does; `--state-dir` names another directory.
+
+- **What it holds:** the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
+- **What it leaves out:** logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.
+- **Export while it runs.** The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.
+- **Import with it stopped.** A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless `--replace` is given, which keeps what was there beside it as `<directory>.before-import-<date>-<time>`.
+- **An archive is code.** Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.
+
+A node's state is moved the same way, on the node: `wactorz-state export --state-dir ~/wactorz/state`, and an import there with the node stopped. The Home Assistant add-on's state is in `/data/state`, which Home Assistant's own backups already include.
 
 ## SSH key management
 

@@ -48,6 +48,12 @@ def mqtt_dial_port(tls: str, plain_port: int, tls_port: int) -> int:
     return tls_port if tls.strip().lower() in _MQTT_TLS_ON else plain_port
 
 
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """The variable's value when it is one of ``choices`` (any case), else ``default``."""
+    value = os.getenv(name, "").strip().lower()
+    return value if value in choices else default
+
+
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
@@ -229,6 +235,20 @@ UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", 
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
 
+#: Largest agent state a migration ships, as JSON. The snapshot goes over MQTT,
+#: waits in the outbox while the broker is away, and is parsed in one piece by
+#: the node that receives it, which may be a Raspberry Pi. A migration over the
+#: limit is refused before the agent is stopped. 0 sets no limit.
+MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 1024 * 1024)
+
+#: Largest total of blobs -- models, arrays, bytes -- a migration carries beside
+#: that JSON, and the largest blob a machine accepts from another. They travel
+#: in chunks and are written to disk as they arrive, so this bounds the disk a
+#: migration takes and how long it runs, not memory. Read on main and on each
+#: node alike. A migration over the limit leaves the agent where it was. 0 sets
+#: no limit.
+MIGRATION_MAX_BLOB_BYTES = _env_int("WACTORZ_MIGRATION_MAX_BLOB_BYTES", 64 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:
@@ -245,6 +265,10 @@ RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
 #: replayed on every start — for ever, for one that never can be. A week outlasts
 #: any outage worth waiting for, and each one expired is logged with its topic.
 RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
+#: The per-minute samples of every agent and node the dashboard's trends read.
+#: A week shows a pattern across days; with a few dozen agents it is a few tens
+#: of megabytes, which a Raspberry Pi's card holds without noticing.
+RETENTION_METRICS_DAYS = _env_int("WACTORZ_RETENTION_METRICS_DAYS", 7)
 
 #: What a node does with a control message not signed for it, once it holds a key.
 #:
@@ -538,6 +562,22 @@ class AppConfig:
     telegram_allowed_user_ids: frozenset[int]
     whatsapp_allowed_numbers: frozenset[str]
     social_rate_limit_per_min: int
+    #: ``package.module:attr`` targets of agents this deployment brings, comma
+    #: separated; the value of WACTORZ_AGENTS as given. See wactorz/plugins.py.
+    agents_env: str
+    #: ``package.module:attr`` targets of pipelines this deployment brings; the
+    #: value of WACTORZ_PIPELINES as given. See wactorz/pipelines.py.
+    pipelines_env: str
+    #: Whether the Home Assistant agents start: ``auto`` (when HA_URL and
+    #: HA_TOKEN are set), ``on``, or ``off``.
+    ha_agents: str
+    #: Start only the monitor and the agents this deployment brings: no
+    #: orchestrator, catalogue or installer, so no model is needed.
+    minimal: bool
+    #: ``package.module:attr`` of the orchestrator that answers chat, in place
+    #: of main or the model-free one; the value of WACTORZ_ORCHESTRATOR as
+    #: given, empty for the default. See wactorz/orchestration.py.
+    orchestrator_env: str
 
 
 CONFIG = AppConfig(
@@ -616,6 +656,11 @@ CONFIG = AppConfig(
         if n.strip()
     ),
     social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
+    agents_env=os.getenv("WACTORZ_AGENTS", ""),
+    pipelines_env=os.getenv("WACTORZ_PIPELINES", ""),
+    ha_agents=_env_choice("WACTORZ_HA_AGENTS", "auto", ("auto", "on", "off")),
+    minimal=_env_truthy("WACTORZ_MINIMAL"),
+    orchestrator_env=os.getenv("WACTORZ_ORCHESTRATOR", "").strip(),
 )
 
 

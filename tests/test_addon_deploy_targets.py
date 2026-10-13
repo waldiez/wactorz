@@ -13,8 +13,8 @@ have caught it.
 """
 
 import dataclasses
-import os
 import re
+from pathlib import Path
 
 import pytest
 import yaml
@@ -32,14 +32,13 @@ ALIASES = {"key": "key_path"}
 NOT_PER_FIELD = {"name"}
 
 
-def _repo_path(relative: str) -> str:
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, relative)
+def _repo_path(relative: str) -> Path:
+    return Path(__file__).resolve().parents[1] / relative
 
 
 def _schema_fields(addon: str) -> set[str]:
     """The per-target keys the Supervisor will accept for this add-on."""
-    with open(_repo_path(f"ha-addon/{addon}/config.yaml")) as handle:
+    with _repo_path(f"ha-addon/{addon}/config.yaml").open() as handle:
         config = yaml.safe_load(handle)
     return set(config["schema"]["deploy_targets"][0])
 
@@ -51,7 +50,7 @@ def _exported_fields(addon: str) -> set[str]:
     that this list is hand-maintained and drifts, so the test has to read the
     thing that drifts.
     """
-    with open(_repo_path(f"ha-addon/{addon}/run.sh")) as handle:
+    with _repo_path(f"ha-addon/{addon}/run.sh").open() as handle:
         source = handle.read()
     match = re.search(r"for deploy_field in ([^;]+); do", source)
     assert match is not None, "the deploy_targets field loop moved or was renamed"

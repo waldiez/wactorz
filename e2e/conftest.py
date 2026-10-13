@@ -54,7 +54,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
     """Run the journey, then the guard, as one thing that passes or fails."""
-    watching = item.funcargs.get("unexpected") if hasattr(item, "funcargs") else None
+    watching = item.funcargs.get("unexpected") if isinstance(item, pytest.Function) else None
+    if not isinstance(watching, guard.Guard):
+        watching = None
     if watching is not None:
         watching.begin()
     result = yield
@@ -75,7 +77,12 @@ def run_fixture(pytestconfig: pytest.Config) -> Iterator[runs.Run]:
 
 @pytest.fixture(scope="session", name="app")
 def app_fixture(run: runs.Run) -> Iterator[backend.Backend]:
-    """The broker, a machine to deploy to, and the application, for the whole run."""
+    """The broker, a machine to deploy to, and the application, for the whole run.
+
+    What it runs once it has settled is recorded on it (`started_with`): the
+    journeys that compare against a fresh install compare against that, so what
+    a server starts by default can change without them being edited to match.
+    """
     script = model.as_json()
     node.make_key(run)
     broker.issue_files(run, backend.environment(run, script=script))
@@ -83,6 +90,7 @@ def app_fixture(run: runs.Run) -> Iterator[backend.Backend]:
         broker.up(run)
         node.up(run)
         app = backend.start(run, script=script)
+        app.started_with = frozenset(str(agent.get("name")) for agent in app.rest.agents())
         try:
             yield app
         finally:

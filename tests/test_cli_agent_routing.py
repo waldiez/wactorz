@@ -22,8 +22,10 @@ import pytest
 from wactorz import config
 from wactorz.agents.main import MainActor
 from wactorz.config import DeployTarget
+from wactorz.core.registry import ActorRegistry
 from wactorz.interfaces.chat import cli
 from wactorz.interfaces.chat.cli import CLIInterface, resolve_host
+from wactorz.orchestration import MainOrchestrator
 
 
 class _Registry:
@@ -63,7 +65,9 @@ class _Main:
 
 
 def _cli(main: _Main) -> CLIInterface:
-    return CLIInterface(cast(MainActor, main))
+    # Nothing here types a line for the orchestrator; it is built the way the start builds it.
+    seam = MainOrchestrator(cast(ActorRegistry, main._registry))
+    return CLIInterface(seam, cast(MainActor, main))
 
 
 class _Chatty:
@@ -322,7 +326,7 @@ class TestDeploy:
 
         monkeypatch.setattr(cli, "resolve_host", _missing)
         await _cli(_Main())._deploy("rpi")
-        cli_without_installer = CLIInterface(cast(MainActor, object()))
+        cli_without_installer = CLIInterface(cast(Any, None), cast(MainActor, object()))
         await cli_without_installer._deploy("box")
 
         out = capsys.readouterr().out

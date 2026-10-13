@@ -20,6 +20,16 @@
  */
 export const MAIN_AGENT: string = "main";
 
+/**
+ * The transport the dashboard's chat arrives through, not an agent anyone talks to.
+ *
+ * Mirrors the backend's `IO_GATEWAY_ID`. The server stamps direct replies with it,
+ * and announces it with a spawn frame each time it reconnects to the broker, so
+ * it reaches the agent list like any agent — and has to be kept out of everything
+ * that lists agents to talk to.
+ */
+export const IO_GATEWAY: string = "io-gateway";
+
 /** Extract the embedded `<name>` from a WID id, or return the input unchanged. */
 export function nameFromWid(raw: string | undefined): string {
     if (!raw) {

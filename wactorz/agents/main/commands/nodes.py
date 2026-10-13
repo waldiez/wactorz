@@ -35,13 +35,16 @@ async def remove_node(ctx: CommandContext, argument: str) -> str:
     # node's agents back when it next reconciles. The spawn message is not
     # retained, so there is nothing of it left to clear.
     await ctx.actor._mqtt_publish(f"nodes/{node_name}/desired_state", b"", retain=True)
+    # And the retained manifest, which would otherwise describe the machine to
+    # every main that connects, for a node no longer there.
+    await ctx.actor._mqtt_publish(f"nodes/{node_name}/manifest", b"", retain=True)
     await ctx.actor._mqtt_publish(f"nodes/{node_name}/stop_all", {"reason": "removed"}, qos=1)
     # Remove all agents for this node from spawn registry
     reg = ctx.actor._get_spawn_registry()
     removed = [n for n, c in reg.items() if c.get("node", "") == node_name]
     for n in removed:
         ctx.actor._remove_from_spawn_registry(n)
-    ctx.actor._known_nodes.pop(node_name, None)
+    ctx.actor.nodes.forget(node_name)
     return (
         f"Node '{node_name}' removed. "
         f"Cleared {len(removed)} agent(s): {', '.join(removed) or 'none'}. "

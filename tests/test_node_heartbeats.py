@@ -190,6 +190,42 @@ class TestTheNodeTable:
         assert entry["node_id"] == "rpi-id"
         assert entry["uptime_s"] == 900
 
+    async def test_it_records_how_close_the_node_is_to_running_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        readings = {
+            "swap_used_mb": 12,
+            "load_1m": 0.5,
+            "load_5m": 0.25,
+            "disk_free_mb": 3000,
+            "temp_c": 61.2,
+            "throttled": ["under_voltage"],
+        }
+        run = await run_heartbeats(monkeypatch, [heartbeat(**readings)])
+
+        entry = run.nodes["rpi"]
+        assert {key: entry[key] for key in readings} == readings
+
+    async def test_a_runner_older_than_the_readings_leaves_them_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Unknown, not zero: admission would read zero as nothing left.
+        run = await run_heartbeats(monkeypatch, [heartbeat()])
+
+        entry = run.nodes["rpi"]
+        assert (entry["disk_free_mb"], entry["load_1m"], entry["throttled"]) == (None, None, None)
+
+    async def test_a_reading_that_is_not_one_is_left_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_heartbeats(
+            monkeypatch,
+            [heartbeat(disk_free_mb="lots", temp_c=True, throttled="under_voltage")],
+        )
+
+        entry = run.nodes["rpi"]
+        assert (entry["disk_free_mb"], entry["temp_c"], entry["throttled"]) == (None, None, None)
+
     async def test_a_later_heartbeat_replaces_the_earlier_one(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -202,11 +238,43 @@ class TestTheNodeTable:
 
         assert set(run.nodes) == {"rpi", "nuc"}
 
-    async def test_it_subscribes_to_both_node_topics(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_it_subscribes_to_every_node_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Subscribing to only heartbeats would leave migrations unreported.
         run = await run_heartbeats(monkeypatch, [])
 
-        assert run.subscribed == ["nodes/+/heartbeat", "nodes/+/migrate_result"]
+        assert run.subscribed == ["nodes/+/heartbeat", "nodes/+/migrate_result", "nodes/+/manifest"]
+
+
+def manifest(node: str = "rpi", payload: bytes | None = None, **over: Any) -> _Message:
+    """A node's retained manifest, or with ``payload=b""`` the clearing of it."""
+    body = {"node": node, "manifest_v": 1, "arch": "aarch64", "ram_total_mb": 8064, **over}
+    return _Message(
+        f"nodes/{node}/manifest", json.dumps(body).encode() if payload is None else payload
+    )
+
+
+class TestTheMachineANodeRunsOn:
+    async def test_its_manifest_is_kept(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest()])
+
+        assert run.main.nodes.node_manifests["rpi"]["ram_total_mb"] == 8064
+
+    async def test_one_without_a_version_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest(manifest_v=None)])
+
+        assert "rpi" not in run.main.nodes.node_manifests
+
+    async def test_a_cleared_manifest_is_forgotten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest(), manifest(payload=b"")])
+
+        assert "rpi" not in run.main.nodes.node_manifests
+
+    async def test_a_later_manifest_replaces_the_earlier_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest(), manifest(ram_total_mb=4096)])
+
+        assert run.main.nodes.node_manifests["rpi"]["ram_total_mb"] == 4096
 
 
 class TestPruningAnAgentThatStoppedAppearing:
@@ -395,11 +463,12 @@ class TestTheProvisionalContract:
 
 
 class TestReportingAMigration:
-    async def test_a_success_is_announced(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_a_success_is_left_to_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The node reports one when it has handed the agent over, before it is
+        # running anywhere; main announces the migration once it is.
         run = await run_heartbeats(monkeypatch, [migrate_result(success=True)])
 
-        assert run.notifications[0]["severity"] == "info"
-        assert "succeeded" in run.notifications[0]["message"]
+        assert not run.notifications
 
     async def test_a_failure_is_announced_with_its_reason(
         self, monkeypatch: pytest.MonkeyPatch
@@ -411,13 +480,10 @@ class TestReportingAMigration:
         assert run.notifications[0]["severity"] == "warning"
         assert "no route to host" in run.notifications[0]["message"]
 
-    async def test_it_names_the_agent_and_the_destination(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        run = await run_heartbeats(monkeypatch, [migrate_result()])
+    async def test_a_failure_names_the_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [migrate_result(success=False, error="x")])
 
         assert "collector" in run.notifications[0]["message"]
-        assert "rpi-2" in run.notifications[0]["message"]
 
 
 class TestMessagesThatCannotBeUsed:

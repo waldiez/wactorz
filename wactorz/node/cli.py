@@ -21,6 +21,7 @@ import uuid
 
 from ..config import CONFIG, deploy_name_error
 from ..core.mqtt_tls import client_context, tls_enabled
+from ..core.state_lock import StateInUseError
 from ..monitoring.log_setup import setup_console_logging
 from .runner import NodeRunner
 
@@ -116,10 +117,17 @@ def run(args: argparse.Namespace) -> None:
             # process is stopped from outside there instead.
             pass
 
+    refused: StateInUseError | None = None
     try:
         loop.run_until_complete(runner.run())
+    except StateInUseError as exc:
+        refused = exc
     finally:
         loop.close()
+    if refused is not None:
+        # The reason is the whole story; a traceback would only bury it.
+        logger.error("[runner] Not starting: %s", refused)
+        sys.exit(1)
 
 
 def get_args(argv: list[str] | None = None) -> argparse.Namespace:

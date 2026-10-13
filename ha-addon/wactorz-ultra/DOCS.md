@@ -263,6 +263,17 @@ Set `ha_connection` to `supervisor` or `custom` only if you want to force a mode
 
 On startup the add-on probes the connection and logs one line with the mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`) — check the add-on log first if HA integration misbehaves.
 
+## Licences
+
+Wactorz is Apache-2.0. This add-on also contains
+[Ultralytics](https://github.com/ultralytics/ultralytics), used by vision agents, which is
+licensed under the **AGPL-3.0**: the add-on as a whole is distributed under its terms.
+Building a closed-source product or a hosted service on it means meeting the AGPL-3.0 or
+holding an [Ultralytics licence](https://www.ultralytics.com/license). The standard
+**Wactorz** add-on contains no such component.
+
+The corresponding source is the source of this release at <https://github.com/waldiez/wactorz> (its tag, with the files in `ha-addon/wactorz-ultra/` that build this add-on) and Ultralytics' own at <https://github.com/ultralytics/ultralytics>.
+
 ## Support
 
 - Documentation: <https://docs.waldiez.io/wactorz/>

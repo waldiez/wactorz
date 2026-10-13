@@ -13,12 +13,11 @@ from typing import Any
 
 import pytest
 
-from wactorz.catalogue_agents.doc_to_pptx_agent import AGENT_CODE
+from tests.programs import program_namespace
 
 # The agent ships as source that the framework exec's when spawning it, so the
 # only way to reach its helpers is the way the framework does.
-_agent: dict = {}
-exec(AGENT_CODE, _agent)
+_agent = program_namespace("doc_to_pptx_agent.py")
 _run_blocking = _agent["_run_blocking"]
 
 

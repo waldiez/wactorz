@@ -78,6 +78,36 @@ def _as_names(value: object) -> list[str]:
     return [name for name in value if isinstance(name, str)]
 
 
+def _as_number(value: object) -> float | int | None:
+    """A reading a heartbeat reported, or None for anything that is not a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _as_flags(value: object) -> list[str] | None:
+    """The throttle flags a heartbeat reported; None when it could not tell."""
+    if not isinstance(value, list):
+        return None
+    return [flag for flag in value if isinstance(flag, str)]
+
+
+#: What a node says about how close it is to running out, under the names it
+#: says it. Copied as they arrive into what main knows and what it lists; a
+#: heartbeat from a runner older than a reading leaves it None, which is "not
+#: known" -- never zero, which would read as nothing left.
+RESOURCE_READINGS = (
+    "cpu_pct",
+    "mem_used_mb",
+    "mem_free_mb",
+    "swap_used_mb",
+    "load_1m",
+    "load_5m",
+    "disk_free_mb",
+    "temp_c",
+)
+
+
 #: How long a node may stay silent before its agents are treated as lost.
 #:
 #: Longer than the window above on purpose. That one drives the indicator in the
@@ -132,6 +162,11 @@ class NodeManager:
         #: node -> monotonic time its desired state was last republished because of
         #: what its heartbeat said about signing.
         self.signing_republished_at: dict[str, float] = {}
+        #: node -> what its machine is, from its retained manifest. Kept apart
+        #: from `known` and not dropped with it: a node forgotten for going
+        #: quiet does not send its manifest again when it comes back -- the
+        #: broker delivers a retained message on subscribing, not on reconnects.
+        self.node_manifests: dict[str, dict[str, Any]] = {}
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Every known node, with its age resolved to an `online` flag.
@@ -151,9 +186,12 @@ class NodeManager:
                 "version": info.get("version"),
                 "runtime": info.get("runtime", DEFAULT_NODE_RUNTIME),
                 "uptime_s": info.get("uptime_s"),
-                "cpu_pct": info.get("cpu_pct"),
-                "mem_used_mb": info.get("mem_used_mb"),
-                "mem_free_mb": info.get("mem_free_mb"),
+                **{reading: info.get(reading) for reading in RESOURCE_READINGS},
+                "throttled": info.get("throttled"),
+                # Agents whose restarts the node's supervisor has slowed down.
+                "slow_retry": info.get("slow_retry", []),
+                # What the machine is; None from a node that has not said.
+                "manifest": self.node_manifests.get(name),
             }
             for name, info in self.known.items()
         ]
@@ -287,6 +325,7 @@ class NodeManager:
                     # the two.
                     await client.subscribe("nodes/+/heartbeat", qos=0)
                     await client.subscribe("nodes/+/migrate_result", qos=1)
+                    await client.subscribe("nodes/+/manifest", qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
@@ -313,6 +352,12 @@ class NodeManager:
 
     async def receive_node_message(self, topic: str, payload: bytes | None) -> None:
         """Route one message from a node to whichever half handles it."""
+        if topic.endswith("/manifest") and not payload:
+            # The retained manifest cleared: the node was removed.
+            parts = topic.split("/")
+            if len(parts) == 3:
+                self.node_manifests.pop(parts[1], None)
+            return
         try:
             data = json.loads(payload.decode()) if payload else None
         except Exception:
@@ -327,6 +372,26 @@ class NodeManager:
             await self.receive_heartbeat(node_name, data)
         elif topic.endswith("/migrate_result"):
             self.report_migration(data)
+        elif topic.endswith("/manifest"):
+            self.receive_manifest(node_name, data)
+
+    def receive_manifest(self, node_name: str, data: dict[str, Any]) -> None:
+        """Take what a node says its machine is.
+
+        Kept as it arrived, for the readers that know the fields. One without a
+        manifest version is not a manifest this server can read, and is ignored
+        rather than half-understood.
+        """
+        version = data.get("manifest_v")
+        if isinstance(version, bool) or not isinstance(version, int):
+            logger.warning("[main] Ignoring a manifest from node %r with no version.", node_name)
+            return
+        self.node_manifests[node_name] = data
+
+    def forget(self, node_name: str) -> None:
+        """Forget a node altogether, as removing it does: its heartbeat and its machine."""
+        self.known.pop(node_name, None)
+        self.node_manifests.pop(node_name, None)
 
     async def receive_heartbeat(self, node_name: str, data: dict[str, Any]) -> None:
         """Take one heartbeat: prune what vanished, record the node, fill gaps."""
@@ -345,9 +410,8 @@ class NodeManager:
             "runtime": data.get("runtime") or DEFAULT_NODE_RUNTIME,
             "pid": data.get("pid"),
             "uptime_s": data.get("uptime_s"),
-            "cpu_pct": data.get("cpu_pct"),
-            "mem_used_mb": data.get("mem_used_mb"),
-            "mem_free_mb": data.get("mem_free_mb"),
+            **{reading: _as_number(data.get(reading)) for reading in RESOURCE_READINGS},
+            "throttled": _as_flags(data.get("throttled")),
             # Whether the node checks what main sends it. A heartbeat without it
             # comes from a runner older than signing, which checks nothing.
             "signing": data.get("signing") or "off",
@@ -588,22 +652,21 @@ class NodeManager:
             monitor._last_seen[remote_actor_id(name)] = now
 
     def report_migration(self, data: dict[str, Any]) -> None:
-        """Turn a node's migration result into a notification."""
+        """Turn a node's failed migration into a notification.
+
+        A success is not announced from here. The node reports one once it has
+        handed the agent over, before main has placed it anywhere, and main
+        announces the migration itself when the agent is confirmed running --
+        so the user hears of each migration once, and only when it is true.
+        """
         host = self.host
-        if host is None:
+        if host is None or data.get("success", False):
             return
-        succeeded = data.get("success", False)
-        agent = data.get("agent", "?")
-        to_node = data.get("to_node", "?")
         host._queue_notification(
             {
                 "_monitor_notification": True,
-                "message": (
-                    f"Migration of '{agent}' to '{to_node}' succeeded."
-                    if succeeded
-                    else f"Migration of '{agent}' failed: {data.get('error', '?')}"
-                ),
-                "severity": "info" if succeeded else "warning",
+                "message": f"Migration of '{data.get('agent', '?')}' failed: {data.get('error', '?')}",
+                "severity": "warning",
                 "timestamp": time.time(),
             }
         )

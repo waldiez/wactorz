@@ -12,6 +12,7 @@ program, and a program is readable as a string here and not as one escaped line.
 
 from __future__ import annotations
 
+import datetime
 import json
 
 from harness.run import NODE_NAME
@@ -28,6 +29,20 @@ async def handle_task(agent, payload):
     return {"result": "counted " + str(agent.state["seen"])}
 """
 
+#: An agent that ends itself a few seconds after it starts, as a planner or a
+#: one-off actuator does once its work is done.
+FINISHER = """
+async def setup(agent):
+    agent.state["ticks"] = 0
+
+
+async def process(agent):
+    agent.state["ticks"] += 1
+    if agent.state["ticks"] >= 8:
+        await agent.stop()
+        return
+"""
+
 #: An agent that puts what it is sent to the model, and says what came back.
 ASKS_THE_MODEL = """
 async def setup(agent):
@@ -38,6 +53,13 @@ async def handle_task(agent, payload):
     said = await agent.ask_llm(str(payload.get("text", "")), timeout=30)
     return {"result": "the model said: " + said}
 """
+
+
+#: A moment already past when any journey asks. With its offset, so it means
+#: the same moment whatever time zone the server reads schedules in.
+_JUST_NOW = (
+    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=30)
+).isoformat(timespec="seconds")
 
 
 def _starts(words: str, **agent: object) -> str:
@@ -74,7 +96,51 @@ SCRIPT = {
         capabilities=["asking"],
         code=ASKS_THE_MODEL,
     ),
+    # An agent that is a system prompt and nothing else, put on the node: what
+    # runs there is the bridge code main writes for it.
+    "start a helper on the node": _starts(
+        "Starting it there.",
+        name="helper",
+        type="llm",
+        node=NODE_NAME,
+        description="Answers in one sentence",
+        capabilities=["helping"],
+        system_prompt="You help. Answer in one short sentence.",
+    ),
     "how is the tide": "The tide is in.",
+    # Asked of a planner, which finds no plan in it and answers directly: the
+    # shortest run a planner has, from its start to its answer. Main adds the
+    # last few exchanges to a short planner task, and the longest key found
+    # wins, so this one is longer than any that conversation could contain.
+    "count the beans in the old blue jar": "There are seven beans.",
+    "start a finisher here": _starts(
+        "Starting it.",
+        name="finisher",
+        type="dynamic",
+        description="Does one thing and ends itself",
+        capabilities=["finishing"],
+        poll_interval=1,
+        code=FINISHER,
+    ),
+    # A once-schedule whose moment is already past: it fires if that was within
+    # its catch-up window, and ends itself either way.
+    "start a reminder here": _starts(
+        "Setting it.",
+        name="reminder",
+        type="scheduled",
+        description="Reminds once",
+        schedule={"type": "once", "at": _JUST_NOW},
+    ),
+    "start a finisher on the node": _starts(
+        "Starting it there.",
+        name="far-finisher",
+        type="dynamic",
+        node=NODE_NAME,
+        description="Does one thing and ends itself",
+        capabilities=["finishing"],
+        poll_interval=1,
+        code=FINISHER,
+    ),
 }
 
 

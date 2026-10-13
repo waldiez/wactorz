@@ -328,23 +328,29 @@ wactorz --no-monitor
 
 ## Adding a custom interface
 
-All interfaces implement the same minimal pattern — call `process_user_input()` and stream or return the result. The simplest possible interface:
+All interfaces implement the same minimal pattern — hand the message to the orchestrator, saying which channel it came in on, and stream or return the answer. The orchestrator is main unless the deployment installed another (see *Your own orchestrator* in the library guide), so an interface never names main. The simplest possible interface:
 
 ```python
+from wactorz.orchestration import SOCIAL
+
+
 class MyInterface:
-    def __init__(self, main_actor):
-        self.main = main_actor
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
 
     async def run(self):
-        async for message in self._receive_messages():
-            # Streaming response
-            async for chunk in self.main.process_user_input_stream(message):
+        async for sender, message in self._receive_messages():
+            # A public channel: the orchestrator answers with the restrictions
+            # that go with one. "dashboard", "cli" and "rest" are the operator's own.
+            async for chunk in self.orchestrator.handle_turn_stream(
+                message, channel=SOCIAL, user=sender
+            ):
                 await self._send(chunk)
 
 
-# Register in cli.py alongside the other interfaces
+# Register in app.py alongside the other interfaces
 elif interface == "my-interface":
-    iface = MyInterface(main_actor)
+    iface = MyInterface(orchestrator)
     await asyncio.gather(iface.run(), system.run_forever())
 ```
 

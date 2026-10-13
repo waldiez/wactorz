@@ -13,6 +13,7 @@ import {
     normaliseQaFlag,
 } from "../io/ServerEventRouter";
 import { resolveAgentName } from "../agents/naming";
+import type { NodeHeartbeatPayload } from "../types/agent";
 
 describe("normaliseHeartbeat", () => {
     it("accepts camelCase payload", () => {
@@ -296,8 +297,26 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         const node = capture(r, "node-heartbeat");
         r.route("nodes/edge-1/heartbeat", { agents: ["a", "b"], node_id: "n1" });
         r.route("nodes/edge-2/heartbeat", { agents: ["c"] }); // no node_id → omitted
-        expect(node[0]).toEqual({ node: "edge-1", agents: ["a", "b"], nodeId: "n1" });
-        expect(node[1]).toEqual({ node: "edge-2", agents: ["c"] });
+        expect(node[0]).toEqual({ node: "edge-1", agents: ["a", "b"], nodeId: "n1", readings: {} });
+        expect(node[1]).toEqual({ node: "edge-2", agents: ["c"], readings: {} });
+    });
+
+    it("carries a node heartbeat's readings, leaving out what is not a number", () => {
+        const r = new ServerEventRouter();
+        const node = capture(r, "node-heartbeat");
+        r.route("nodes/rpi/heartbeat", {
+            agents: [],
+            cpu_pct: 12.5,
+            mem_free_mb: 7000,
+            disk_free_mb: "lots",
+            temp_c: Number.NaN,
+            throttled: ["under_voltage", 3],
+        });
+        expect((node[0] as NodeHeartbeatPayload).readings).toEqual({
+            cpu_pct: 12.5,
+            mem_free_mb: 7000,
+            throttled: ["under_voltage"],
+        });
     });
 
     it("falls back to the id prefix when no name is in the payload", () => {

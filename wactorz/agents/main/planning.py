@@ -17,6 +17,9 @@ from typing import TYPE_CHECKING, ClassVar
 
 from wactorz.llm_factory import provider_for
 
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+
 logger = logging.getLogger(__name__)
 
 #: Persistence key for the rules that shape how a pipeline is planned.
@@ -155,6 +158,10 @@ _CONDITION_WORDS = {
 
 class PlanningMixin(_Host):
     """Plans, dry-run flow, and pipeline execution. Mix into an LLMAgent host."""
+
+    #: What every planner this host spawns plans for. Every integration unless
+    #: the host says otherwise.
+    _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
 
     def get_pipeline_rules(self) -> dict:
         return self.recall(PIPELINE_RULES_KEY) or {}
@@ -543,6 +550,7 @@ class PlanningMixin(_Host):
                 plan_only=plan_only,
                 approved_plan=approved_plan,
                 max_lifetime_s=lifetime_s,
+                prompt_fragments=self._prompt_fragments,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             if not planner:
@@ -555,7 +563,6 @@ class PlanningMixin(_Host):
             spawned_names = result_payload.get("spawned", [])
             if spawned_names:
                 answer += f"\n\n[System: Planner created new agents: {', '.join(spawned_names)} — saved for future use]"
-            return answer
 
         except asyncio.TimeoutError:
             logger.warning("[%s] Planner timed out for: %s", self.name, task[:60])
@@ -563,6 +570,8 @@ class PlanningMixin(_Host):
         except Exception:
             logger.exception("[%s] Planner error", self.name)
             return None
+        else:
+            return answer
         finally:
             self._result_futures.pop(task_id, None)
 

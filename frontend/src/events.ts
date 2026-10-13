@@ -28,7 +28,8 @@ export interface AppEventMap {
     "af-stream-chunk": { chunk: string; from: string };
     "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
-    "af-wipe-all": void;
+    /** Everything was wiped; `survivors` are the ids of the agents still running. */
+    "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have
      *  been applied, or a named agent was deleted. Either way "the chat target
      *  is gone" is now a fact rather than a race with agents re-registering.

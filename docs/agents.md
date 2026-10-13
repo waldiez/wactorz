@@ -20,14 +20,16 @@ Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ON
 | **restarts** | 10 |
 | **persists** | `_spawned_agents`, `_pipeline_rules`, `_user_facts`, `_notification_urls`, `conversation_history`, `history_summary` → SQLite |
 
-The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (`ACTUATE` / `HA` / `PIPELINE` / `OTHER`), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to `OTHER`.
+The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (`PIPELINE` / `OTHER`, plus `ACTUATE` / `HA` where Home Assistant is configured), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to `OTHER`.
+
+Its prompts are assembled for the installation: a core every installation shares, plus what each configured integration adds — see [Prompt fragments](architecture.md#prompt-fragments). Without Home Assistant, main is never told about devices, and a turn cannot be classified as `ACTUATE` or `HA`.
 
 #### Intent routing
 
 | Intent | Routed to | Example |
 |--------|-----------|---------|
-| `ACTUATE` | `OneOffActuatorAgent` (ephemeral) | "turn off the lamp" |
-| `HA` | `home-assistant-agent` | "list all automations" |
+| `ACTUATE` | `OneOffActuatorAgent` (ephemeral) — Home Assistant only | "turn off the lamp" |
+| `HA` | `home-assistant-agent` — Home Assistant only | "list all automations" |
 | `PIPELINE` | a new `PlannerAgent` | "notify me on Discord when the door opens" |
 | `OTHER` | `main.chat()` | "what's the weather like?" |
 | `@mention` | named actor directly | `@my-agent {"action": "status"}` |
@@ -70,7 +72,7 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 | **name** | `planner-{hash}` (ephemeral) |
 | **lifetime** | per-request |
 
-Spawned by MainActor for every `PIPELINE`-classified request. The planner queries `home-assistant-agent` for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an `ha_actuator` agent (declarative HA service call), a `scheduled` agent (first-class time trigger — see [ScheduledAgent](#scheduledagent-spawned)), or a `dynamic` agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits.
+Spawned by MainActor for every `PIPELINE`-classified request. The planner samples live topic schemas from the TopicBus and, where Home Assistant is configured, queries `home-assistant-agent` for the full list of real entity IDs and resolves camera URLs, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an `ha_actuator` agent (declarative HA service call, offered only where Home Assistant is configured), a `scheduled` agent (first-class time trigger — see [ScheduledAgent](#scheduledagent-spawned)), or a `dynamic` agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits. Its prompts follow the same [fragments](architecture.md#prompt-fragments) main's do, inherited from the main that spawned it.
 
 After spawning, the planner fires a background `_bootstrap_ha_entity_states()` task that extracts HA entity IDs from the plan (generated code, `ha_actuator` actions, MQTT topics, and the enriched task string) and sends a `get_entities_state` request to `home-assistant-agent`. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to `homeassistant/state_changes/#` fire immediately — without waiting for the next real HA state change.
 
@@ -145,7 +147,7 @@ Runs `pip install` in a subprocess on request. Called automatically by `CatalogA
 | **restarts** | 10 |
 | **recipes dir** | `wactorz/catalogue_agents/` |
 
-Pre-built agent recipe library. On startup it loads every `AGENT_CODE` string from `wactorz/catalogue_agents/*.py` and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and `trusted=True` — bypassing the code safety validator since catalog agents are pre-built and tested.
+Pre-built agent recipe library. On startup it reads every recipe's program from `wactorz/catalogue_agents/` and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and `trusted=True` — bypassing the code safety validator since catalog agents are pre-built and tested.
 
 #### Usage
 
@@ -322,7 +324,7 @@ Maintains a live map of entity IDs to friendly names and domains. Used by Planne
 |---|---|
 | **name** | set at spawn time (e.g. `evening-lights-trigger`) |
 | **spawned by** | PlannerAgent (pattern 5 — scheduled trigger) |
-| **persists** | `_schedule_state` (last fire time, fire count) → SQLite |
+| **persists** | `_schedule_state` (last fire time, fire count) → the agent's `state.pkl` |
 
 First-class scheduled trigger primitive. Sleeps until the next fire time, publishes to its topic, then loops. Replaces the broken `while True: if datetime.now()…` patterns that LLM-generated dynamic agents kept producing for time-based rules.
 
@@ -365,7 +367,7 @@ The internal sleep is bounded to 5 minutes so DST transitions, system clock jump
 
 ### TimeSeriesCollector `[core]`
 
-**File:** `wactorz/agents/timeseries_collector.py`
+**File:** `wactorz/catalogue_agents/timeseries_collector_agent.py`
 
 | | |
 |---|---|
@@ -558,65 +560,165 @@ See [API reference](api.md#cost-management) for the full endpoint spec.
 
 ## Catalog recipes
 
-Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `AGENT_CODE` string. They are loaded by `CatalogAgent` at startup and spawned on demand as DynamicAgents with `trusted=True` (safety validator bypassed).
+Recipes live in `wactorz/catalogue_agents/` as plain Python modules, each one the program itself; the module's source is what gets sent. They are loaded by `CatalogAgent` at startup and spawned on demand as DynamicAgents with `trusted=True` (safety validator bypassed).
 
 | Recipe name | File | Description | Deps |
 |-------------|------|-------------|------|
-| `image-gen-agent` | `image_gen_agent.py` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns the absolute path to the saved PNG. | `requests` |
 | `doc-to-pptx-agent` | `doc_to_pptx_agent.py` | Converts PDF or TXT documents into PowerPoint presentations. Extracts embedded images from PDF; optionally uses NIM FLUX for slides without images. | `pymupdf`, `pdfplumber`, `pillow` |
-| `sinergym-collector` | `sinergym_collector_agent.py` | Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on `sinergym/env/{env_id}/observation`, buffers transitions per-episode, persists episode blobs, and signals the optimizer on collection complete. | `aiomqtt`, `numpy` |
-| `sinergym-optimizer` | `sinergym_optimizer_agent.py` | Env-aware GP-UCB Q(s,a) optimizer with RBC warm-start. Trains from collected episodes (RL PPO/SAC or Bayesian GP), then publishes actions to `sinergym/env/{env_id}/action` during deployment. Auto-introspects obs/action variable names and comfort models. | `stable-baselines3`, `scikit-learn`, `numpy`, `torch`, `aiomqtt`, `gymnasium` |
 | `anomaly-detector` | `anomaly_detector_agent.py` | Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data. | `aiomqtt`, `numpy` |
 | `smart-energy` | `smart_energy_agent.py` | Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules. | none |
 | `manual-agent` | `manual_agent.py` | Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM. | `httpx`, `pdfplumber`, `duckduckgo_search` |
 
-> **💡 Adding a recipe** — Create `wactorz/catalogue_agents/my_agent.py` exporting `AGENT_CODE = r'''...'''`, then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.
+> **💡 Adding a recipe** — Write the program as `wactorz/catalogue_agents/my_agent.py` (`setup`, `process`, `handle_task`, `cleanup`, as any dynamic agent's code), then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.
 
 ---
 
-## Writing a new core agent
+## Bringing your own agents
 
-For agents that need to be part of the supervision tree (always running, not spawnable from chat), subclass `Actor` directly:
+Wactorz is a library as much as an application: an agent you already have — a
+trained model, a class with its own loop — runs supervised beside the built-in
+ones, with persistence, heartbeats and a dashboard card, without forking
+`app.py`. The full walkthrough with examples is [Using Wactorz as a library](library.md);
+this section is the reference.
+
+### One function, one decorator
+
+The smallest agent is a function. `@wactorz.agent` gives it a name, topics and
+a manifest, and leaves it a plain function you can still call and test:
+
+```python
+import wactorz
+
+@wactorz.agent(
+    name="imu-anomaly",
+    subscribes="sensors/imu/#",
+    publishes="anomalies/imu",
+    description="Flags IMU readings the trained model calls abnormal.",
+    requires={"ram_mb": 128, "packages": ["numpy"]},
+)
+def detect(reading: dict) -> dict | None:
+    return reading if MODEL.score(reading) > 4.0 else None
+```
+
+The function is called once per message with the decoded payload, and once per
+task sent to the agent by chat (`@imu-anomaly {...}`) or by another agent.
+What it returns is published to `publishes`, or sent back as the task's
+result; `None` publishes nothing. A plain function runs on a worker thread, so
+a slow model never holds the event loop; a coroutine function runs on the
+loop. A function that takes a second parameter is given the actor, for
+`persist`, `recall`, `publish` and the `options` a spawn config passed it.
+
+### An `Actor` subclass
+
+For an agent with its own lifecycle, subclass `Actor`. The base class now
+subscribes and keeps windows for you, on one shared broker connection that is
+closed when the actor stops:
 
 ```python
 from wactorz.core.actor import Actor, Message, MessageType
 
 class MyAgent(Actor):
-
-    def __init__(self, **kwargs):
-        kwargs.setdefault("name", "my-agent")
-        super().__init__(**kwargs)
+    DESCRIPTION = "Watches the pump."
+    CAPABILITIES = ["pump"]
 
     async def on_start(self):
-        asyncio.create_task(self._my_loop())
+        self.subscribe("sensors/pump/#", self.on_reading)        # async or plain callback
+        self.flow = self.window("sensors/pump/flow", seconds=60)  # rolling window
+
+    async def on_reading(self, payload: dict):
+        if self.flow.falling(threshold=2.0):
+            await self.publish("alerts/pump", {"flow": payload})
 
     async def handle_message(self, msg: Message):
         if msg.type != MessageType.TASK:
             return
-        result = {"echo": msg.payload}
+        result = {"flow_mean": self.flow.mean("value")}
         if isinstance(msg.payload, dict):
             result["_task_id"] = msg.payload.get("_task_id")
         await self.send(msg.reply_to or msg.sender_id, MessageType.RESULT, result)
-
-    async def _my_loop(self):
-        while True:
-            await self._mqtt_publish("custom/my-agent/tick", {"ts": time.time()})
-            await asyncio.sleep(10)
 ```
 
-Then register it in `app.py` inside `build_system()`. `_sd` there is the state directory
-resolved at startup, and `_wire_persistence` attaches the persistence API:
+`DESCRIPTION`, `CAPABILITIES`, `REQUIRES`, `INPUT_SCHEMA` and `OUTPUT_SCHEMA` on
+the class are read into the catalogue entry; `AGENT_NAME` names the agent
+(default: the class name, `MyAgent` → `my-agent`); `AUTOSTART = False` keeps it
+in the catalogue until asked for.
+
+### Registering it
+
+Three ways in, all equivalent once the system is up:
+
+| How | Where | For |
+| --- | ----- | --- |
+| `wactorz.run(agents=[detect, MyAgent], web=True)` | a script | development, a single deployment |
+| `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:MyAgent wactorz` | the environment | a configured deployment |
+| `[project.entry-points."wactorz.agents"]` in your package's `pyproject.toml` | the package | anything `pip install`ed |
+
+A registered agent is supervised at startup, listed by `@catalog list`, and
+restored from the spawn registry after a restart. A spawn config may also name
+it by path, `{"type": "module", "target": "mypkg.agents:detect", "name":
+"imu-left", "options": {...}}`, which is how one function runs under several
+names — but only a registered target is accepted, because a spawn config can be
+model-authored.
+
+### Profiles
+
+Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) the Home Assistant
+agents do not start; `WACTORZ_HA_AGENTS=on|off` decides outright.
+`wactorz --minimal` (or `WACTORZ_MINIMAL=1`, or `wactorz.run(..., minimal=True)`)
+starts the monitor, the dashboard and your agents only — no orchestrator,
+catalogue or installer, so no model API key is needed.
+
+### Pipelines
+
+Steps that work together are declared together. Each step stays an agent of
+its own; the pipeline groups them, adds a schedule and rules, and records
+itself beside the planner's pipelines so `/rules` lists it and `/rules delete`
+stops the whole of it:
 
 ```python
-from wactorz.agents.my_agent import MyAgent
-
-def make_my_agent():
-    return _wire_persistence(
-        MyAgent(name="my-agent", persistence_dir=_sd))
-
-system.supervisor.supervise(
-    "my-agent", make_my_agent,
-    strategy=SupervisorStrategy.ONE_FOR_ONE,
-    max_restarts=5, restart_delay=1.0
+watch = wactorz.pipeline(
+    "imu-watch",
+    steps=[detect, notify, report],              # decorated functions, Actor classes or targets
+    inputs=["sensors/imu/#"],                    # what comes from outside (the first step may omit it)
+    schedule={"type": "interval", "seconds": 300},   # a scheduled agent ticking pipelines/imu-watch/tick
+    rules=[{"triggers": ["anomalies/imu"],
+            "conditions": [{"field": "score", "op": "gt", "value": 20}],
+            "actions": [{"type": "publish", "topic": "alerts/imu", "payload": {"level": "high"}}],
+            "cooldown_seconds": 30}],
 )
 ```
+
+Wiring is checked when the pipeline is declared: a step or rule listening on a
+topic nothing in the pipeline publishes, and not named in `inputs`, is a
+`ValueError` before anything starts. A pipeline declared at module level is
+found through `WACTORZ_PIPELINES=mypkg.flows:watch`, a `wactorz.pipelines`
+entry point, or `wactorz.run(pipelines_=[watch])`; its agents are supervised
+at startup like any plugin. The schedule takes every form `ScheduledAgent`
+accepts. In the minimal profile there is no main, so the rule record is
+skipped and the agents simply run.
+
+### RuleAgent `[spawned]`
+
+The glue between stages without a program per rule: trigger topics, conditions
+on the payload, a cooldown, and actions. Spawnable on its own with
+`"type": "rule"`:
+
+```json
+{"type": "rule", "name": "imu-alert",
+ "triggers": ["anomalies/imu"],
+ "conditions": [{"field": "score", "op": "gt", "value": 10}],
+ "actions": [{"type": "publish", "topic": "alerts/imu", "payload": {"level": "high"}},
+             {"type": "task", "agent": "notify", "payload": {"text": "IMU anomaly {score}"}},
+             {"type": "webhook", "url": "https://hooks.example/imu"}],
+ "cooldown_seconds": 30}
+```
+
+Conditions take `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`,
+`exists` and `absent` (or `==`, `>`, and so on), with dotted fields such as
+`reading.ax`. An action's payload may name trigger fields in braces and carries
+the trigger payload under `trigger` unless `include_trigger` is false. A task
+sent to a rule is a trial run: the payload is judged as a trigger and the
+verdict returned. Home Assistant service calls stay with `ha_actuator`.
+
+A complete example, a trained model over IMU readings on MQTT, is in
+[`examples/imu_anomaly/`](https://github.com/waldiez/wactorz/tree/main/examples/imu_anomaly).

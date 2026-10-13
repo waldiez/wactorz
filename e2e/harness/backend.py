@@ -86,6 +86,9 @@ class Backend:
     #: What it was started with, so it can be started again the same.
     run: Run | None = None
     script: str = ""
+    #: The agents it ran when it had just started, before anyone asked for
+    #: anything: what a fresh install runs, with this run's configuration.
+    started_with: frozenset[str] = frozenset()
 
     @property
     def url(self) -> str:

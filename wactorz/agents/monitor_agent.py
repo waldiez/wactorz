@@ -24,6 +24,7 @@ Single restart authority:
 import asyncio
 import logging
 import time
+from typing import Any
 
 import psutil
 
@@ -60,8 +61,13 @@ class MonitorActor(Actor):
 
         # Cached Process object — cpu_percent(interval=None) tracks a delta
         # between consecutive calls on the SAME instance; creating a new one
-        # each time always returns 0.0.
-        self._proc = psutil.Process()
+        # each time always returns 0.0. The one CPU reading for the whole
+        # process: agents share it, so none of them measures its own.
+        self._proc: Any | None = None
+        try:
+            self._proc = psutil.Process()
+        except Exception:  # noqa: S110  # host stats are skipped without it; see _publish_host_stats
+            pass
 
     async def on_start(self):
         if self._registry:
@@ -73,8 +79,8 @@ class MonitorActor(Actor):
         # Prime the baseline on the cached instance so the first real reading
         # is meaningful (cpu_percent needs two samples on the same object).
         if self._proc is not None:
-            # Declared Any | None on Actor, where psutil.Process() is built
-            # inside a try — it can fail, and this agent reads it every cycle.
+            # Built inside a try above; it can fail, and this agent reads it
+            # every cycle.
             try:
                 self._proc.cpu_percent(interval=None)
             except Exception:  # noqa: S110  # priming a CPU baseline; telemetry only

@@ -13,8 +13,8 @@ documents the break. The shipped deployments set the variable explicitly, so tha
 flip is a no-op for them.
 """
 
-import os
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -182,6 +182,4 @@ class TestTheShippedDeployments:
 
 
 def _repo_text(relative: str) -> str:
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, relative), encoding="utf-8") as handle:
-        return handle.read()
+    return (Path(__file__).resolve().parents[1] / relative).read_text(encoding="utf-8")

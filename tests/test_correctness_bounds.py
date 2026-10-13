@@ -10,7 +10,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.actor import SIZE_WALK_BUDGET, Actor, Message
-from wactorz.monitoring.prometheus import UNMATCHED_ROUTE, PrometheusMonitor
+from wactorz.monitoring.http_metrics import UNMATCHED_ROUTE, route_label
 from wactorz.web import ws as ws_module
 from wactorz.web.ws import HEARTBEAT_SECONDS
 
@@ -74,7 +74,7 @@ def test_unmatched_route_label_is_constant() -> None:
     request = type(
         "_Request", (), {"match_info": _MatchInfo(), "path": "/attacker/controlled/1234"}
     )()
-    label = PrometheusMonitor._route_label(request)  # pyright: ignore[reportArgumentType]
+    label = route_label(request)  # pyright: ignore[reportArgumentType]
 
     assert label == UNMATCHED_ROUTE
     assert "attacker" not in label
@@ -94,7 +94,7 @@ def test_matched_route_label_uses_the_registered_pattern() -> None:
 
     request = type("_Request", (), {"match_info": _MatchInfo(), "path": "/api/agents/alice"})()
 
-    assert PrometheusMonitor._route_label(request) == "/api/agents/{name}"  # pyright: ignore[reportArgumentType]
+    assert route_label(request) == "/api/agents/{name}"  # pyright: ignore[reportArgumentType]
 
 
 async def test_ws_handler_pings_an_idle_client(monkeypatch: pytest.MonkeyPatch) -> None:

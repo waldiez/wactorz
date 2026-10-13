@@ -12,14 +12,13 @@ the day it was written.
 """
 
 import importlib.util
-import os
 import re
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_script() -> ModuleType:

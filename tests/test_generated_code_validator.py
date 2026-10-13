@@ -1,8 +1,8 @@
-"""The pattern check applied to model-written code before it is executed.
+"""The check applied to model-written code before it is executed.
 
-⚠ This is a regex scan over source text, not a sandbox. It catches the shapes it
-lists and nothing else, and the tests below pin both halves of that: what is
-refused, and what walks straight past. The second half is the more important
+⚠ This reads the source, it is not a sandbox. It catches the names it lists,
+however they are spelled, and nothing else, and the tests below pin both halves
+of that: what is refused, and what walks straight past. The second half is the more important
 one — a check that reads as a security boundary and is not one is worse than an
 absent check, because it invites trust it cannot carry.
 
@@ -58,9 +58,12 @@ class TestRefused:
     def test_whitespace_before_the_call_does_not_help(self, validate) -> None:
         assert validate("eval ('x')") is not None
 
-    @pytest.mark.parametrize("mode", ["w", "a", "b"])
+    @pytest.mark.parametrize("mode", ["w", "a", "x", "wb", "r+"])
     def test_each_write_mode_is_caught(self, validate, mode: str) -> None:
         assert validate(f"open('/tmp/x', '{mode}')") is not None
+
+    def test_a_write_mode_given_by_keyword_is_caught(self, validate) -> None:
+        assert validate("open('/tmp/x', mode='w')") is not None
 
 
 class TestAllowed:
@@ -89,13 +92,13 @@ class TestAllowed:
 class TestKnownEvasions:
     """Shapes that reach the same capabilities and are not matched.
 
-    Each of these is a documented limit of a text scan, not a defect to fix by
-    adding another pattern — the list can always be walked around. They are
+    Each of these is a documented limit of reading source, not a defect to fix
+    by adding another rule — the list can always be walked around. They are
     pinned so the check's actual reach is visible rather than assumed.
     """
 
     def test_a_write_mode_held_in_a_variable_is_not_matched(self, validate) -> None:
-        """The pattern requires a quoted mode inside the call."""
+        """The mode is a value; only a literal one is read."""
         assert validate("mode = 'w'\nopen('/tmp/x', mode)") is None
 
     def test_pathlib_writes_are_not_matched(self, validate) -> None:
@@ -105,12 +108,9 @@ class TestKnownEvasions:
     def test_deletion_through_pathlib_is_not_matched(self, validate) -> None:
         assert validate("from pathlib import Path\nPath('/tmp/x').unlink()") is None
 
-    def test_an_aliased_import_is_not_matched(self, validate) -> None:
-        """Patterns match the attribute spelling, not the resolved object."""
-        assert validate("import os as o\no.system('ls')") is None
-
-    def test_indirection_through_getattr_is_not_matched(self, validate) -> None:
-        assert validate("getattr(__builtins__, 'eval')('1+1')") is None
+    def test_a_name_built_at_run_time_is_not_matched(self, validate) -> None:
+        """A computed name on a module the check does not guard is not followed."""
+        assert validate("import sys\nsys.modules['o' + 's'].system('ls')") is None
 
 
 class TestExtractFunctionBody:

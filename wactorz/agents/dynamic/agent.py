@@ -462,13 +462,9 @@ class DynamicAgent(Actor):
     _MAX_COMPILE_RETRIES = 2
 
     # ── Pre-exec safety validator ──────────────────────────────────────────
-    # Scans sanitized code for dangerous patterns BEFORE exec().
+    # Checks sanitized code BEFORE exec() (see .safety for what it refuses).
     # This is NOT a sandbox — it's a best-effort blocklist.
     # For true isolation, run DynamicAgents in a subprocess or container.
-
-    # Patterns that are suspicious but allowed — just logged as warnings
-
-    # Patterns checked specifically inside process() body — cause 120s timeout crashes
 
     _sanitize_code = staticmethod(sanitize_code)
     _extract_function_body = staticmethod(extract_function_body)

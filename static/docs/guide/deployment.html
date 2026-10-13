@@ -379,6 +379,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins <code>/data/state</code>. <code>wactorz-reset</code> reads the same variable, so a wipe targets whatever the app is using</td>
 </tr>
 <tr>
+<td><code>WACTORZ_DOCUMENT_DIRS</code></td>
+<td>your Documents folder</td>
+<td>The folders an agent that converts files (the doc-to-pptx agent) may read from and write to, separated like <code>PATH</code>. Anything under <code>WACTORZ_STATE_DIR</code> stays out of reach whatever is named here. See <a href="../catalogue/catalogue-doc-to-pptx.html">Doc → PPTX agent</a></td>
+</tr>
+<tr>
 <td><code>WACTORZ_AGENTS</code></td>
 <td>—</td>
 <td>Agents this deployment brings, as <code>package.module:attr</code> targets (an <code>Actor</code> subclass or a function declared with <code>@wactorz.agent</code>), comma separated. Supervised at startup beside the built-ins; see <a href="../guide/agents.html#bringing-your-own-agents">Bringing your own agents</a></td>

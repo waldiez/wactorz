@@ -18,17 +18,21 @@ listening loses the agent, so the checks that come first are pinned first.
 import json
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from wactorz import plugins
 from wactorz.agents.function_agent import agent as declare_agent
+from wactorz.agents.main import artifact_service as service_module
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.artifacts import ArtifactStore
 
 
 class _Supervisor:
@@ -792,3 +796,115 @@ class TestALibraryAgent:
         assert "WACTORZ_AGENTS" in result["message"]
         assert main.spawned_remote == []
         assert main.local("probe").stopped is False
+
+
+@declare_agent(subscribes="imu/in", models={"model": "imu-detector"})
+def scorer(reading: dict) -> dict:
+    return reading
+
+
+class TestAnAgentWhoseModelIsMissing:
+    """Nothing stops until everything the node will need is known to be there.
+
+    The models an agent names are pinned before the stop, as the spawn pins
+    them again after: a model removed from the store refuses the move with
+    the agent still running, rather than after it has been stopped.
+    """
+
+    @pytest.fixture(autouse=True)
+    def target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+        monkeypatch.setattr(
+            service_module, "resolve_state_dir", lambda: str(tmp_path / "main-state")
+        )
+        with plugins.registered([scorer]) as (plugin,):
+            yield plugin.target
+
+    @staticmethod
+    def _main(target: str) -> _Main:
+        main = _Main(nodes={"nuc": online()}, local=("scorer",))
+        main.actor.artifact_service = ArtifactService(main.actor)
+        main.actor.nodes.node_manifests["nuc"] = {"code_bundles": True, "agents": [target]}
+        return main
+
+    async def test_it_is_refused_before_anything_stops(self, target: str) -> None:
+        main = self._main(target)
+
+        result = await main.migrate("scorer", "nuc")
+
+        assert result["success"] is False
+        assert "imu-detector" in result["message"]
+        assert "stays on 'local'" in result["message"]
+        assert main.local("scorer").stopped is False
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns
+
+    async def test_with_the_model_stored_it_goes_pinned(self, target: str, tmp_path: Path) -> None:
+        main = self._main(target)
+        path = tmp_path / "imu.npz"
+        path.write_bytes(b"arrays")
+        ArtifactStore.in_state_dir(tmp_path / "main-state").add(path, "imu-detector")
+
+        result = await main.migrate("scorer", "nuc")
+
+        assert result["success"] is True, result
+        config, _node, _save = main.spawned_remote[0]
+        assert config["artifacts"]["model"]["name"] == "imu-detector"
+        assert config["artifacts"]["model"]["version"] == 1
+
+
+class TestAPutBackThatFails:
+    """An agent that cannot be started again is said to be running nowhere."""
+
+    @staticmethod
+    def _stuck(main: _Main) -> None:
+        async def _cannot(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+            raise RuntimeError("no artifact 'imu-detector:1'")
+
+        setattr(main.actor, "_spawn_from_config", _cannot)
+
+    async def _pending(self, main: _Main) -> str:
+        await main.migrate("collector", "rpi")
+        (token,) = main.actor.migration.pending_spawns
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+        return token
+
+    async def test_the_dashboard_is_told_and_where_the_state_is(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code()},
+            nodes={"rpi": online()},
+            local=("collector",),
+        )
+        await self._pending(main)
+        self._stuck(main)
+
+        await main.actor.migration.expire_pending_spawns()
+
+        (notice,) = [n for n in main.notifications if n["severity"] == "error"]
+        assert "running nowhere" in notice["message"]
+        assert "no artifact 'imu-detector:1'" in notice["message"]
+        assert "main's state directory" in notice["message"]
+        assert not main.actor.migration.pending_spawns
+
+    async def test_the_sweep_reaches_the_next_agent(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code(), "other": with_code(name="other")},
+            nodes={"rpi": online()},
+            local=("collector", "other"),
+        )
+        await self._pending(main)
+        await main.migrate("other", "rpi")
+        for pending in main.actor.migration.pending_spawns.values():
+            pending["started_at"] = 0.0
+        restored: list[str] = []
+
+        async def _first_fails(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+            restored.append(cfg["name"])
+            if cfg["name"] == "collector":
+                raise RuntimeError("boom")
+
+        setattr(main.actor, "_spawn_from_config", _first_fails)
+
+        await main.actor.migration.expire_pending_spawns()
+
+        assert restored == ["collector", "other"]
+        assert not main.actor.migration.pending_spawns

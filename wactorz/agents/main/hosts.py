@@ -283,6 +283,9 @@ class NodeReaders(Protocol):
 class MigrationHost(NodeHost, Protocol):
     """What moving an agent between machines needs.
 
+    ``spawns`` is the spawn service, for pinning an agent's models before it
+    is stopped, exactly as the spawn that follows will.
+
     Extends `NodeHost` because a migration reads the same spawn registry and
     reports through the same notifications, and adds the machinery for putting
     an agent somewhere: spawning it here or there, and rewriting what each side
@@ -293,6 +296,8 @@ class MigrationHost(NodeHost, Protocol):
     it would make the two mutually dependent for the sake of four questions the
     owning actor can already answer.
     """
+
+    spawns: Any
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:

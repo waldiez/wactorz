@@ -667,3 +667,14 @@ class TestWhatTheRegistryPlacesOnNodes:
 
     def test_no_registry_places_nothing(self) -> None:
         assert app_module.placed_on_nodes(None) == {}
+
+    def test_every_entry_is_mains_to_restore_wherever_it_places_the_agent(self) -> None:
+        """One that came home from a node has an entry placing it here; main
+        restores it from that, so its plugin must not start it as well."""
+        registry = {
+            "imu-anomaly": {"type": "module", "node": ""},
+            "collector": {"code": "x = 1", "node": "rpi"},
+            "junk": "not a config",
+        }
+
+        assert app_module.placed_by(registry) == {"imu-anomaly": "", "collector": "rpi"}

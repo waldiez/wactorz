@@ -90,6 +90,21 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
     )
 
 
+def with_models_of(config: dict[str, Any]) -> dict[str, Any]:
+    """``config`` naming, as ``artifacts``, the models a library agent declares in its code.
+
+    A spawn that names artifacts itself keeps them. The agent's own
+    declaration -- ``models=`` on the decorator, ``MODELS`` on a class -- is
+    what main has and the node does not, so it goes with the spawn.
+    """
+    if not is_module_config(config) or config.get("artifacts"):
+        return config
+    plugin = for_target(str(config.get("target") or ""))
+    if plugin is None or not plugin.models:
+        return config
+    return {**config, "artifacts": plugin.models}
+
+
 async def with_code_for(
     config: dict[str, Any], node_targets: Collection[str], takes_bundles: bool
 ) -> tuple[dict[str, Any], str | None]:
@@ -714,6 +729,27 @@ class SpawnService:
             else:
                 logger.warning("[%s] Remote install issue: %s", self.host.name, result)
 
+    async def pinned_for(
+        self, config: dict[str, Any], node: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """``config`` with every model it names pinned for ``node``, or why one cannot be.
+
+        A library agent's own models are named first. What is saved and what
+        is sent then name the same versions, so an agent restarted from its
+        record runs the model it ran. A copy: the caller's dict may be written
+        elsewhere too. A migration runs this before it stops the agent: an
+        artifact that is not stored would otherwise be found only after the
+        stop, with the agent running nowhere.
+        """
+        config = with_models_of(config)
+        if not config.get("artifacts"):
+            return config, None
+        try:
+            pinned = await self.host.artifact_service.pin_for_node(config["artifacts"], node)
+        except ArtifactError as exc:
+            return config, f"its artifacts cannot be sent: {exc}"
+        return {**config, "artifacts": pinned}, None
+
     async def _refuse_remote_spawn(self, config: dict[str, Any], node: str, reason: str) -> None:
         """Say in the log and on the dashboard why an agent was not sent to ``node``."""
         name = config.get("name")
@@ -787,24 +823,10 @@ class SpawnService:
                 },
             )
             return
-        if is_module_config(config) and not config.get("artifacts"):
-            # A library agent names its models in its code, which main has and
-            # the node builds; sent as artifacts, they are on the node first.
-            plugin = for_target(str(config.get("target") or ""))
-            if plugin is not None and plugin.models:
-                config = {**config, "artifacts": plugin.models}
-        if config.get("artifacts"):
-            try:
-                pinned = await self.host.artifact_service.pin_for_node(config["artifacts"], node)
-            except ArtifactError as exc:
-                await self._refuse_remote_spawn(
-                    config, node, f"its artifacts cannot be sent: {exc}."
-                )
-                return
-            # What is saved and what is sent then name the same versions, so an
-            # agent restarted from its record runs the model it ran. A copy, as
-            # for the bridge: the caller's dict may be written elsewhere too.
-            config = {**config, "artifacts": pinned}
+        config, problem = await self.pinned_for(config, node)
+        if problem:
+            await self._refuse_remote_spawn(config, node, f"{problem}.")
+            return
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 

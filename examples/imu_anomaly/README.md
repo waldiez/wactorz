@@ -16,7 +16,7 @@ language model.
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
 | `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
 | `fastapi_app.py` | The same, inside a FastAPI app: the system on the web app's loop, started and stopped by its lifespan, with routes that reach the running agent. |
-| `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal. |
+| `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal, to the broker `MQTT_HOST`/`MQTT_PORT` name (`localhost:1883` by default). |
 | `ask.py` | Starts the detector and asks it two questions with `wactorz.ask`, then stops. |
 
 ## Run it

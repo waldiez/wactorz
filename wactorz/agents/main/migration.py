@@ -678,8 +678,36 @@ class Migration:
         """Restore an agent on its source after its target did not take it.
 
         ``refused`` is the target's reason when it said the agent did not start,
-        and None when it never answered.
+        and None when it never answered. A restore that fails is said on the
+        dashboard, naming where the agent's state is kept: silence here is an
+        agent running nowhere that nobody is told about, and it must not stop
+        the sweep that found it from reaching the next.
         """
+        if self.host is None:
+            return
+        agent_name = pending["agent_name"]
+        from_node = pending["from_node"]
+        target_node = pending["target_node"]
+        try:
+            await self._put_back_on_source(pending, refused)
+        except Exception as exc:
+            logger.exception(
+                "[%s] Could not put %r back on %r", self.host.name, agent_name, from_node
+            )
+            where = (
+                "its state is kept in main's state directory"
+                if from_node == LOCAL_SOURCE
+                else f"its state is kept on '{from_node}'"
+            )
+            self._announce(
+                f"Migration of '{agent_name}' to '{target_node}' failed"
+                + (f": {refused}" if refused else "")
+                + f", and it could not be started on '{from_node}' again: {exc}. "
+                f"It is running nowhere; {where}. Fix the cause and spawn it again.",
+                "error",
+            )
+
+    async def _put_back_on_source(self, pending: dict[str, Any], refused: str | None) -> None:
         if self.host is None:
             return
         agent_name = pending["agent_name"]
@@ -1127,6 +1155,11 @@ class Migration:
             dict(config or {}), targets, self.host_nodes.takes_bundles(target_node)
         )
         unrunnable = problem or why_a_node_cannot_run(config, targets)
+        if not unrunnable:
+            # The models too, pinned now: one that is not stored would otherwise
+            # be found by the spawn, after the stop, with the agent running
+            # nowhere. The pinned config is what is sent and saved below.
+            config, unrunnable = await self.host.spawns.pinned_for(config, target_node)
         if unrunnable:
             return {
                 "success": False,

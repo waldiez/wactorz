@@ -100,13 +100,24 @@ def placed_on_nodes(registry: Any) -> dict[str, str]:
     here as well, it would run twice, answering beside the copy the node
     reconciles from its own retained state.
     """
+    return {name: node for name, node in placed_by(registry).items() if node}
+
+
+def placed_by(registry: Any) -> dict[str, str]:
+    """Agent name to where the spawn registry places it: a node's name, or "" for main.
+
+    Every entry is main's to restore when it starts, wherever it places the
+    agent: one that came back from a node is restored here, from its record.
+    A library agent with an entry is therefore not supervised from its plugin
+    as well, which would start it twice, the first copy only to be stopped by
+    the restore a moment later.
+    """
     if not isinstance(registry, dict):
         return {}
     placed: dict[str, str] = {}
     for name, entry in registry.items():
-        node = str(entry.get("node") or "").strip() if isinstance(entry, dict) else ""
-        if node:
-            placed[str(name)] = node
+        if isinstance(entry, dict):
+            placed[str(name)] = str(entry.get("node") or "").strip()
     return placed
 
 
@@ -634,13 +645,20 @@ async def build_system(
     # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
-    elsewhere = placed_on_nodes(_db.kv_get("main", SPAWN_REGISTRY_KEY, None))
+    recorded = placed_by(_db.kv_get("main", SPAWN_REGISTRY_KEY, None))
+    elsewhere = {name: node for name, node in recorded.items() if node}
     for plugin in startable_plugins(plugins.discover().values()):
         if plugin.name in elsewhere:
             logger.info(
                 "Not starting %r here: it was moved to node %r, which runs it.",
                 plugin.name,
                 elsewhere[plugin.name],
+            )
+            continue
+        if plugin.name in recorded:
+            logger.info(
+                "Not supervising %r from its plugin: main restores it from its record.",
+                plugin.name,
             )
             continue
         system.supervisor.supervise(

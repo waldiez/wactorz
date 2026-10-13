@@ -5,29 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.7.1] - 2026-10-13
 
-Wactorz 0.7.1 is about using Wactorz as a library and seeing what it does over time: your own agents, pipelines and orchestrator run supervised beside the built-in ones, with or without a model or Home Assistant, an agent's models travel with it, and the dashboard keeps a history of every agent and node. It also fixes migrations that lost state, agent cards that came and went, and several catalogue agents. A short summary comes first; the full account of each change follows it.
-
-### Before you upgrade
-
-- **Redeploy your edge nodes.** A 0.7.0 node keeps working with a 0.7.1 server, so nothing makes you, but most of this release's node changes ship in the package the node runs: its manifest and new heartbeat readings, turn ids in its logs, two copies of one agent no longer sharing a broker connection, and stopping an agent main has moved home. A 0.7.0 node also does not understand the models, arrays and bytes a migration now carries, so an agent holding any comes up there without them. Run `/deploy <node>` for each.
-- **0.7.0 cannot read the agent state 0.7.1 writes.** Each value in an agent's `state.pkl` is now stored on its own, so going back to 0.7.0 afterwards starts each agent's own keys afresh. If you may need to go back, keep a copy of the state directory first.
-- **Code that stores a `datetime`, a numpy number or a `set`** in conversation history, user facts or another JSON-backed store now gets a `TypeError` naming the key, where the value used to be turned into text. Convert it first. An agent's own `persist()` keys are unaffected.
-- **Agents no longer carry a `cpu` field** in their heartbeat or in `/api/actors`. Read the process's CPU from `system/host`.
-- **A query or alert on `wactorz_http_*` meant for the REST interface alone** needs `server="rest"`: the dashboard's server now records into the same metrics.
-- **Only one server or node runs on a state directory at a time.** A second one started on the same directory refuses to start and names the process holding it.
-- **Compose: Prometheus moves to version 3**, which rewrites the data in the `prometheus-data` volume. Going back to Prometheus 2 afterwards means removing that volume and the history in it.
+Wactorz 0.7.1 makes Wactorz something you build on: bring your own agents, pipelines and orchestrator, run with or without a model or Home Assistant, and watch every agent and node over time.
 
 ### Highlights
 
-- **Wactorz as a library.** A function becomes a supervised agent with `@wactorz.agent`, a pipeline is declared in code with `wactorz.pipeline`, and `wactorz.run()` or `await wactorz.serve()` starts it from a script, a notebook or a web app. `wactorz --minimal` runs your agents and the dashboard with no model and no Home Assistant. Examples cover an IMU anomaly model, YOLO, LangGraph and AG2.
-- **Your own orchestrator, or none.** What answers the chat is now an orchestrator you can replace with `run(orchestrator=...)` or `WACTORZ_ORCHESTRATOR`. Without a model, a built-in one passes `@agent` messages on and answers `/agents`, `/topics`, `/nodes` and `/help`.
-- **Main and the planner build with your agents**, and an install without Home Assistant is no longer told about it. With Home Assistant configured the prompts are unchanged, word for word.
-- **Ask an agent and wait.** `Actor.ask()` and `wactorz.ask()` send a task and return the answer, or raise.
-- **Models travel with their agent.** Bytes, numpy arrays, torch tensors and scikit-learn style models are kept as files beside an agent's state and carried by a migration, checked by hash. A value that runs code when it loads is never taken back from a node.
-- **History and trends.** Every agent and node is sampled each minute into the database. Each card on the dashboard draws its trend and opens its full history, and nodes are cards that say what their machine is and how close it is to running out.
-- **Follow one answer.** Each chat turn has an id that goes with its work through every agent and node, so `GET /api/logs?turn=<id>` and the activity feed show that answer's lines together.
-- **More to watch.** Metrics for chat wait times, mailbox waits, task and cycle times, Home Assistant requests and node model round trips, `/metrics` on the dashboard's port, and alerts for failing agents, crash loops and model spend.
+- **Wactorz as a library.** Turn a function into a supervised agent with `@wactorz.agent`, declare pipelines in code, and start it all from a script, a notebook or a web app. Main and the planner build with your agents too.
+- **No model required.** `wactorz --minimal` runs your agents and the dashboard alone, and the chat still answers `@agent` messages.
+- **Your own orchestrator.** Swap what answers the chat for your own, a LangGraph graph for example.
+- **Models travel with their agent.** Arrays, tensors and trained models are saved beside its state and move with it, checked by hash.
+- **History on the dashboard.** Every agent and node card draws its trend, with the full history one click away.
+- **Follow one answer.** Each chat turn carries an id through every agent and node it touches, straight into the logs.
 - **Back up and move an install** with `wactorz-state export` and `wactorz-state import`.
+- **Fixes** for migrations, agent cards, *Wipe everything* and five catalogue agents.
+
+### Before you upgrade
+
+- **Redeploy your edge nodes** with `/deploy <node>` to bring them this release's node changes.
+- **0.7.0 cannot read the agent state 0.7.1 writes.** Keep a copy of your state directory if you might go back.
+
+Scripts and dashboards that read metrics or the agent heartbeat should check the full changelog: `cpu` is gone from agents, HTTP metrics gain a `server` label, and the compose stacks move to Prometheus 3.
 
 ### Added
 

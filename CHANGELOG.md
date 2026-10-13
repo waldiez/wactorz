@@ -3,7 +3,31 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — pending
+## [0.7.1] - 2026-10-13
+
+Wactorz 0.7.1 is about using Wactorz as a library and seeing what it does over time: your own agents, pipelines and orchestrator run supervised beside the built-in ones, with or without a model or Home Assistant, an agent's models travel with it, and the dashboard keeps a history of every agent and node. It also fixes migrations that lost state, agent cards that came and went, and several catalogue agents. A short summary comes first; the full account of each change follows it.
+
+### Before you upgrade
+
+- **Redeploy your edge nodes.** A 0.7.0 node keeps working with a 0.7.1 server, so nothing makes you, but most of this release's node changes ship in the package the node runs: its manifest and new heartbeat readings, turn ids in its logs, two copies of one agent no longer sharing a broker connection, and stopping an agent main has moved home. A 0.7.0 node also does not understand the models, arrays and bytes a migration now carries, so an agent holding any comes up there without them. Run `/deploy <node>` for each.
+- **0.7.0 cannot read the agent state 0.7.1 writes.** Each value in an agent's `state.pkl` is now stored on its own, so going back to 0.7.0 afterwards starts each agent's own keys afresh. If you may need to go back, keep a copy of the state directory first.
+- **Code that stores a `datetime`, a numpy number or a `set`** in conversation history, user facts or another JSON-backed store now gets a `TypeError` naming the key, where the value used to be turned into text. Convert it first. An agent's own `persist()` keys are unaffected.
+- **Agents no longer carry a `cpu` field** in their heartbeat or in `/api/actors`. Read the process's CPU from `system/host`.
+- **A query or alert on `wactorz_http_*` meant for the REST interface alone** needs `server="rest"`: the dashboard's server now records into the same metrics.
+- **Only one server or node runs on a state directory at a time.** A second one started on the same directory refuses to start and names the process holding it.
+- **Compose: Prometheus moves to version 3**, which rewrites the data in the `prometheus-data` volume. Going back to Prometheus 2 afterwards means removing that volume and the history in it.
+
+### Highlights
+
+- **Wactorz as a library.** A function becomes a supervised agent with `@wactorz.agent`, a pipeline is declared in code with `wactorz.pipeline`, and `wactorz.run()` or `await wactorz.serve()` starts it from a script, a notebook or a web app. `wactorz --minimal` runs your agents and the dashboard with no model and no Home Assistant. Examples cover an IMU anomaly model, YOLO, LangGraph and AG2.
+- **Your own orchestrator, or none.** What answers the chat is now an orchestrator you can replace with `run(orchestrator=...)` or `WACTORZ_ORCHESTRATOR`. Without a model, a built-in one passes `@agent` messages on and answers `/agents`, `/topics`, `/nodes` and `/help`.
+- **Main and the planner build with your agents**, and an install without Home Assistant is no longer told about it. With Home Assistant configured the prompts are unchanged, word for word.
+- **Ask an agent and wait.** `Actor.ask()` and `wactorz.ask()` send a task and return the answer, or raise.
+- **Models travel with their agent.** Bytes, numpy arrays, torch tensors and scikit-learn style models are kept as files beside an agent's state and carried by a migration, checked by hash. A value that runs code when it loads is never taken back from a node.
+- **History and trends.** Every agent and node is sampled each minute into the database. Each card on the dashboard draws its trend and opens its full history, and nodes are cards that say what their machine is and how close it is to running out.
+- **Follow one answer.** Each chat turn has an id that goes with its work through every agent and node, so `GET /api/logs?turn=<id>` and the activity feed show that answer's lines together.
+- **More to watch.** Metrics for chat wait times, mailbox waits, task and cycle times, Home Assistant requests and node model round trips, `/metrics` on the dashboard's port, and alerts for failing agents, crash loops and model spend.
+- **Back up and move an install** with `wactorz-state export` and `wactorz-state import`.
 
 ### Added
 
@@ -37,6 +61,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The evaluation harness measures each profile, and the planner's real prompt.** `python -m wactorz.evalharness --profile minimal` assembles the prompts as an installation without Home Assistant sends them, where `--profile ha`, the default, is one with it; the `ha` and `actuator` call sites are skipped on `minimal`, since they exist only with Home Assistant, and a benchmark case may carry `expected_minimal` for a prompt whose right answer differs there, as the built-in intent cases now do. The `planner` category runs against the production pipeline-design preamble with the output format the planner appends at runtime, where it ran against a condensed stand-in, and its output budget is the planner's own, so a comparison between models, or between the two profiles, measures the prompt the system actually sends.
 
+- **How long a person waits in the chat.** Every chat turn from the dashboard is timed on the server, until the first words of its reply (`wactorz_chat_first_reply_seconds`) and until it is complete (`wactorz_chat_turn_duration_seconds`), labelled by where it went: a command, an agent in this process, one on a node, or a name nothing answers to. A turn the person stops is not counted.
+
 - **`/metrics` is served however Wactorz is started.** It was served only by the REST interface, which runs only with `INTERFACE=rest`: started from the CLI, from a library call or as the Home Assistant add-on, Wactorz had metrics and nowhere to read them. The dashboard's server, which always runs, now serves the same page at `/metrics` (port 8888 by default), behind the same key check as the rest of it; a scraper presents the key as `Authorization: Bearer`. The compose stacks keep scraping the REST port.
 
 - **The dashboard's server shows in `/metrics`.** Its requests, the chat among them, were not counted anywhere: only the REST interface recorded its own. Both now record into the same `wactorz_http_*` metrics, told apart by a new `server` label (`rest` or `dashboard`), and `wactorz_ws_connections` says how many dashboard WebSockets are open. A WebSocket is counted but not timed, since it lasts as long as the connection. A query or alert on `wactorz_http_*` that should cover only the REST interface adds `server="rest"`.
@@ -50,7 +76,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Room for a LangGraph graph, an AG2 conversation or a training job inside an agent.** `concurrency=N` on `@wactorz.agent` and on `Actor.subscribe` runs that many messages of a topic, and that many tasks, at once, for a function that waits on a model or a job rather than computes; the default stays one at a time, in order. `Actor.state_dir` is the agent's own directory for the files `persist()` is not for: weights, a checkpointer's database, an experiment store. a decorated function's calls through `me.llm` are counted on its card and against the cost limit as they return, `Actor.record_llm_cost(...)` does the same for a model call made outside the system's providers, and two helpers do it for the common cases: `wactorz.core.integrations.langchain.CostCallback` for a LangChain chain or LangGraph graph, `wactorz.core.integrations.ag2.record_reply` for an AG2 1.x reply, with `model_config` giving AG2's agents the system's model (`pip install 'wactorz[langgraph]'` / `'wactorz[ag2]'`). `examples/langgraph_triage/` and `examples/ag2_review/` run each as an agent.
 
 - **Pipelines declared in code, and a rule agent for the glue.** `wactorz.pipeline(name, steps=[...], schedule=..., rules=[...])` declares what the planner otherwise builds from a request: each step is an agent of its own, a schedule becomes a scheduled agent ticking `pipelines/<name>/tick`, and each rule becomes a rule agent. Wiring is checked when the pipeline is declared, so a step listening on a topic nothing publishes is refused before anything starts. A declared pipeline is found through `WACTORZ_PIPELINES`, a `wactorz.pipelines` entry point or `wactorz.run(pipelines_=[...])`, its agents are supervised at startup, and it is recorded beside the planner's pipelines so `/rules` lists it and `/rules delete` stops it. The new `rule` agent type acts when a message on a trigger topic satisfies its conditions: publish a message, send a task to an agent, or call a webhook, with a cooldown, and with the trigger's fields available to the action's payload. A Home Assistant service call stays with `ha_actuator`. `examples/imu_anomaly/pipeline.py` shows the detector as one stage with a notifier, a scheduled report and an alert rule. Rules are `wactorz.RuleConfig`, `RuleCondition` and `RuleAction` dataclasses the type checker sees, or the equivalent dicts. A new guide, *Using Wactorz as a library*, walks through all of it with examples and names the supported surface.
+
 ### Changed
+
+- **Agents no longer report a CPU figure of their own.** Every agent runs in the same process, so the per-agent `cpu` was that process's CPU, measured once per agent and shown under each agent's name. It is gone from the agent heartbeat (`agents/{id}/heartbeat`) and from `/api/actors`; the process's CPU is still published once, by the monitor, on `system/host`, which is what the dashboard's host bar shows. **A script that read `cpu` from either should read `system/host` instead.** Each agent also stops holding a process handle of its own.
 
 - **A plugin or pipeline that fails to load says where.** A module named in `WACTORZ_AGENTS` or `WACTORZ_PIPELINES`, or registered as an entry point, that is found but fails to import is now logged with its traceback, not only the exception's message, so the line in the module that failed is in the log.
 

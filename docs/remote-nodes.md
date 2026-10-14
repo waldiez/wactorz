@@ -228,6 +228,33 @@ The package comes from PyPI. Two things send the deploy to a wheel built on the 
 
 Leaving `DEPLOY_<NODE>_HOST` unset makes the deploy resolve `<node>.local` over mDNS instead. That is a single name lookup; earlier versions fell back to scanning the local `/24` for open SSH ports, which is gone.
 
+### Checking on a node, and running a command there
+
+The assistant can check on a configured node for you — "how full is the Pi's disk?", "what did rpi-kitchen log last?" — by asking the installer for one of a fixed set of operations, each of which only reads:
+
+| Operation | What it shows |
+|---|---|
+| `uptime` | how long the node has been up, and its load |
+| `disk` | free and used space on each filesystem |
+| `memory` | free and used memory |
+| `temperature` | each thermal zone's temperature |
+| `os` | the operating system and kernel |
+| `network` | each network interface and its addresses |
+| `python` | the Python the node's runner uses |
+| `packages` | the Python packages installed for the runner |
+| `node-log` | the last lines the runner logged (1–200, default 50), from the journal or its log file |
+
+It cannot send a node a command of its own. The assistant reads mail, web pages and device names, and a command it wrote would be only as trustworthy as everything it read; a named operation runs its fixed command whatever the request says. A command of your own you type yourself:
+
+```
+/nodes run rpi-bedroom df -h /home
+/nodes run rpi-bedroom sudo apt-get update
+```
+
+It runs over SSH with the node's deploy-target credentials, as the deploy does, and its output is the reply. A slash command is read from what you typed, never from a reply the assistant wrote, and the social channels refuse them. The whole command is logged, at warning level. Only main may ask the installer for anything that reaches a node: an agent running beside it is refused.
+
+The operations are defined in `wactorz.core.node_operations`, which nodes install too.
+
 ### The broker has to be reachable from the node
 
 A remote node connects back to the MQTT broker over the network, so `broker` in

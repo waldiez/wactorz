@@ -415,3 +415,33 @@ class TestReportingWhatCameBack:
 
         assert "error" in answer
         assert _MAILBOX_CLOSED in answer
+
+
+class TestAskingTheInstaller:
+    """The model reaches a node by named operation; a command is the operator's to type."""
+
+    async def test_a_command_for_a_node_is_refused_with_the_way_to_run_it(self) -> None:
+        main = _Main(running=("installer",))
+
+        text, _ = await main.blocks(
+            delegate(agent="installer", payload={"action": "node_run", "command": "reboot"})
+        )
+
+        assert main.dispatched == []
+        assert "/nodes run" in text
+
+    async def test_a_mention_cannot_send_one_either(self) -> None:
+        main = _Main(running=("installer",))
+
+        result = await main.run_one("installer", {"action": "node_run", "command": "reboot"})
+
+        assert main.dispatched == []
+        assert "/nodes run" in result
+
+    async def test_a_named_operation_goes_through(self) -> None:
+        main = _Main(running=("installer",))
+        payload = {"action": "node_op", "node_name": "rpi", "operation": "disk"}
+
+        await main.blocks(delegate(agent="installer", payload=payload))
+
+        assert main.payloads == [payload]

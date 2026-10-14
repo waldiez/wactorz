@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from operator import attrgetter
 
+from ...core.node_operations import described as described_node_operations
 from .assemble import PromptFragment, Slot, Template, one_of, render
 from .fragments import DEFAULT_FRAGMENTS
 
@@ -477,7 +478,7 @@ already have what you need to delegate — delegate in the same turn.
 - main                    : you (orchestrator)
 - monitor                 : health monitoring
 - installer               : installs Python packages locally AND on remote nodes via SSH
-                            Actions: install, node_deploy, node_install, node_run, check, history
+                            Actions: install, node_deploy, node_install, node_op, check, history
 """,
     Slot("existing_agents_extra"),
     """
@@ -717,13 +718,19 @@ To install extra packages on a node BEFORE spawning an agent there:
       "packages":  ["adafruit-circuitpython-dht", "RPi.GPIO"],
   })
 
-To run a shell command on a node:
+To check on a node, ask for one of these operations by name. Each only reads. You
+cannot send a node a command of your own: if the user wants one run, tell them to
+type it themselves as /nodes run <node> <command>.
   result = await main.delegate_to_installer({
-      "action":    "node_run",
-      "host":      "192.168.1.50",
+      "action":    "node_op",
       "node_name": "rpi-kitchen",
-      "command":   "python3 --version",
+      "operation": "node-log",
+      "params":    {"lines": 50},
   })
+Operations:
+""",
+    described_node_operations(),
+    """
 
 The installer is the only supported route to a remote machine — do not spawn an
 agent that opens its own SSH connections. It verifies host keys and takes its

@@ -28,7 +28,7 @@ from .info import (
     show_registry,
     show_topics,
 )
-from .nodes import deploy_node, remove_node, restart_node, shutdown_node
+from .nodes import deploy_node, remove_node, restart_node, run_on_node, shutdown_node
 from .state import (
     clear_plans,
     delete_rule,
@@ -56,6 +56,7 @@ registry.add(deploy_node)
 registry.add(restart_agent)
 registry.add(remove_node)
 registry.add(restart_node)
+registry.add(run_on_node)
 registry.add(shutdown_node)
 registry.add(start_agent)
 registry.add(stop_agent)

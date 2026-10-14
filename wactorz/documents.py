@@ -131,11 +131,15 @@ def _inside(path: Path, roots: Iterable[Path]) -> bool:
 def _confined(raw: str) -> Path:
     """`raw` resolved, if it is inside a document folder and outside the state directory."""
     roots = document_dirs()
+    # Checked here rather than left to resolve(): POSIX raises on a null byte,
+    # Windows hands the path back unchanged, and no file anywhere is named by one.
+    if "\0" in raw:
+        raise DocumentRefused.unusable(raw)
     try:
         path = Path(raw).expanduser().resolve()
     except (OSError, RuntimeError, ValueError) as unresolvable:
-        # A null byte (ValueError) or, before Python 3.13, a link that leads
-        # back to itself (RuntimeError): neither names a file anywhere.
+        # Before Python 3.13, a link that leads back to itself raises
+        # RuntimeError; the others cover whatever else the platform refuses.
         raise DocumentRefused.unusable(raw) from unresolvable
     if not _inside(path, roots):
         raise DocumentRefused.outside(raw, roots)

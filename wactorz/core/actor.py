@@ -27,10 +27,11 @@ from . import models
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
-from .outbound import DASHBOARD, check_channel, check_options
+from .outbound import DASHBOARD, Answer, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .questions import QUESTIONS_KEY, Question, answered, book_of, questions_in
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
@@ -475,6 +476,11 @@ class Actor(ABC):
         #: `_resolve_pending_result` as the RESULT is received, ahead of the
         #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
+        #: Who waits for the person's answer to a question, by question id:
+        #: one future per question, and how many waiters share it.
+        self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
+        #: Whether this actor already listens on its own answer topic.
+        self._hearing_answers = False
         self._setup_default_handlers()
 
         # Background tasks
@@ -512,6 +518,10 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
+        # A question asked before a restart is still open: listen for its
+        # answer, which goes to `on_operator_answer` since nothing awaits it.
+        if self.open_questions():
+            self._hear_answers()
         # Outside whatever turn started this actor: each message brings its own.
         self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
         self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
@@ -1797,6 +1807,164 @@ class Actor(ABC):
         # something; the user never sees it.
         await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
         return payload["id"]
+
+    # ─── Questions to a person ────────────────────────────────────────────────
+
+    async def ask_operator(
+        self,
+        text: str,
+        *,
+        options: Sequence[str],
+        channel: str = DASHBOARD,
+        user: str = "",
+        timeout: float | None = None,
+    ) -> str:
+        """Ask the person ``text``, offer ``options``, and return the one they pick.
+
+        The question goes out as :meth:`notify_user` sends it, on ``channel``
+        to ``user``, and is written into this actor's state until it is
+        answered, so a restart in between loses nothing: the actor listens
+        again when it starts, and the answer reaches
+        :meth:`on_operator_answer`, or :meth:`wait_for_answer` if the agent
+        asks for it by id. The first pick on any channel is the answer; the
+        dashboard shows every question and can answer it whatever channel it
+        went to.
+
+        ``timeout`` is seconds to wait, None to wait for as long as the actor
+        runs. When it passes on a question sent to a chat channel, the
+        question is shown again on the dashboard, saying where it was asked,
+        and waited for once more for the same time; then
+        ``asyncio.TimeoutError`` is raised. The question stays open, and a
+        later pick still reaches :meth:`on_operator_answer`.
+
+        Raises ``ValueError`` for no options, or options or a channel the
+        channels cannot show.
+        """
+        if not options:
+            raise ValueError("ask_operator needs options for the person to pick from")
+        self._hear_answers()
+        question_id = await self.notify_user(text, options=options, channel=channel, user=user)
+        question = Question(
+            id=question_id,
+            text=str(text),
+            options=check_options(options),
+            channel=check_channel(channel),
+            user=str(user).strip(),
+            asked_at=time.time(),
+        )
+        self._write_question(question)
+        try:
+            return await self.wait_for_answer(question_id, timeout=timeout)
+        except asyncio.TimeoutError:
+            if timeout is None or question.channel == DASHBOARD:
+                raise
+        # Nothing came from the chat channel: the same question, the same id,
+        # on the dashboard, where the operator looks when a channel is quiet.
+        await self.notify_user(
+            f"Still waiting for an answer (asked on {question.channel}): {text}",
+            options=options,
+            id=question_id,
+        )
+        self._write_question(
+            Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
+        )
+        return await self.wait_for_answer(question_id, timeout=timeout)
+
+    async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
+        """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.
+
+        Returns at once for a question already answered. ``LookupError`` for a
+        question this actor never asked, ``asyncio.TimeoutError`` when the time
+        passes; the question stays open either way.
+        """
+        question = self.questions().get(question_id)
+        if question is None:
+            raise LookupError(f"[{self.name}] no question with id {question_id!r}")
+        if question.answer is not None:
+            return question.answer
+        self._hear_answers()
+        entry = self._answer_waiters.get(question_id)
+        future = entry[0] if entry is not None and not entry[0].done() else None
+        if future is None:
+            future = asyncio.get_running_loop().create_future()
+            entry = (future, 0)
+        self._answer_waiters[question_id] = (future, entry[1] + 1)  # pyright: ignore[reportOptionalSubscript]
+        try:
+            # Shielded: a waiter that gives up must not cancel the future a
+            # later answer, or another waiter, still needs.
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(
+                f"[{self.name}] no answer to {question.text[:60]!r} within {timeout:g}s"
+            ) from None
+        finally:
+            # The last waiter to leave takes the future with it, so a pick that
+            # comes later finds nobody waiting and goes to `on_operator_answer`.
+            left = self._answer_waiters.get(question_id)
+            if left is not None and left[0] is future:
+                if left[1] <= 1:
+                    self._answer_waiters.pop(question_id, None)
+                else:
+                    self._answer_waiters[question_id] = (future, left[1] - 1)
+
+    def questions(self) -> dict[str, Question]:
+        """Every question this actor has asked and still keeps, by id."""
+        return questions_in(self.recall(QUESTIONS_KEY, {}))
+
+    def open_questions(self) -> list[Question]:
+        """The questions still waiting for an answer, oldest first."""
+        return sorted((q for q in self.questions().values() if q.open), key=lambda q: q.asked_at)
+
+    async def on_operator_answer(self, question: Question, option: str) -> None:
+        """Called with the person's pick when nothing awaits it.
+
+        That is a question asked before a restart, one asked without waiting,
+        or one whose wait timed out. Override it to act on the answer; the
+        default only logs it. An answer :meth:`ask_operator` or
+        :meth:`wait_for_answer` is waiting for goes to them instead.
+        """
+        logger.info(
+            "[%s] %r was answered %r on %s",
+            self.name,
+            question.text[:60],
+            option,
+            question.answer_channel,
+        )
+
+    def _write_question(self, question: Question) -> None:
+        """Put ``question`` in the book, replacing its earlier record."""
+        book = self.questions()
+        book[question.id] = question
+        self.persist(QUESTIONS_KEY, book_of(book))
+
+    def _hear_answers(self) -> None:
+        """Listen on this actor's answer topic, once."""
+        if self._hearing_answers:
+            return
+        self._hearing_answers = True
+        self.subscribe(answer_topic(self.actor_id), self._on_answer_frame)
+
+    async def _on_answer_frame(self, payload: Any) -> None:
+        """One frame on the answer topic: the first pick for an open question settles it."""
+        answer = Answer.from_payload(self.actor_id, payload)
+        if answer is None:
+            return
+        question = self.questions().get(answer.id)
+        if question is None:
+            logger.debug("[%s] an answer to a question not asked here: %s", self.name, answer.id)
+            return
+        if question.answer is not None:
+            logger.debug(
+                "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
+            )
+            return
+        settled = answered(question, answer.option, answer.index, answer.channel)
+        self._write_question(settled)
+        waiting = self._answer_waiters.pop(answer.id, None)
+        if waiting is not None and not waiting[0].done():
+            waiting[0].set_result(answer.option)
+            return
+        await self.on_operator_answer(settled, answer.option)
 
     # ─── Status ───────────────────────────────────────────────────────────────
 

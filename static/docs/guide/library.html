@@ -562,7 +562,9 @@ dicts, which are the spelling chat and JSON use:</p>
         <span class="s2">"cooldown_seconds"</span><span class="p">:</span> <span class="mi">30</span><span class="p">}]</span>
 </code></pre></div>
 
-<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name) and <code>webhook</code>.
+<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name), <code>webhook</code> and
+<code>ask_operator</code> (a question to the person, with options, whose pick is published
+when it comes; see <em>Asking and waiting</em> in the interfaces guide).
 Conditions take <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>in</code>, <code>contains</code>,
 <code>exists</code>, <code>absent</code>, with dotted fields such as <code>reading.ax</code>; an action's
 payload may name trigger fields in braces and carries the trigger under
@@ -803,6 +805,10 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <tr>
 <td><code>notify_user(text, options=[...], channel=..., user=...)</code> and <code>agents/&lt;id&gt;/answer</code></td>
 <td>a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see <em>Messages from an agent</em> in the interfaces guide)</td>
+</tr>
+<tr>
+<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
+<td>the same, waiting for the pick; a question outlives a restart</td>
 </tr>
 <tr>
 <td><code>models=</code> on <code>wactorz.agent</code>, <code>MODELS</code> on an <code>Actor</code>, with <code>artifact_path</code>, <code>load_model</code> and <code>artifacts</code></td>

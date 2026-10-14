@@ -358,6 +358,49 @@ class HvacWatch(wactorz.Actor):
 
 A generated agent has the same call, `await agent.notify_user(...)`, and `agent.subscribe("agents/<its id>/answer", callback)`. Every open dashboard marks the question answered once any channel has the pick, and the pick is a row on the activity feed.
 
+### Asking and waiting: `ask_operator`
+
+Most of the time the agent wants the answer, not the topic. `ask_operator` sends the same message and waits for the pick:
+
+```python
+answer = await me.ask_operator(
+    "Every reading since 14:02 looks like an anomaly. Did something change?",
+    options=["maintenance", "real problem", "not sure"],
+    channel="telegram",
+    user="123456789",
+    timeout=3600,
+)
+if answer == "maintenance":
+    me.persist("regime_change_at", "14:02")
+```
+
+- The question is written into the agent's state until it is answered, so a restart in between loses nothing. When the agent starts it listens again, and a pick that arrives while nothing waits for it reaches `on_operator_answer(question, option)` on an `Actor`, or `async def on_answer(agent, question, option)` in a generated agent's program. `me.open_questions()` lists what is still unanswered, and `await me.wait_for_answer(question_id)` waits for one of them by id.
+- The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, so the operator can answer there as well.
+- `timeout` is seconds; `None` waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then `asyncio.TimeoutError` is raised, and the question stays open: a later pick still reaches `on_operator_answer`.
+
+A rule can ask without any code, with the `ask_operator` action:
+
+```python
+RuleConfig(
+    triggers=("anomalies/hvac",),
+    conditions=(RuleCondition("score", "gt", 20),),
+    actions=(
+        RuleAction(
+            "ask_operator",
+            text="HVAC score {score} since {since}. Did something change?",
+            options=("maintenance", "real problem", "not sure"),
+            channel="telegram",
+            user="123456789",
+            timeout=3600,
+            topic="labels/hvac",
+        ),
+    ),
+    cooldown_seconds=3600,
+)
+```
+
+The text may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, `{"question", "option", "index", "trigger"}` is published on `topic`, or on `answers/<rule name>` when none is given, which is where a label store or a controller listens.
+
 Two things a channel cannot do:
 
 - **WhatsApp lets a business write first only inside a day of the person's last message**, or through a template Meta approved. Outside that window Twilio refuses the send, and the refusal is logged with the message's words. Telegram and the dashboard have no such limit.

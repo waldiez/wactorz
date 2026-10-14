@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
 from ...core.paths import resolve_state_dir
+from ...core.questions import Question
 from ...core.state_versions import StateUpgradeError
 from ...core.turns import current_turn, outside_any_turn
 from ...monitoring import agent_metrics
@@ -439,6 +440,25 @@ class DynamicAgent(Actor):
         except Exception as exc:
             logger.debug("[%s] Could not unregister from TopicBus: %s", self.name, exc)
 
+    async def on_operator_answer(self, question: Question, option: str) -> None:
+        """The person's pick, to the program's ``on_answer(agent, question, option)`` if it has one."""
+        hook = self._ns.get("on_answer")
+        if not callable(hook):
+            await super().on_operator_answer(question, option)
+            return
+        try:
+            result = hook(self._api, question.to_dict(), option)
+            if inspect.isawaitable(result):
+                await _bounded_call(result, self._HANDLE_TASK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] on_answer() timed out", self.name)
+        except _ProgramHalted as halted:
+            if isinstance(halted.original, KeyboardInterrupt):
+                raise halted.original from None
+            logger.warning("[%s] on_answer() error: %s", self.name, halted.original)
+        except Exception as e:
+            logger.warning("[%s] on_answer() error: %s", self.name, e)
+
     async def _run_generated_cleanup(self) -> None:
         """Give the generated code its chance to let go, under a timeout."""
         cleanup = self._ns.get("cleanup")
@@ -562,7 +582,11 @@ class DynamicAgent(Actor):
             self._fn_setup = self._ns.get("setup")
             self._fn_process = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")
-            fns = [f for f in ["setup", "process", "handle_task", "cleanup"] if f in self._ns]
+            fns = [
+                f
+                for f in ["setup", "process", "handle_task", "cleanup", "on_answer"]
+                if f in self._ns
+            ]
             logger.info("[%s] Code compiled OK. Functions: %s", self.name, fns)
             if not fns:
                 logger.warning("[%s] No functions found in compiled code.", self.name)

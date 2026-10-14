@@ -693,6 +693,44 @@ wactorz<span class="w"> </span>--no-monitor
 </code></pre></div>
 
 <p>A generated agent has the same call, <code>await agent.notify_user(...)</code>, and <code>agent.subscribe("agents/&lt;its id&gt;/answer", callback)</code>. Every open dashboard marks the question answered once any channel has the pick, and the pick is a row on the activity feed.</p>
+<h3 id="asking-and-waiting-ask_operator">Asking and waiting: <code>ask_operator</code></h3>
+<p>Most of the time the agent wants the answer, not the topic. <code>ask_operator</code> sends the same message and waits for the pick:</p>
+<div class="highlight"><pre><span></span><code><span class="n">answer</span> <span class="o">=</span> <span class="k">await</span> <span class="n">me</span><span class="o">.</span><span class="n">ask_operator</span><span class="p">(</span>
+    <span class="s2">"Every reading since 14:02 looks like an anomaly. Did something change?"</span><span class="p">,</span>
+    <span class="n">options</span><span class="o">=</span><span class="p">[</span><span class="s2">"maintenance"</span><span class="p">,</span> <span class="s2">"real problem"</span><span class="p">,</span> <span class="s2">"not sure"</span><span class="p">],</span>
+    <span class="n">channel</span><span class="o">=</span><span class="s2">"telegram"</span><span class="p">,</span>
+    <span class="n">user</span><span class="o">=</span><span class="s2">"123456789"</span><span class="p">,</span>
+    <span class="n">timeout</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">if</span> <span class="n">answer</span> <span class="o">==</span> <span class="s2">"maintenance"</span><span class="p">:</span>
+    <span class="n">me</span><span class="o">.</span><span class="n">persist</span><span class="p">(</span><span class="s2">"regime_change_at"</span><span class="p">,</span> <span class="s2">"14:02"</span><span class="p">)</span>
+</code></pre></div>
+
+<ul>
+<li>The question is written into the agent's state until it is answered, so a restart in between loses nothing. When the agent starts it listens again, and a pick that arrives while nothing waits for it reaches <code>on_operator_answer(question, option)</code> on an <code>Actor</code>, or <code>async def on_answer(agent, question, option)</code> in a generated agent's program. <code>me.open_questions()</code> lists what is still unanswered, and <code>await me.wait_for_answer(question_id)</code> waits for one of them by id.</li>
+<li>The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, so the operator can answer there as well.</li>
+<li><code>timeout</code> is seconds; <code>None</code> waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then <code>asyncio.TimeoutError</code> is raised, and the question stays open: a later pick still reaches <code>on_operator_answer</code>.</li>
+</ul>
+<p>A rule can ask without any code, with the <code>ask_operator</code> action:</p>
+<div class="highlight"><pre><span></span><code><span class="n">RuleConfig</span><span class="p">(</span>
+    <span class="n">triggers</span><span class="o">=</span><span class="p">(</span><span class="s2">"anomalies/hvac"</span><span class="p">,),</span>
+    <span class="n">conditions</span><span class="o">=</span><span class="p">(</span><span class="n">RuleCondition</span><span class="p">(</span><span class="s2">"score"</span><span class="p">,</span> <span class="s2">"gt"</span><span class="p">,</span> <span class="mi">20</span><span class="p">),),</span>
+    <span class="n">actions</span><span class="o">=</span><span class="p">(</span>
+        <span class="n">RuleAction</span><span class="p">(</span>
+            <span class="s2">"ask_operator"</span><span class="p">,</span>
+            <span class="n">text</span><span class="o">=</span><span class="s2">"HVAC score </span><span class="si">{score}</span><span class="s2"> since </span><span class="si">{since}</span><span class="s2">. Did something change?"</span><span class="p">,</span>
+            <span class="n">options</span><span class="o">=</span><span class="p">(</span><span class="s2">"maintenance"</span><span class="p">,</span> <span class="s2">"real problem"</span><span class="p">,</span> <span class="s2">"not sure"</span><span class="p">),</span>
+            <span class="n">channel</span><span class="o">=</span><span class="s2">"telegram"</span><span class="p">,</span>
+            <span class="n">user</span><span class="o">=</span><span class="s2">"123456789"</span><span class="p">,</span>
+            <span class="n">timeout</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
+            <span class="n">topic</span><span class="o">=</span><span class="s2">"labels/hvac"</span><span class="p">,</span>
+        <span class="p">),</span>
+    <span class="p">),</span>
+    <span class="n">cooldown_seconds</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>The text may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, <code>{"question", "option", "index", "trigger"}</code> is published on <code>topic</code>, or on <code>answers/&lt;rule name&gt;</code> when none is given, which is where a label store or a controller listens.</p>
 <p>Two things a channel cannot do:</p>
 <ul>
 <li><strong>WhatsApp lets a business write first only inside a day of the person's last message</strong>, or through a template Meta approved. Outside that window Twilio refuses the send, and the refusal is logged with the message's words. Telegram and the dashboard have no such limit.</li>

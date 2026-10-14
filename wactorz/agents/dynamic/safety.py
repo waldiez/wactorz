@@ -142,6 +142,93 @@ PROCESS_ANTIPATTERNS: list[tuple[str, str]] = [
 ]
 
 
+#: Modules a repair may import though the program it repairs did not: standard
+#: modules that only compute. A missing ``import json`` is among the commonest
+#: crashes a repair fixes, and none of these reaches a process, a socket or a
+#: file the program could not reach already.
+REPAIR_MAY_IMPORT = frozenset(
+    {
+        "abc",
+        "asyncio",
+        "bisect",
+        "collections",
+        "copy",
+        "dataclasses",
+        "datetime",
+        "decimal",
+        "enum",
+        "fractions",
+        "functools",
+        "heapq",
+        "itertools",
+        "json",
+        "math",
+        "numbers",
+        "operator",
+        "random",
+        "re",
+        "statistics",
+        "string",
+        "textwrap",
+        "time",
+        "typing",
+        "uuid",
+    }
+)
+
+#: An import line, for code that does not parse: a syntax repair starts there.
+_IMPORT_LINE = re.compile(
+    r"^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)|import[ \t]+([A-Za-z_][\w \t,.]*))", re.MULTILINE
+)
+
+
+def imports_a_repair_adds(original: str, repaired: str) -> list[str]:
+    """The modules ``repaired`` imports that ``original`` did not, beyond `REPAIR_MAY_IMPORT`.
+
+    Top-level names, sorted: ``import os.path`` is ``os``, and a relative import
+    is the program's own code. What a repair is asked to fix comes from the
+    failing run, whose error text can carry what the agent was processing, so
+    a repair keeps to the capabilities the program it repairs already had.
+    ``original`` is the program the agent was first given, never an earlier
+    repair, so successive repairs cannot add a module each. A ``repaired`` that
+    does not parse adds nothing: compiling it reports that.
+    """
+    added = _imported(repaired)
+    if added is None:
+        return []
+    had = _imported(original)
+    if had is None:
+        had = _imported_by_line(original)
+    return sorted(added - had - REPAIR_MAY_IMPORT)
+
+
+def _imported(code: str) -> set[str] | None:
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    return names
+
+
+def _imported_by_line(code: str) -> set[str]:
+    names: set[str] = set()
+    for found in _IMPORT_LINE.finditer(code):
+        if found[1]:
+            names.add(found[1])
+        else:
+            for part in found[2].split(","):
+                words = part.split()
+                if words:
+                    names.add(words[0].split(".")[0])
+    return names
+
+
 def extract_function_body(code: str, fn_name: str) -> str | None:
     """Extract the body of a top-level function by name from source code.
     Simple indentation-based parser — good enough for LLM-generated code.

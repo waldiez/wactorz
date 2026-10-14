@@ -655,6 +655,14 @@ Each layer catches what the previous one missed:
 | **4. Callback wrapper** (`_safe_invoke`) | Subscribe listener | Catches `TypeError` from `await None` inside callbacks, logs once, suppresses for all subsequent messages | Prevents infinite error spam |
 | **5. LLM self-correction** (`_run_setup`) | Setup phase | If `setup()` raises a runtime error, the traceback + API docs are sent to the LLM, code is fixed, recompiled, and retried (up to 2 attempts) | Last resort — works for most fixable errors |
  
+### What a repair may do
+
+A repair is code the model wrote, whatever program it repairs, and the error it is asked to fix comes from the failing run, which can carry text the agent was processing. So, at start, in `setup()` and in `process()` alike:
+
+- **It always meets the sanitizer and the safety validator**, a catalogue agent's included. An agent running a repair is no longer trusted, and neither is its spawn registry entry or the Supervisor's restart of it.
+- **It imports nothing the agent's own program did not**, beyond standard modules that only compute (`json`, `math`, `datetime`, `re`, `collections` and their like). A repair that reaches for `subprocess`, `socket`, an HTTP client or any other new module is refused and counts as a failed round; when the rounds run out the agent falls to the Supervisor. The comparison is with the program the agent was given, never an earlier repair.
+- **The failing run's report reaches the model as data.** The error, its traceback and what earlier repairs failed with are set between markers and named as data that is never to be followed, each error cut to a few hundred characters. The markers carry a token drawn for each prompt, so neither that text nor the program shown after it can end the block early.
+
 ### Pre-Exec Safety Validator
  
 `_validate_code_safety()` runs after sanitization but before `exec()`. It parses the code and reads each name through the code's own imports, so `os . system`, `import os as o; o.system`, `from os import system as run` and `getattr(os, "system")` are all `os.system`, and a blocked name is refused whether it is called or only referenced. Two tiers:

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent
+from wactorz.agents.dynamic.safety import imports_a_repair_adds
 
 BLOCKED = [
     ("os.system('ls')", "os.system"),
@@ -372,3 +373,58 @@ class TestCompileCode:
         agent = self._agent(tmp_path, "def broken(:\n")
 
         assert agent._compile_code("async def setup(agent):\n    pass\n") is None
+
+
+class TestWhatARepairMayImport:
+    """A repaired program keeps to the modules its original imported.
+
+    The repair prompt carries the failing run's error text, which can hold
+    whatever the agent was processing; a repair is the one place that text
+    reaches code that runs. So a repair may not reach for a module the agent
+    never had -- a shell, a socket, an HTTP client -- beyond a few that only
+    compute.
+    """
+
+    ORIGINAL = "import httpx\nimport os\n\nasync def process(agent):\n    pass\n"
+
+    @pytest.mark.parametrize(
+        ("repaired", "added"),
+        [
+            ("import subprocess\n", ["subprocess"]),
+            ("import socket, json\n", ["socket"]),
+            ("from urllib import request\n", ["urllib"]),
+            ("import importlib.util\n", ["importlib"]),
+        ],
+    )
+    def test_a_module_the_original_did_not_have_is_named(
+        self, repaired: str, added: list[str]
+    ) -> None:
+        assert imports_a_repair_adds(self.ORIGINAL, self.ORIGINAL + repaired) == added
+
+    @pytest.mark.parametrize(
+        "repaired",
+        [
+            "import httpx\n",
+            "import os.path\n",
+            "from os import environ\n",
+            "import json\nimport math\nfrom datetime import datetime\n",
+            "from . import helpers\n",
+        ],
+    )
+    def test_the_originals_own_and_computing_modules_pass(self, repaired: str) -> None:
+        assert imports_a_repair_adds(self.ORIGINAL, repaired) == []
+
+    def test_an_original_that_does_not_parse_still_counts_its_imports(self) -> None:
+        """A syntax repair starts from code that does not parse."""
+        broken = "import httpx\n\nasync def process(agent)\n    pass\n"
+
+        assert imports_a_repair_adds(broken, "import httpx\n") == []
+        assert imports_a_repair_adds(broken, "import socket\n") == ["socket"]
+
+    def test_each_import_line_of_an_original_that_does_not_parse_counts(self) -> None:
+        broken = "import httpx\nimport serial, json\nfrom paho import mqtt\ndef (\n"
+
+        assert imports_a_repair_adds(broken, "import serial\nimport paho\nimport httpx\n") == []
+
+    def test_a_repair_that_does_not_parse_adds_nothing_compile_will_report_it(self) -> None:
+        assert imports_a_repair_adds(self.ORIGINAL, "import socket\ndef (") == []

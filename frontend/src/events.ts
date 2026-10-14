@@ -28,6 +28,10 @@ export interface AppEventMap {
     "af-stream-chunk": { chunk: string; from: string };
     "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
+    /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
+    "af-answer-option": { id: string; agentId: string; option: string; index: number };
+    /** A question was answered, here or on another channel: show the pick, take the buttons off. */
+    "af-answered": { id: string; option: string };
     /** Everything was wiped; `survivors` are the ids of the agents still running. */
     "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have

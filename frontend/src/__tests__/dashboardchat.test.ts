@@ -11,6 +11,7 @@ import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { withoutAttachment } from "../ui/dashboard/attachTray";
 import {
     defaultChatTarget,
+    markAnswered,
     preferredChatTarget,
     resolveSendTarget,
     sendBlockedReason,
@@ -171,6 +172,30 @@ describe("stripLeadingMention", () => {
 
     it("does not strip a partial-name match", () => {
         expect(stripLeadingMention("@catalogue hi", "catalog")).toBe("@catalogue hi");
+    });
+});
+
+describe("markAnswered", () => {
+    const question: ChatMessage = {
+        id: "q1",
+        from: "hvac",
+        to: "user",
+        content: "Changed?",
+        timestampMs: 1,
+        options: ["yes", "no"],
+    };
+    const plain: ChatMessage = { id: "p1", from: "hvac", to: "user", content: "hi", timestampMs: 2 };
+
+    it("marks the question and leaves the rest as they were", () => {
+        const out = markAnswered([plain, question], "q1", "no")!;
+        expect(out.message).toEqual({ ...question, answer: "no" });
+        expect(out.messages).toEqual([plain, { ...question, answer: "no" }]);
+        expect(question.answer).toBeUndefined(); // copied, not edited
+    });
+
+    it("changes nothing for an unknown id or a message with no options", () => {
+        expect(markAnswered([plain, question], "nope", "no")).toBeNull();
+        expect(markAnswered([plain, question], "p1", "no")).toBeNull();
     });
 });
 
@@ -381,6 +406,31 @@ describe("DashboardChat — sending & live events", () => {
         };
         document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
         expect(thread(host).textContent).toContain("hi back");
+    });
+
+    it("closes a question's buttons when it is answered, here or elsewhere", () => {
+        const msg: ChatMessage = {
+            id: "q1",
+            from: "main",
+            to: "user",
+            content: "Changed?",
+            timestampMs: Date.now(),
+            options: ["yes", "no"],
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+        const buttons = (): HTMLButtonElement[] => [
+            ...thread(host).querySelectorAll<HTMLButtonElement>("button.af-chat-option"),
+        ];
+        expect(buttons().map(b => b.disabled)).toEqual([false, false]);
+
+        // The pick from another channel reaches the dashboard as an answer.
+        document.dispatchEvent(new CustomEvent("af-answered", { detail: { id: "q1", option: "no" } }));
+        expect(buttons().map(b => b.disabled)).toEqual([true, true]);
+        expect(thread(host).querySelector(".af-chat-option-picked")!.textContent).toBe("no");
+
+        // An answer to a question not shown here changes nothing.
+        document.dispatchEvent(new CustomEvent("af-answered", { detail: { id: "other", option: "x" } }));
+        expect(buttons()).toHaveLength(2);
     });
 
     it("keeps a voice session in its embodied surface thread", () => {

@@ -973,11 +973,13 @@ async def _run_interface(
     orchestrator: "Orchestrator | None",
     interface: str,
     companions: list[Any],
+    outbox: Any = None,
 ) -> None:
     """Run ``interface``, the system and ``companions`` until one of them ends.
 
     ``orchestrator`` answers the chat turns; ``main_actor`` is for what still
-    needs main itself. Both are None in the minimal profile.
+    needs main itself. Both are None in the minimal profile. ``outbox`` carries
+    agents' messages to a chat channel run as the primary interface.
     """
     from wactorz.interfaces.chat_interfaces import (
         CLIInterface,
@@ -1027,6 +1029,7 @@ async def _run_interface(
             orchestrator,
             token=discord_token,
             allowed_user_ids=CONFIG.discord_allowed_user_ids,
+            outbox=outbox,
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "whatsapp":
@@ -1038,6 +1041,7 @@ async def _run_interface(
             from_number=CONFIG.twilio_whatsapp_number,
             port=port,
             allowed_numbers=CONFIG.whatsapp_allowed_numbers,
+            outbox=outbox,
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "telegram":
@@ -1049,6 +1053,7 @@ async def _run_interface(
             token=telegram_token,
             allowed_user_id=args.telegram_allowed_user_id or None,
             allowed_user_ids=CONFIG.telegram_allowed_user_ids,
+            outbox=outbox,
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     else:
@@ -1071,16 +1076,27 @@ async def _run(
     # NOTE: the monitor web UI is now started inside build_system(), before the
     # supervisor, so it binds even if the broker stalls agent startup.
 
-    from wactorz.interfaces.chat_interfaces import build_social_companions
+    from wactorz.interfaces.chat_interfaces import (
+        SOCIAL_INTERFACES,
+        Outbox,
+        build_social_companions,
+    )
 
     interface = args.interface or CONFIG.interface
 
     # Configured social channels run alongside the primary interface, not
-    # instead of it (the dashboard stays primary; the bots ride along).
-    companions = build_social_companions(orchestrator, interface) if orchestrator else []
+    # instead of it (the dashboard stays primary; the bots ride along). The
+    # outbox carries agents' messages to them, and runs only when there is a
+    # channel for it to serve.
+    outbox = Outbox(args.mqtt_broker or CONFIG.mqtt_host, args.mqtt_port or CONFIG.mqtt_port)
+    companions = (
+        build_social_companions(orchestrator, interface, outbox=outbox) if orchestrator else []
+    )
+    if orchestrator is not None and (companions or interface in SOCIAL_INTERFACES):
+        companions = [*companions, outbox]
 
     try:
-        await _run_interface(args, system, main_actor, orchestrator, interface, companions)
+        await _run_interface(args, system, main_actor, orchestrator, interface, companions, outbox)
     except StartupError:
         # The caller's to report: the command exits on it, a host program
         # catches it. Shutdown below still runs.

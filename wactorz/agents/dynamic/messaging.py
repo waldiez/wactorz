@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
@@ -124,12 +125,55 @@ class MessagingMixin(_Host):
             },
         )
 
-    async def notify_user(self, text: str, **extra: Any) -> None:
-        """Push a user-facing chat message to the chat panel (see Actor.notify_user).
+    async def notify_user(
+        self,
+        text: str,
+        *,
+        options: Sequence[str] = (),
+        channel: str = "dashboard",
+        user: str = "",
+        **extra: Any,
+    ) -> str:
+        """Say ``text`` to the person, and return the message's id (see Actor.notify_user).
+
         Use this — not log() or alert() — when the user should see the message in
         chat, e.g. when a long task finishes or an autonomous agent has news.
+        ``options`` offers a choice, shown as buttons or a numbered list; the
+        pick comes back on ``agents/<id>/answer`` naming the id returned.
+        ``channel`` ("dashboard", "telegram", "discord", "whatsapp") says where,
+        and ``user`` who to reach there.
         """
-        await self._actor.notify_user(text, **extra)
+        return await self._actor.notify_user(
+            text, options=options, channel=channel, user=user, **extra
+        )
+
+    async def ask_operator(
+        self,
+        text: str,
+        *,
+        options: Sequence[str],
+        channel: str = "dashboard",
+        user: str = "",
+        timeout: float | None = None,
+    ) -> str:
+        """Ask the person ``text`` with ``options`` and return the one picked (see Actor.ask_operator).
+
+        Waits for the pick, up to ``timeout`` seconds (None: as long as the
+        agent runs). A question outlives a restart; an answer that arrives
+        when nothing waits goes to the program's ``on_answer(agent, question,
+        option)`` if it defines one.
+        """
+        return await self._actor.ask_operator(
+            text, options=options, channel=channel, user=user, timeout=timeout
+        )
+
+    async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
+        """The option picked for an earlier question, waiting up to ``timeout`` seconds."""
+        return await self._actor.wait_for_answer(question_id, timeout=timeout)
+
+    def open_questions(self) -> list[dict[str, Any]]:
+        """The questions still waiting for an answer, oldest first, as dicts (SYNC, no await)."""
+        return [q.to_dict() for q in self._actor.open_questions()]
 
     async def _send_to_remote(
         self, agent_name: str, payload: Any, timeout: float

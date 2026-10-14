@@ -20,6 +20,7 @@ import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import {
+    markAnswered,
     preferredChatTarget,
     replacementTarget,
     resolveSendTarget,
@@ -105,6 +106,7 @@ export class DashboardChat {
     private _evSendFailed: EventListener | null = null;
     private _evAttach: EventListener | null = null;
     private _evConnection: EventListener | null = null;
+    private _evAnswered: EventListener | null = null;
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
     private _pendingAttachments: Attachment[] = [];
@@ -614,6 +616,8 @@ export class DashboardChat {
             ["af-send-failed", this._evSendFailed],
             ["af-connection-status", this._evConnection],
             ["af-attachment-added", this._evAttach],
+            ["af-answered", this._evAnswered],
+            ["af-answer-option", this._evAnswered],
         ];
         pairs.forEach(([name, fn]) => {
             if (fn) {
@@ -622,6 +626,20 @@ export class DashboardChat {
         });
         this._evChat = this._evChunk = this._evEnd = this._evResetChat = this._evSendMessage = null;
         this._evSendFailed = this._evAttach = this._evConnection = null;
+        this._evAnswered = null;
+    }
+
+    /** Mark the question `id` answered with `option`, and redraw if it is on screen.
+     *  The same for a press here and an answer from another channel: the buttons close either way. */
+    private _markAnswered(id: string, option: string): void {
+        const answered = markAnswered(this.chatMessages, id, option);
+        if (!answered) {
+            return;
+        }
+        this.chatMessages = answered.messages;
+        if (this.host.getView() === "chat" && this._msgBelongsHere(answered.message)) {
+            this.renderChatThread();
+        }
     }
 
     private _wireChatEvents(): void {
@@ -642,6 +660,11 @@ export class DashboardChat {
                 this._showSentMessage(stored, Boolean(voiceTarget));
             }
         });
+
+        // Marked at the press, not at the broker's echo, so a second press cannot answer twice.
+        // One listener for both: a press here and an answer from elsewhere read the same.
+        this._evAnswered = listen("af-answered", detail => this._markAnswered(detail.id, detail.option));
+        document.addEventListener("af-answer-option", this._evAnswered);
 
         this._evResetChat = listen("af-reset-chat", detail => {
             const agent = detail.agent;

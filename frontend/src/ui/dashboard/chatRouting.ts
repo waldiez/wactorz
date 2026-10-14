@@ -136,3 +136,26 @@ export function preferredChatTarget(agents: AgentInfo[], remembered: string | nu
     const kept = agents.filter(canDirectMessage).find(a => a.name === remembered);
     return kept?.name ?? defaultChatTarget(agents);
 }
+
+/**
+ * `messages` with the question `id` marked answered by `option`, and that message.
+ *
+ * Null when no question with that id is held: an answer to a question this
+ * dashboard never showed, or to a plain message, changes nothing. The list is
+ * copied rather than edited, as the thread re-renders from it.
+ */
+export function markAnswered(
+    messages: ChatMessage[],
+    id: string,
+    option: string,
+): { messages: ChatMessage[]; message: ChatMessage } | null {
+    const idx = messages.findIndex(m => m.id === id && (m.options?.length ?? 0) > 0);
+    const found = idx === -1 ? undefined : messages[idx];
+    if (!found) {
+        return null;
+    }
+    const message: ChatMessage = { ...found, answer: option };
+    const next = [...messages];
+    next[idx] = message;
+    return { messages: next, message };
+}

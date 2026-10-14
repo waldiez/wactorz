@@ -28,6 +28,7 @@ _AGENT_LEAVES = frozenset(
         "status",
         "alert",
         "chat",
+        "answer",
         "spawn",
         "metrics",
         "logs",

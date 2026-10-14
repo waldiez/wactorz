@@ -282,6 +282,42 @@
   border-bottom-left-radius: 4px;
   color: rgba(255, 255, 255, 0.88);
 }
+/* A question's options: one button per choice under the text. Once answered,
+   the buttons stay for the record, dimmed, with the pick marked. */
+.af-chat-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.af-chat-option {
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  background: rgba(37, 99, 235, 0.18);
+  color: #dbeafe;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.af-chat-option:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.4);
+}
+.af-chat-option:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.af-chat-option.af-chat-option-picked {
+  opacity: 1;
+  border-color: rgba(74, 222, 128, 0.7);
+  background: rgba(22, 163, 74, 0.25);
+  color: #dcfce7;
+}
+.af-chat-option-note {
+  align-self: center;
+  font-size: 12px;
+  color: #dcfce7;
+}
 /* Waiting for the first token: the agent's own bubble, with three dots rising
    in turn. Same background and radius as a real reply, so the answer appears to
    arrive in place rather than replacing something. */

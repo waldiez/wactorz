@@ -19,6 +19,8 @@ import { toast } from "../ui/ToastManager";
 // Registries the mocked transport + router populate as main.ts wires them up.
 const mockRouter: Record<string, (...a: any[]) => void> = {};
 const mockWs: Record<string, (...a: any[]) => void> = {};
+// Every frame main.ts sent over the mocked transport with sendRaw.
+const mockSent: unknown[] = [];
 // A single known agent so `getAgents().find(...)` resolves in the metrics path.
 const mockStoreAgents = [{ id: "a", name: "A", state: "running", protected: false }];
 // The store main.ts builds, so a test can see what reached it.
@@ -67,7 +69,10 @@ vi.mock("../io/WSClient", () => ({
         onStreamEnd = vi.fn();
         connect = vi.fn();
         disconnect = vi.fn();
-        sendRaw = vi.fn();
+        sendRaw = vi.fn((frame: unknown) => {
+            mockSent.push(frame);
+            return true;
+        });
     },
 }));
 
@@ -144,6 +149,7 @@ describe("main.ts bootstrap", () => {
             "node-heartbeat",
             "host-stats",
             "raw",
+            "answer",
         ]) {
             expect(typeof mockRouter[ev]).toBe("function");
         }
@@ -252,6 +258,23 @@ describe("main.ts bootstrap", () => {
         ]);
         wsHandler("logFeed")([{ type: "log", agent_id: "a", message: "m2", timestamp: 3 }]); // initialized branch
         expect(true).toBe(true);
+    });
+
+    it("sends a pressed option to the agent, and closes the question on an answer", () => {
+        const answered: unknown[] = [];
+        const seen = (e: Event): void => {
+            answered.push((e as CustomEvent).detail);
+        };
+        document.addEventListener("af-answered", seen);
+        mockSent.length = 0;
+        try {
+            emit("af-answer-option", { id: "q1", agentId: "a", option: "yes", index: 0 });
+            routerHandler("answer")({ id: "q1", agentId: "a", option: "yes", index: 0, channel: "telegram" });
+        } finally {
+            document.removeEventListener("af-answered", seen);
+        }
+        expect(mockSent).toEqual([{ type: "answer", agent_id: "a", id: "q1", option: "yes", index: 0 }]);
+        expect(answered).toEqual([{ id: "q1", option: "yes" }]);
     });
 
     it("handles the app-event listeners", () => {

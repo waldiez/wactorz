@@ -15,14 +15,15 @@
 import type {
     AgentInfo,
     AgentState,
-    HeartbeatPayload,
-    SpawnPayload,
     AlertPayload,
-    LogPayload,
-    NodeHeartbeatPayload,
+    AnswerPayload,
     ChatMessage,
+    HeartbeatPayload,
+    LogPayload,
     MetricsPayload,
+    NodeHeartbeatPayload,
     QaFlagPayload,
+    SpawnPayload,
 } from "../types/agent";
 import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
@@ -157,6 +158,10 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         agentName: item.name ?? agentName,
         timestamp: ts,
     }),
+    answer: (item, { agentName, ts }) =>
+        item.option
+            ? { type: "chat", label: `✓ ${item.option}`, agentName, timestamp: ts, role: "user" }
+            : null,
 };
 
 /**
@@ -305,6 +310,17 @@ export function chatFeedItem(msg: ChatMessage): FeedItem {
         label: `→ ${msg.to}: ${msg.content}`,
         agentName: msg.from,
         timestamp: msg.timestampMs,
+    };
+}
+
+/** Feed row for a person's answer to a question an agent asked. */
+export function answerFeedItem(answer: AnswerPayload): FeedItem {
+    return {
+        type: "chat",
+        label: `✓ ${answer.option} (${answer.channel})`,
+        agentName: answer.agentId,
+        timestamp: answer.timestampMs,
+        role: "user",
     };
 }
 

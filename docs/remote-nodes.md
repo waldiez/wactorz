@@ -188,6 +188,16 @@ From the main Wactorz chat, add a `"node"` field to any spawn request. The plann
 
 The main machine publishes this config to `nodes/rpi-livingroom/spawn`. The runner picks it up, installs any declared `"install"` packages, compiles the code, and starts the agent under a local supervisor.
 
+#### A library agent (`type: module`)
+
+An agent the deployment brings — a function declared with `@wactorz.agent`, an `Actor` subclass — is spawned on a node by its import path, as it is on main, and built there from the package installed on the node:
+
+```json
+{"name": "imu-anomaly", "node": "rpi-kitchen", "type": "module", "target": "imu_anomaly.agent:detect", "options": {"threshold": 4.0}}
+```
+
+Main sends the agent's code with the spawn: the folder its module is in, `.py` files only, which the node writes under `~/wactorz/state/..bundles/`, checks against the hash the signed spawn names, and imports the agent from. The packages it lists in `requires={"packages": [...]}` are installed first. **An agent's own code has to live in that folder**: one that imports code of the main machine's from anywhere else is refused before it moves, naming the import — see *Using Wactorz as a library*. A node that has the package installed itself, with the target named in `WACTORZ_AGENTS` or as a `wactorz.agents` entry point, builds it from that and is sent no code; the targets it can build and whether it takes code (`code_bundles`) are in its manifest. A node from before this release takes no code, and main refuses to move a library agent there until it is deployed again. On the node the agent runs as it does on main, with no model: `me.llm` is `None` there. The models it names with `models=` (or `MODELS` on a class) go with it as artifacts: main pins them when it sends the agent, and the node fetches them before it builds it, as for any agent whose spawn names artifacts. *Using Wactorz as a library* has the rest.
+
 > **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh.
 
 ---
@@ -447,7 +457,7 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
 | `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, whether the node checks signed commands, and how close the machine is to running out: CPU, memory (within a container's or a unit's memory limit), swap, load, free disk where the state is kept, the CPU's temperature and, on a Raspberry Pi, what is throttling it. A reading the node cannot take is `null`. |
-| `nodes/{name}/manifest` | ← runner | What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, and the installed packages. Sent when the runner starts and after an install; cleared by `/nodes remove`. |
+| `nodes/{name}/manifest` | ← runner | What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, the installed packages, and the library agents it can build (`agents`, by import path). Sent when the runner starts and after an install; cleared by `/nodes remove`. |
 | `nodes/{name}/migrate` | → runner | Hand a running agent back to main, which places it. Payload: `{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}`. Signed. |
 | `nodes/{name}/migrate_result` | ← runner | Result of a migration request. A failure, including a refusal, is shown on the dashboard. |
 | `nodes/{name}/code_changed` | ← runner | An agent here repaired its own program. Carries the agent's name and no code. |
@@ -520,7 +530,7 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 | `await agent.publish(topic, data)` | Publish to any MQTT topic via the shared broker. |
 | `await agent.log(message)` | Log to `agents/{id}/logs` — visible in the central dashboard. |
 | `await agent.alert(message, severity)` | Publish an alert. Levels: `info`, `warning`, `error`. |
-| `agent.persist(key, value)` | Write to `~/wactorz/state/<name>_state.json` (JSON, not pickle — portable, and what a migration carries). Bytes, numpy arrays, torch tensors and modules, and scikit-learn-family models are kept as files of their own beside it. Any other value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved. |
+| `agent.persist(key, value)` | Write to `~/wactorz/state/<name>_state.json` (JSON, not pickle — portable, and what a migration carries). Bytes, numpy arrays, torch tensors and modules, and scikit-learn-family models are kept as files of their own beside it. A `datetime`, `date`, `time` or `timedelta`, a `set` or `frozenset`, a tuple, and a dict whose keys are not strings are written in a marked form and come back as what they were. Any other value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved. |
 | `agent.recall(key)` | Read a persisted value. |
 | `agent.state` | In-memory dict, not persisted. |
 | `await agent.send_to(name, payload)` | Send a task to any agent (local or remote) via MQTT request/reply. Times out after 30 s by default. |
@@ -543,11 +553,11 @@ A running agent can be moved between main and a node, or from one node to anothe
 
 Main routes every migration; a node never spawns on another node.
 
-A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled, rule or module agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. A library agent — a decorated function or an `Actor` subclass registered with the system, `type: module` — it builds from the package installed there, so one moves only to a node whose manifest names its target; see [A library agent](#a-library-agent-type-module). An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled or rule agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
 
 The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
 
-State travels as JSON, and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:
+State travels as JSON — a date, a set, a tuple or a dict keyed by numbers in the marked form that brings it back as it was — and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:
 
 - **its state holds a value that can go neither way** (an open capture, a socket, an object of the agent's own class). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
 - **it is on a node and keeps a value that runs code when it loads** — a torch module, a scikit-learn, XGBoost, LightGBM or CatBoost model saved with joblib. Main sends these to a node, which runs what main sends it anyway; it does not load them from a node, and one node does not pass them to another. They are refused like the values above, and `--force` leaves them on the node. Keep a model's `state_dict()` instead of the module, and it travels;

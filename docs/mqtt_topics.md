@@ -546,6 +546,7 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/migrate_result` | Remote runner | `{ "success": true, "agent": "...", "from_node": "...", "to_node": "..." }` |
 | `nodes/{node}/state_return` | Remote runner | `{ "agent": "...", "config": {...}, "state": {...}, "state_keys_dropped": [...], "return_token": "..." }`, or with `"refused": "<reason>"` and no state when the agent stays where it is. A blob in `state` is a reference, as on `blob` above |
 | `nodes/{node}/blob_return/{sha256}` | Remote runner | One blob of an agent the node is handing back, in chunks shaped as on `blob`, sent before the `state_return` that names it. Never a format that runs code when it loads |
+| `nodes/{node}/artifact_request` | Remote runner | `{ "agent": "...", "sha256": ["..."] }` — the artifacts an agent spawned here names, pinned in its spawn's `artifacts` as `{ "<key>": { "name": "imu-detector", "version": 3, "sha256": "...", "format": "onnx", "size": ..., "runs_code": false } }`, that the node does not hold. Main answers on `blob` for each that an agent placed on this node names, and the node uses one only if it hashes to what the spawn names |
 | `nodes/{node}/reply/#` | Remote runner | Reply payloads for node requests |
 | `agents/by-name/{agent}/task` | Main actor | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }` |
 
@@ -639,8 +640,9 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/agents` | Remote runner | Agent list response |
 | `nodes/{node}/migrate_result` | Remote runner | Migration result |
 | `nodes/{node}/state_return` | Remote runner | Remote-to-local state return |
-| `nodes/{node}/blob/{sha256}` | Main actor | An agent's blob, in chunks, as main places it |
+| `nodes/{node}/blob/{sha256}` | Main actor | An agent's blob, in chunks, as main places it, or an artifact the node asked for |
 | `nodes/{node}/blob_return/{sha256}` | Remote runner | An agent's blob, in chunks, as the node hands it back |
+| `nodes/{node}/artifact_request` | Remote runner | The artifacts an agent spawned here names that the node does not hold |
 | `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |

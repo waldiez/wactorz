@@ -44,6 +44,13 @@ ALLOWED_UNPICKLE_SITES = {
     # A blob's loaders, reading from the agent's own directory, which is built
     # through agent_state_dir like the state file beside it.
     "core/blobs.py": 2,
+    # An artifact's loaders for a pickle and a joblib file. Reached only when the
+    # agent passes `allow_code=True` (`test_models.py` pins the refusal without
+    # it), for a file in main's store or a node's cache -- both directories of
+    # their own under the state directory, the file named by its SHA-256 and
+    # checked against the hash its spawn pinned, from an artifact an operator
+    # stored with `--allow-code`.
+    "core/models.py": 2,
 }
 
 #: The modules whose `load` reads a file by unpickling it.

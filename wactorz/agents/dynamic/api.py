@@ -322,6 +322,24 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         value = self._actor.recall(key)
         return value if value is not None else default
 
+    def persist_bytes(self, key: str, data: bytes) -> Any:
+        """Save raw bytes -- model weights, a pickled estimator, an ONNX file --
+        as text, so they are kept on a node and travel with a migration like
+        any other value. Keep it to a model: the whole state has to fit a
+        migration's size limit.
+
+        Synchronous, like persist(); safe to await by mistake.
+        """
+        self._actor.persist_bytes(key, data)
+        return AWAITABLE_NONE
+
+    def recall_bytes(self, key: str) -> bytes | None:
+        """What persist_bytes() saved under `key`, or None when nothing is there.
+
+        Synchronous -- do NOT use await.
+        """
+        return self._actor.recall_bytes(key)
+
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
     def agents(self) -> list[dict[str, Any]]:
@@ -403,6 +421,37 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         if self._actor._node:
             return [{"node": self.node, "online": True, "agents": self._agent_names()}]
         return []
+
+    # ── Artifacts: models main keeps, named in the spawn ──────────────────
+
+    def artifact_path(self, key: str) -> str:
+        """Where the artifact this agent's spawn names as ``key`` is, on this host.
+
+        A spawn names models kept with ``wactorz-artifacts`` under keys of its
+        choosing -- ``"artifacts": {"model": "imu-detector:3"}`` -- and the
+        agent opens one with whatever loads it::
+
+            import onnxruntime
+            session = onnxruntime.InferenceSession(agent.artifact_path("model"))
+
+        A file, or for a directory artifact the directory it unpacks to. It is
+        here and checked against its hash before the agent starts, on main and
+        on a node alike. A string, which every loader takes.
+        """
+        return self._actor.artifact_path(key)
+
+    async def load_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """The artifact named ``key``, loaded once: numpy arrays, safetensors, ONNX, raw bytes.
+
+        ``model = await agent.load_model("model")``. See `wactorz.core.models`
+        for what each format loads as; open any other through `artifact_path`.
+        """
+        return await self._actor.load_model(key, allow_code=allow_code)
+
+    @property
+    def artifacts(self) -> dict[str, dict[str, Any]]:
+        """Each artifact this agent's spawn names: its name, version, format, size and path."""
+        return self._actor.artifacts
 
     def _agent_names(self) -> list[str]:
         """The agents in this process, by name."""

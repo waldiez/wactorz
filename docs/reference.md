@@ -152,6 +152,7 @@ async def handle_task(agent, payload):
 | `await agent.log(msg)` | Publish a log event |
 | `await agent.publish(topic, data)` | Publish to an MQTT topic |
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
+| `agent.artifact_path(key)` | Where a model the spawn names in `artifacts` is, on main or on a node |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
 | `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
@@ -748,6 +749,7 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/memory forget <key>` | Remove a specific stored fact |
 | `/webhook <service> <url>` | Store a notification webhook URL |
 | `/topics` | List known MQTT topics and their publishing agents |
+| `/artifacts [name]` | List the models kept on main with `wactorz-artifacts`, or every version of one. Main's model is told the same list, so an agent it writes names a model that is there |
 | `/cost` | Show per-agent token usage and cost breakdown |
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |
@@ -1356,11 +1358,13 @@ wactorz/
 ├── node/                                      Edge node runtime — `wactorz-node --node <name>`
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
+├── artifacts_cli.py                           `wactorz-artifacts` CLI — models kept on main, by name and version
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
 │   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │   ├── topic_bus.py                           TopicBus — TopicContract / TopicRegistry, schema introspection
+│   ├── artifacts.py                           ArtifactStore — files kept once by SHA-256, named by version
 │   └── persistence/                           SQLite + memory + Pickle three-tier persistence
 │
 ├── agents/

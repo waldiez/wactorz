@@ -23,6 +23,7 @@ import logging
 import re
 import time
 import traceback
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, Message, MessageType
@@ -97,10 +98,14 @@ class DynamicAgent(Actor):
         output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider: Any = None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
+        artifacts: Mapping[str, Mapping[str, Any]] | None = None,  # see `AgentAPI.artifact_path`
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._code = code
+        #: The artifacts the spawn named, pinned, each with the ``path`` this
+        #: host keeps it at. Resolved by whoever spawns the agent, before it starts.
+        self._artifacts = {key: dict(entry) for key, entry in (artifacts or {}).items()}
         self.poll_interval = poll_interval
         self.description = description
         self.input_schema = input_schema or {}

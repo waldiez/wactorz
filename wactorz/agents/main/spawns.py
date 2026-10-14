@@ -19,10 +19,14 @@ import json
 import logging
 import re
 import time
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
+from ...core.artifacts import ArtifactError
+from ...core.bundles import BundleError, bundle_for
 from ...core.topics import topic_name_error
+from ...plugins import MODULE_TYPE, for_target, is_module_config
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -49,16 +53,18 @@ SPAWN_REGISTRY_KEY = "_spawned_agents"
 TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
 
 
-def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
+def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] = ()) -> str | None:
     """Why a node could not run the agent ``config`` describes, or None if it can.
 
-    A node runs every agent as generated code: what the config's ``code`` holds,
-    or, for an agent of type ``llm``, the bridge code main writes for it. Every
-    other kind of agent is a class built into this server -- a native catalogue
-    agent, a Home Assistant actuator, a scheduled or rule agent, a registered
-    module -- and its config carries no program. Sent to a node, it starts as an
-    agent with nothing to run, answers every message with an error, and is
-    reported as started all the same.
+    A node runs an agent as generated code: what the config's ``code`` holds,
+    or, for an agent of type ``llm``, the bridge code main writes for it. A
+    module agent it builds from a package installed there, so one is placed
+    only on a node whose manifest names the target among ``node_targets``.
+    Every other kind of agent is a class built into this server -- a native
+    catalogue agent, a Home Assistant actuator, a scheduled or rule agent --
+    and its config carries no program. Sent to a node, it starts as an agent
+    with nothing to run, answers every message with an error, and is reported
+    as started all the same.
     """
     if (config.get("code") or "").strip():
         return None
@@ -67,10 +73,70 @@ def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
         return None
     if agent_type == "dynamic":
         return "it has no program to send there"
+    if agent_type == MODULE_TYPE:
+        target = str(config.get("target") or "").strip()
+        if target and (target in node_targets or isinstance(config.get("bundle"), dict)):
+            return None
+        return (
+            f"it is built from {target or 'a target it does not name'}, which that node has "
+            f"not said it has, and its code could not be sent with it. Redeploy the node so it "
+            f"takes the code from main, or install the package there and name the agent in "
+            f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
+        )
     return (
         f"it is a {agent_type} agent, built into this server, and a node runs only an "
-        f"agent whose program goes with it: generated code, or an LLM agent"
+        f"agent whose program goes with it: generated code, an LLM agent, or a library "
+        f"agent from a package installed there"
     )
+
+
+def with_models_of(config: dict[str, Any]) -> dict[str, Any]:
+    """``config`` naming, as ``artifacts``, the models a library agent declares in its code.
+
+    A spawn that names artifacts itself keeps them. The agent's own
+    declaration -- ``models=`` on the decorator, ``MODELS`` on a class -- is
+    what main has and the node does not, so it goes with the spawn.
+    """
+    if not is_module_config(config) or config.get("artifacts"):
+        return config
+    plugin = for_target(str(config.get("target") or ""))
+    if plugin is None or not plugin.models:
+        return config
+    return {**config, "artifacts": plugin.models}
+
+
+async def with_code_for(
+    config: dict[str, Any], node_targets: Collection[str], takes_bundles: bool
+) -> tuple[dict[str, Any], str | None]:
+    """``config`` as a node can build it, and why its code cannot go, or None.
+
+    A library agent whose target the node has installed is built from that.
+    Otherwise, on a node that takes them, its code goes with the spawn as a
+    bundle -- the folder its module is in, see `wactorz.core.bundles` -- made
+    again from the code here each time, so the node runs what main runs, with
+    the packages the agent requires to be installed there. A config that is
+    not a library agent's is returned as it is.
+    """
+    if not is_module_config(config):
+        return config, None
+    target = str(config.get("target") or "").strip()
+    if not target or target in node_targets or not takes_bundles:
+        return config, None
+    plugin = for_target(target)
+    if plugin is None:
+        # Not built here, so there is nothing to send: a bundle the config
+        # already carries is the one it was placed with.
+        return config, None
+    try:
+        # It reads and parses every file in the folder: off the loop.
+        bundle = await asyncio.to_thread(bundle_for, target)
+    except BundleError as exc:
+        return config, str(exc)
+    bundled = {**config, "bundle": bundle}
+    packages = plugin.requires.get("packages")
+    if packages and not config.get("install"):
+        bundled["install"] = [str(p) for p in packages]
+    return bundled, None
 
 
 def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -663,6 +729,27 @@ class SpawnService:
             else:
                 logger.warning("[%s] Remote install issue: %s", self.host.name, result)
 
+    async def pinned_for(
+        self, config: dict[str, Any], node: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """``config`` with every model it names pinned for ``node``, or why one cannot be.
+
+        A library agent's own models are named first. What is saved and what
+        is sent then name the same versions, so an agent restarted from its
+        record runs the model it ran. A copy: the caller's dict may be written
+        elsewhere too. A migration runs this before it stops the agent: an
+        artifact that is not stored would otherwise be found only after the
+        stop, with the agent running nowhere.
+        """
+        config = with_models_of(config)
+        if not config.get("artifacts"):
+            return config, None
+        try:
+            pinned = await self.host.artifact_service.pin_for_node(config["artifacts"], node)
+        except ArtifactError as exc:
+            return config, f"its artifacts cannot be sent: {exc}"
+        return {**config, "artifacts": pinned}, None
+
     async def _refuse_remote_spawn(self, config: dict[str, Any], node: str, reason: str) -> None:
         """Say in the log and on the dashboard why an agent was not sent to ``node``."""
         name = config.get("name")
@@ -704,7 +791,18 @@ class SpawnService:
                 problem,
             )
             return
-        unrunnable = why_a_node_cannot_run(config)
+        # The node's targets are asked for only when they decide: a host that
+        # cannot say -- a test's stand-in -- places code and LLM agents as before.
+        targets: Collection[str] = ()
+        if is_module_config(config):
+            targets = self.host._node_targets(node)
+            config, problem = await with_code_for(
+                config, targets, self.host._node_takes_bundles(node)
+            )
+            if problem:
+                await self._refuse_remote_spawn(config, node, f"{problem}.")
+                return
+        unrunnable = why_a_node_cannot_run(config, targets)
         if unrunnable:
             await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
             return
@@ -724,6 +822,10 @@ class SpawnService:
                     "timestamp": time.time(),
                 },
             )
+            return
+        config, problem = await self.pinned_for(config, node)
+        if problem:
+            await self._refuse_remote_spawn(config, node, f"{problem}.")
             return
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")

@@ -12,6 +12,7 @@ import asyncio
 import sys
 
 from agent import detect
+from model import STATE_DIR
 
 import wactorz
 
@@ -23,7 +24,7 @@ if sys.platform == "win32":
 
 async def main() -> None:
     system = asyncio.create_task(
-        wactorz.serve(agents=[detect], minimal=True, web=False, state_dir="./state")
+        wactorz.serve(agents=[detect], minimal=True, web=False, state_dir=STATE_DIR)
     )
     await asyncio.sleep(3)  # the broker connection and the agent come up
     if system.done():

@@ -7,7 +7,8 @@ reconcile against a desired state after a reboot, hand an agent's state back so
 main can move it somewhere else.
 
 The agents themselves are ordinary :class:`~wactorz.agents.DynamicAgent`
-instances (see :mod:`.agent`), registered in an ordinary
+instances (see :mod:`.agent`), or library agents built from a package installed
+here, each with :class:`~.hosted.NodeHosted` in front of its own class, registered in an ordinary
 :class:`~wactorz.core.registry.ActorRegistry` and watched by the ordinary
 :class:`~wactorz.core.registry.Supervisor`. So a node gets the same OTP
 restart semantics as main, agents on one node reach each other in process
@@ -20,14 +21,23 @@ import json
 import logging
 import os
 import sys
+import tarfile
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import __version__
-from ..config import CONFIG, MIGRATION_MAX_BLOB_BYTES
-from ..core.actor import Actor, SupervisorStrategy
+from .. import __version__, plugins
+from ..config import (
+    ARTIFACT_MAX_BYTES,
+    CONFIG,
+    MIGRATION_MAX_BLOB_BYTES,
+    NODE_ARTIFACT_CACHE_BYTES,
+)
+from ..core import bundles
+from ..core.actor import Actor, ActorState, SupervisorStrategy
+from ..core.artifacts import ArtifactError, pinned_in
 from ..core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsUnusable,
@@ -62,6 +72,8 @@ from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
 from .agent import NodeAgent
+from .artifact_cache import CACHE_DIRNAME, ArtifactCache
+from .hosted import NodeHosted
 from .publishing import NodePublisher
 from .signing import (
     CLEARABLE_LEAVES,
@@ -131,14 +143,32 @@ class NodeRunner:
         self.registry._supervisor_ref = self.supervisor
         #: name → the config it was spawned from, so a restart can use it again.
         self._configs: dict[str, dict] = {}
+        #: The agents being started now: installing, fetching, not yet running.
+        self._starting: set[str] = set()
         state_path = self._resolve_state_dir(state_dir)
         self.state_dir = str(state_path)
         #: Where the blobs of an agent main is placing here arrive, before the
         #: spawn that names them uses them.
         #: Held from `run` until it returns, so nothing else runs on this state.
         self._state_lock = StateLock(self.state_dir)
+        # Large enough for either: an agent's own blobs on a migration, and the
+        # artifacts it names, which arrive the same way.
         self.inbox = Inbox(
-            Path(self.state_dir) / INBOX_DIRNAME, MIGRATION_MAX_BLOB_BYTES or sys.maxsize
+            Path(self.state_dir) / INBOX_DIRNAME,
+            _largest(MIGRATION_MAX_BLOB_BYTES, ARTIFACT_MAX_BYTES),
+        )
+        #: Where the code library agents' spawns carry is written, one
+        #: directory per bundle, and imported from.
+        self._bundles_dir = Path(self.state_dir) / bundles.BUNDLES_DIRNAME
+        #: name -> the plugin built from the bundle its spawn carried, and the
+        #: directory that bundle is in, from the moment it is written.
+        self._bundled: dict[str, tuple[plugins.AgentPlugin, Path]] = {}
+        #: One bundle written and imported at a time: each changes `sys.path`
+        #: and `sys.modules`, and clears away the bundles no agent here uses.
+        self._bundle_lock = asyncio.Lock()
+        #: The models agents here have named, kept across restarts.
+        self.artifacts = ArtifactCache(
+            Path(self.state_dir) / CACHE_DIRNAME, NODE_ARTIFACT_CACHE_BYTES
         )
         # Read from the environment rather than a flag, like the broker
         # credentials, so the key appears in no process listing. Left in the
@@ -184,15 +214,21 @@ class NodeRunner:
     # ── The agents running here ───────────────────────────────────────────────
 
     @property
-    def agents(self) -> dict[str, NodeAgent]:
+    def agents(self) -> dict[str, NodeHosted]:
         """The node's agents by name, as the control plane thinks of them."""
         return {
             actor.name: actor
             for actor in self.registry.all_actors()
-            if isinstance(actor, NodeAgent)
+            if isinstance(actor, NodeHosted)
         }
 
+    def hosted(self, name: str) -> NodeHosted | None:
+        """The agent this node runs under ``name``: generated code or a library agent."""
+        actor = self.registry.find_by_name(name)
+        return actor if isinstance(actor, NodeHosted) else None
+
     def get(self, name: str) -> NodeAgent | None:
+        """The agent running generated code here under ``name``; see `hosted` for any."""
         actor = self.registry.find_by_name(name)
         return actor if isinstance(actor, NodeAgent) else None
 
@@ -227,15 +263,34 @@ class NodeRunner:
     def forget(self, name: str) -> None:
         """Drop an agent that has ended itself, without stopping it again."""
         self._configs.pop(name, None)
+        self._bundled.pop(name, None)
         self.supervisor.drop_supervised(name)
 
     async def spawn_agent(self, config: Any) -> None:
+        """Start the agent ``config`` describes here, unless it is being started already.
+
+        Main sends a spawn and, at the same moment, the desired state that lists
+        the agent, and both arrive here. A start that installs packages or
+        fetches models takes a while, and the agent is not running until it
+        ends: without this, the second message starts it again beside the
+        first, and the two wait on the same model, which only one receives.
+        """
         if not isinstance(config, dict):
             logger.warning("[runner] spawn_agent: invalid config type %s, ignoring.", type(config))
             return
         name = config.get("name", f"agent-{uuid.uuid4().hex[:6]}")
+        if name in self._starting:
+            logger.info("[runner] '%s' is already being started; not starting it twice", name)
+            return
+        self._starting.add(name)
+        try:
+            await self._spawn_now(name, config)
+        finally:
+            self._starting.discard(name)
+
+    async def _spawn_now(self, name: str, config: dict[str, Any]) -> None:
         logger.info("[runner] Spawning agent '%s'...", name)
-        if self.get(name) is not None:
+        if self.hosted(name) is not None:
             if config.get("replace", False):
                 logger.info("[runner] Replacing agent '%s'", name)
                 await self.stop_agent(name)
@@ -261,16 +316,52 @@ class NodeRunner:
                     "error",
                     f"Refused to spawn '{name}': these are not package names: {refused}",
                 )
+                await self._refuse_migration(
+                    name, config, f"these are not package names: {refused}"
+                )
                 return
 
         if not await self._receive_blobs(name, config):
+            await self._refuse_migration(name, config, "its models and other blobs did not arrive")
+            return
+
+        missing = await self._fetch_artifacts(name, config)
+        if missing:
+            logger.warning("[runner] Not starting '%s': %s", name, missing)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {missing}"
+            )
+            await self._refuse_migration(name, config, missing)
+            return
+
+        unloaded = await self._take_bundle(str(name), config)
+        if unloaded:
+            logger.error("[runner] Not starting '%s': %s", name, unloaded)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {unloaded}"
+            )
+            await self._refuse_migration(name, config, unloaded)
+            return
+
+        factory = self._factory(config)
+        if factory is None:
+            target = config.get("target") or "a target it does not name"
+            reason = (
+                f"this node cannot build {target}: install its package here and name it in "
+                "WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
+            )
+            logger.error("[runner] Not starting '%s': %s", name, reason)
+            await self._log_to_dashboard(
+                "error", f"Did not start '{name}' on {self.node_name}: {reason}"
+            )
+            await self._refuse_migration(name, config, reason)
             return
 
         try:
             self._configs[name] = config
-            await self.supervisor.start_supervised(
+            agent = await self.supervisor.start_supervised(
                 name,
-                lambda: NodeAgent(config, self, state_dir=self.state_dir),
+                factory,
                 strategy=SupervisorStrategy.ONE_FOR_ONE,
                 max_restarts=int(config.get("max_restarts", 5)),
                 restart_delay=float(config.get("restart_delay", 3.0)),
@@ -280,6 +371,19 @@ class NodeRunner:
             logger.exception("[runner] Failed to start agent '%s'", name)
             self.forget(name)
             await self._log_to_dashboard("error", f"Failed to start '{name}': {e}")
+            await self._refuse_migration(name, config, f"it failed to start: {e}")
+            return
+
+        # The start returns once `on_start` has, and a program that did not
+        # compile -- after any repair -- or whose state could not be upgraded is
+        # FAILED by then. It never ran, so it is not an arrival: a migration is
+        # refused and the agent stopped here, rather than left to a supervisor
+        # that would compile it again on every restart. Outside a migration it
+        # stays supervised, as an agent main spawned here always has.
+        if config.get("_migration_token") and agent.state is ActorState.FAILED:
+            phase = getattr(agent, "_error_phase", "") or "start"
+            await self.stop_agent(name)
+            await self._refuse_migration(name, config, f"its program did not start ({phase})")
             return
 
         await self.publish(
@@ -310,13 +414,111 @@ class NodeRunner:
                 retain=False,
             )
 
+    def _factory(self, config: dict[str, Any]) -> Callable[[], Actor] | None:
+        """What builds the agent ``config`` describes here, or None when this node cannot.
+
+        Generated code becomes a `NodeAgent`. A library agent (`type: module`)
+        is built from the plugin installed here under its target, with
+        `NodeHosted` in front of its own class and the models its spawn names
+        already in place, so it does not look for them in a store this node
+        does not have.
+        """
+        if not plugins.is_module_config(config):
+            return lambda: NodeAgent(config, self, state_dir=self.state_dir)
+        if isinstance(config.get("bundle"), dict):
+            taken = self._bundled.get(str(config.get("name")))
+            plugin = taken[0] if taken else None
+        else:
+            plugin = plugins.for_target(str(config.get("target") or ""))
+        if plugin is None:
+            return None
+        return lambda: self._build_hosted(plugin, config)
+
+    async def _take_bundle(self, name: str, config: dict[str, Any]) -> str | None:
+        """Write and import the code a library agent's spawn carries; why it could not, or None.
+
+        A spawn with no bundle is left to `_factory`, which builds from what is
+        installed here. Writing and importing read and write files and run the
+        module's own code: off the loop.
+        """
+        if not plugins.is_module_config(config) or not isinstance(config.get("bundle"), dict):
+            return None
+        try:
+            async with self._bundle_lock:
+                in_use = {d for n, (_p, d) in self._bundled.items() if n != name}
+                self._bundled[name] = await asyncio.to_thread(self._import_bundle, config, in_use)
+        except bundles.BundleError as exc:
+            return str(exc)
+        except Exception as exc:
+            # The module's own code ran, and raised: what it raised is the reason.
+            logger.exception("[runner] The code '%s' was sent with did not load", name)
+            return f"its code did not load: {exc}"
+        return None
+
+    def _import_bundle(
+        self, config: dict[str, Any], in_use: set[Path]
+    ) -> tuple[plugins.AgentPlugin, Path]:
+        """The plugin built from the bundle in ``config``, written here and imported.
+
+        ``in_use`` is the bundle directories the other agents here run from.
+        """
+        directory = bundles.write(config["bundle"], self._bundles_dir).resolve()
+        bundles.prepare_import(directory, self._bundles_dir, in_use)
+        target = str(config.get("target") or "")
+        obj = plugins.resolve_target(target)
+        module = sys.modules.get(target.partition(":")[0])
+        file = getattr(module, "__file__", None)
+        if not file or not Path(file).resolve().is_relative_to(directory):
+            raise bundles.BundleError(f"{target} was not loaded from the code its spawn carries")
+        bundles.trim(self._bundles_dir, in_use | {directory})
+        return plugins.plugin_from(obj, target), directory
+
+    def _build_hosted(self, plugin: plugins.AgentPlugin, config: dict[str, Any]) -> Actor:
+        """The library agent ``plugin`` builds, made this node's before it starts."""
+        options = config.get("options")
+        actor = plugin.build(
+            name=str(config["name"]),
+            persistence_dir=self.state_dir,
+            options=dict(options) if isinstance(options, dict) else None,
+            mixin=NodeHosted,
+        )
+        if not isinstance(actor, NodeHosted):
+            raise TypeError(f"{plugin.target} did not build an agent this node can host")
+        actor.host_on(self, config, self.state_dir)
+        readable = self.readable_artifacts(config)
+        if readable:
+            actor._artifacts = readable
+        return actor
+
+    async def _refuse_migration(self, name: str, config: dict[str, Any], reason: str) -> None:
+        """Tell main an agent it is moving here did not start, so it is put back at once.
+
+        Without this main learns only from silence, and the agent is down until
+        its migration's token runs out. A spawn that is not a migration has no
+        one waiting, and is not answered.
+        """
+        token = config.get("_migration_token")
+        if not token:
+            return
+        await self.publish(
+            f"nodes/{self.node_name}/spawn_ack",
+            {
+                "agent": name,
+                "migration_token": token,
+                "node": self.node_name,
+                "refused": reason,
+                "timestamp": time.time(),
+            },
+            retain=False,
+        )
+
     async def _receive_blobs(self, name: str, config: dict[str, Any]) -> bool:
         """Put the blobs an arriving agent's state refers to in its state. False if they never came.
 
         Main sends them beside the spawn, and the spawn -- signed by main -- is
         what names their hashes, so what arrives is used only if it matches.
-        An agent that would start without them is not started: main hears no
-        confirmation and puts the agent back where it came from.
+        An agent that would start without them is not started: main is told it
+        was refused and puts the agent back where it came from.
         """
         initial = config.get("_initial_state")
         if not isinstance(initial, dict):
@@ -340,6 +542,80 @@ class NodeRunner:
         await self.inbox.release(shas)
         return True
 
+    async def _fetch_artifacts(self, name: str, config: dict[str, Any]) -> str | None:
+        """Have every artifact ``config`` names here and checked; why not, or None.
+
+        Those already cached and still matching their hash are used as they
+        are. The rest are asked of main, which sends only what an agent placed
+        here names, and are used only if they hash to what the spawn -- signed
+        by main -- names.
+        """
+        try:
+            wanted = {entry["sha256"]: entry for entry in pinned_in(config).values()}
+        except ArtifactError as exc:
+            return f"its artifacts are not named properly: {exc}"
+        if not wanted:
+            return None
+        too_large = [
+            f"{e['name']}:{e['version']}"
+            for e in wanted.values()
+            if ARTIFACT_MAX_BYTES and e["size"] > ARTIFACT_MAX_BYTES
+        ]
+        if too_large:
+            return f"{', '.join(too_large)} is over this node's limit (WACTORZ_ARTIFACT_MAX_BYTES)"
+        missing = set(wanted) - await asyncio.to_thread(self.artifacts.usable, wanted)
+        if missing:
+            logger.info("[runner] Fetching %s artifact(s) for '%s'", len(missing), name)
+            await self.inbox.sweep(older_than_s=INBOX_KEEP_S)
+            await self.publish(
+                f"nodes/{self.node_name}/artifact_request",
+                {"agent": name, "sha256": sorted(missing)},
+            )
+            try:
+                received = await self.inbox.wait_for(
+                    missing, wait_for(sum(wanted[sha]["size"] for sha in missing))
+                )
+            except BlobsUnusable as exc:
+                return f"its artifacts did not arrive: {exc}"
+            for sha, path in received.items():
+                await asyncio.to_thread(self.artifacts.take, sha, path)
+        try:
+            for entry in wanted.values():
+                await asyncio.to_thread(self.artifacts.readable_path, entry)
+        except (ArtifactError, OSError, tarfile.TarError) as exc:
+            return f"its artifacts could not be unpacked: {exc}"
+        await asyncio.to_thread(self.artifacts.used, wanted)
+        named = self._named_artifacts() | set(wanted)
+        trimmed = await asyncio.to_thread(self.artifacts.trim, named)
+        if trimmed:
+            logger.info("[runner] Dropped %s artifact(s) no agent here names", len(trimmed))
+        return None
+
+    def readable_artifacts(self, config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Each artifact ``config`` names, with the path an agent here reads it at.
+
+        For an agent being built: by then the spawn has fetched and unpacked
+        every one, so this only works out where they are.
+        """
+        try:
+            named = pinned_in(config)
+        except ArtifactError:
+            return {}
+        return {
+            key: {**entry, "path": str(self.artifacts.readable_path(entry))}
+            for key, entry in named.items()
+        }
+
+    def _named_artifacts(self) -> set[str]:
+        """Every hash an agent on this node names."""
+        named: set[str] = set()
+        for config in self._configs.values():
+            try:
+                named.update(entry["sha256"] for entry in pinned_in(config).values())
+            except ArtifactError:
+                continue
+        return named
+
     async def stop_agent(self, name: str, delete: bool = False, keep_topics: bool = False) -> None:
         """Stop an agent, and with ``delete`` erase everything it leaves behind.
 
@@ -355,7 +631,7 @@ class NodeRunner:
         subscriber that connects afterwards -- which is what made a deleted
         agent come back on the next restart.
         """
-        agent = self.get(name)
+        agent = self.hosted(name)
         if agent is None:
             if delete:
                 await self._delete_leftovers(name)
@@ -365,6 +641,7 @@ class NodeRunner:
 
         await self.supervisor.stop_supervised(name)
         self._configs.pop(name, None)
+        self._bundled.pop(name, None)
 
         if delete:
             # After the agent is fully stopped: its own shutdown writes the
@@ -502,7 +779,16 @@ class NodeRunner:
         described = await asyncio.to_thread(machine.describe, Path(self.state_dir))
         await self.publish(
             f"nodes/{self.node_name}/manifest",
-            {**self._node_identity(), **described, "timestamp": time.time()},
+            {
+                **self._node_identity(),
+                **described,
+                # The library agents this node can build, by import path: main
+                # places one here only when its target is among them, or when
+                # it sends the agent's code with the spawn, which this node takes.
+                "agents": plugins.targets(),
+                "code_bundles": True,
+                "timestamp": time.time(),
+            },
             retain=True,
         )
 
@@ -628,7 +914,7 @@ class NodeRunner:
             missing = [
                 str(config.get("name"))
                 for config in desired
-                if config.get("name") and self.get(config["name"]) is None
+                if config.get("name") and self.hosted(config["name"]) is None
             ]
             if server is not None and missing:
                 await self._refuse_agents_from(server, missing)
@@ -638,7 +924,7 @@ class NodeRunner:
             aname = agent_config.get("name")
             if not aname:
                 continue
-            if self.get(aname) is not None:
+            if self.hosted(aname) is not None:
                 logger.info("[runner] '%s' already running, skipping.", aname)
             else:
                 logger.info("[runner] Reconcile: starting missing agent '%s'", aname)
@@ -662,7 +948,7 @@ class NodeRunner:
     async def _stop_unlisted(self, listed: set[str]) -> None:
         """Stop every agent running here that ``listed`` leaves out, keeping its state."""
         for name, config in list(self._configs.items()):
-            if name in listed or config.get("_migration_token") or self.get(name) is None:
+            if name in listed or config.get("_migration_token") or self.hosted(name) is None:
                 continue
             logger.info("[runner] '%s' is no longer in the desired state; stopping it.", name)
             await self.stop_agent(name)
@@ -778,7 +1064,8 @@ class NodeRunner:
         name = str(data.get("agent") or "")
         agent = self.get(name)
         if agent is None:
-            logger.info("[runner] code_request for '%s', which is not running here", name)
+            # Not here, or a library agent, whose program is its package.
+            logger.info("[runner] code_request for '%s', which runs no code here", name)
             return
         await self.publish(
             f"nodes/{self.node_name}/code_return",
@@ -823,7 +1110,7 @@ class NodeRunner:
         if len(parts) < 4:
             return
         agent_name = parts[2]
-        agent = self.get(agent_name)
+        agent = self.hosted(agent_name)
         if agent is None or not isinstance(data, dict):
             return
 
@@ -845,7 +1132,7 @@ class NodeRunner:
         agent._tasks.append(task)
         task.add_done_callback(lambda t, _ts=agent._tasks: _ts.remove(t) if t in _ts else None)
 
-    async def _run_task(self, agent: NodeAgent, payload: Any, reply_topic: str | None) -> None:
+    async def _run_task(self, agent: NodeHosted, payload: Any, reply_topic: str | None) -> None:
         """Run one task and publish the answer where the caller asked for it.
 
         Inside the turn the task was sent in, so what the agent does about it,
@@ -1106,7 +1393,7 @@ class NodeRunner:
             logger.warning("[runner] migrate: missing 'name' or 'target_node' in payload")
             return
 
-        agent = self.get(str(name))
+        agent = self.hosted(str(name))
         if agent is None:
             logger.warning("[runner] migrate: agent '%s' not running here", name)
             await self.publish(
@@ -1150,7 +1437,7 @@ class NodeRunner:
             },
         )
 
-    async def _return_to_main(self, agent: NodeAgent, payload: dict[str, Any]) -> None:
+    async def _return_to_main(self, agent: NodeHosted, payload: dict[str, Any]) -> None:
         """Stop an agent and publish its config and state for main to re-place.
 
         Whether the state can travel is asked before the stop, so a refusal
@@ -1243,7 +1530,7 @@ class NodeRunner:
         )
         logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
 
-    async def _refuse_return(self, agent: NodeAgent, payload: dict[str, Any], reason: str) -> None:
+    async def _refuse_return(self, agent: NodeHosted, payload: dict[str, Any], reason: str) -> None:
         """Tell main the agent is staying, and why, without stopping it.
 
         Answered on `state_return` as well as `migrate_result`, so main can let
@@ -1280,6 +1567,11 @@ class NodeRunner:
 
 #: How long a blob that arrived and was never used is kept.
 INBOX_KEEP_S = 3600.0
+
+
+def _largest(*limits: int) -> int:
+    """The largest of byte limits where 0 means none: no limit if any is none."""
+    return sys.maxsize if not all(limits) else max(limits)
 
 
 def _positive_int(value: Any) -> int | None:

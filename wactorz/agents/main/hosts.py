@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from ...core.actor import ActorState
     from ..llm_agent import LLMProvider
     from ..prompts.assemble import PromptFragment
+    from .artifact_service import ArtifactService
+    from .migration import Migration
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -68,6 +70,8 @@ class SpawnHost(Protocol):
     actor_id: str
     _registry: Any
     _result_futures: dict[str, Any]
+    #: Pins the artifacts a config names before it goes to a node.
+    artifact_service: ArtifactService
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:
@@ -80,6 +84,14 @@ class SpawnHost(Protocol):
         ...
 
     def _node_version_mismatch(self, node_name: str) -> str | None: ...
+
+    def _node_targets(self, node_name: str) -> list[str]:
+        """The library agents a node says it can build, by import path."""
+        ...
+
+    def _node_takes_bundles(self, node_name: str) -> bool:
+        """Whether a node builds a library agent from code sent with its spawn."""
+        ...
 
     def recall(self, key: str) -> Any: ...
 
@@ -233,22 +245,46 @@ class CodeRefreshHost(ListenerHost, Protocol):
     ) -> None: ...
 
 
+class ArtifactHost(ListenerHost, Protocol):
+    """What sending nodes their agents' artifacts needs from the actor.
+
+    It reads where agents are placed -- the registry and the migrations in
+    flight -- to decide what a node may have, and publishes; it changes nothing.
+    """
+
+    migration: Migration
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
 class NodeReaders(Protocol):
     """The live node view a migration consults.
 
     Named separately from the host because it is a different object: the node
-    collaborator, not the actor. A migration asks it two things — whether the
-    destination is up, and which node currently runs an agent — and both are
-    answered from the heartbeat table it owns.
+    collaborator, not the actor. A migration asks it three things — whether the
+    destination is up, which node currently runs an agent, and which library
+    agents a node can build — answered from the heartbeat table and the
+    manifests it owns.
     """
 
     known: dict[str, dict[str, Any]]
 
     def running_agent(self, name: str) -> str: ...
 
+    def targets_of(self, node_name: str) -> list[str]: ...
+
+    def takes_bundles(self, node_name: str) -> bool: ...
+
 
 class MigrationHost(NodeHost, Protocol):
     """What moving an agent between machines needs.
+
+    ``spawns`` is the spawn service, for pinning an agent's models before it
+    is stopped, exactly as the spawn that follows will.
 
     Extends `NodeHost` because a migration reads the same spawn registry and
     reports through the same notifications, and adds the machinery for putting
@@ -260,6 +296,8 @@ class MigrationHost(NodeHost, Protocol):
     it would make the two mutually dependent for the sake of four questions the
     owning actor can already answer.
     """
+
+    spawns: Any
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:

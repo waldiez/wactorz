@@ -161,6 +161,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_RETENTION_METRICS_DAYS` | `7` | Days the per-minute metrics history of every agent and node is kept (`/api/history/...`); `0` keeps it for ever. A metrics reset clears it |
 | `WACTORZ_MIGRATION_MAX_STATE_BYTES` | `8388608` | Largest agent state a `/migrate` ships, as JSON; a larger one is refused before the agent stops, and `--force` does not override it. Set on main, which sends it to the node it asks; `0` sets no limit |
 | `WACTORZ_MIGRATION_MAX_BLOB_BYTES` | `67108864` | Largest total of an agent's blobs (models, arrays, bytes) a `/migrate` carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; `0` sets no limit |
+| `WACTORZ_ARTIFACT_MAX_BYTES` | `268435456` | Largest artifact (a model kept with `wactorz-artifacts`) main sends a node and a node accepts. A spawn naming a larger one is refused before it is sent. Read on main and on each node; `0` sets no limit |
+| `WACTORZ_NODE_ARTIFACT_CACHE_BYTES` | `1073741824` | How much of the artifacts it has fetched a node keeps. Past it, those no agent on the node names are deleted, the least recently used first; one an agent names is kept whatever the total. Read on each node; `0` keeps everything |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `ALERTMANAGER_EXTERNAL_PORT` | `9093` | Alertmanager host port |
 | `ALERT_WEBHOOK_URL` | _(none)_ | Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See `prometheus.md` |
@@ -190,13 +192,37 @@ wactorz-state import backup.tar.gz --replace
 
 Both read `WACTORZ_STATE_DIR` as the server does; `--state-dir` names another directory.
 
-- **What it holds:** the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
-- **What it leaves out:** logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.
+- **What it holds:** the database, each agent's state file and blobs, uploads, the models kept with `wactorz-artifacts`, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
+- **What it leaves out:** logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, files moved aside as unreadable, and directory artifacts as unpacked for agents to read, which are unpacked again from the archive kept beside them.
 - **Export while it runs.** The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.
 - **Import with it stopped.** A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless `--replace` is given, which keeps what was there beside it as `<directory>.before-import-<date>-<time>`.
 - **An archive is code.** Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.
 
 A node's state is moved the same way, on the node: `wactorz-state export --state-dir ~/wactorz/state`, and an import there with the node stopped. The Home Assistant add-on's state is in `/data/state`, which Home Assistant's own backups already include.
+
+## Models kept on main
+
+`wactorz-artifacts` keeps models and other large files that agents load, each under a name and a version:
+
+```bash
+wactorz-artifacts add detector.onnx imu-detector --meta dataset=imu-2026 --meta auc=0.93
+wactorz-artifacts add yolo-model/ yolo                       # a directory, kept as one archive
+wactorz-artifacts add model.pt imu-detector --format state_dict
+wactorz-artifacts list                                       # every name and version
+wactorz-artifacts show imu-detector:latest                   # one version, as JSON
+wactorz-artifacts remove imu-detector:1                      # one version
+wactorz-artifacts remove imu-detector --every-version
+wactorz-artifacts verify                                     # stored files still match their hashes
+```
+
+- **A name and a version name one file.** Each `add` of a name is its next version. A reference is `NAME` or `NAME:latest` for the newest, or `NAME:3` for the third; each resolves to the file's SHA-256, so what a machine fetches can be checked against it. The same bytes, under any names, are kept once.
+- **The format comes from the file's ending**: `.onnx`, `.safetensors`, `.npz`, `.npy`, `.gguf`, `.tflite`, `.skops`. `--format` names it where the ending does not say, as for a `.pt`, which may hold a `state_dict` or a whole module; `raw` keeps bytes as they are. A directory is kept as one archive of it, written the same way on every machine, so the same directory has the same hash wherever it is added; a link inside it is refused.
+- **Formats that run code when they load are refused** unless `--allow-code` is given: a pickle (`.pkl`), a joblib file and a whole torch module (`--format torch`). One stored anyway is marked as running code.
+- **Where:** `<state>/..artifacts/`, beside the rest of the state, in what `wactorz-state export` writes. `--state-dir` names another state directory. Adding and removing work while the server runs.
+- **In chat.** `/artifacts` lists what is kept, and `/artifacts <name>` every version of one. Main's model is given the same list on each turn, and so is the planner when a request becomes a pipeline, so asking for an agent that uses a model ("flag IMU readings far from normal with the imu-detector model") gets one that names it.
+- **Which store.** Every `wactorz-artifacts` command says which store it used, and `add` warns when it had to make a new state directory: the default is `./state` in the folder it runs from, which is Wactorz's own only when run from where Wactorz runs. Pass `--state-dir`, or set `WACTORZ_STATE_DIR` for both.
+- **In an agent.** A generated or catalogue agent names artifacts in its spawn config, `"artifacts": {"model": "imu-detector:3"}`, and its program opens one with `agent.artifact_path("model")`: the file, or for a directory the directory it unpacks to, once, in `<state>/..unpacked-artifacts/` (left out of an export, and unpacked again when needed). A spawn on main that names an artifact that is not stored is refused.
+- **On a node.** Main pins each artifact to the version and the bytes it means when the spawn goes out — `imu-detector` alone means the newest then — and keeps that pinned form, so the agent restarted or moved later runs the same model. The node keeps what it fetches in `<state>/..artifact-cache/` across restarts, asks main only for what it lacks, and starts the agent once every file is there and matches its SHA-256; one that does not arrive leaves the agent unstarted, and a migration is put back where it was. Main sends a node only the artifacts an agent placed on it names. A spawn naming an artifact that is not stored, or one over `WACTORZ_ARTIFACT_MAX_BYTES`, is refused before anything is sent.
 
 ## SSH key management
 

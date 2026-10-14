@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import config, pipelines, plugins, retention
 from wactorz.agents.lookup import find_main_actor
+from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY
 from wactorz.agents.prompts.assemble import PromptFragment
 from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
@@ -90,6 +91,34 @@ BUILT_IN_AGENT_NAMES = frozenset(
         runtime.IO_GATEWAY_ID,
     }
 )
+
+
+def placed_on_nodes(registry: Any) -> dict[str, str]:
+    """Agent name to node, for every spawn-registry entry that places its agent on a node.
+
+    A library agent moved to a node is recorded there like any other. Started
+    here as well, it would run twice, answering beside the copy the node
+    reconciles from its own retained state.
+    """
+    return {name: node for name, node in placed_by(registry).items() if node}
+
+
+def placed_by(registry: Any) -> dict[str, str]:
+    """Agent name to where the spawn registry places it: a node's name, or "" for main.
+
+    Every entry is main's to restore when it starts, wherever it places the
+    agent: one that came back from a node is restored here, from its record.
+    A library agent with an entry is therefore not supervised from its plugin
+    as well, which would start it twice, the first copy only to be stopped by
+    the restore a moment later.
+    """
+    if not isinstance(registry, dict):
+        return {}
+    placed: dict[str, str] = {}
+    for name, entry in registry.items():
+        if isinstance(entry, dict):
+            placed[str(name)] = str(entry.get("node") or "").strip()
+    return placed
 
 
 def startable_plugins(found: Iterable[plugins.AgentPlugin]) -> list[plugins.AgentPlugin]:
@@ -616,7 +645,22 @@ async def build_system(
     # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
+    recorded = placed_by(_db.kv_get("main", SPAWN_REGISTRY_KEY, None))
+    elsewhere = {name: node for name, node in recorded.items() if node}
     for plugin in startable_plugins(plugins.discover().values()):
+        if plugin.name in elsewhere:
+            logger.info(
+                "Not starting %r here: it was moved to node %r, which runs it.",
+                plugin.name,
+                elsewhere[plugin.name],
+            )
+            continue
+        if plugin.name in recorded:
+            logger.info(
+                "Not supervising %r from its plugin: main restores it from its record.",
+                plugin.name,
+            )
+            continue
         system.supervisor.supervise(
             plugin.name,
             make_plugin_factory(plugin),
@@ -631,6 +675,13 @@ async def build_system(
     started_pipelines = startable_pipelines(pipelines.discover().values())
     for pipe in started_pipelines:
         for agent_name, factory in pipeline_factories(pipe):
+            if agent_name in elsewhere:
+                logger.info(
+                    "Not starting %r here: it was moved to node %r, which runs it.",
+                    agent_name,
+                    elsewhere[agent_name],
+                )
+                continue
             system.supervisor.supervise(
                 agent_name,
                 factory,

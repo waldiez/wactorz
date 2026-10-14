@@ -26,6 +26,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
@@ -53,8 +54,9 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
-from ...core.state_snapshot import why_it_cannot_travel
-from .spawns import why_a_node_cannot_run, without_transient_keys
+from ...core.state_snapshot import json_safe, why_it_cannot_travel
+from ...plugins import MODULE_TYPE, is_module_config
+from .spawns import why_a_node_cannot_run, with_code_for, without_transient_keys
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -82,6 +84,27 @@ INBOX_KEEP_S = 3600.0
 #: Identifies the code synthesized for an LLM agent sent out to a node, so it
 #: can be dropped when the agent comes back. Hand-written code never has it.
 BRIDGE_CODE_MARKER = "Auto-generated LLM bridge"
+
+
+def library_agent_config(agent_name: str, registry: Any) -> dict[str, Any] | None:
+    """The spawn config of a library agent, as a ``type: module`` spawn would state it.
+
+    None when no plugin goes by ``agent_name``, or the one that does was
+    registered in code under no import path, which nothing elsewhere could
+    name. The running actor's options go with it, those that can be written
+    as JSON: a path, a threshold. One starting with an underscore is the
+    actor's own working value -- a loaded model -- and is left.
+    """
+    plugin = plugins.for_name(agent_name)
+    if plugin is None or not plugin.target:
+        return None
+    local = registry.find_by_name(agent_name) if registry else None
+    held = getattr(local, "options", None)
+    options: dict[str, Any] = {}
+    if isinstance(held, dict):
+        options, _dropped = json_safe({k: v for k, v in held.items() if not k.startswith("_")})
+    return {"name": agent_name, "type": MODULE_TYPE, "target": plugin.target, "options": options}
+
 
 #: `from_node` for an agent that was running here rather than on a node. The
 #: source of a migration is a node name everywhere else, so the sentinel is what
@@ -281,10 +304,13 @@ class Migration:
             )
             return
 
-        started = self.pending_returns.pop(token)
+        started = self.pending_returns[token]
+        if _misaddressed(topic, data, started["agent_name"], started["from_node"]):
+            return
+        self.pending_returns.pop(token)
         self._save_pending()
-        agent_name = data.get("agent") or started.get("agent_name", "?")
-        from_node = started.get("from_node", "?")
+        agent_name = started["agent_name"]
+        from_node = started["from_node"]
         if data.get("refused"):
             # The node kept the agent running and said why on `migrate_result`
             # too, which is what the user is told; repeating it here would be a
@@ -489,10 +515,12 @@ class Migration:
         )
 
     async def receive_spawn_ack(self, topic: str, payload: bytes | None) -> None:
-        """A target node confirms an agent it was handed is running.
+        """A target node confirms an agent it was handed is running, or says it is not.
 
-        Only now is the migration complete: the registry moves, both nodes'
-        desired state is rewritten, and the source is told to drop its copy.
+        Only a confirmation completes the migration: the registry moves, both
+        nodes' desired state is rewritten, and the source is told to drop its
+        copy. An answer carrying ``refused`` puts the agent back on its source
+        now, as the sweep would once the token ran out.
         """
         if not payload or self.host is None:
             return
@@ -505,10 +533,16 @@ class Migration:
 
         self._expire_tokens()
         token = data.get("migration_token", "")
-        pending = self.pending_spawns.pop(token, None) if token else None
-        self._save_pending()
+        pending = self.pending_spawns.get(token) if token else None
         if pending is None:
             logger.debug("[main] spawn_ack with unknown/expired token from %s — ignoring", topic)
+            return
+        if _misaddressed(topic, data, pending["agent_name"], pending["target_node"]):
+            return
+        self.pending_spawns.pop(token)
+        self._save_pending()
+        if data.get("refused"):
+            await self._put_back(pending, str(data["refused"]))
             return
 
         agent_name = pending["agent_name"]
@@ -638,48 +672,88 @@ class Migration:
                 continue
             self.pending_spawns.pop(token, None)
             self._save_pending()
-            agent_name = pending["agent_name"]
-            from_node = pending["from_node"]
-            target_node = pending["target_node"]
-            logger.warning(
-                "[%s] %r never confirmed on %r — putting it back on %r",
-                self.host.name,
-                agent_name,
-                target_node,
-                from_node,
+            await self._put_back(pending, None)
+
+    async def _put_back(self, pending: dict[str, Any], refused: str | None) -> None:
+        """Restore an agent on its source after its target did not take it.
+
+        ``refused`` is the target's reason when it said the agent did not start,
+        and None when it never answered. A restore that fails is said on the
+        dashboard, naming where the agent's state is kept: silence here is an
+        agent running nowhere that nobody is told about, and it must not stop
+        the sweep that found it from reaching the next.
+        """
+        if self.host is None:
+            return
+        agent_name = pending["agent_name"]
+        from_node = pending["from_node"]
+        target_node = pending["target_node"]
+        try:
+            await self._put_back_on_source(pending, refused)
+        except Exception as exc:
+            logger.exception(
+                "[%s] Could not put %r back on %r", self.host.name, agent_name, from_node
             )
-            # Clear the target first, best effort. The ack may have been lost
-            # rather than never sent, in which case the target is running the
-            # agent and putting it back on the source would leave two -- the
-            # duplicate this whole choreography exists to avoid. An agent that
-            # never started ignores the stop.
-            #
-            # Its retained topics are kept. An actor id comes from the name, so
-            # they are the topics of the copy being restored below: cleared, its
-            # manifest reads as that copy withdrawing, and the registry forgets
-            # the agent this rollback exists to keep.
-            await self.host._mqtt_publish(
-                f"nodes/{target_node}/stop",
-                {"name": agent_name, "delete": True, "keep_topics": True},
-                qos=1,
+            where = (
+                "its state is kept in main's state directory"
+                if from_node == LOCAL_SOURCE
+                else f"its state is kept on '{from_node}'"
             )
-            # The stop is a one-off, but placing the agent added it to the
-            # target's desired state, and that message is retained. Left there,
-            # the next time the node reboots it reconciles the agent back into
-            # existence beside the copy this rollback is restoring, and the two
-            # of them carry the same name and diverge from the same state.
-            await self.update_desired_state(target_node, remove_name=agent_name)
-            if from_node == LOCAL_SOURCE:
-                await self._restore_local(pending)
-            else:
-                restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
-                restored["node"] = from_node
-                await self.host._spawn_remote(restored, from_node, save=True)
             self._announce(
-                f"Migration of '{agent_name}' to '{target_node}' failed — "
-                f"it is back on '{from_node}'.",
-                "warning",
+                f"Migration of '{agent_name}' to '{target_node}' failed"
+                + (f": {refused}" if refused else "")
+                + f", and it could not be started on '{from_node}' again: {exc}. "
+                f"It is running nowhere; {where}. Fix the cause and spawn it again.",
+                "error",
             )
+
+    async def _put_back_on_source(self, pending: dict[str, Any], refused: str | None) -> None:
+        if self.host is None:
+            return
+        agent_name = pending["agent_name"]
+        from_node = pending["from_node"]
+        target_node = pending["target_node"]
+        logger.warning(
+            "[%s] %r %s on %r — putting it back on %r",
+            self.host.name,
+            agent_name,
+            f"did not start ({refused})" if refused else "never confirmed",
+            target_node,
+            from_node,
+        )
+        # Clear the target first, best effort. The ack may have been lost
+        # rather than never sent, in which case the target is running the
+        # agent and putting it back on the source would leave two -- the
+        # duplicate this whole choreography exists to avoid. An agent that
+        # never started ignores the stop.
+        #
+        # Its retained topics are kept. An actor id comes from the name, so
+        # they are the topics of the copy being restored below: cleared, its
+        # manifest reads as that copy withdrawing, and the registry forgets
+        # the agent this rollback exists to keep.
+        await self.host._mqtt_publish(
+            f"nodes/{target_node}/stop",
+            {"name": agent_name, "delete": True, "keep_topics": True},
+            qos=1,
+        )
+        # The stop is a one-off, but placing the agent added it to the
+        # target's desired state, and that message is retained. Left there,
+        # the next time the node reboots it reconciles the agent back into
+        # existence beside the copy this rollback is restoring, and the two
+        # of them carry the same name and diverge from the same state.
+        await self.update_desired_state(target_node, remove_name=agent_name)
+        if from_node == LOCAL_SOURCE:
+            await self._restore_local(pending)
+        else:
+            restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
+            restored["node"] = from_node
+            await self.host._spawn_remote(restored, from_node, save=True)
+        self._announce(
+            f"Migration of '{agent_name}' to '{target_node}' failed"
+            + (f": {refused}" if refused else "")
+            + f" — it is back on '{from_node}'.",
+            "warning",
+        )
 
     async def _restore_local(self, pending: dict[str, Any]) -> None:
         """Start the agent here again after its target never confirmed.
@@ -898,6 +972,10 @@ class Migration:
             return {}
         reg = self.host._get_spawn_registry()
         config = reg.get(agent_name)
+        if config is None:
+            # A library agent started with the system has no entry: its config
+            # is what a `type: module` spawn of it would say.
+            config = library_agent_config(agent_name, self.host._registry)
         have_code = bool(config and config.get("code"))
 
         # ── Locate the agent via every source we have ─────────────────────────
@@ -1072,7 +1150,16 @@ class Migration:
         # Before anything stops: a node handed a config with no program starts
         # an empty agent and confirms it, and the migration would then purge
         # the only copy that worked.
-        unrunnable = why_a_node_cannot_run(dict(config or {}))
+        targets = self.host_nodes.targets_of(target_node)
+        config, problem = await with_code_for(
+            dict(config or {}), targets, self.host_nodes.takes_bundles(target_node)
+        )
+        unrunnable = problem or why_a_node_cannot_run(config, targets)
+        if not unrunnable:
+            # The models too, pinned now: one that is not stored would otherwise
+            # be found by the spawn, after the stop, with the agent running
+            # nowhere. The pinned config is what is sent and saved below.
+            config, unrunnable = await self.host.spawns.pinned_for(config, target_node)
         if unrunnable:
             return {
                 "success": False,
@@ -1283,7 +1370,7 @@ class Migration:
         if self.host is None:
             return {}
         message = f"Cannot migrate '{agent_name}': {reason}"
-        if config and config.get("code"):
+        if config and (config.get("code") or is_module_config(config)):
             await self._restore_local({"config": dict(config)})
             return {"success": False, "message": f"{message} It is running on 'local' again."}
         logger.warning(
@@ -1338,6 +1425,36 @@ class Migration:
             qos=1,
         )
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
+
+
+def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) -> bool:
+    """Whether a node's answer quoting a migration's token is not that migration's.
+
+    The token is one migration's: one agent, answered by one node -- the source
+    handing it back, or the target confirming it started. An answer naming
+    another agent, or arriving on another node's topics, is not the answer to
+    it. The topic is the part a node cannot choose: with an account of its own,
+    the broker lets it write under its own ``nodes/<node>/`` and nowhere else.
+
+    Asked before the token is spent, and that order is the point. The token
+    travels in the clear, so anyone who can read the topics it crosses can
+    quote it. Spending it on a misaddressed answer would let them cancel the
+    migration: the real answer, a moment later, would find nothing waiting.
+    Dropped without spending, the migration stands and the right answer lands.
+    """
+    parts = topic.split("/")
+    sender = parts[1] if len(parts) > 2 and parts[0] == "nodes" else ""
+    if data.get("agent") == agent and sender == node:
+        return False
+    logger.warning(
+        "[main] %s quotes the token for %r on %r but names %r on %r — ignoring",
+        parts[-1],
+        agent,
+        node,
+        data.get("agent"),
+        sender,
+    )
+    return True
 
 
 def _left_behind_note(keys: list[str] | None) -> str:

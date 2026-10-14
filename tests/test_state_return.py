@@ -94,7 +94,9 @@ def config(**over: Any) -> dict[str, Any]:
     return {"name": "collector", "type": "dynamic", "code": "print(1)", **over}
 
 
-def state_return(token: str = TOKEN, **over: Any) -> _Message:
+def state_return(
+    token: str = TOKEN, *, topic: str = "nodes/rpi/state_return", **over: Any
+) -> _Message:
     """A node returning an agent, as its runner publishes it."""
     body: dict[str, Any] = {
         "agent": "collector",
@@ -103,7 +105,7 @@ def state_return(token: str = TOKEN, **over: Any) -> _Message:
         "state": {"count": 7},
         **over,
     }
-    return _Message(json.dumps(body).encode())
+    return _Message(json.dumps(body).encode(), topic=topic)
 
 
 async def run_listener(
@@ -306,6 +308,70 @@ class TestTheToken:
             await run_listener(monkeypatch, [state_return(token="forged")], pending=waiting())
 
         assert "token" in caplog.text
+
+
+class TestWhoMayHandItBack:
+    """Only the node main asked, about the agent it asked for, is acted on.
+
+    The token travels in the request, in the clear. The topic is what a node
+    cannot choose: with an account of its own it writes under its own
+    `nodes/<node>/` alone.
+    """
+
+    async def test_another_nodes_answer_spawns_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(topic="nodes/nuc/state_return")], pending=waiting()
+        )
+
+        assert not run.spawned
+        assert not run.published
+
+    async def test_an_answer_naming_another_agent_spawns_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spawned under the name it gives, it would replace an agent main never
+        # asked for.
+        run = await run_listener(
+            monkeypatch,
+            [state_return(agent="other", config=config(name="other"))],
+            pending=waiting(),
+        )
+
+        assert not run.spawned
+        assert not run.published
+
+    async def test_a_misaddressed_answer_leaves_the_migration_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spent on the wrong answer, the token would turn the real one away.
+        run = await run_listener(
+            monkeypatch,
+            [state_return(topic="nodes/nuc/state_return", state={"count": 0}), state_return()],
+            pending=waiting(),
+        )
+
+        assert run.only_spawn["_initial_state"] == {"count": 7}
+
+    async def test_a_topic_outside_nodes_spawns_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(topic="rpi/state_return")], pending=waiting()
+        )
+
+        assert not run.spawned
+
+    async def test_a_misaddressed_answer_is_logged(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.migration"):
+            await run_listener(
+                monkeypatch, [state_return(topic="nodes/nuc/state_return")], pending=waiting()
+            )
+
+        assert "'nuc'" in caplog.text and "'rpi'" in caplog.text
 
 
 class TestTheConfigThatIsSpawned:

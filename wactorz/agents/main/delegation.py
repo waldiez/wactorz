@@ -286,7 +286,12 @@ class DelegationManager:
             "[%s] Executing LLM delegation → @%s %s", self.host.name, agent_name, json_str[:80]
         )
         try:
-            result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+            if agent_name == "installer" and isinstance(payload, dict):
+                # The installer reads its action from the payload itself, so
+                # it is sent as one rather than as task text.
+                result = await self.delegate_to_installer(payload, timeout=300.0)
+            else:
+                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
         except Exception as e:
             return f"[{agent_name} error: {e}]"
         # Formatting the reply is outside the guard on purpose: only the

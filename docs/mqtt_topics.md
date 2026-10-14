@@ -304,17 +304,57 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 ---
 
 ### `agents/{id}/chat`
-**Published by:** Every agent (via `speak()`)
+**Published by:** Every agent (via `notify_user()`)
 **Trigger:** On chat output / assistant reply
-**Purpose:** Chat messages. The monitor forwards these to the dashboard chat panel as live output.
+**Purpose:** Chat messages. The monitor forwards these to the dashboard chat panel as live output, and the chat channels deliver the ones addressed to them.
 
 ```json
 {
+  "id":        "3f2a9c1e4b7d4e0a9f1b2c3d4e5f6a7b",
   "from":      "main",
-  "text":      "Hi there!",
+  "to":        "user",
+  "content":   "Hi there!",
   "timestamp": 1740000000.0
 }
 ```
+
+A message that offers the person a choice, or goes to a chat channel, carries more:
+
+```json
+{
+  "id":        "3f2a9c1e4b7d4e0a9f1b2c3d4e5f6a7b",
+  "from":      "hvac-watch",
+  "to":        "user",
+  "content":   "Did something change at 14:02?",
+  "options":   ["maintenance", "real problem", "not sure"],
+  "channel":   "telegram",
+  "user":      "123456789",
+  "timestamp": 1740000000.0
+}
+```
+
+`options` are shown as buttons on the dashboard and Telegram, and as a numbered list on Discord and WhatsApp. `channel` names where to deliver it (`dashboard`, `telegram`, `discord`, `whatsapp`; absent means the dashboard alone) and `user` who to reach there: a Telegram or Discord user id, a WhatsApp number. The dashboard shows every frame, whatever channel it names. `id` is what the answer below refers to.
+
+---
+
+### `agents/{id}/answer`
+**Published by:** The chat channel the person answered on, or the dashboard server
+**Trigger:** The person picks one of a message's options
+**Purpose:** The pick, for the agent that asked. The agent subscribes to its own topic to read it; the monitor puts it on the activity feed and tells every open dashboard, which marks the question answered.
+
+```json
+{
+  "id":        "3f2a9c1e4b7d4e0a9f1b2c3d4e5f6a7b",
+  "option":    "maintenance",
+  "index":     0,
+  "channel":   "telegram",
+  "user":      "123456789",
+  "from":      "user",
+  "timestamp": 1740000600.0
+}
+```
+
+`id` is the message's; `index` is the option's place among those offered, from zero.
 
 ---
 
@@ -619,6 +659,7 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `agents/{id}/actuations` | HomeAssistantActuatorAgent | After HA actions |
 | `agents/{name}/data/{key}` | Dynamic / remote agents | World-state helper |
 | `agents/{id}/chat` | Every agent | On chat output |
+| `agents/{id}/answer` | A chat channel, or the dashboard server | The person picks one of a message's options |
 | `agents/{id}/spawn` | Discoverable agents | On startup (self-announce) |
 | `system/health` | Monitor agent | Every 15s |
 | `system/host` | Monitor agent | Every 15s |

@@ -13,16 +13,22 @@ network is needed.
 import sys
 import types
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from wactorz.core.outbound import Answer
 from wactorz.interfaces.chat.discord import DiscordInterface
+from wactorz.interfaces.chat.outbound import Outbox
 
 
 class _User:
     def __init__(self, user_id: int) -> None:
         self.id = user_id
+        self.dms: list[str] = []
+
+    async def send(self, text: str) -> None:
+        self.dms.append(text)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, _User) and other.id == self.id
@@ -68,6 +74,10 @@ class _Client:
     #: because the interface builds its own client; reset by the fixture.
     instances: "list[_Client]" = []  # noqa: RUF012  # reset per test by the fixture
     next_script: "list[_Message]" = []  # noqa: RUF012  # reset per test by the fixture
+    #: The people the next client can look up, by id; reset by the fixture.
+    people: "dict[int, _User]" = {}  # noqa: RUF012  # reset per test by the fixture
+    #: What to do once logged in, before the script runs: where a test sends.
+    once_logged_in: Any = None
 
     def __init__(self, intents: Any) -> None:
         self.intents = intents
@@ -80,11 +90,23 @@ class _Client:
         self.handlers[handler.__name__] = handler
         return handler
 
+    def get_user(self, user_id: int) -> _User | None:
+        return None  # never cached, so `send` has to fetch
+
+    async def fetch_user(self, user_id: int) -> _User:
+        try:
+            return _Client.people[user_id]
+        except KeyError:
+            raise LookupError(f"no such user {user_id}") from None
+
     async def start(self, token: str) -> None:
         self.token = token
-        await self.handlers["on_message"](self.script[0])  # before login: ignored
+        if self.script:
+            await self.handlers["on_message"](self.script[0])  # before login: ignored
         self.user = _User(1)
         await self.handlers["on_ready"]()
+        if _Client.once_logged_in is not None:
+            await _Client.once_logged_in()
         for message in self.script:
             await self.handlers["on_message"](message)
 
@@ -127,6 +149,8 @@ def discord_module_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     monkeypatch.setitem(sys.modules, "discord", module)
     _Client.instances = []
     _Client.next_script = []
+    _Client.people = {}
+    _Client.once_logged_in = None
     return module
 
 
@@ -187,3 +211,134 @@ async def test_a_throttled_user_is_told_and_not_answered(
 
     assert channel.sent == ["slow down"]
     assert main.asked == []
+
+
+class _Outbox:
+    """Records what the bot registers and the answers it hands over."""
+
+    def __init__(self) -> None:
+        self.registered: list[str] = []
+        self.answers: list[Answer] = []
+
+    def register(self, name: str, sender: Any) -> None:
+        self.registered.append(name)
+
+    def unregister(self, name: str) -> None:
+        self.registered.remove(name)
+
+    async def answered(self, answer: Answer) -> bool:
+        self.answers.append(answer)
+        return True
+
+
+async def test_a_message_from_an_agent_is_a_direct_message_with_its_options_numbered(
+    discord_module: types.ModuleType,
+) -> None:
+    outbox = _Outbox()
+    bot = _bot(_Orchestrator(), allowed_user_ids={7}, outbox=cast(Outbox, outbox))
+    person = _User(7)
+    _Client.people = {7: person}
+    sent: list[str] = []
+
+    async def _send() -> None:
+        sent.append(
+            await bot.send(
+                "7",
+                "Changed?",
+                ["maintenance", "real problem"],
+                message_id="m1",
+                agent_id="agent-1",
+            )
+        )
+
+    _Client.once_logged_in = _send
+
+    await bot.run()
+
+    assert sent == ["m1"]
+    assert person.dms == ["Changed?\n\n1. maintenance\n2. real problem\n\nReply with the number."]
+    assert outbox.registered == []  # forgotten once the bot stopped
+
+
+async def test_a_numbered_reply_answers_the_agent_and_is_not_a_turn(
+    discord_module: types.ModuleType,
+) -> None:
+    outbox = _Outbox()
+    main = _Orchestrator()
+    bot = _bot(main, allowed_user_ids={7}, outbox=cast(Outbox, outbox))
+    person = _User(7)
+    _Client.people = {7: person}
+    home = _Channel(10)
+
+    async def _ask() -> None:
+        await bot.send(
+            "7", "Changed?", ["maintenance", "real problem"], message_id="m1", agent_id="agent-1"
+        )
+
+    _Client.once_logged_in = _ask
+    _Client.next_script = [
+        _Message(_User(9), "2", home),  # not allowed: not an answer, not a turn
+        _Message(_User(7), "2", home),  # the answer, no mention needed
+        _Message(_User(7), "<@1> 2", home),  # answered already: a turn like any other
+    ]
+
+    await bot.run()
+
+    (answer,) = outbox.answers
+    assert (
+        answer.id,
+        answer.agent_id,
+        answer.option,
+        answer.index,
+        answer.channel,
+        answer.user,
+    ) == (
+        "m1",
+        "agent-1",
+        "real problem",
+        1,
+        "discord",
+        "7",
+    )
+    assert main.asked == ["2"]
+
+
+async def test_a_long_direct_message_is_split(discord_module: types.ModuleType) -> None:
+    bot = _bot(_Orchestrator(), allowed_user_ids={7})
+    person = _User(7)
+    _Client.people = {7: person}
+
+    async def _send() -> None:
+        await bot.send("7", "x" * 4500)
+
+    _Client.once_logged_in = _send
+
+    await bot.run()
+
+    assert [len(piece) for piece in person.dms] == [2000, 2000, 500]
+
+
+async def test_before_the_bot_runs_there_is_nothing_to_send_with(
+    discord_module: types.ModuleType,
+) -> None:
+    bot = _bot(_Orchestrator(), allowed_user_ids={7})
+    with pytest.raises(RuntimeError, match="not running"):
+        await bot.send("7", "hi")
+
+
+async def test_a_user_that_is_not_an_id_is_refused(discord_module: types.ModuleType) -> None:
+    bot = _bot(_Orchestrator(), allowed_user_ids={7})
+    seen: list[BaseException] = []
+
+    async def _send() -> None:
+        try:
+            await bot.send("alice", "hi")
+        except ValueError as exc:
+            seen.append(exc)
+
+    _Client.once_logged_in = _send
+
+    await bot.run()
+
+    assert len(seen) == 1
+    assert "numeric id" in str(seen[0])

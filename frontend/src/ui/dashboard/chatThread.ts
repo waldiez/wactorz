@@ -14,7 +14,8 @@ import { iconMarkup } from "./icons";
 import { MAIN_AGENT } from "../../agents/naming";
 import { openLightbox } from "./lightbox";
 import { timeLabel } from "../../time";
-import { el, externalLink } from "../dom";
+import { button, el, externalLink } from "../dom";
+import { emit } from "../../events";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
  *  a single list for both is what let `data:` reach an anchor href. */
@@ -121,6 +122,36 @@ function buildAttachments(attachments: Attachment[]): HTMLElement {
     return wrap;
 }
 
+/** The buttons for a question's options, or the pick once it is answered.
+ *
+ *  A press fires `af-answer-option`; the message is marked answered by whoever
+ *  listens, here or from another channel, so the buttons never decide on their
+ *  own that the question is closed. Option text is set as text: the agent chose it. */
+export function buildOptions(msg: ChatMessage): HTMLElement {
+    const wrap = el("div", "af-chat-options");
+    const answered = msg.answer !== undefined;
+    (msg.options ?? []).forEach((option, index) => {
+        const btn = button("af-chat-option", option);
+        if (answered) {
+            btn.disabled = true;
+            if (option === msg.answer) {
+                btn.classList.add("af-chat-option-picked");
+                btn.setAttribute("aria-pressed", "true");
+            }
+        } else {
+            btn.addEventListener("click", () => {
+                emit("af-answer-option", { id: msg.id, agentId: msg.agentId ?? "", option, index });
+            });
+        }
+        wrap.appendChild(btn);
+    });
+    if (answered && msg.answer && !(msg.options ?? []).includes(msg.answer)) {
+        // Answered elsewhere with words the buttons do not carry: still shown.
+        wrap.appendChild(el("span", "af-chat-option-picked af-chat-option-note", `✓ ${msg.answer}`));
+    }
+    return wrap;
+}
+
 /** The bubble body: agent replies render Markdown; user messages stay plain so
  *  stray *asterisks* / backticks they type are never reformatted. */
 function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
@@ -132,6 +163,9 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
     }
     if (msg.attachments?.length) {
         bubble.appendChild(buildAttachments(msg.attachments));
+    }
+    if (!isUser && msg.options?.length) {
+        bubble.appendChild(buildOptions(msg));
     }
     return bubble;
 }
@@ -153,7 +187,10 @@ export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
 
     row.append(from, buildMsgBubble(msg, isUser));
     if (!isUser) {
-        row.append(el("div", "af-chat-msg-time", timeLabel(msg.timestampMs)));
+        // A question also sent on a chat channel says so, since the answer may
+        // come from there rather than from these buttons.
+        const via = msg.channel && msg.options?.length ? ` · also on ${msg.channel}` : "";
+        row.append(el("div", "af-chat-msg-time", `${timeLabel(msg.timestampMs)}${via}`));
     }
     return row;
 }

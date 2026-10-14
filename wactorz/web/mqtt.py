@@ -21,6 +21,7 @@ from ..core.mqtt import (
     reconnect_wait,
     session_kwargs,
 )
+from ..core.outbound import numbered
 from ..monitoring.log_redaction import redact
 from . import events, relay, runtime, ws
 
@@ -107,13 +108,16 @@ async def handle_message(topic: str, payload: str) -> None:
                 agent_name = (
                     push.get("to", "agent") if role == "user" else push.get("from", "agent")
                 )
+                # The options go into the stored text: a reloaded thread has no
+                # buttons, and a question without its choices reads as half of one.
+                stored = numbered(push["content"], push.get("options") or ())
                 runtime.db.write_chat_log(
                     ts=push.get("timestamp", time.time()),
                     agent_name=agent_name,
                     role=role,
                     # Same treatment as the WS path: an agent can quote back
                     # something a user typed, and this row outlives the turn.
-                    content=redact(push["content"]),
+                    content=redact(stored),
                 )
         except Exception as exc:
             logger.debug("[chat-bridge] persist failed: %s", exc)

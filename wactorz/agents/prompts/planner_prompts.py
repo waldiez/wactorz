@@ -220,6 +220,10 @@ TYPE 3 — "dynamic"
     await agent.log("message")                        — structured log (ASYNC, must await)
     await agent.publish("topic", {dict})              — publish to MQTT (ASYNC, must await)
     await agent.alert("message")                      — trigger alert (ASYNC, must await)
+    await agent.notify_user(text, options=[...], channel="dashboard", user="")
+                                                      — a chat message to the person, outside any turn (ASYNC);
+                                                        options show as buttons or a numbered list, the pick
+                                                        arrives on agents/{id}/answer ({"id","option","index"})
     await agent.send_to("name", payload)              — delegate to agent (ASYNC, must await)
     await agent.mqtt_get("topic")                     — one-shot MQTT read (ASYNC, must await)
     agent.subscribe("topic", async_callback)          — subscribe to MQTT (SYNC, NO await!)

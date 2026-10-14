@@ -183,6 +183,27 @@ export interface ChatMessage {
     brain?: string;
     /** Files attached to this turn, if any. */
     attachments?: Attachment[];
+    /** The id of the agent that sent it, when the message came off its own topic. */
+    agentId?: string;
+    /** A choice the agent offers; the person answers by picking one. */
+    options?: string[];
+    /** The option picked, once the question is answered, on any channel. */
+    answer?: string;
+    /** A chat channel the message also went to ("telegram", "discord", "whatsapp"). */
+    channel?: string;
+}
+
+/** A person's pick among the options an agent offered, from whichever channel showed them. */
+export interface AnswerPayload {
+    /** The id of the message answered. */
+    id: string;
+    agentId: string;
+    option: string;
+    /** The option's place among those offered, from zero. */
+    index: number;
+    /** Where it was picked: "dashboard", "telegram", "discord" or "whatsapp". */
+    channel: string;
+    timestampMs: number;
 }
 
 /** Custom DOM event payload for agent selection. */

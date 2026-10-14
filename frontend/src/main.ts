@@ -53,6 +53,7 @@ import {
     alertFeedItem,
     alertKind,
     chatFeedItem,
+    answerFeedItem,
     feedSeedItem,
     stoppedFeedItem,
     qaFlagFeedItem,
@@ -299,6 +300,12 @@ router.on("chat", msg => {
     pushFeed(chatFeedItem(msg));
 });
 
+// A question answered on any channel: the card closes on every open dashboard.
+router.on("answer", answer => {
+    emit("af-answered", { id: answer.id, option: answer.option });
+    pushFeed(answerFeedItem(answer));
+});
+
 router.on("status", payload => {
     if (!isDeleted(payload.agentId)) {
         agentStore.addOrUpdateAgent({
@@ -430,6 +437,18 @@ listen("af-agent-command", detail => {
         agentStore.removeAgent(agentId);
     }
     ws.sendRaw({ type: "command", command, agent_id: agentId });
+});
+
+// A press on one of a question's buttons: the pick goes to the agent that
+// asked, over the server's broker link, as a tap on Telegram would.
+listen("af-answer-option", detail => {
+    ws.sendRaw({
+        type: "answer",
+        agent_id: detail.agentId,
+        id: detail.id,
+        option: detail.option,
+        index: detail.index,
+    });
 });
 
 // af-iobar sends: route through ioManager (same as regular io-bar)

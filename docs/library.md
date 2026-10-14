@@ -661,6 +661,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
+| `notify_user(text, options=[...], channel=..., user=...)` and `agents/<id>/answer` | a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see *Messages from an agent* in the interfaces guide) |
 | `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
 | `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.model_config` and `record_reply` | LangChain and AG2 beside the system |

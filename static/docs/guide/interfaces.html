@@ -667,6 +667,39 @@ wactorz<span class="w"> </span>--no-monitor
 </code></pre></div>
 
 <hr />
+<h2 id="messages-from-an-agent-and-the-answer-back">Messages from an agent, and the answer back</h2>
+<p>The channels above answer a person who writes first. An agent can also write first: say something to the operator outside any turn, and offer a choice.</p>
+<div class="highlight"><pre><span></span><code><span class="n">message_id</span> <span class="o">=</span> <span class="k">await</span> <span class="n">me</span><span class="o">.</span><span class="n">notify_user</span><span class="p">(</span>
+    <span class="s2">"Every reading since 14:02 looks like an anomaly. Did something change?"</span><span class="p">,</span>
+    <span class="n">options</span><span class="o">=</span><span class="p">[</span><span class="s2">"maintenance"</span><span class="p">,</span> <span class="s2">"real problem"</span><span class="p">,</span> <span class="s2">"not sure"</span><span class="p">],</span>
+    <span class="n">channel</span><span class="o">=</span><span class="s2">"telegram"</span><span class="p">,</span>
+    <span class="n">user</span><span class="o">=</span><span class="s2">"123456789"</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<ul>
+<li><code>channel</code> is where to send it: <code>dashboard</code> (the default), <code>telegram</code>, <code>discord</code> or <code>whatsapp</code>.</li>
+<li><code>user</code> is who to reach there: a Telegram or Discord user id, a WhatsApp number. The dashboard has one operator and needs none.</li>
+<li><code>options</code> is the choice. Telegram and the dashboard show buttons; Discord and WhatsApp show a numbered list, and the person replies with the number or the option's words. Up to ten options of a few words each.</li>
+</ul>
+<p>The message goes on the agent's own <code>agents/{id}/chat</code> topic, wherever the agent runs, so the dashboard shows it whatever channel it names, as a card with the buttons and a note of where else it went. The channel delivers it if it is running; one that is not, or one that cannot reach the person, logs the message's words rather than losing them.</p>
+<p>The pick comes back on <code>agents/{id}/answer</code>, from whichever channel the person answered on, as <code>{"id": &lt;the message id&gt;, "option": "maintenance", "index": 0, "channel": "telegram"}</code>. An agent that wants it subscribes to its own topic:</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">HvacWatch</span><span class="p">(</span><span class="n">wactorz</span><span class="o">.</span><span class="n">Actor</span><span class="p">):</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_start</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="sa">f</span><span class="s2">"agents/</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">actor_id</span><span class="si">}</span><span class="s2">/answer"</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">on_answer</span><span class="p">)</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_answer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">answer</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">persist</span><span class="p">(</span><span class="s2">"last_answer"</span><span class="p">,</span> <span class="n">answer</span><span class="p">[</span><span class="s2">"option"</span><span class="p">])</span>
+</code></pre></div>
+
+<p>A generated agent has the same call, <code>await agent.notify_user(...)</code>, and <code>agent.subscribe("agents/&lt;its id&gt;/answer", callback)</code>. Every open dashboard marks the question answered once any channel has the pick, and the pick is a row on the activity feed.</p>
+<p>Two things a channel cannot do:</p>
+<ul>
+<li><strong>WhatsApp lets a business write first only inside a day of the person's last message</strong>, or through a template Meta approved. Outside that window Twilio refuses the send, and the refusal is logged with the message's words. Telegram and the dashboard have no such limit.</li>
+<li><strong>A question offered before a restart is answered on the dashboard, not by number.</strong> Discord and WhatsApp match a bare "2" to the latest question they sent that person, and keep that in memory; after a restart the reply reaches the model as a message like any other. The dashboard card still answers it.</li>
+</ul>
+<p>A chat channel object also has the call directly, <code>await interface.send(user, text, options)</code>, for a host program that holds one.</p>
+<hr />
 <h2 id="adding-a-custom-interface">Adding a custom interface</h2>
 <p>All interfaces implement the same minimal pattern — hand the message to the orchestrator, saying which channel it came in on, and stream or return the answer. The orchestrator is main unless the deployment installed another (see <em>Your own orchestrator</em> in the library guide), so an interface never names main. The simplest possible interface:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.orchestration</span><span class="w"> </span><span class="kn">import</span> <span class="n">SOCIAL</span>

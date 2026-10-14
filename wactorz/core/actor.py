@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -27,6 +27,7 @@ from . import models
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .outbound import DASHBOARD, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
@@ -1746,17 +1747,36 @@ class Actor(ABC):
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
 
-    async def notify_user(self, text: str, **extra):
-        """Push a user-facing chat message to the UI from this actor, OUTSIDE the
-        synchronous request/reply turn.
+    async def notify_user(
+        self,
+        text: str,
+        *,
+        options: Sequence[str] = (),
+        channel: str = DASHBOARD,
+        user: str = "",
+        **extra: Any,
+    ) -> str:
+        """Say ``text`` to a person, outside any turn, and return the message's id.
 
-        The monitor forwards agents/{id}/chat messages to the chat panel as live
-        chat frames, so use this for autonomous notifications the user should see
-        in chat without having just asked for them: a long delegated task
-        finishing after the reply already returned, sensor alerts, scheduled
-        output, reactive automations, etc.
+        The message goes on ``agents/{id}/chat``: the dashboard shows every such
+        frame, and the chat channels deliver the ones addressed to them. Use it
+        for what the person did not just ask for: a long delegated task
+        finishing after the reply already returned, a sensor alert, scheduled
+        output, a reactive automation.
+
+        ``options`` offers the person a choice: Telegram and the dashboard show
+        buttons, Discord and WhatsApp a numbered list. The pick comes back on
+        ``agents/{id}/answer`` naming the id this returns, which the agent reads
+        with ``subscribe``. ``channel`` is where to send it, ``dashboard`` when
+        unsaid; ``user`` is who to reach there, a Telegram or Discord user id or
+        a WhatsApp number, and is not needed for the dashboard. The frame is
+        published whether or not that channel is running: the dashboard shows
+        it either way, and the channel, if it runs, logs what it could not do.
+
+        Raises ``ValueError`` for options or a channel the channels cannot show.
         """
-        payload = {
+        payload: dict[str, Any] = {
+            "id": uuid.uuid4().hex,
             "from": self.name,
             "to": "user",
             "content": str(text),
@@ -1764,11 +1784,19 @@ class Actor(ABC):
         }
         if extra:
             payload.update(extra)
+        checked = check_options(options)
+        if checked:
+            payload["options"] = list(checked)
+        named = check_channel(channel)
+        if named != DASHBOARD or user:
+            payload["channel"] = named
+            payload["user"] = str(user).strip()
         # QoS 1: neither critical-prefixed nor telemetry-suffixed, so the
         # publisher would leave this at 0 -- and a frame emitted while the
         # monitor is reconnecting would simply be gone. The agent said
         # something; the user never sees it.
         await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
+        return payload["id"]
 
     # ─── Status ───────────────────────────────────────────────────────────────
 

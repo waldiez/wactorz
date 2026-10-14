@@ -236,7 +236,9 @@ class TestTheInterfaceOfALibraryCall:
         monkeypatch.setattr(app_module, "prepare_broker_files", lambda: "")
         monkeypatch.setattr(app_module, "_build_system_or_stop", build)
         monkeypatch.setattr(app_module, "_shut_down", shut_down)
-        monkeypatch.setattr(chat_interfaces, "build_social_companions", lambda main, primary: [])
+        monkeypatch.setattr(
+            chat_interfaces, "build_social_companions", lambda main, primary, **_kw: []
+        )
         monkeypatch.setattr(chat_interfaces, "CLIInterface", RecordingCLI)
         # A terminal, so the CLI would start if the interface asked for it.
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
@@ -498,7 +500,9 @@ class TestAppAsALibraryCall:
         monkeypatch.setattr(app_module, "prepare_broker_files", lambda: "")
         monkeypatch.setattr(app_module, "_build_system_or_stop", built)
         monkeypatch.setattr(app_module, "_shut_down", shut_down)
-        monkeypatch.setattr(chat_interfaces, "build_social_companions", lambda main, primary: [])
+        monkeypatch.setattr(
+            chat_interfaces, "build_social_companions", lambda main, primary, **_kw: []
+        )
         monkeypatch.setattr(
             app_module,
             "CONFIG",

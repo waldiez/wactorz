@@ -416,15 +416,32 @@ class ArtifactStore:
                 out.flush()
                 os.fsync(out.fileno())
             sha256 = hashing.hexdigest()
-            final = self.objects / sha256
-            if final.exists():
-                part.unlink()
-            else:
-                part.replace(final)
+            self._settle(part, self.objects / sha256)
         except BaseException:
             part.unlink(missing_ok=True)
             raise
         return sha256, hashing.size
+
+    @staticmethod
+    def _settle(part: Path, final: Path) -> None:
+        """Make ``part`` the stored file ``final``, or drop it when another already is.
+
+        Two adds of the same bytes at once each write a part and reach here
+        with the same ``final``. The first to rename wins; the second finds
+        the file there and drops its own part. On Windows the rename itself
+        is what fails for the second, with the file briefly held by the first,
+        so the file being there afterwards counts as settled too: the bytes
+        are the same, by the hash in the name.
+        """
+        if final.exists():
+            part.unlink()
+            return
+        try:
+            part.replace(final)
+        except OSError:
+            if not final.exists():
+                raise
+            part.unlink(missing_ok=True)
 
     def _read_index(self) -> dict[str, list[dict[str, Any]]]:
         if not self.index_path.exists():

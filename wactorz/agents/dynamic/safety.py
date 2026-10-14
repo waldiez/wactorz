@@ -1,37 +1,107 @@
 """What generated code is refused for, and what is only warned about.
 
-A pattern scan over source text in front of an exec that happens by design.
-It catches the mistakes a model makes, not an adversary: anything spelling a
-call differently -- through getattr, or with whitespace inside the dotted
-name -- passes. Treat a clean result as 'nothing obviously wrong', never as
-containment.
+A check in front of an exec that happens by design. The refusals come from
+parsing the code and reading each name through the code's own imports, so
+``os . system``, ``import os as o; o.system`` and ``getattr(os, "system")`` are
+all read as ``os.system``, whether called or only referenced. That makes walking
+past the check take code that looks deliberately evasive; it does not make the
+check containment. A name looked up through a value the parser cannot follow --
+a string held in a variable, ``sys.modules``, a subscript of ``globals()`` --
+passes, and so does anything a permitted module can do (``pathlib`` deletes,
+for one). Writing a file is not refused in any form: from the text alone a data
+export and an overwritten state file look the same, so where an agent may write
+is for the process running it to decide. Treat a clean result as 'nothing
+obviously wrong', never as a sandbox: isolating untrusted code means running it
+in another process.
+
+The warnings and the ``process()`` anti-patterns stay a pattern scan over the
+text. They are advice about code that hangs or deserves a second look, and
+never refuse anything.
 """
 
+import ast
 import logging
 import re
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
-BLOCKED_PATTERNS: list[tuple[str, str]] = [
-    # System-level access
-    (r"\bos\.system\s*\(", "os.system() — use subprocess instead or avoid shell commands"),
-    (r"\bos\.popen\s*\(", "os.popen() — use subprocess instead"),
-    (r"\bos\.exec[a-z]*\s*\(", "os.exec*() — direct process replacement not allowed"),
-    (r"\bos\.remove\s*\(", "os.remove() — file deletion not allowed in agent code"),
-    (r"\bos\.rmdir\s*\(", "os.rmdir() — directory deletion not allowed"),
-    (r"\bshutil\.rmtree\s*\(", "shutil.rmtree() — recursive deletion not allowed"),
-    (
-        r"\bsubprocess\.(?:call|run|Popen)\s*\(.{0,20}rm\s",
-        "subprocess with rm — destructive shell command",
+#: Names that refuse the code wherever they appear, keyed by what they resolve
+#: to through the code's imports. Referencing one is refused as well as calling
+#: it, so binding it to another name first does not help.
+BLOCKED_NAMES: dict[str, str] = {
+    "os.system": "os.system() — use subprocess instead or avoid shell commands",
+    "os.popen": "os.popen() — use subprocess instead",
+    "os.remove": "os.remove() — file deletion not allowed in agent code",
+    "os.unlink": "os.unlink() — file deletion not allowed in agent code",
+    "os.rmdir": "os.rmdir() — directory deletion not allowed",
+    "shutil.rmtree": "shutil.rmtree() — recursive deletion not allowed",
+    "socket.socket": "raw socket creation — use httpx or agent.publish instead",
+    "eval": "eval() — arbitrary code execution not allowed",
+    "exec": "exec() — arbitrary code execution not allowed",
+    "compile": "compile() — builds code to run; write the code itself instead",
+    "__import__": "__import__() — use regular import statements",
+    "importlib.__import__": "__import__() — use regular import statements",
+    "importlib.import_module": "importlib.import_module() — use regular import statements",
+    # Named one by one rather than by prefix, so os.executable stays readable.
+    **dict.fromkeys(
+        (
+            f"os.{name}"
+            for name in (
+                "execl",
+                "execle",
+                "execlp",
+                "execlpe",
+                "execv",
+                "execve",
+                "execvp",
+                "execvpe",
+            )
+        ),
+        "os.exec*() — direct process replacement not allowed",
     ),
-    # Network abuse
-    (r"\bsocket\.socket\s*\(", "raw socket creation — use httpx or agent.publish instead"),
-    # Code execution / eval
-    (r"\beval\s*\(", "eval() — arbitrary code execution not allowed"),
-    (r"\b__import__\s*\(", "__import__() — use regular import statements"),
-    # File system writes outside agent scope
-    (r'\bopen\s*\([^)]*["\'][wab]["\']', "open() in write mode — use agent.persist() instead"),
-]
+}
+
+#: The modules the blocked names live in, and ``subprocess``, whose ``rm`` check
+#: needs to see which of its functions is called. Reaching into one by a name the
+#: parser cannot read -- a star import, ``getattr`` with a computed name,
+#: ``vars()`` or ``__dict__`` -- hides which function is used, so it is refused too.
+GUARDED_MODULES = frozenset({"builtins", "importlib", "os", "shutil", "socket", "subprocess"})
+
+#: Attributes that reach the interpreter's internals: a function's globals, a
+#: class's subclasses, the builtins. Ordinary agent code has no use for them,
+#: and they are the usual first step around a check like this one.
+INTERNAL_ATTRIBUTES = frozenset(
+    {
+        "__base__",
+        "__bases__",
+        "__builtins__",
+        "__closure__",
+        "__code__",
+        "__getattribute__",
+        "__globals__",
+        "__loader__",
+        "__mro__",
+        "__subclasses__",
+    }
+)
+
+#: What a module is under another name: ``os`` is ``posix`` or ``nt`` underneath.
+_MODULE_ALIASES = {"nt": "os", "posix": "os"}
+
+
+_SUBPROCESS_CALLS = frozenset(
+    {
+        "subprocess.Popen",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        "subprocess.run",
+    }
+)
+_SUBPROCESS_REASON = "subprocess with rm — destructive shell command"
 
 WARN_PATTERNS: list[tuple[str, str]] = [
     (r"\bsubprocess\b", "subprocess usage — ensure this is necessary"),
@@ -99,16 +169,153 @@ def extract_function_body(code: str, fn_name: str) -> str | None:
     return "\n".join(body_lines) if body_lines else None
 
 
+def _canonical(name: str) -> str:
+    """`name` with a module's other spelling replaced and ``builtins.`` dropped."""
+    head, _, rest = name.partition(".")
+    head = _MODULE_ALIASES.get(head, head)
+    if head == "builtins" and rest:
+        return rest
+    return f"{head}.{rest}" if rest else head
+
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    """Each name the code's imports bind, mapped to the dotted name it stands for.
+
+    Collected from every import in the code, at any depth: a name imported
+    inside a function still says what the code means by it.
+    """
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    top = alias.name.partition(".")[0]
+                    aliases[top] = top
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                if alias.name != "*":
+                    aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _literal_attribute(node: ast.AST, aliases: dict[str, str]) -> str | None:
+    """The attribute a ``getattr(obj, "name", ...)`` call names, if it is a literal."""
+    if not (isinstance(node, ast.Call) and len(node.args) >= 2):
+        return None
+    if _resolve(node.func, aliases) != "getattr":
+        return None
+    name = node.args[1]
+    if isinstance(name, ast.Constant) and isinstance(name.value, str):
+        return name.value
+    return None
+
+
+def _resolve(node: ast.AST, aliases: dict[str, str]) -> str | None:
+    """The dotted name `node` refers to, read through the imports; None if unknown.
+
+    A name nothing imports stands for itself, so ``os.system`` without an
+    ``import os`` still reads as ``os.system``.
+    """
+    if isinstance(node, ast.Name):
+        return _canonical(aliases.get(node.id, node.id))
+    if isinstance(node, ast.Attribute):
+        base = _resolve(node.value, aliases)
+        return None if base is None else _canonical(f"{base}.{node.attr}")
+    attribute = _literal_attribute(node, aliases)
+    if attribute is not None and isinstance(node, ast.Call):
+        base = _resolve(node.args[0], aliases)
+        return None if base is None else _canonical(f"{base}.{attribute}")
+    return None
+
+
+def _blocked_reason(name: str | None) -> str | None:
+    return None if name is None else BLOCKED_NAMES.get(name)
+
+
+def _runs_rm(node: ast.Call) -> bool:
+    """Whether a subprocess call's command, written out literally, is ``rm``."""
+    if not node.args:
+        return False
+    command = node.args[0]
+    if isinstance(command, ast.Constant) and isinstance(command.value, str):
+        first = command.value.split(maxsplit=1)[:1]
+    elif isinstance(command, (ast.List, ast.Tuple)) and command.elts:
+        head = command.elts[0]
+        first = [head.value] if isinstance(head, ast.Constant) else []
+    else:
+        return False
+    return first == ["rm"]
+
+
+def _call_refusal(node: ast.Call, aliases: dict[str, str]) -> str | None:
+    """What a call is refused for beyond the names it uses."""
+    func = _resolve(node.func, aliases)
+    if func in ("getattr", "vars") and node.args:
+        target = _resolve(node.args[0], aliases)
+        attribute = _literal_attribute(node, aliases)
+        if attribute in INTERNAL_ATTRIBUTES:
+            return f"{attribute} — reaches the interpreter's internals"
+        if target in GUARDED_MODULES and attribute is None:
+            shown = f"vars({target})" if func == "vars" else f"getattr({target}, …)"
+            return f"{shown} — call the function by its name"
+    if func in _SUBPROCESS_CALLS and _runs_rm(node):
+        return _SUBPROCESS_REASON
+    return None
+
+
+def _reaching_in(node: ast.AST, aliases: dict[str, str]) -> str | None:
+    """What `node` is refused for as a way into a guarded module or the interpreter."""
+    if isinstance(node, ast.ImportFrom) and node.module and not node.level:
+        module = _canonical(node.module)
+        if module in GUARDED_MODULES and any(alias.name == "*" for alias in node.names):
+            return f"from {node.module} import * — import the names you use"
+    elif isinstance(node, ast.Name) and node.id in INTERNAL_ATTRIBUTES:
+        return f"{node.id} — reaches the interpreter's internals"
+    elif isinstance(node, ast.Attribute):
+        if node.attr in INTERNAL_ATTRIBUTES:
+            return f"{node.attr} — reaches the interpreter's internals"
+        module = _resolve(node.value, aliases)
+        if node.attr == "__dict__" and module in GUARDED_MODULES:
+            return f"{module}.__dict__ — call the function by its name"
+    return None
+
+
+def _refusals(tree: ast.AST, aliases: dict[str, str]) -> Iterator[str]:
+    """Every reason `tree` is refused for, in the order the walk meets them."""
+    for node in ast.walk(tree):
+        reasons = (
+            _reaching_in(node, aliases),
+            _blocked_reason(_resolve(node, aliases)),
+            _call_refusal(node, aliases) if isinstance(node, ast.Call) else None,
+        )
+        yield from (reason for reason in reasons if reason is not None)
+
+
+def _refusal(code: str) -> str | None:
+    """The first reason `code` is refused for, or None."""
+    try:
+        tree = ast.parse(code)
+        return next(_refusals(tree, _import_aliases(tree)), None)
+    except (SyntaxError, ValueError):
+        # compile() is handed this same text next and fails on it the same
+        # way, so nothing runs; its error is the one worth sending back.
+        return None
+    except RecursionError:
+        return "code nested too deeply to check"
+
+
 def validate_code_safety(code: str, log_name: str) -> str | None:
-    """Scan sanitized code for dangerous patterns before exec().
+    """Check sanitized code before exec().
 
     Returns an error message string if blocked, None if OK.
     Warnings are logged but don't block execution.
     """
-    for pattern, reason in BLOCKED_PATTERNS:
-        if re.search(pattern, code):
-            logger.warning("[%s] BLOCKED dangerous code pattern: %s", log_name, reason)
-            return f"Code blocked for safety: {reason}"
+    reason = _refusal(code)
+    if reason is not None:
+        logger.warning("[%s] BLOCKED dangerous code: %s", log_name, reason)
+        return f"Code blocked for safety: {reason}"
 
     for pattern, reason in WARN_PATTERNS:
         if re.search(pattern, code):

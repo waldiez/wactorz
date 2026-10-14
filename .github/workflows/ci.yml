@@ -227,7 +227,7 @@ jobs:
   lint-ci:
     # The workflows themselves (zizmor) and the shell scripts the images and
     # the add-ons run (shellcheck), through the tool images pinned in
-    # .github/tools/Dockerfile. Online, so zizmor also checks that each pinned
+    # ci/tools/Dockerfile. Online, so zizmor also checks that each pinned
     # sha belongs to its action and that no pinned release has an advisory.
     name: Workflows and shell scripts
     runs-on: ubuntu-latest

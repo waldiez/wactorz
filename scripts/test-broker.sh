@@ -12,7 +12,7 @@
 # do not collide.
 #
 # Usage: scripts/test-broker.sh <mosquitto-image> <python> [pytest arguments]
-# `make test-broker` passes the image pinned in .github/tools/Dockerfile and the
+# `make test-broker` passes the image pinned in ci/tools/Dockerfile and the
 # project's interpreter.
 set -eu
 

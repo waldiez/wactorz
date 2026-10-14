@@ -17,12 +17,14 @@ BLOCKED = [
     ("os.popen('ls')", "os.popen"),
     ("os.execv('/bin/sh', [])", "os.exec*"),
     ("os.remove('/etc/passwd')", "os.remove"),
+    ("os.unlink('/etc/passwd')", "os.unlink"),
+    ("subprocess.run(['rm', '-rf', '/tmp/x'])", "subprocess with rm"),
+    ("subprocess.run('rm -rf /tmp/x', shell=True)", "subprocess with rm"),
     ("os.rmdir('/tmp/x')", "os.rmdir"),
     ("shutil.rmtree('/')", "shutil.rmtree"),
     ("socket.socket()", "raw socket"),
     ("eval('1 + 1')", "eval"),
     ("__import__('os')", "__import__"),
-    ("open('/tmp/x', 'w')", "open in write mode"),
 ]
 
 ALLOWED_WITH_A_WARNING = [
@@ -31,13 +33,53 @@ ALLOWED_WITH_A_WARNING = [
     ("pickle.loads(data)", "pickle"),
 ]
 
-# Recorded, not endorsed: each of these reaches exec untouched. The scan is
-# pattern-based over source text, so anything that spells the call differently
-# passes. Listed so the gap is visible rather than assumed closed.
+# The same calls spelled another way. The check reads names through the code's
+# imports, so each of these resolves to a blocked name.
+RESPELLED = [
+    ("os . system('ls')", "os.system()"),
+    ("getattr(os, 'system')('ls')", "os.system()"),
+    ("import os as o\no.system('ls')", "os.system()"),
+    ("from os import system as run\nrun('ls')", "os.system()"),
+    ("shell = os.system\nshell('ls')", "os.system()"),
+    ("import posix\nposix.system('ls')", "os.system()"),
+    ("from os import execv\nexecv('/bin/sh', [])", "os.exec*()"),
+    ("import builtins\nbuiltins.eval('1')", "eval()"),
+    ("exec('import os')", "exec()"),
+    ("compile('1', 'f', 'eval')", "compile()"),
+    ("from importlib import import_module\nimport_module('os')", "importlib.import_module()"),
+    ("def f():\n    import shutil as s\n    s.rmtree('/')", "shutil.rmtree()"),
+]
+
+# Ways into a module or the interpreter that hide which function is used.
+REACHING_IN = [
+    ("from os import *", "import the names you use"),
+    ("from subprocess import *\nrun(['rm', '-rf', '/tmp/x'])", "import the names you use"),
+    ("getattr(os, name)('ls')", "getattr(os, …)"),
+    ("vars(os)['system']('ls')", "vars(os)"),
+    ("os.__dict__['system']('ls')", "os.__dict__"),
+    ("getattr(__builtins__, 'eval')('1')", "__builtins__"),
+    ("().__class__.__base__.__subclasses__()", "interpreter's internals"),
+    ("f.__globals__['os']", "__globals__"),
+    ("getattr(f, '__globals__')", "__globals__"),
+]
+
+# Recorded, not endorsed: each of these reaches exec untouched. The check reads
+# names, not values, so a name held in data -- a string in a variable, a
+# subscript, a module table -- passes, as does what a permitted module can do.
 NOT_CAUGHT = [
-    ("os . system('ls')", "whitespace around the dot defeats the literal pattern"),
-    ("getattr(os, 'system')('ls')", "attribute lookup by name is not a pattern match"),
-    ("exec('import os')", "exec() is absent from the list while eval() is on it"),
+    ("import sys\nsys.modules['os'].system('ls')", "a module looked up in sys.modules"),
+    ("globals()['__builtins__']", "a subscript of globals() by a string"),
+    ("from pathlib import Path\nPath('/tmp/x').unlink()", "pathlib is not on the list"),
+]
+
+# Code that only looks like the blocked shapes.
+LOOKALIKES = [
+    ("message = 'never call os.system() here'", "a blocked name inside a string"),
+    ("import re\npattern = re.compile('x')", "re.compile is not the builtin"),
+    ("label = type(error).__name__", "a dunder that is not on the list"),
+    ("open('/tmp/x', 'rb')", "a binary read"),
+    ("import os\ninterpreter = os.executable", "os.executable is not an exec call"),
+    ("class A:\n    def __init__(self):\n        super().__init__()", "a constructor"),
 ]
 
 
@@ -75,14 +117,49 @@ class TestWarningsDoNotBlock:
         assert agent._validate_code_safety(code) is None, label
 
 
+class TestNamesAreReadThroughTheSpelling:
+    @pytest.mark.parametrize(("code", "fragment"), RESPELLED)
+    def test_another_spelling_is_refused(
+        self, agent: DynamicAgent, code: str, fragment: str
+    ) -> None:
+        verdict = agent._validate_code_safety(code)
+
+        assert verdict is not None
+        assert fragment in verdict
+
+    @pytest.mark.parametrize(("code", "fragment"), REACHING_IN)
+    def test_reaching_in_by_a_hidden_name_is_refused(
+        self, agent: DynamicAgent, code: str, fragment: str
+    ) -> None:
+        verdict = agent._validate_code_safety(code)
+
+        assert verdict is not None
+        assert fragment in verdict
+
+    @pytest.mark.parametrize(("code", "why"), LOOKALIKES)
+    def test_a_lookalike_passes(self, agent: DynamicAgent, code: str, why: str) -> None:
+        assert agent._validate_code_safety(code) is None, why
+
+    def test_code_too_deep_to_parse_is_refused_rather_than_raised(
+        self, agent: DynamicAgent
+    ) -> None:
+        """The parser gives up on deep enough code; the check must still answer."""
+        code = "x = a" + ".b" * 100_000
+
+        verdict = agent._validate_code_safety(code)
+
+        assert verdict is not None
+        assert "too deeply" in verdict
+
+
 class TestKnownGaps:
     @pytest.mark.parametrize(("code", "why"), NOT_CAUGHT)
     def test_these_reach_exec_untouched(self, agent: DynamicAgent, code: str, why: str) -> None:
-        """Recorded so the scan is not mistaken for containment.
+        """Recorded so the check is not mistaken for containment.
 
         Closing any of these means changing this assertion on purpose, which is
-        the moment to decide whether a pattern list is the right mechanism at
-        all -- a source-text filter cannot see through indirection.
+        the moment to ask whether reading source is the right mechanism at all
+        -- no check over source text can follow a name through a value.
         """
         assert agent._validate_code_safety(code) is None, why
 

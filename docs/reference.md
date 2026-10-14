@@ -656,18 +656,19 @@ Each layer catches what the previous one missed:
  
 ### Pre-Exec Safety Validator
  
-`_validate_code_safety()` runs after sanitization but before `exec()`. It scans for dangerous patterns in two tiers:
+`_validate_code_safety()` runs after sanitization but before `exec()`. It parses the code and reads each name through the code's own imports, so `os . system`, `import os as o; o.system`, `from os import system as run` and `getattr(os, "system")` are all `os.system`, and a blocked name is refused whether it is called or only referenced. Two tiers:
  
 **Blocked (code won't run):**
  
-| Pattern | Reason |
+| Name | Reason |
 | --- | --- |
 | `os.system()`, `os.popen()`, `os.exec*()` | Shell execution |
-| `os.remove()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
-| `subprocess` with `rm` | Destructive shell commands |
-| `eval()`, `__import__()` | Arbitrary code execution |
-| `open()` in write mode | Use `agent.persist()` instead |
+| `os.remove()`, `os.unlink()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
+| `subprocess` running `rm` | Destructive shell commands |
+| `eval()`, `exec()`, `compile()`, `__import__()`, `importlib.import_module()` | Arbitrary code execution |
 | Raw `socket.socket()` | Use httpx or `agent.publish` |
+| `from os import *`, `getattr(os, name)`, `vars(os)`, `os.__dict__` (and the same for `builtins`, `importlib`, `shutil`, `socket`, `subprocess`) | Hides which function is used |
+| `__builtins__`, `__globals__`, `__subclasses__`, `__code__` and similar | Reaches the interpreter's internals |
  
 **Warned (runs but logged):**
  
@@ -678,7 +679,7 @@ Each layer catches what the previous one missed:
 | `pickle.loads` | Deserialization risk if data is untrusted |
 | `while True:` without `await` | May block event loop |
  
-This is a best-effort blocklist, not a sandbox. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
+This is a best-effort blocklist, not a sandbox. A name the parser cannot follow — held in a variable, looked up in `sys.modules`, a subscript of `globals()` — passes, and so does anything a permitted module can do, such as deleting through `pathlib`. Writing a file is not refused at all: from the code alone a data export and an overwritten state file look the same. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
  
 ### Planner Code Validator
  

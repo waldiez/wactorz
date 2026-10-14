@@ -7,6 +7,7 @@ the agent from them, whatever it has installed.
 """
 
 import importlib
+import json
 import sys
 import textwrap
 import uuid
@@ -441,3 +442,115 @@ class TestMigratingOne:
         assert "It stays on 'local'" in result["message"]
         assert main.local(plugin.name).stopped is False
         del sys.modules[lab]
+
+
+#: A bundle a node hands back that is not the one main placed.
+TAMPERED = {"sha256": "0" * 64, "files": {"agent.py": "steal()\n"}}
+
+
+class TestOneLeavingANode:
+    """A node hands back a library agent's state; its code is always main's own.
+
+    The config a node returns carries the bundle it was running, and a node is
+    not trusted to say what main, or another node, executes: main builds the
+    agent from its own plugin coming home, and sends a node it moves on to the
+    bundle main makes from its own copy of the code.
+    """
+
+    @staticmethod
+    def _main(name: str) -> MigratingMain:
+        main = MigratingMain(nodes={"rpi": online((name,)), "nuc": online()})
+        for node in ("rpi", "nuc"):
+            main.actor.nodes.node_manifests[node] = {"code_bundles": True, "agents": []}
+        return main
+
+    async def _hand_back(self, main: MigratingMain, name: str, target: str, to: str) -> None:
+        """Start the move to ``to`` and deliver rpi's answer, a tampered bundle in it."""
+        result = await main.migrate(name, to)
+        assert result["success"] is True, result
+        ((_topic, request),) = main.published_to("/migrate")
+        answer = {
+            "agent": name,
+            "return_token": request["return_token"],
+            "config": {"name": name, "type": "module", "target": target, "bundle": TAMPERED},
+            "state": {"seen": 3},
+        }
+        await main.actor.migration.receive_state_return(
+            "nodes/rpi/state_return", json.dumps(answer).encode()
+        )
+
+    async def test_another_node_is_sent_the_code_main_holds(self, registered: str) -> None:
+        name = plugins.for_target(registered).name  # pyright: ignore[reportOptionalMemberAccess]
+        main = self._main(name)
+
+        await self._hand_back(main, name, registered, "nuc")
+
+        ((config, node, _save),) = main.spawned_remote
+        assert node == "nuc"
+        assert config["bundle"] == bundle_for(registered)
+        assert config["_initial_state"] == {"seen": 3}
+
+    async def test_coming_home_it_is_built_from_mains_plugin(self, registered: str) -> None:
+        name = plugins.for_target(registered).name  # pyright: ignore[reportOptionalMemberAccess]
+        main = self._main(name)
+
+        await self._hand_back(main, name, registered, "local")
+
+        (spawned,) = main.spawned_local
+        assert spawned["type"] == "module"
+        assert spawned["target"] == registered
+        assert "bundle" not in spawned
+        assert spawned["_initial_state"] == {"seen": 3}
+
+    async def test_the_bundle_it_discarded_is_said(self, registered: str) -> None:
+        name = plugins.for_target(registered).name  # pyright: ignore[reportOptionalMemberAccess]
+        main = self._main(name)
+
+        await self._hand_back(main, name, registered, "nuc")
+
+        assert any("node's was discarded" in n["message"] for n in main.notifications)
+
+    async def test_a_next_node_that_cannot_take_it_is_refused_before_anything_stops(
+        self, registered: str
+    ) -> None:
+        name = plugins.for_target(registered).name  # pyright: ignore[reportOptionalMemberAccess]
+        main = self._main(name)
+        # A node from before bundles, without the agent installed.
+        main.actor.nodes.node_manifests["nuc"] = {"agents": []}
+
+        result = await main.migrate(name, "nuc")
+
+        assert result["success"] is False
+        assert "It stays on 'rpi'" in result["message"]
+        assert not main.published_to("/migrate")
+
+    async def test_a_next_node_that_stops_taking_it_meanwhile_has_it_restarted_where_it_was(
+        self, registered: str
+    ) -> None:
+        name = plugins.for_target(registered).name  # pyright: ignore[reportOptionalMemberAccess]
+        main = self._main(name)
+        result = await main.migrate(name, "nuc")
+        assert result["success"] is True, result
+        # Redeployed from an older release while the source was handing it back.
+        main.actor.nodes.node_manifests["nuc"] = {"agents": []}
+        ((_topic, request),) = main.published_to("/migrate")
+        answer = {
+            "agent": name,
+            "return_token": request["return_token"],
+            "config": {
+                "name": name,
+                "type": "module",
+                "target": registered,
+                "bundle": TAMPERED,
+            },
+            "state": {"seen": 3},
+        }
+
+        await main.actor.migration.receive_state_return(
+            "nodes/rpi/state_return", json.dumps(answer).encode()
+        )
+
+        ((config, node, _save),) = main.spawned_remote
+        assert node == "rpi"
+        assert config.get("bundle") != TAMPERED
+        assert any("is running on 'rpi' again" in n["message"] for n in main.notifications)

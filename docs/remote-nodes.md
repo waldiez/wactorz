@@ -483,8 +483,13 @@ The asymmetry is the point. Main executes what a node sends it, so a node that
 could publish code straight into the registry could put it there for any agent
 it hosts — and that code would run wherever the agent went next, including on
 main. It is the same reason node-to-node migration is routed through main, and
-the same rule a returning agent's config follows. A forged notice buys nothing:
-main asks the node, and the node answers with what it is really running.
+why an agent leaving a node is placed from main's copy of its program rather
+than the one the node sends back. A forged notice buys nothing: main asks the
+node, and the node answers with what it is really running.
+
+A program filed this way is no longer trusted, even for a catalogue agent: a
+repair is model-written, and the node is not trusted to say what it wrote. It
+meets the safety scanner wherever the agent is spawned next, main included.
 
 Two limits keep a notice from being worth sending. Main asks about one agent at
 a time and no more often than every ten seconds, because each question is a
@@ -553,7 +558,9 @@ A running agent can be moved between main and a node, or from one node to anothe
 
 Main routes every migration; a node never spawns on another node.
 
-A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. A library agent — a decorated function or an `Actor` subclass registered with the system, `type: module` — it builds from the package installed there, so one moves only to a node whose manifest names its target; see [A library agent](#a-library-agent-type-module). An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled or rule agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+An agent leaving a node, for main or for another node, is placed from main's own copy of its program: the node hands back its state, and the program it sends with it — generated code, or a library agent's bundle — is compared and discarded, never run. A move on to another node sends the bundle main builds from its own copy of the agent's code, and is checked before the source stops the agent, as a move from main is. A program the node repaired reaches main's copy through the exchange in *Why a repair travels in two steps*; one main has not fetched yet is lost, and the announcement of the move says the node's program was discarded. An agent main holds no program for — one in no spawn registry entry, and not a library agent installed on main, though a node runs it — cannot leave its node, and `/migrate` says so before anything stops.
+
+A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. A library agent — a decorated function or an `Actor` subclass registered with the system, `type: module` — it builds from the package installed there, so one moves only to a node whose manifest names its target; see [A library agent](#a-library-agent-type-module). An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled or rule agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its persisted state is sent to where it is going with main's copy of its config, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
 
 The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
 

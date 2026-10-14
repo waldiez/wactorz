@@ -3,13 +3,15 @@
 Three things can know where an agent currently is, and they are consulted in
 order of how much they know: the spawn registry (which holds the code), the
 agent's manifest (which does not), and the live heartbeats (which only name a
-node). Migration works from whichever answers first.
+node). Any of them locates the agent; an agent on a node moves only when the
+registry holds its program.
 
-Which direction the move goes decides how it is done. Between two nodes, main
-tells the source node to hand the agent over. Coming home, main cannot be told
-to spawn something it has no code for, so it asks the source to send everything
-back — that is the `@main` sentinel, and the reply arrives on the state-return
-path. Going out from local, main already has the config and sends it.
+Which direction the move goes decides how it is done. Leaving a node, for main
+or for another node, main asks the source to hand back the agent's state — that
+is the `@main` sentinel, and the reply arrives on the state-return path — and
+places the agent from its own registry entry, never from the program the node
+sends with the state. Going out from local, main already has the config and
+sends it.
 
 The refusals matter as much as the moves: migrating to a node that is not
 listening loses the agent, so the checks that come first are pinned first.
@@ -29,7 +31,7 @@ from wactorz.agents.main import artifact_service as service_module
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.manifests import ManifestRegistry
-from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.migration import BRIDGE_CODE_MARKER, Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.artifacts import ArtifactStore
@@ -118,6 +120,8 @@ class _Main:
         self.desired_state: list[tuple[str, Any, Any]] = []
         self.spawned_remote: list[tuple[dict[str, Any], str, bool]] = []
         self.spawned_local: list[dict[str, Any]] = []
+        #: The `from_registry` each local spawn was given: what lets `trusted` stand.
+        self.from_registry: list[bool] = []
         self.purged: list[tuple[Any, str]] = []
         self.notifications: list[dict[str, Any]] = []
         self.recorded: dict[str, Any] = {}
@@ -133,8 +137,11 @@ class _Main:
         async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
             self.spawned_remote.append((cfg, node, save))
 
-        async def _spawn_from_config(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+        async def _spawn_from_config(
+            cfg: dict[str, Any], save: bool = False, *, from_registry: bool = False
+        ) -> None:
             self.spawned_local.append(cfg)
+            self.from_registry.append(from_registry)
 
         async def _purge(actor: Any, name: str) -> None:
             self.purged.append((actor, name))
@@ -257,22 +264,28 @@ class TestFindingWhereTheAgentIs:
         assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
 
     async def test_the_manifest_answers_when_the_registry_does_not(self) -> None:
+        # Located, and refused there: with no registry entry main holds no
+        # program to place, and a node's own copy is not run anywhere else.
         main = _Main(
             manifests={"collector": {"node": "rpi"}},
             nodes={"rpi": online(), "nuc": online()},
         )
 
-        await main.migrate("collector", "nuc")
+        result = await main.migrate("collector", "nuc")
 
-        assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
+        assert result["success"] is False
+        assert "no program" in result["message"] and "stays on 'rpi'" in result["message"]
+        assert not main.published
 
     async def test_a_heartbeat_answers_when_neither_does(self) -> None:
         # Nothing recorded it, but a node is reporting it right now.
         main = _Main(nodes={"rpi": online(("collector",)), "nuc": online()})
 
-        await main.migrate("collector", "nuc")
+        result = await main.migrate("collector", "local")
 
-        assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
+        assert result["success"] is False
+        assert "stays on 'rpi'" in result["message"]
+        assert not main.published
 
 
 class TestBetweenTwoNodes:
@@ -712,6 +725,198 @@ class TestTheStateThatComesBack:
         assert main.spawned_remote[0][0]["_initial_state"] == {"history": "x" * 1000}
         (entry,) = main.actor.migration.pending_spawns.values()
         assert "_initial_state" not in entry["config"]
+
+
+MAINS = "async def process(agent):\n    pass  # the program main sent out\n"
+NODES = "async def process(agent):\n    steal()  # a program the node chose\n"
+
+
+class TestTheProgramThatComesBack:
+    """A node hands back an agent's state; the program is always main's own.
+
+    A node is not trusted to say what main, or another node, executes. Were its
+    returned config spawned, a compromised node would only have to wait for the
+    agent to be moved to get code onto main -- unscanned, for a catalogue agent,
+    whose trust main re-attaches from its registry -- or onto another node,
+    signed by main.
+    """
+
+    @staticmethod
+    def _main(**entry: Any) -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code("rpi", code=MAINS, **entry)},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+
+    @staticmethod
+    async def _hand_back(
+        main: _Main,
+        target: str,
+        *,
+        topic: str = "nodes/rpi/state_return",
+        **over: Any,
+    ) -> str:
+        """Start the move to ``target`` and deliver the node's answer; return its token."""
+        await main.migrate("collector", target)
+        ((_topic, request),) = main.published_to("/migrate")
+        token = request["return_token"]
+        answer = {
+            "agent": "collector",
+            "return_token": token,
+            "config": with_code("rpi", code=NODES),
+            "state": {"turns": 7},
+            **over,
+        }
+        await main.actor.migration.receive_state_return(topic, json.dumps(answer).encode())
+        return token
+
+    async def test_coming_home_runs_mains_program(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local")
+
+        (spawned,) = main.spawned_local
+        assert spawned["code"] == MAINS
+
+    async def test_the_nodes_state_comes_with_it(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local")
+
+        assert main.spawned_local[0]["_initial_state"] == {"turns": 7}
+
+    async def test_a_catalogue_agent_comes_home_trusted_with_its_own_program(self) -> None:
+        # Trust is earned from the registry, so it must cover the registry's
+        # program: the node's would run past the safety scanner.
+        main = self._main(trusted=True)
+
+        await self._hand_back(main, "local")
+
+        (spawned,) = main.spawned_local
+        assert main.from_registry == [True]
+        assert spawned["trusted"] is True
+        assert spawned["code"] == MAINS
+
+    async def test_another_node_is_sent_mains_program(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "nuc")
+
+        ((config, node, _save),) = main.spawned_remote
+        assert node == "nuc"
+        assert config["code"] == MAINS
+        assert config["_initial_state"] == {"turns": 7}
+
+    async def test_the_registry_keeps_mains_program_when_the_move_completes(self) -> None:
+        main = self._main()
+        await self._hand_back(main, "nuc")
+        token = next(iter(main.actor.migration.pending_spawns))
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        (committed,) = main.saved
+        assert committed["code"] == MAINS
+        assert committed["node"] == "nuc"
+
+    async def test_a_program_that_differs_is_named_as_discarded(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local")
+
+        warnings = [n["message"] for n in main.notifications if n["severity"] == "warning"]
+        assert any("differs" in m and "discarded" in m for m in warnings)
+
+    async def test_the_same_program_is_not_called_different(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local", config=with_code("rpi", code=MAINS))
+
+        assert [n["severity"] for n in main.notifications] == ["info"]
+
+    @staticmethod
+    def _llm_main() -> tuple[_Main, str]:
+        """An LLM agent on rpi, and the bridge code main sent it out with."""
+        entry = {"name": "collector", "node": "rpi", "type": "llm", "system_prompt": "Be brief."}
+        main = _Main(spawn_registry={"collector": entry}, nodes={"rpi": online()})
+        return main, main.actor._inject_llm_bridge_code(dict(entry))["code"]
+
+    async def test_bridge_code_for_an_llm_agent_is_not_called_different(self) -> None:
+        # The registry holds an LLM agent without code; the node ran the bridge
+        # main synthesized for it on the way out.
+        main, bridge = self._llm_main()
+
+        await self._hand_back(
+            main, "local", config={"name": "collector", "type": "llm", "code": bridge}
+        )
+
+        (spawned,) = main.spawned_local
+        assert "code" not in spawned
+        assert [n["severity"] for n in main.notifications] == ["info"]
+
+    async def test_a_tampered_bridge_is_called_different(self) -> None:
+        # The marker is a comment anyone can write: only the bridge main would
+        # send passes as its own.
+        main, bridge = self._llm_main()
+        tampered = bridge + "\nsteal()\n"
+        assert BRIDGE_CODE_MARKER in tampered
+
+        await self._hand_back(
+            main, "local", config={"name": "collector", "type": "llm", "code": tampered}
+        )
+
+        (spawned,) = main.spawned_local
+        assert "code" not in spawned
+        warnings = [n["message"] for n in main.notifications if n["severity"] == "warning"]
+        assert any("discarded" in m for m in warnings)
+
+    async def test_an_answer_from_another_node_is_ignored_and_the_question_stands(
+        self,
+    ) -> None:
+        # The token travels in the clear; spending it here would let anyone who
+        # read it cancel the real answer.
+        main = self._main()
+
+        token = await self._hand_back(main, "local", topic="nodes/nuc/state_return")
+
+        assert not main.spawned_local
+        assert token in main.actor.migration.pending_returns
+
+    async def test_an_answer_naming_another_agent_is_ignored(self) -> None:
+        # The name picks the registry entry that is spawned: a node must not
+        # get another agent's program started with its state.
+        main = self._main()
+        main._spawn_registry["vault"] = {"name": "vault", "code": MAINS, "trusted": True}
+
+        token = await self._hand_back(main, "local", agent="vault")
+
+        assert not main.spawned_local
+        assert token in main.actor.migration.pending_returns
+
+    async def test_an_entry_gone_while_in_flight_starts_nothing(self) -> None:
+        main = self._main()
+        await main.migrate("collector", "local")
+        ((_topic, request),) = main.published_to("/migrate")
+        del main._spawn_registry["collector"]
+
+        await main.actor.migration.receive_state_return(
+            "nodes/rpi/state_return",
+            json.dumps(
+                {
+                    "agent": "collector",
+                    "return_token": request["return_token"],
+                    "config": with_code("rpi", code=NODES),
+                    "state": {},
+                }
+            ).encode(),
+        )
+
+        assert not main.spawned_local
+        assert not main.spawned_remote
+        (notice,) = main.notifications
+        assert "no program" in notice["message"]
 
 
 class TestAnAgentANodeCannotRun:

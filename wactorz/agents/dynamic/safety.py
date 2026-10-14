@@ -7,9 +7,12 @@ all read as ``os.system``, whether called or only referenced. That makes walking
 past the check take code that looks deliberately evasive; it does not make the
 check containment. A name looked up through a value the parser cannot follow --
 a string held in a variable, ``sys.modules``, a subscript of ``globals()`` --
-passes, and so does anything a permitted module can do (``pathlib`` writes and
-deletes, for one). Treat a clean result as 'nothing obviously wrong', never as a
-sandbox: isolating untrusted code means running it in another process.
+passes, and so does anything a permitted module can do (``pathlib`` deletes,
+for one). Writing a file is not refused in any form: from the text alone a data
+export and an overwritten state file look the same, so where an agent may write
+is for the process running it to decide. Treat a clean result as 'nothing
+obviously wrong', never as a sandbox: isolating untrusted code means running it
+in another process.
 
 The warnings and the ``process()`` anti-patterns stay a pattern scan over the
 text. They are advice about code that hangs or deserves a second look, and
@@ -86,9 +89,6 @@ INTERNAL_ATTRIBUTES = frozenset(
 #: What a module is under another name: ``os`` is ``posix`` or ``nt`` underneath.
 _MODULE_ALIASES = {"nt": "os", "posix": "os"}
 
-_OPEN_CALLS = frozenset({"open", "io.open"})
-_WRITE_MODE = re.compile(r"[wax+]")
-_OPEN_REASON = "open() in write mode — use agent.persist() instead"
 
 _SUBPROCESS_CALLS = frozenset(
     {
@@ -234,18 +234,6 @@ def _blocked_reason(name: str | None) -> str | None:
     return None if name is None else BLOCKED_NAMES.get(name)
 
 
-def _opens_for_writing(node: ast.Call) -> bool:
-    if len(node.args) >= 2:
-        mode: ast.AST | None = node.args[1]
-    else:
-        mode = next((kw.value for kw in node.keywords if kw.arg == "mode"), None)
-    return (
-        isinstance(mode, ast.Constant)
-        and isinstance(mode.value, str)
-        and _WRITE_MODE.search(mode.value) is not None
-    )
-
-
 def _runs_rm(node: ast.Call) -> bool:
     """Whether a subprocess call's command, written out literally, is ``rm``."""
     if not node.args:
@@ -272,8 +260,6 @@ def _call_refusal(node: ast.Call, aliases: dict[str, str]) -> str | None:
         if target in GUARDED_MODULES and attribute is None:
             shown = f"vars({target})" if func == "vars" else f"getattr({target}, …)"
             return f"{shown} — call the function by its name"
-    if func in _OPEN_CALLS and _opens_for_writing(node):
-        return _OPEN_REASON
     if func in _SUBPROCESS_CALLS and _runs_rm(node):
         return _SUBPROCESS_REASON
     return None

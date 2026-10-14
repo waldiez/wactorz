@@ -25,7 +25,6 @@ BLOCKED = [
     ("socket.socket()", "raw socket"),
     ("eval('1 + 1')", "eval"),
     ("__import__('os')", "__import__"),
-    ("open('/tmp/x', 'w')", "open in write mode"),
 ]
 
 ALLOWED_WITH_A_WARNING = [
@@ -68,7 +67,6 @@ REACHING_IN = [
 # names, not values, so a name held in data -- a string in a variable, a
 # subscript, a module table -- passes, as does what a permitted module can do.
 NOT_CAUGHT = [
-    ("mode = 'w'\nopen('/tmp/x', mode)", "a write mode held in a variable"),
     ("import sys\nsys.modules['os'].system('ls')", "a module looked up in sys.modules"),
     ("globals()['__builtins__']", "a subscript of globals() by a string"),
     ("from pathlib import Path\nPath('/tmp/x').unlink()", "pathlib is not on the list"),

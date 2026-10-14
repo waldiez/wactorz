@@ -34,6 +34,13 @@ from ..core.actor import Actor, Message, MessageType
 from ..core.installed_wheel import installed_from_a_direct_reference, wheel_of_installed
 from ..core.mqtt import client_id, install_id, mqtt_client
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
+from ..core.node_operations import (
+    COMMAND_TIMEOUT_S,
+    OPERATION_TIMEOUT_S,
+    OUTPUT_CHARS,
+    OperationRefused,
+    command_for,
+)
 from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
 from ..core.pip import is_installable_name
@@ -54,6 +61,13 @@ NODE_CA_FILE = "mqtt-ca.crt"
 #: it. The node that is running reads the CA under its own name, and goes on
 #: reading the one it has if the deploy stops early.
 NOT_YET_IN_USE = ".incoming"
+
+#: The actions that reach a node over SSH. Only main may ask for them: an agent
+#: beside it in the process reaches the installer through its mailbox as easily,
+#: and a node's shell is not that agent's to use.
+NODE_ACTIONS = frozenset(
+    {"node_deploy", "node_install", "node_install_for_agent", "node_op", "node_run"}
+)
 
 #: How long the node's TLS check waits for the broker, in seconds.
 TLS_CHECK_TIMEOUT_S = 5
@@ -351,6 +365,12 @@ class InstallerAgent(Actor):
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         action = payload.get("action", "install")
 
+        if action in NODE_ACTIONS and not self._asked_by_main(msg):
+            logger.warning(
+                "[%s] Refused %r from %s: only main may ask", self.name, action, msg.sender_id
+            )
+            return {"error": f"'{action}' reaches a node over SSH, and only main may ask for it"}
+
         if action == "install":
             packages = payload.get("packages", [])
             if isinstance(packages, str):
@@ -385,9 +405,14 @@ class InstallerAgent(Actor):
             return await self._node_install(payload)
 
         if action == "node_run":
-            # Run an arbitrary command on a remote node via SSH
-            # payload: {host, command}; SSH auth comes from the deploy target
+            # A command the operator typed as `/nodes run`, never one the model wrote
+            # payload: {node_name or host, command}; SSH auth comes from the deploy target
             return await self._node_run(payload)
+
+        if action == "node_op":
+            # A named operation from `core.node_operations`, the model's way to a node
+            # payload: {node_name or host, operation, params}
+            return await self._node_op(payload)
 
         return {"error": f"Unknown action: {action}"}
 
@@ -552,9 +577,9 @@ class InstallerAgent(Actor):
     def _resolve_ssh_target(self, payload: dict) -> DeployTarget | None:
         """The configured deploy target a payload refers to, by node name or host.
 
-        ``node_install`` and ``node_run`` are handed a host rather than a node
-        name, so a host match is the fallback — otherwise every follow-up call
-        to an already-deployed node would have to repeat its credentials.
+        The node actions may be handed a host rather than a node name, so a host
+        match is the fallback — otherwise every follow-up call to an
+        already-deployed node would have to repeat its credentials.
         """
         node_name = payload.get("node_name") or payload.get("node")
         target = deploy_target(str(node_name)) if node_name else None
@@ -1569,30 +1594,77 @@ class InstallerAgent(Actor):
             f"> ~/wactorz/{log_path} 2>&1 &"
         )
 
+    def _asked_by_main(self, msg: Message) -> bool:
+        """Whether ``msg`` came from main, the one sender a node action is taken from."""
+        main = find_main_actor(self._registry)
+        return main is not None and msg.sender_id == main.actor_id
+
     async def _node_run(self, payload: dict) -> dict:
-        """Run an arbitrary shell command on a remote node via SSH.
+        """Run a command the operator typed, as `/nodes run`, on a node.
 
         payload keys:
-          host     — IP or hostname
-          command  — shell command to run
+          node_name — the node, by its deploy target's name; or
+          host      — its address, when that is how the target is known
+          command   — the shell command
 
-        SSH auth is not a payload key — see _ssh_kwargs.
+        Taken from main only, and main sends it for `/nodes run` alone: the
+        model is never given it. Logged whole, as a warning, because it is a
+        shell on another machine.
         """
-        host = payload.get("host")
-        command = payload.get("command", "echo hello")
-        if not host:
-            return {"error": "Missing 'host' in payload"}
+        where = payload.get("node_name") or payload.get("node") or payload.get("host")
+        command = str(payload.get("command") or "").strip()
+        if not where:
+            return {"error": "Name the node, or its host"}
+        if not command:
+            return {"error": "No command to run"}
+        logger.warning(
+            "[%s] Running on %s, as the operator typed it: %s", self.name, where, command
+        )
+        self._log_remote(f"Running on {where}: {command}")
+        result = await self._run_on_node(payload, command, COMMAND_TIMEOUT_S)
+        return {"host": payload.get("host") or where, "command": command, **result}
 
-        self._log_remote(f"Running on {host}: {command[:80]}")
+    async def _node_op(self, payload: dict) -> dict:
+        """Run a named operation from `core.node_operations` on a node.
+
+        payload keys:
+          node_name — the node, by its deploy target's name; or host
+          operation — the operation's name
+          params    — what it takes, each checked against its bounds
+
+        The model's way to a node. Nothing in the payload reaches the shell but
+        checked numbers: a ``command`` key, should one come, is not read.
+        """
+        name = str(payload.get("operation") or "")
+        target = self._resolve_ssh_target(payload)
+        if target is None:
+            asked = payload.get("node_name") or payload.get("node") or payload.get("host")
+            return {"error": f"No deploy target configured for {asked!r}"}
+        params = payload.get("params")
+        try:
+            command = command_for(name, params if isinstance(params, dict) else {}, target.name)
+        except OperationRefused as exc:
+            return {"error": str(exc)}
+        self._log_remote(f"Running {name} on {target.name}")
+        result = await self._run_on_node(payload, command, OPERATION_TIMEOUT_S)
+        if "error" in result:
+            return result
+        return {"node": target.name, "operation": name, **result}
+
+    async def _run_on_node(self, payload: dict, command: str, timeout: float) -> dict:
+        """Run ``command`` on the node ``payload`` names, over SSH, within ``timeout``.
+
+        Every command a node is sent outside a deploy goes through here, so how
+        it is carried is decided in one place.
+        """
         try:
             async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
-                ok, output = await self._ssh_run(conn, command)
-                return {
-                    "success": ok,
-                    "host": host,
-                    "command": command,
-                    "output": output,
-                    "exit_code": 0 if ok else 1,
-                }
+                ok, output = await asyncio.wait_for(self._ssh_run(conn, command), timeout)
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": f"Still running after {timeout:.0f}s; stopped waiting",
+            }
         except Exception as e:
-            return {"success": False, "host": host, "error": str(e)}
+            return {"success": False, "error": str(e)}
+        return {"success": ok, "output": output[-OUTPUT_CHARS:], "exit_code": 0 if ok else 1}

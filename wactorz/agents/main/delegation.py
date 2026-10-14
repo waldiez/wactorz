@@ -62,6 +62,23 @@ _BARE_MENTION = re.compile(r"(?:^|\n|[.!?:]\s+)(@([\w][\w\-]*)[ \t]+)")
 #: safe direction for a default to fail in.
 RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
 
+#: What the model may ask the installer for. Not ``node_run``: a command for a
+#: node's shell is the operator's to type, as ``/nodes run``, and the model asks
+#: for a named operation (``node_op``) instead. What it reads is untrusted text,
+#: so a command it writes could be anyone's.
+MODEL_INSTALLER_ACTIONS = frozenset(
+    {
+        "check",
+        "history",
+        "install",
+        "node_deploy",
+        "node_install",
+        "node_install_for_agent",
+        "node_op",
+        "resolve",
+    }
+)
+
 #: How long to wait for a reply subscription before publishing regardless.
 #:
 #: Publishing anyway is deliberate: the task still gets done and its side
@@ -231,8 +248,13 @@ class DelegationManager:
         self, payload: dict[str, Any], timeout: float = 300.0
     ) -> dict[str, Any]:
         """Send a task to the installer agent and wait for the result.
-        Handles node_deploy, node_install, node_run, install, check actions.
-        timeout is generous (300s) because deploys involve SSH + pip installs.
+
+        Main's own route to it, for every action it takes: a local ``install``
+        or ``check``, and the node actions only main may ask for -- ``node_deploy``,
+        ``node_install``, a named read-only ``node_op``, and ``node_run``, which
+        main sends for a command the operator typed as ``/nodes run`` and never
+        for one the model wrote (see `MODEL_INSTALLER_ACTIONS`). The timeout is
+        generous because deploys involve SSH and pip installs.
         """
         if not self.host._registry:
             return {"error": "No registry available"}
@@ -252,12 +274,24 @@ class DelegationManager:
         """Dispatch one already-resolved delegation and format the result string.
         Shared by @mention delegations and <delegate> blocks.
         """
+        action = payload.get("action", "install") if isinstance(payload, dict) else "install"
+        if agent_name == "installer" and action not in MODEL_INSTALLER_ACTIONS:
+            logger.warning("[%s] Refused the model's %r for the installer", self.host.name, action)
+            return (
+                f"[installer: '{action}' is not something the assistant may ask for. A command "
+                "for a node is typed by the operator: /nodes run <node> <command>]"
+            )
         json_str = json.dumps(payload)
         logger.info(
             "[%s] Executing LLM delegation → @%s %s", self.host.name, agent_name, json_str[:80]
         )
         try:
-            result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+            if agent_name == "installer" and isinstance(payload, dict):
+                # The installer reads its action from the payload itself, so
+                # it is sent as one rather than as task text.
+                result = await self.delegate_to_installer(payload, timeout=300.0)
+            else:
+                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
         except Exception as e:
             return f"[{agent_name} error: {e}]"
         # Formatting the reply is outside the guard on purpose: only the

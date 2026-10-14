@@ -1225,15 +1225,16 @@ For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': promp
 
 ### Installer Agent — Remote Actions
 
-The installer agent handles three actions for node management:
+The installer agent handles these actions for node management:
 
 | Action | Description |
 |--------|-------------|
 | `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
 | `node_install` | Install pip packages on a running node via SSH |
-| `node_run` | Run any shell command on a remote node via SSH |
+| `node_op` | Run a named, read-only operation on a node (`uptime`, `disk`, `memory`, `temperature`, `os`, `network`, `python`, `packages`, `node-log`; see `wactorz.core.node_operations`) |
+| `node_run` | Run a shell command on a node — sent only for `/nodes run`, typed by the operator; refused from a model's `<delegate>` |
 
-All three take `host` and, where relevant, `node_name`. **None of them accept SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
+Each takes `node_name` or `host`. Only main may ask for any of them: another agent's request is refused, though any agent may ask for a local `install`. **None of them accepts SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
 
 ---
 

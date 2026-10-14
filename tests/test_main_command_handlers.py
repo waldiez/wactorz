@@ -94,6 +94,7 @@ class _Main:
         self.published: list[tuple[str, Any]] = []
         self.migrate_result: Any = {"success": True, "message": "moved"}
         self.delete_error: Exception | None = None
+        self.installer_result: Any = {"success": True, "output": "up 3 days", "exit_code": 0}
 
     # memory
     def persist(self, key: str, value: Any) -> None:
@@ -166,6 +167,10 @@ class _Main:
 
     def _record_agent_deletion(self, name: str, reason: str = "") -> None:
         self.calls.append(("record", (name, reason)))
+
+    async def delegate_to_installer(self, payload: dict[str, Any], timeout: float = 0) -> Any:
+        self.calls.append(("installer", payload))
+        return self.installer_result
 
 
 @pytest.fixture(name="main")
@@ -832,3 +837,45 @@ class TestListAgents:
         assert "📦 [gmail]" in text
         assert "    spawnable   : yes — @catalog spawn gmail" in text
         assert "🔴 [old]" in text
+
+
+class TestRunningACommandOnANode:
+    """`/nodes run`: the one way free text reaches a node's shell, typed by the operator."""
+
+    async def test_the_command_goes_to_the_installer_for_that_node(self, main: _Main) -> None:
+        await node_cmds.run_on_node(_ctx(main), "rpi-kitchen df -h /home")
+
+        assert main.calls == [
+            (
+                "installer",
+                {"action": "node_run", "node_name": "rpi-kitchen", "command": "df -h /home"},
+            )
+        ]
+
+    async def test_a_tab_after_the_node_separates_it_too(self, main: _Main) -> None:
+        await node_cmds.run_on_node(_ctx(main), "rpi-kitchen\tuptime")
+
+        assert main.calls == [
+            ("installer", {"action": "node_run", "node_name": "rpi-kitchen", "command": "uptime"})
+        ]
+
+    async def test_its_output_is_the_reply(self, main: _Main) -> None:
+        text = await node_cmds.run_on_node(_ctx(main), "rpi-kitchen uptime")
+
+        assert "up 3 days" in text
+
+    async def test_a_failure_says_so(self, main: _Main) -> None:
+        main.installer_result = {"success": False, "error": "No deploy target configured"}
+
+        text = await node_cmds.run_on_node(_ctx(main), "ghost uptime")
+
+        assert "No deploy target configured" in text
+
+    @pytest.mark.parametrize("argument", ["", "rpi-kitchen", "rpi-kitchen   "])
+    async def test_without_a_node_and_a_command_it_says_how(
+        self, main: _Main, argument: str
+    ) -> None:
+        text = await node_cmds.run_on_node(_ctx(main), argument)
+
+        assert text.startswith("Usage: /nodes run")
+        assert main.calls == []

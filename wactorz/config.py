@@ -692,7 +692,7 @@ def deploy_target_for_host(host: str) -> DeployTarget | None:
     """The configured target whose ``host`` matches, or None.
 
     Lets the installer re-authenticate to a node it only knows by address —
-    ``node_install`` and ``node_run`` are given a host, not a node name.
+    the installer's node actions may be given a host rather than a node name.
     """
     host = (host or "").strip().lower()
     if not host:

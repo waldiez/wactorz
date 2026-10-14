@@ -159,10 +159,10 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 	@echo "── gated: basedpyright (basic) ──"
 	$(PYTHON) -m basedpyright
 
-# The pinned image of a CI tool, read from its FROM line in .github/tools/Dockerfile.
+# The pinned image of a CI tool, read from its FROM line in ci/tools/Dockerfile.
 # A function rather than a nested `$(MAKE) tool-image`: a recipe line naming
 # $(MAKE) runs even under `make -n`, so a dry run would start the containers.
-tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' .github/tools/Dockerfile)
+tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' ci/tools/Dockerfile)
 
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
@@ -245,7 +245,7 @@ image-scan: ## Scan IMAGE for fixable CRITICAL/HIGH vulnerabilities (accepted on
 		--skip-db-update --ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 \
 		$(SCAN_ARGS) "$(IMAGE)"
 
-tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (.github/tools/Dockerfile)
+tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (ci/tools/Dockerfile)
 	@echo "$(call tool-image,$(NAME))"
 
 # ── Docker stack ────────────────────────────────────────────────────────────

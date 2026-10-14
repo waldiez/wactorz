@@ -1,6 +1,6 @@
 {
   "name": "wactorz-dashboard",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Wactorz dashboard",
   "private": true,
   "packageManager": "bun@1.4.2",

@@ -12,7 +12,7 @@
 # and a package with no wheel built against the system libraries.
 #
 # Usage: scripts/image-smoke.sh <image> <mosquitto-image>
-# `make image-smoke IMAGE=…` passes the broker image pinned in .github/tools/Dockerfile.
+# `make image-smoke IMAGE=…` passes the broker image pinned in ci/tools/Dockerfile.
 set -eu
 
 # Under Git Bash on Windows, arguments that look like Unix paths (`/proc/1/status`,

@@ -153,6 +153,11 @@ describe("sendBlockedReason", () => {
         expect(sendBlockedReason([], "worker")).not.toContain("start it");
         expect(sendBlockedReason([], "worker")).toContain("worker");
     });
+
+    it("blocks a message to an agent that cannot be messaged, opened for its question", () => {
+        const reason = sendBlockedReason([agent("installer", { protected: true })], "installer");
+        expect(reason).toContain("can't be messaged");
+    });
 });
 
 describe("stripLeadingMention", () => {
@@ -336,6 +341,36 @@ describe("DashboardChat — target selection", () => {
         workerRow.click();
         expect(dc.chatTarget).toBe("worker");
         expect(host.root.querySelector(".af-chat-pane-title")!.textContent).toBe("@worker");
+    });
+
+    it("opens an agent that cannot be messaged while it is asking something", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        const row = () =>
+            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+        expect(row().disabled).toBe(true);
+
+        const msg: ChatMessage = {
+            id: "q1",
+            from: "installer",
+            to: "user",
+            content: "Install?",
+            timestampMs: Date.now(),
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+        expect(row().disabled).toBe(false);
+
+        row().click();
+        expect(dc.chatTarget).toBe("installer");
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+
+        // Answered, it closes again, as an agent that cannot be messaged is.
+        document.dispatchEvent(new CustomEvent("af-answered", { detail: { id: "q1", option: "Refuse" } }));
+        expect(row().disabled).toBe(true);
+        dc.unwire();
     });
 
     it("does not switch to a non-messageable (system) agent", () => {

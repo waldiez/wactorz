@@ -27,6 +27,10 @@ export interface ToastOptions {
     message: string;
     durationMs?: number;
     actions?: ToastAction[];
+    /** Stays up until dismissed or closed by `key`, with no countdown. */
+    sticky?: boolean;
+    /** A name `close()` dismisses the toast by. */
+    key?: string;
 }
 
 interface ThemeEntry {
@@ -341,6 +345,9 @@ export class ToastManager {
         }
 
         const toastEl = el("div", "wz-toast");
+        if (opts.key) {
+            toastEl.dataset["key"] = opts.key;
+        }
 
         toastEl.innerHTML = `
       <div class="wz-toast__strip" style="background:${theme.strip}"></div>
@@ -372,7 +379,14 @@ export class ToastManager {
         this.container.appendChild(toastEl);
         this.active.push(toastEl);
 
-        this._animateAndSchedule(toastEl, duration);
+        this._animateAndSchedule(toastEl, opts.sticky ? null : duration);
+    }
+
+    /** Dismiss every toast shown with `key`. */
+    close(key: string): void {
+        for (const toastEl of this.active.filter(t => t.dataset["key"] === key)) {
+            this.dismiss(toastEl);
+        }
     }
 
     /** Build and wire the action buttons into the toast's actions container. */
@@ -395,12 +409,16 @@ export class ToastManager {
         }
     }
 
-    /** Trigger the enter animation, run the progress countdown and schedule auto-dismiss. */
-    private _animateAndSchedule(toastEl: HTMLElement, duration: number): void {
+    /** Trigger the enter animation, then run the countdown and schedule auto-dismiss unless `duration` is null. */
+    private _animateAndSchedule(toastEl: HTMLElement, duration: number | null): void {
         // Animate in (next frame so transition fires)
         requestAnimationFrame(() => {
             requestAnimationFrame(() => toastEl.classList.add("wz-toast--in"));
         });
+        if (duration === null) {
+            toastEl.querySelector(".wz-toast__progress")?.remove();
+            return;
+        }
 
         // Progress bar countdown
         const bar = toastEl.querySelector<HTMLElement>(".wz-toast__progress-bar")!;

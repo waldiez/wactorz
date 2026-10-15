@@ -35,6 +35,7 @@ import { register as registerTTS } from "./ext/tts";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
+import { questionToast } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
@@ -292,7 +293,9 @@ router.on("alert", payload => {
 
 router.on("chat", msg => {
     if (msg.from !== "user") {
-        toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
+        toast.show(
+            questionToast(msg) ?? { type: "chat", title: msg.from, message: msg.content.slice(0, 120) },
+        );
     }
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(msg.from, msg.to);
@@ -303,6 +306,7 @@ router.on("chat", msg => {
 // A question answered on any channel: the card closes on every open dashboard.
 router.on("answer", answer => {
     emit("af-answered", { id: answer.id, option: answer.option });
+    toast.close(answer.id);
     pushFeed(answerFeedItem(answer));
 });
 
@@ -442,6 +446,7 @@ listen("af-agent-command", detail => {
 // A press on one of a question's buttons: the pick goes to the agent that
 // asked, over the server's broker link, as a tap on Telegram would.
 listen("af-answer-option", detail => {
+    toast.close(detail.id);
     ws.sendRaw({
         type: "answer",
         agent_id: detail.agentId,

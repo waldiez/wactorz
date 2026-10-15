@@ -384,6 +384,16 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>The folders an agent that converts files (the doc-to-pptx agent) may read from and write to, separated like <code>PATH</code>. Anything under <code>WACTORZ_STATE_DIR</code> stays out of reach whatever is named here. See <a href="../catalogue/catalogue-doc-to-pptx.html">Doc → PPTX agent</a></td>
 </tr>
 <tr>
+<td><code>WACTORZ_PIP_ALLOW</code></td>
+<td>—</td>
+<td>Packages an agent may have installed without the operator being asked, separated by commas or spaces, in addition to the built-in list. Anything else is asked about on the dashboard first; <code>/packages</code> shows the whole list. See <a href="../guide/remote-nodes.html#the-packages-an-agent-installs">the packages an agent installs</a></td>
+</tr>
+<tr>
+<td><code>WACTORZ_PIP_INDEX_URL</code></td>
+<td>—</td>
+<td>The package index every install uses, such as a private mirror. Unset, pip uses PyPI</td>
+</tr>
+<tr>
 <td><code>WACTORZ_AGENTS</code></td>
 <td>—</td>
 <td>Agents this deployment brings, as <code>package.module:attr</code> targets (an <code>Actor</code> subclass or a function declared with <code>@wactorz.agent</code>), comma separated. Supervised at startup beside the built-ins; see <a href="../guide/agents.html#bringing-your-own-agents">Bringing your own agents</a></td>

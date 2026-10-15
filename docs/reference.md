@@ -441,6 +441,16 @@ Webhook URLs for Discord, Slack, and Telegram are stored separately and automati
 
 You can also paste a webhook URL directly into any message — it is detected automatically and saved.
 
+### Packages installed without asking
+
+A package an agent asks for is installed at once only when it is on the list: what the catalogue and the examples install, the packages the installer knows by their import names, those in `WACTORZ_PIP_ALLOW`, and those you have allowed. Anything else is asked about on the dashboard, and the agent is not started if you refuse.
+
+| Command | Description |
+|---------|-------------|
+| `/packages` | Show the list: what you allowed, what `WACTORZ_PIP_ALLOW` adds, and what is built in |
+| `/packages allow <name> …` | Allow packages from now on |
+| `/packages forget <name> …` | Take packages you allowed off the list |
+
 ---
 
 ## 9. Reactive Pipelines
@@ -762,7 +772,8 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |
 | `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
-| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
+| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node, allowing them first |
+| `/packages [allow\|forget <pkg...>]` | Show, add to or take from the packages installed without asking |
 | `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
 | `/help` | Show all available commands |
 | `@agent-name` | Route your next message directly to a specific agent |
@@ -1233,6 +1244,8 @@ The installer agent handles these actions for node management:
 | `node_install` | Install pip packages on a running node via SSH |
 | `node_op` | Run a named, read-only operation on a node (`uptime`, `disk`, `memory`, `temperature`, `os`, `network`, `python`, `packages`, `node-log`; see `wactorz.core.node_operations`) |
 | `node_run` | Run a shell command on a node — sent only for `/nodes run`, typed by the operator; refused from a model's `<delegate>` |
+
+`node_install` installs only packages on the list of packages installed without asking, or allowed by the operator when asked on the dashboard; the `packages_allow`, `packages_forget`, `packages_list` and `packages_clear` actions keep that list, and only main may send them.
 
 Each takes `node_name` or `host`. Only main may ask for any of them: another agent's request is refused, though any agent may ask for a local `install`. **None of them accepts SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
 

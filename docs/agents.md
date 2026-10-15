@@ -129,7 +129,7 @@ Tracks heartbeat timestamps from every registered actor. If an actor's last hear
 | **name** | `installer` |
 | **restarts** | 3 |
 
-Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. Also handles remote nodes over SSH (`node_deploy`, `node_install`, `node_op` — a named read-only operation — and `node_run` — a command typed as `/nodes run`), for machines listed in `DEPLOY_TARGETS`, and takes those only from main — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
+Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. A package not on the list of packages installed without asking (the catalogue's, the examples', `WACTORZ_PIP_ALLOW`, and what the operator has allowed with `/packages allow` or the dashboard) is asked about on the dashboard first, and not installed if the operator refuses or does not answer. Also handles remote nodes over SSH (`node_deploy`, `node_install`, `node_op` — a named read-only operation — and `node_run` — a command typed as `/nodes run`), for machines listed in `DEPLOY_TARGETS`, and takes those only from main — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
 
 ```
 @installer {"action": "install", "packages": ["httpx", "aiomqtt"]}

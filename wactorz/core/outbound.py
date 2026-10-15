@@ -21,7 +21,7 @@ import re
 import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 #: The channel a message goes to when none is named: the dashboard shows every
 #: ``agents/<id>/chat`` frame, so a message for it needs no delivery of its own.
@@ -147,6 +147,20 @@ class OutboundMessage:
     def wants_delivery(self) -> bool:
         """Whether a channel other than the dashboard has to carry this message."""
         return self.channel != DASHBOARD
+
+
+@runtime_checkable
+class TakesDashboardAnswers(Protocol):
+    """An agent that takes a pick only from the dashboard, handed over in its process.
+
+    An answer on ``agents/<id>/answer`` is whatever was published there, and
+    any agent beside the one that asked can publish there. That is fine for
+    an agent's own questions, and no good for one whose answer is a
+    permission: such an agent does not listen on the topic, and the web
+    server, when the agent runs in its process, hands it the press instead.
+    """
+
+    async def dashboard_answer(self, answer: Answer) -> None: ...
 
 
 @dataclass(frozen=True)

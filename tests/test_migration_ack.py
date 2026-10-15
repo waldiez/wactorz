@@ -37,7 +37,9 @@ class _Main:
         async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
             self.published.append((topic, payload))
 
-        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        async def _spawn_remote(
+            cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+        ) -> None:
             self.spawned.append((cfg, node, save))
 
         setattr(main, "_mqtt_publish", _publish)

@@ -29,6 +29,7 @@ from .info import (
     show_topics,
 )
 from .nodes import deploy_node, remove_node, restart_node, run_on_node, shutdown_node
+from .packages import manage_packages
 from .state import (
     clear_plans,
     delete_rule,
@@ -51,6 +52,7 @@ registry.add(delete_rule)
 registry.add(clear_plans)
 registry.add(manage_plans)
 registry.add(manage_webhooks)
+registry.add(manage_packages)
 registry.add(migrate_agent_cmd)
 registry.add(deploy_node)
 registry.add(restart_agent)

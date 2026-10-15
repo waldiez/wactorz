@@ -25,6 +25,12 @@ from typing import TYPE_CHECKING, Any
 from ...core.actor import ReplyError, ask_through
 from ...core.artifacts import ArtifactError
 from ...core.bundles import BundleError, bundle_for
+from ...core.packages import (
+    APPROVAL_TIMEOUT_S,
+    DEFAULT_ALLOWED,
+    allowed_by_env,
+    unlisted,
+)
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 
@@ -239,8 +245,9 @@ def _parse_spawn_config(raw: str) -> dict:
     return config
 
 
-#: How long to wait for a node's packages before spawning without them.
-INSTALL_TIMEOUT_S = 180.0
+#: How long to wait for a node's packages before spawning without them: the
+#: operator's answer about a package not on the list, then pip over SSH.
+INSTALL_TIMEOUT_S = APPROVAL_TIMEOUT_S + 180.0
 
 #: How long a catalogue spawn is given to appear in the registry.
 CATALOGUE_SETTLE_S = 0.5
@@ -395,7 +402,7 @@ class SpawnService:
         node = config.get("node", "").strip()
         if node:
             logger.info("[%s] Re-spawning remote agent %r on node %r", self.host.name, name, node)
-            await self._spawn_remote(config, node, save=False)
+            await self._spawn_remote(config, node, save=False, restoring=True)
             return
         if self.host._registry and self.host._registry.find_by_name(name):
             logger.info("[%s] %r already running, skipping.", self.host.name, name)
@@ -592,7 +599,7 @@ class SpawnService:
         """
         node = config.get("node", "").strip()
         if node:
-            return await self._spawn_remote(config, node, save)
+            return await self._spawn_remote(config, node, save, restoring=from_registry)
         return await self.host._spawn_local_from_config(
             config, register=save, from_registry=from_registry
         )
@@ -666,6 +673,50 @@ class SpawnService:
                 return installer.recall(f"node_host_{node}")
         return None
 
+    async def _packages_cleared(self, agent_name: str, packages: list[str]) -> str | None:
+        """Why ``packages`` may not be installed for ``agent_name``, or None when they may.
+
+        The installer decides, asking the operator about a package not on the
+        list. With no installer running, only what is on the list without
+        asking is cleared.
+        """
+        if self.host._registry is None or self.host._registry.find_by_name("installer") is None:
+            refused = unlisted(packages, DEFAULT_ALLOWED | allowed_by_env())
+            if refused:
+                return (
+                    f"no installer is running to ask about {', '.join(refused)}, "
+                    "which the list of packages installed without asking does not hold"
+                )
+            return None
+        request = {"action": "packages_clear", "packages": packages, "agent": agent_name}
+        try:
+            await ask_through(self.host, "installer", request, timeout=APPROVAL_TIMEOUT_S + 30)
+        except ReplyError as exc:
+            return str(exc.reply.get("error", "the installer refused its packages"))
+        except (asyncio.TimeoutError, RuntimeError) as exc:
+            return f"its packages could not be cleared: {exc}"
+        return None
+
+    async def _packages_placed(
+        self, config: dict[str, Any], node: str, packages: list[str], restoring: bool
+    ) -> bool:
+        """Clear ``packages`` for the agent in ``config`` and install them on ``node``.
+
+        False when they are refused, which has been said where the operator
+        looks. Cleared first: the node installs what the spawn lists, whether or
+        not it could be installed from here. An agent put back where it ran
+        (``restoring``) is not asked about again: its packages were cleared
+        when it was first placed, and main saves no other.
+        """
+        name = str(config.get("name", "remote-agent"))
+        if not restoring:
+            refusal = await self._packages_cleared(name, packages)
+            if refusal:
+                await self._refuse_remote_spawn(config, node, refusal)
+                return False
+        await self._install_packages(node, name, packages)
+        return True
+
     async def _install_packages(self, node: str, agent_name: str, packages: list[str]) -> None:
         """Install `packages` on `node` before its agent is spawned.
 
@@ -712,6 +763,7 @@ class SpawnService:
             "host": address,
             "packages": packages,
             "node_name": node,
+            "agent": agent_name,
         }
         try:
             result = await ask_through(self.host, "installer", request, timeout=INSTALL_TIMEOUT_S)
@@ -765,7 +817,9 @@ class SpawnService:
             },
         )
 
-    async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
+    async def _spawn_remote(
+        self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+    ) -> None:
         """Publish a spawn command to a node, which runs the agent there.
 
         A remote agent appears in the dashboard like a local one, because both
@@ -835,8 +889,8 @@ class SpawnService:
             packages = [p.strip() for p in packages.replace(",", " ").split()]
 
         logger.info("[%s] Spawning %r on remote node %r", self.host.name, name, node)
-        if packages:
-            await self._install_packages(node, name, packages)
+        if packages and not await self._packages_placed(config, node, packages, restoring):
+            return
 
         # Not retained, and that is the whole point. A retained spawn is handed
         # to the node again on every reconnect, so an agent withdrawn after this

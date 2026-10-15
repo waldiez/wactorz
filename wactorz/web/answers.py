@@ -6,6 +6,10 @@ goes out on the agent's ``agents/<id>/answer`` topic over the server's broker
 link, the way a Telegram tap or a WhatsApp reply does from its channel. The
 agent that asked hears it there, wherever it runs, and so does every open
 dashboard, which marks the question answered.
+
+An agent in this process whose answers are permissions -- the installer,
+asking whether to install a package -- does not listen on that topic, which
+anything on the broker could write to. It is handed the press here as well.
 """
 
 import json
@@ -13,7 +17,7 @@ import logging
 import time
 from typing import Any
 
-from ..core.outbound import Answer, check_options
+from ..core.outbound import Answer, TakesDashboardAnswers, check_options
 from ..core.topics import topic_name_error
 from . import runtime
 
@@ -58,6 +62,10 @@ async def answer_from_dashboard(data: dict[str, Any]) -> str | None:
     answer = answer_from_frame(data)
     if isinstance(answer, str):
         return answer
+    agent = runtime.registry.get(answer.agent_id) if runtime.registry is not None else None
+    if isinstance(agent, TakesDashboardAnswers):
+        # Handed over here, not heard from the broker: this agent's answers are permissions.
+        await agent.dashboard_answer(answer)
     client = runtime.mqtt_client_ref
     if client is None:
         return "The broker is not connected, so the answer could not be sent."

@@ -119,6 +119,8 @@ class _Main:
         self.saved: list[dict[str, Any]] = []
         self.desired_state: list[tuple[str, Any, Any]] = []
         self.spawned_remote: list[tuple[dict[str, Any], str, bool]] = []
+        #: Whether each remote spawn put an agent back where it ran, which clears nothing.
+        self.restoring: list[bool] = []
         self.spawned_local: list[dict[str, Any]] = []
         #: The `from_registry` each local spawn was given: what lets `trusted` stand.
         self.from_registry: list[bool] = []
@@ -134,8 +136,11 @@ class _Main:
         async def _desired(node: str, cfg: Any = None, remove_name: Any = None) -> None:
             self.desired_state.append((node, cfg, remove_name))
 
-        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        async def _spawn_remote(
+            cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+        ) -> None:
             self.spawned_remote.append((cfg, node, save))
+            self.restoring.append(restoring)
 
         async def _spawn_from_config(
             cfg: dict[str, Any], save: bool = False, *, from_registry: bool = False
@@ -952,6 +957,33 @@ class TestAnAgentANodeCannotRun:
         assert not agent.stopped
         assert not main.spawned_remote
         assert not main.actor.migration.pending_spawns
+
+
+class TestAnAgentWhosePackagesAreNotCleared:
+    """A node installs what the spawn lists, so the packages are cleared before anything stops."""
+
+    @staticmethod
+    def _main() -> _Main:
+        # No installer running: only what is on the list without asking is cleared.
+        return _Main(
+            spawn_registry={"collector": with_code(install=["wactorz-unlisted-probe"])},
+            nodes={"rpi": online()},
+            local=("collector",),
+        )
+
+    async def test_it_is_refused_with_the_reason(self) -> None:
+        result = await self._main().migrate("collector", "rpi")
+
+        assert result["success"] is False
+        assert "wactorz-unlisted-probe" in result["message"]
+
+    async def test_nothing_is_stopped_or_sent(self) -> None:
+        main = self._main()
+
+        await main.migrate("collector", "rpi")
+
+        assert not main.local("collector").stopped
+        assert not main.spawned_remote
 
 
 @declare_agent(subscribes="probe/in")

@@ -832,6 +832,9 @@
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>A task's payload is untrusted input.</strong> On main, any agent may send one; on a node, any node on the broker may, by name (<code>agents/by-name/&lt;name&gt;/task</code>); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what <code>handle_task</code> acts on, and never run, install or fetch what a payload names without checking it.</p>
+</blockquote>
 <h4 id="agent-api-agent-object-inside-generated-code">Agent API (<code>agent</code> object inside generated code)</h4>
 <table>
 <thead>

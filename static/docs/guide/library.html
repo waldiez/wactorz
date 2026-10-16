@@ -176,7 +176,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 <p><code>detect</code> is still a function: call it in a test, import it elsewhere. As an
 agent it is called once per message on <code>sensors/imu/#</code> with the decoded
 payload, and once per task sent to it by chat or by another agent. What it
-returns is published to <code>anomalies/imu</code>; <code>None</code> publishes nothing. A plain
+returns is published to <code>anomalies/imu</code>; <code>None</code> publishes nothing. A task's
+payload is untrusted input: on a node, any node on the broker may send one by
+name, so check what the function acts on. A plain
 function runs on a worker thread, so a slow model never holds the event loop
 every other agent shares; a coroutine function runs on the loop.</p>
 <p>A function that wants the actor takes it as a second parameter, for state,

@@ -474,9 +474,13 @@ and is taken only if the heartbeat no longer lists the agent. A node that has
 gone quiet counts too: the withdrawal waits until it speaks again, or until
 main gives up on it after its grace period, which removes its agents anyway.
 Only for a node main does not know at all, such as one that was down when main
-started, is a withdrawal taken at once. What else a node
-can publish under another agent's topics, such as its manifest or status, is
-taken as given.</p>
+started, is a withdrawal taken at once. What else a node can publish under
+another agent's topics, such as its manifest or status, is taken as given.</p>
+<p>That includes tasks. A task on <code>agents/by-name/&lt;name&gt;/task</code> reaches the agent of
+that name on whichever node runs it, and any node may publish one, so an agent
+on a node is asked by whoever publishes there, another node included. Its
+<code>handle_task</code> should treat the payload as untrusted input, as it would text from
+the web: check what it acts on, and never run or install what a task names.</p>
 <p>Two settings shape the list, both read by whatever writes it (the server, and
 compose's <code>mqtt-certs</code>; the add-ons offer them as <code>node_topics</code> and
 <code>broker_accounts</code>):</p>
@@ -718,7 +722,7 @@ node holding the old one.</p>
 <tr>
 <td><code>agents/by-name/{name}/task</code></td>
 <td>→ agent</td>
-<td>Task addressed to a named agent on any node. Runner routes to local agents by name.</td>
+<td>Task addressed to a named agent on any node. Runner routes to local agents by name. Any node may publish one, so its payload is untrusted input.</td>
 </tr>
 </tbody>
 </table>

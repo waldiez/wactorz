@@ -702,8 +702,8 @@ class SpawnService:
     ) -> bool:
         """Clear ``packages`` for the agent in ``config`` and install them on ``node``.
 
-        False when they are refused, which has been said where the operator
-        looks. Cleared first: the node installs what the spawn lists, whether or
+        False when they are refused; the refusal is then on the dashboard and
+        in the log. Cleared first: the node installs what the spawn lists, whether or
         not it could be installed from here. An agent put back where it ran
         (``restoring``) is not asked about again: its packages were cleared
         when it was first placed, and main saves no other.
@@ -714,10 +714,12 @@ class SpawnService:
             if refusal:
                 await self._refuse_remote_spawn(config, node, refusal)
                 return False
-        await self._install_packages(node, name, packages)
+        await self._install_packages(node, name, packages, restoring=restoring)
         return True
 
-    async def _install_packages(self, node: str, agent_name: str, packages: list[str]) -> None:
+    async def _install_packages(
+        self, node: str, agent_name: str, packages: list[str], *, restoring: bool = False
+    ) -> None:
         """Install `packages` on `node` before its agent is spawned.
 
         Best-effort by design. An agent that starts without its packages fails
@@ -759,7 +761,8 @@ class SpawnService:
         # The node's name rather than its credentials: the installer already
         # holds those, and putting them in a message would spread them.
         request = {
-            "action": "node_install",
+            # A restore installs without asking, as on main: see `_packages_placed`.
+            "action": "node_install_restored" if restoring else "node_install",
             "host": address,
             "packages": packages,
             "node_name": node,

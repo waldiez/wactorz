@@ -53,8 +53,8 @@ logger = logging.getLogger(__name__)
 
 #: How long a spawn waits for each package beyond the operator's answer: the
 #: installer's own bound on a pip run, twice, since a package may be retried
-#: under another name. Shorter, and a large download still going would be given
-#: up on and the agent spawned without it.
+#: under another name. A shorter wait would give up on a large download the
+#: installer is still making, and spawn the agent without it.
 PIP_WAIT_PER_PACKAGE_S = 2 * PIP_TIMEOUT_S
 
 
@@ -234,7 +234,12 @@ class SpawnMixin(_Host):
             actor = await self._spawn_llm_agent(config, name)
         elif code:
             actor = await self._spawn_dynamic_agent(
-                config, name, code, blocking_install=blocking_install
+                config,
+                name,
+                code,
+                blocking_install=blocking_install,
+                register=register,
+                restoring=from_registry,
             )
         else:
             logger.warning(
@@ -454,12 +459,24 @@ class SpawnMixin(_Host):
         )
 
     async def _spawn_dynamic_agent(
-        self, config: dict, name: str, code: str, *, blocking_install: bool = False
+        self,
+        config: dict,
+        name: str,
+        code: str,
+        *,
+        blocking_install: bool = False,
+        register: bool = True,
+        restoring: bool = False,
     ) -> Actor | SpawnPlaceholder | None:
         """Spawn a DynamicAgent — sensors, pipelines, tools. If the config
         declares packages that aren't importable yet, either install in the
         background (default) and return a placeholder, or block until installed
         (``blocking_install=True``) and return the real actor.
+
+        ``register`` says whether this spawn saves the config, so a refusal
+        takes back only what it saved. ``restoring`` installs without asking
+        the operator: the config came from the spawn registry, whose packages
+        were cleared when the agent was first placed.
         """
         packages = config.get("install", [])
         if isinstance(packages, str):
@@ -473,7 +490,7 @@ class SpawnMixin(_Host):
         if blocking_install:
             # Pipeline path: the next step may depend on this agent being live.
             logger.info("[%s] Installing %s for '%s' (blocking)…", self.name, needed, name)
-            refusal = await self._install_packages(needed, agent_name=name)
+            refusal = await self._install_packages(needed, agent_name=name, restoring=restoring)
             if refusal:
                 logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
                 return None
@@ -484,11 +501,23 @@ class SpawnMixin(_Host):
             "[%s] Scheduling background install+spawn for '%s': %s", self.name, name, needed
         )
         self.run_detached(
-            self._install_then_spawn(config, name, code, needed), name=f"install-{name}"
+            self._install_then_spawn(
+                config, name, code, needed, registered=register, restoring=restoring
+            ),
+            name=f"install-{name}",
         )
         return SpawnPlaceholder(name)
 
-    async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
+    async def _install_then_spawn(
+        self,
+        config: dict,
+        name: str,
+        code: str,
+        packages: list,
+        *,
+        registered: bool = True,
+        restoring: bool = False,
+    ):
         """Background task: install packages, then spawn, then register.
 
         Emits the same dashboard log frames main historically published so the
@@ -506,12 +535,14 @@ class SpawnMixin(_Host):
                         "timestamp": time.time(),
                     },
                 )
-            refusal = await self._install_packages(packages, agent_name=name)
+            refusal = await self._install_packages(packages, agent_name=name, restoring=restoring)
             if refusal:
                 logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
-                # Saved when the placeholder was returned; restored, it would
-                # ask for the same packages at every start.
-                self._unregister_spawn(name)
+                if registered:
+                    # The entry was saved when the placeholder was returned, and
+                    # a refused agent must not be restored at the next start. An
+                    # entry this spawn did not save belongs to whoever saved it.
+                    self._unregister_spawn(name)
                 if publish is not None:
                     await publish(
                         f"agents/{self.actor_id}/logs",
@@ -610,15 +641,18 @@ class SpawnMixin(_Host):
                 needed.append(pkg)
         return needed
 
-    async def _install_packages(self, packages: list[str], agent_name: str = "?") -> str | None:
+    async def _install_packages(
+        self, packages: list[str], agent_name: str = "?", *, restoring: bool = False
+    ) -> str | None:
         """Install packages by delegating to the 'installer' agent and blocking
-        until it replies, or the operator's answer and every pip run have had
-        their time. No-op when nothing is
-        needed or the registry/installer is unavailable.
+        until it replies, or until the operator's answer and every pip run have
+        had their time. No-op when nothing is needed or the registry or the
+        installer is unavailable.
 
         Returns why the agent must not be spawned: a package the operator did
         not allow. Anything else that goes wrong is logged and the agent is
-        spawned, to report the import it lacks itself.
+        spawned, to report the import it lacks itself. ``restoring`` installs
+        without asking: see `_spawn_dynamic_agent`.
         """
         if not packages or not self._registry:
             return None
@@ -641,9 +675,12 @@ class SpawnMixin(_Host):
             return None
 
         logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-        request = {"action": "install", "packages": needed, "agent": agent_name}
+        action = "install_restored" if restoring else "install"
+        request = {"action": action, "packages": needed, "agent": agent_name}
         try:
-            wait = APPROVAL_TIMEOUT_S + PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
+            # A restore asks nothing, so it waits for pip alone.
+            answer = 0 if restoring else APPROVAL_TIMEOUT_S
+            wait = answer + PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
             result = await ask_through(self, "installer", request, timeout=wait)
         except asyncio.TimeoutError:
             logger.warning(

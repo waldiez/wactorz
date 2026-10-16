@@ -8,12 +8,15 @@ in the registry and being carried home again on a migrate-back. A move that
 saved the wire config instead would look correct and would quietly grow the
 registry with code nobody wrote.
 
-Package installs happen before the spawn, over SSH, through the installer
-agent. The node's address is looked for in three places, and the install is
-allowed to fail: an agent that spawns without its packages reports a real error
-later, whereas one that never spawns because a `pip` call timed out is a silent
-loss. The payload carries the node's name rather than its credentials, so the
-installer resolves the target itself.
+Before anything is sent, the agent's packages are cleared: the node installs
+what the spawn lists, so one the operator did not allow stops the spawn here.
+An agent put back where it ran is not asked about again. The install itself
+then runs over SSH through the installer agent, and is allowed to fail: an
+agent that spawns without its packages reports a real error later, whereas one
+that never spawns because a `pip` call timed out is a silent loss. The node's
+address is looked for in the heartbeat table, the spawn registry and what the
+installer recorded, and the payload carries the node's name rather than its
+credentials, so the installer resolves the target itself.
 """
 
 import asyncio
@@ -314,6 +317,16 @@ class TestInstallingPackagesFirst:
         )
 
         assert main.published_to("/spawn")[0] == "nodes/rpi/spawn"
+
+    async def test_and_installs_without_asking(self) -> None:
+        main = _Main(known_nodes={"rpi": {"host": "h"}}, installer=_Installer())
+
+        await main.actor.spawns._spawn_remote(
+            llm_agent(install=["wactorz-unlisted-probe"]), "rpi", save=False, restoring=True
+        )
+
+        assert not main.cleared
+        assert [payload["action"] for _, _, payload in main.sent] == ["node_install_restored"]
 
     async def test_the_waiting_future_is_always_dropped(self) -> None:
         # It is keyed by a fresh task id each time; keeping them would grow the

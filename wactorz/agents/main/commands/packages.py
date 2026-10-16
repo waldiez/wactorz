@@ -46,7 +46,10 @@ def _forgetting(names: list[str], result: dict) -> list[str]:
     absent = [p for p in names if p not in forgotten and p not in staying]
     lines = []
     if forgotten:
-        lines.append(f"Forgotten: {', '.join(forgotten)}.")
+        lines.append(
+            f"Forgotten: {', '.join(forgotten)}. Agents already saved keep what they were "
+            "placed with; this asks again for agents placed from now on."
+        )
     if staying:
         lines.append(
             f"Still allowed, built in or named in WACTORZ_PIP_ALLOW: {', '.join(staying)}."

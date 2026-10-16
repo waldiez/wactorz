@@ -10,7 +10,10 @@ The yes is the whole control, so it must come from the operator. A press on the
 dashboard reaches the installer from the web server in the same process; an
 answer on the broker topic does not count, because any agent on main can
 publish there and any node can write ``agents/#``. ``/packages allow``, typed on
-a channel only the operator uses, is the other way to say yes.
+a channel only the operator uses, is the other way to say yes. A question
+nobody answers in time is closed and the install refused. An agent being
+restored is not asked about: its packages were cleared when it was placed, and
+nobody may be there to answer.
 """
 
 import asyncio
@@ -217,16 +220,46 @@ class TestAskingTheOperator:
         assert installer.installed == []
         assert result["refused"] == [UNLISTED]
 
-    async def test_a_late_yes_is_still_remembered(
+    async def test_a_question_not_answered_in_time_is_closed(
         self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Left open, a later Install would allow the package for a spawn that
+        # was already refused, and start nothing.
         monkeypatch.setattr(installer_agent, "APPROVAL_TIMEOUT_S", 0.01)
         await installer.ask("install", packages=[UNLISTED])
+        question = installer.question
+
+        closing = [p for t, p in installer.frames if t == answer_topic(installer.agent.actor_id)]
+        assert [(p["id"], p["option"]) for p in closing] == [
+            (question["id"], installer_agent.NO_ANSWER)
+        ]
 
         await installer.agent.dashboard_answer(installer.press(installer_agent.INSTALL))
-        await installer.ask("install", packages=[UNLISTED])
+        assert installer.agent.recall(installer_agent.ALLOWED_KEY, []) == []
 
+    async def test_a_yes_settles_every_question_it_answers(self, installer: _Installer) -> None:
+        # Two spawns waiting for the same package: one Install lets both through.
+        first = installer.install(UNLISTED)
+        await installer.until_asked()
+        first_question = installer.question["id"]
+        installer.asked.clear()
+        second = installer.install(UNLISTED)
+        await installer.until_asked()
+
+        await installer.agent.dashboard_answer(
+            installer.press(installer_agent.INSTALL, question_id=first_question)
+        )
+
+        assert (await first)["success"]
+        assert (await asyncio.wait_for(second, timeout=ASKED_WITHIN_S))["success"]
+
+    async def test_a_restore_installs_without_asking(self, installer: _Installer) -> None:
+        # Its packages were cleared when the agent was first placed.
+        result = await installer.ask("install_restored", packages=[UNLISTED], agent="scraper")
+
+        assert result["success"]
         assert installer.installed == [UNLISTED]
+        assert not installer.asked.is_set()
 
     async def test_allowing_it_by_command_meanwhile_lets_it_through(
         self, installer: _Installer
@@ -293,7 +326,14 @@ class TestWhoMaySayYes:
         assert installer.agent.recall(installer_agent.ALLOWED_KEY, []) == []
 
     @pytest.mark.parametrize(
-        "action", ["packages_allow", "packages_clear", "packages_forget", "packages_list"]
+        "action",
+        [
+            "install_restored",
+            "packages_allow",
+            "packages_clear",
+            "packages_forget",
+            "packages_list",
+        ],
     )
     async def test_only_main_may_change_the_list(self, installer: _Installer, action: str) -> None:
         result = await installer.ask(action, sender="some-agent-id", packages=[UNLISTED])
@@ -302,7 +342,14 @@ class TestWhoMaySayYes:
         assert UNLISTED not in installer.agent.recall(installer_agent.ALLOWED_KEY, [])
 
     @pytest.mark.parametrize(
-        "action", ["packages_allow", "packages_clear", "packages_forget", "packages_list"]
+        "action",
+        [
+            "install_restored",
+            "packages_allow",
+            "packages_clear",
+            "packages_forget",
+            "packages_list",
+        ],
     )
     def test_the_model_may_not_ask_to_change_it(self, action: str) -> None:
         assert action not in MODEL_INSTALLER_ACTIONS
@@ -356,6 +403,36 @@ class TestClearingASpawnForANode:
 
 
 class TestOnANode:
+    async def test_a_restore_installs_without_asking(
+        self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # As on main: cleared when it was placed, and nobody may be there to answer.
+        reached: list[str] = []
+
+        async def _ssh(_payload: dict[str, Any]) -> dict[str, Any]:
+            reached.append("ssh")
+            raise PermissionError("stop here")
+
+        monkeypatch.setattr(installer.agent, "_ssh_kwargs", _ssh)
+        monkeypatch.setattr(installer.agent, "_log_remote", lambda _m: None)
+
+        await installer.ask(
+            "node_install_restored", host="10.0.0.5", node_name="rpi", packages=[UNLISTED]
+        )
+
+        assert reached == ["ssh"]
+        assert not installer.asked.is_set()
+
+    def test_the_model_may_not_send_that(self) -> None:
+        assert "node_install_restored" not in MODEL_INSTALLER_ACTIONS
+
+    async def test_nor_may_an_agent_beside_main(self, installer: _Installer) -> None:
+        result = await installer.ask(
+            "node_install_restored", sender="some-agent-id", host="h", packages=[UNLISTED]
+        )
+
+        assert "only main" in result["error"]
+
     async def test_an_unlisted_package_is_refused_before_ssh(
         self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
     ) -> None:

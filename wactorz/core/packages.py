@@ -19,8 +19,8 @@ import re
 from collections.abc import Iterable
 
 #: How long an install waits for the operator to allow a package not on the
-#: list, in seconds. A yes that comes later is still remembered, so asking again
-#: then succeeds. Whoever waits on an install waits this long on top of pip.
+#: list, in seconds; then the question is closed and the install refused.
+#: Whoever waits on an install waits this long on top of pip.
 APPROVAL_TIMEOUT_S = 120
 
 #: The variable naming further packages that may be installed without asking,

@@ -449,7 +449,7 @@ A package an agent asks for is installed at once only when it is on the list: wh
 |---------|-------------|
 | `/packages` | Show the list: what you allowed, what `WACTORZ_PIP_ALLOW` adds, and what is built in |
 | `/packages allow <name> …` | Allow packages from now on |
-| `/packages forget <name> …` | Take packages you allowed off the list |
+| `/packages forget <name> …` | Take packages you allowed off the list, for agents placed from then on; an agent already saved keeps the packages it was placed with |
 
 ---
 
@@ -1245,7 +1245,7 @@ The installer agent handles these actions for node management:
 | `node_op` | Run a named, read-only operation on a node (`uptime`, `disk`, `memory`, `temperature`, `os`, `network`, `python`, `packages`, `node-log`; see `wactorz.core.node_operations`) |
 | `node_run` | Run a shell command on a node — sent only for `/nodes run`, typed by the operator; refused from a model's `<delegate>` |
 
-`node_install` installs only packages on the list of packages installed without asking, or allowed by the operator when asked on the dashboard; the `packages_allow`, `packages_forget`, `packages_list` and `packages_clear` actions keep that list, and only main may send them.
+`node_install` installs only packages on the list of packages installed without asking, or allowed by the operator when asked on the dashboard; the `packages_allow`, `packages_forget`, `packages_list` and `packages_clear` actions keep that list, and only main may send them. An agent main restores, on main or on a node, is installed with `install_restored` or `node_install_restored`, which ask nothing: its packages were cleared when it was placed. Neither is among the actions the model may send.
 
 Each takes `node_name` or `host`. Only main may ask for any of them: another agent's request is refused, though any agent may ask for a local `install`. **None of them accepts SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
 

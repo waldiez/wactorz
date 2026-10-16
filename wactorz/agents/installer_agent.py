@@ -77,20 +77,35 @@ NOT_YET_IN_USE = ".incoming"
 #: beside it in the process reaches the installer through its mailbox as easily,
 #: and a node's shell is not that agent's to use.
 NODE_ACTIONS = frozenset(
-    {"node_deploy", "node_install", "node_install_for_agent", "node_op", "node_run"}
+    {
+        "node_deploy",
+        "node_install",
+        "node_install_for_agent",
+        "node_install_restored",
+        "node_op",
+        "node_run",
+    }
 )
 
 #: The actions about which packages are installed without asking: the list,
-#: and clearing a spawn's packages before it goes to a node. Only main may ask
-#: for them: an agent that could add to the list could install anything, and
-#: the list is the operator's.
+#: clearing a spawn's packages before it goes to a node, and installing an
+#: agent's packages as it is restored, which asks nothing: they were cleared
+#: when it was first placed, and nobody may be there to answer. Only main may
+#: ask for them: an agent that could add to the list, or install without being
+#: asked about, could install anything, and the list is the operator's.
 PACKAGE_ACTIONS = frozenset(
-    {"packages_allow", "packages_clear", "packages_forget", "packages_list"}
+    {"install_restored", "packages_allow", "packages_clear", "packages_forget", "packages_list"}
 )
 
 #: The choices the operator is offered for a package not on the list.
 INSTALL = "Install"
 REFUSE = "Refuse"
+
+#: The answers a question is closed with when the operator did not pick one:
+#: nobody answered in time, or a yes to another question covered its packages.
+#: Shown as its answer, so its buttons go wherever it is drawn.
+NO_ANSWER = "No answer in time"
+ALLOWED = "Allowed"
 
 #: Where the packages the operator has allowed are kept, as `normalized` names.
 ALLOWED_KEY = "allowed_packages"
@@ -361,6 +376,13 @@ class InstallerAgent(Actor):
                 packages = [p.strip() for p in packages.replace(",", " ").split()]
             return await self._install_packages(packages, self._wanted_by(msg, payload))
 
+        if action == "install_restored":
+            # An agent main is restoring: its packages were cleared when it was placed.
+            packages = payload.get("packages", [])
+            if isinstance(packages, str):
+                packages = packages.replace(",", " ").split()
+            return await self._install_packages(packages, self._wanted_by(msg, payload), ask=False)
+
         if action == "check":
             packages = payload.get("packages", [])
             if isinstance(packages, str):
@@ -388,6 +410,11 @@ class InstallerAgent(Actor):
             # payload: {host, packages, agent_name}; SSH auth comes from the deploy target
             return await self._node_install(payload, self._wanted_by(msg, payload))
 
+        if action == "node_install_restored":
+            # An agent main is putting back on its node: its packages were
+            # cleared when it was placed. Not among the model's actions.
+            return await self._node_install(payload, self._wanted_by(msg, payload), ask=False)
+
         if action == "node_run":
             # A command the operator typed as `/nodes run`, never one the model wrote
             # payload: {node_name or host, command}; SSH auth comes from the deploy target
@@ -410,7 +437,7 @@ class InstallerAgent(Actor):
             return self._not_allowed(refused) if refused else {"success": True}
 
         if action in PACKAGE_ACTIONS:
-            return self._change_the_list(action, payload)
+            return await self._change_the_list(action, payload)
 
         return {"error": f"Unknown action: {action}"}
 
@@ -463,14 +490,39 @@ class InstallerAgent(Actor):
         try:
             await asyncio.wait_for(asyncio.shield(settled), timeout=APPROVAL_TIMEOUT_S)
         except asyncio.TimeoutError:
-            # The question stays open: a later yes is remembered, and asking again then succeeds.
             logger.warning(
                 "[%s] No answer within %gs about installing %s",
                 self.name,
                 APPROVAL_TIMEOUT_S,
                 names,
             )
+            # Closed, so a press that comes later cannot allow a package for a
+            # spawn already refused. The next request for it asks afresh.
+            if self._asking.pop(question_id, None) is not None:
+                await self._close_question(question_id, NO_ANSWER)
         return unlisted(waiting, self._allowed())
+
+    async def _close_question(self, question_id: str, option: str) -> None:
+        """Mark ``question_id`` answered with ``option`` wherever it is shown."""
+        closing = Answer(
+            id=question_id,
+            agent_id=self.actor_id,
+            option=option,
+            index=-1,
+            channel=self.name,
+            timestamp=time.time(),
+        )
+        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
+
+    async def _settle_allowed(self) -> None:
+        """Let through every question whose packages are all allowed now, and close it."""
+        allowed = self._allowed()
+        for question_id, asking in list(self._asking.items()):
+            if not unlisted(asking.packages, allowed):
+                self._asking.pop(question_id)
+                if not asking.settled.done():
+                    asking.settled.set_result(True)
+                await self._close_question(question_id, ALLOWED)
 
     @staticmethod
     def _not_allowed(refused: list[str]) -> dict:
@@ -495,6 +547,8 @@ class InstallerAgent(Actor):
         asking = self._asking.pop(answer.id, None)
         if asking is None:
             return
+        if not asking.settled.done():
+            asking.settled.set_result(answer.option == INSTALL)
         if answer.option == INSTALL:
             self._remember(asking.packages)
             logger.warning(
@@ -502,10 +556,10 @@ class InstallerAgent(Actor):
                 self.name,
                 ", ".join(asking.packages),
             )
-        if not asking.settled.done():
-            asking.settled.set_result(answer.option == INSTALL)
+            # Another spawn waiting for the same packages goes through too.
+            await self._settle_allowed()
 
-    def _change_the_list(self, action: str, payload: dict) -> dict:
+    async def _change_the_list(self, action: str, payload: dict) -> dict:
         """``/packages``: show, add to or take from the operator's list."""
         packages = payload.get("packages", [])
         if isinstance(packages, str):
@@ -517,12 +571,7 @@ class InstallerAgent(Actor):
             self._remember(names)
             logger.warning("[%s] The operator allowed %s", self.name, ", ".join(names))
             # Settle every question this answers, and leave the rest waiting.
-            allowed = self._allowed()
-            for question_id, asking in list(self._asking.items()):
-                if not unlisted(asking.packages, allowed):
-                    self._asking.pop(question_id)
-                    if not asking.settled.done():
-                        asking.settled.set_result(True)
+            await self._settle_allowed()
         forgotten: list[str] = []
         if action == "packages_forget":
             gone = {normalized(p) for p in names}
@@ -538,7 +587,9 @@ class InstallerAgent(Actor):
 
     # ── Core install logic ──────────────────────────────────────────────────
 
-    async def _install_packages(self, packages: list[str], wanted_by: str = "an agent") -> dict:
+    async def _install_packages(
+        self, packages: list[str], wanted_by: str = "an agent", *, ask: bool = True
+    ) -> dict:
         if not packages:
             return {"error": "No packages specified"}
 
@@ -550,7 +601,7 @@ class InstallerAgent(Actor):
                 continue
             if not self._is_installed(PACKAGE_TO_IMPORT.get(pip_name, pip_name)):
                 to_install.append(pip_name)
-        refused = await self._cleared(to_install, wanted_by)
+        refused = await self._cleared(to_install, wanted_by) if ask else []
         if refused:
             return self._not_allowed(refused)
 
@@ -1302,7 +1353,9 @@ class InstallerAgent(Actor):
             name="log",
         )
 
-    async def _node_install(self, payload: dict, wanted_by: str = "an agent") -> dict:
+    async def _node_install(
+        self, payload: dict, wanted_by: str = "an agent", *, ask: bool = True
+    ) -> dict:
         """Install pip packages on a remote node via SSH.
 
         payload keys:
@@ -1325,7 +1378,7 @@ class InstallerAgent(Actor):
             # Refused rather than filtered: installing a subset silently would
             # report success for a request that was not carried out.
             return {"error": f"Not package names: {', '.join(refused)}"}
-        refused = await self._cleared(packages, wanted_by)
+        refused = await self._cleared(packages, wanted_by) if ask else []
         if refused:
             return self._not_allowed(refused)
 

@@ -113,7 +113,7 @@ class _Main:
 
         self.locally_spawned: list[tuple[str, bool, bool]] = []
         self.remotely_spawned: list[tuple[str, str, bool]] = []
-        #: Whether each remote spawn was a putting back, which asks about no packages.
+        #: Whether each remote spawn was a restore, which asks about no packages.
         self.restoring: list[bool] = []
 
         async def _local(config: dict[str, Any], save: bool = True, *, from_registry: bool = False):

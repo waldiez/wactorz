@@ -367,7 +367,7 @@ describe("DashboardChat — target selection", () => {
         expect(dc.chatTarget).toBe("installer");
         expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
 
-        // Answered, it closes again, as an agent that cannot be messaged is.
+        // Answered, its row locks again, as any agent's that cannot be messaged.
         document.dispatchEvent(new CustomEvent("af-answered", { detail: { id: "q1", option: "Refuse" } }));
         expect(row().disabled).toBe(true);
         dc.unwire();

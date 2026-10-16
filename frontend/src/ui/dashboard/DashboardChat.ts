@@ -640,7 +640,7 @@ export class DashboardChat {
         if (this.host.getView() === "chat" && this._msgBelongsHere(answered.message)) {
             this.renderChatThread();
         }
-        // An agent that cannot be messaged closes again once nothing it asked is open.
+        // The row of an agent that cannot be messaged locks again once nothing it asked is open.
         this.renderSidebar();
     }
 

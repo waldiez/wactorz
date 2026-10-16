@@ -38,6 +38,8 @@ describe("questionToast", () => {
         expect(toast.title).toBe("installer");
         expect(toast.message).toContain("Install?");
         expect(toast.actions!.map(a => a.label)).toEqual(["Install", "Refuse"]);
+        // A permission is not to be granted by the button the eye lands on first.
+        expect(toast.actions!.some(a => a.primary)).toBe(false);
     });
 
     it("a button sends the pick as the thread's card does", () => {

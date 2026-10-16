@@ -9,7 +9,9 @@
  * The thread the question is in may be one the user rarely opens, or one that
  * opens only while the question waits (an agent that cannot be messaged, such
  * as the installer asking about a package), so the toast is where it is seen
- * and can be answered. A press sends the pick as the thread's card does.
+ * and can be answered. A press sends the pick as the thread's card does. No
+ * option is drawn as the primary one: the question may be a permission, which
+ * is not to be granted by the button the eye lands on first.
  */
 import type { ChatMessage } from "../types/agent";
 import type { ToastOptions } from "./ToastManager";
@@ -29,7 +31,6 @@ export function questionToast(msg: ChatMessage): ToastOptions | null {
         key: msg.id,
         actions: options.map((option, index) => ({
             label: option,
-            primary: index === 0,
             onClick: () =>
                 emit("af-answer-option", { id: msg.id, agentId: msg.agentId ?? "", option, index }),
         })),

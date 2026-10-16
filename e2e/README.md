@@ -57,6 +57,7 @@ A journey that provokes one of these on purpose says which, with
 | 08 | The broker goes away and comes back: the page says so, and so does an agent that cannot be reached. |
 | 09 | The server restarts: its agents, the node's agents, the conversations and the open tab all carry on. |
 | 10 | Agents are deleted one by one, then everything is wiped: what is left is what a fresh install runs, and the node, still deployed and running nothing. |
+| 11 | Main's model checks the node's disk by a named operation and is refused a command of its own; `/nodes run` runs one; an agent needing a package nobody allowed waits for the operator's answer on a notice, and the installer's thread opens while it asks. |
 
 ## Order
 

@@ -67,6 +67,19 @@ def _starts(words: str, **agent: object) -> str:
     return f"{words}\n<spawn>\n{json.dumps(agent)}\n</spawn>"
 
 
+def _asks(words: str, agent: str, **payload: object) -> str:
+    """A reply from main that asks another agent: what it says, then the block that asks it."""
+    return f"{words}\n<delegate>{json.dumps({'agent': agent, 'payload': payload})}</delegate>"
+
+
+#: A package on no list, and not on any index either: asked about, never installed.
+UNLISTED_PACKAGE = "wactorz-unlisted-probe"
+
+#: A package not on the list that the node already has, as a dependency of
+#: Wactorz: allowed, its install finds it there and needs no network.
+ON_THE_NODE_ALREADY = "psutil"
+
+
 SCRIPT = {
     "say hello": "Hello from the scripted model.",
     "start a greeter": _starts(
@@ -130,6 +143,41 @@ SCRIPT = {
         type="scheduled",
         description="Reminds once",
         schedule={"type": "once", "at": _JUST_NOW},
+    ),
+    # A named operation on the node, the only way the model reaches one.
+    "how full is the disk on the node": _asks(
+        "Checking.",
+        "installer",
+        action="node_op",
+        node_name=NODE_NAME,
+        operation="disk",
+    ),
+    # A command of the model's own for the node, which is refused.
+    "please reboot the node": _asks(
+        "Rebooting it.",
+        "installer",
+        action="node_run",
+        node_name=NODE_NAME,
+        command="sudo reboot",
+    ),
+    "start an agent that needs an unknown package": _starts(
+        "Starting it.",
+        name="prober",
+        type="dynamic",
+        description="Needs a package nobody has allowed",
+        capabilities=["probing"],
+        install=[UNLISTED_PACKAGE],
+        code=COUNTER,
+    ),
+    "start a sampler on the node": _starts(
+        "Starting it there.",
+        name="sampler",
+        type="dynamic",
+        node=NODE_NAME,
+        description="Needs a package the node has and the list does not",
+        capabilities=["sampling"],
+        install=[ON_THE_NODE_ALREADY],
+        code=COUNTER,
     ),
     "start a finisher on the node": _starts(
         "Starting it there.",

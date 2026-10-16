@@ -1,6 +1,6 @@
 """Agents deleted one by one, then everything wiped: a fresh install, its node still there.
 
-Last, because nothing after it has anything to start from.
+Late, because after it only the node is left to start from.
 """
 
 from harness import backend, browser, node, waiting
@@ -73,6 +73,8 @@ def test_wiping_everything_asks_first_and_says_when_it_is_done(
         lambda: "Reset: Wipe everything cleared" in dashboard.notices(),
         what="the page to say everything was cleared",
     )
+    # Every thread starts again from nothing, and so does what has been claimed in it.
+    dashboard.threads_wiped()
 
 
 def test_what_is_left_is_what_a_fresh_install_runs(

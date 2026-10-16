@@ -142,6 +142,13 @@ CONFIRM_MESSAGE = ".af-confirm-message"
 CONFIRM_OK = ".af-confirm-ok"
 CONFIRM_CANCEL = ".af-confirm-cancel"
 TOAST = ".wz-toast"
+QUESTION_TOAST = ".wz-toast:has(.wz-toast__actions)"
+TOAST_TITLE = ".wz-toast__name"
+TOAST_MESSAGE = ".wz-toast__message"
+TOAST_BUTTON = ".wz-toast__btn"
+SIDEBAR_ROW = ".af-chat-agent-row[data-name='{name}']"
+PANE_TITLE = ".af-chat-pane-title"
+THREAD_OPTION = "#af-chat-thread button.af-chat-option"
 
 #: How long an agent is given to say what a scenario expects of it.
 REPLY_TIMEOUT = 60.0
@@ -477,6 +484,11 @@ class Dashboard:
         }
         return {agent: said for agent, said in pending.items() if said}
 
+    def threads_wiped(self) -> Dashboard:
+        """Forget what was claimed: every thread is empty, and counts start again from it."""
+        self._claimed.clear()
+        return self
+
     def all_said(self) -> list[Said]:
         """Every agent message in every thread."""
         return [said for thread in self._every_thread().values() for said in thread]
@@ -532,6 +544,49 @@ class Dashboard:
         thread = self.talking_to
         self._claimed[thread] = self._claimed.get(thread, 0) + 1
         return found
+
+    # ── Questions an agent asks ─────────────────────────────────────────────
+
+    def _question_toast(self, sender: str) -> Locator:
+        return self.page.locator(QUESTION_TOAST).filter(
+            has=self.page.locator(TOAST_TITLE, has_text=sender)
+        )
+
+    def question_from(self, sender: str) -> str:
+        """The question ``sender`` is asking in a notice on screen, or "" when there is none."""
+        notice = self._question_toast(sender)
+        if notice.count() == 0:
+            return ""
+        return notice.first.locator(TOAST_MESSAGE).inner_text().strip()
+
+    def answer_notice(self, sender: str, option: str) -> Dashboard:
+        """Press ``option`` on the notice of ``sender``'s question."""
+        self._question_toast(sender).first.locator(TOAST_BUTTON, has_text=option).click()
+        return self
+
+    def thread_opens(self, agent: str) -> bool:
+        """Whether ``agent``'s row in the chat list can be opened."""
+        self.show("chat")
+        return self.page.locator(SIDEBAR_ROW.format(name=agent)).is_enabled()
+
+    def open_from_list(self, agent: str) -> Dashboard:
+        """Open ``agent``'s thread from the chat list, the way to one that cannot be messaged."""
+        self.show("chat")
+        self.page.locator(SIDEBAR_ROW.format(name=agent)).click()
+        waiting.until(
+            lambda: self.page.locator(PANE_TITLE).inner_text().strip() == f"@{agent}",
+            what=f"{agent!r}'s thread to be on screen",
+        )
+        return self
+
+    def options_in_thread(self) -> list[str]:
+        """The answers the thread on screen offers that can still be pressed."""
+        buttons = self.page.locator(THREAD_OPTION)
+        return [
+            buttons.nth(i).inner_text().strip()
+            for i in range(buttons.count())
+            if buttons.nth(i).is_enabled()
+        ]
 
     # ── What the page complains about ───────────────────────────────────────
 

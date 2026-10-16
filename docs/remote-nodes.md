@@ -322,6 +322,19 @@ direction, so it can neither drive, impersonate nor watch another node;
 `system/`; and whatever else shares the broker, such as `zigbee2mqtt/` or Home
 Assistant's discovery topics.
 
+`agents/#` being open means a node can publish under any agent's topics, and
+a message there does not say who sent it. Main therefore does not take an
+agent's withdrawal, the empty manifest that says it is gone, from that alone:
+one for an agent still running on main is ignored, and one for an agent on a
+node waits for that node's next heartbeat, which only the node can publish,
+and is taken only if the heartbeat no longer lists the agent. A node that has
+gone quiet counts too: the withdrawal waits until it speaks again, or until
+main gives up on it after its grace period, which removes its agents anyway.
+Only for a node main does not know at all, such as one that was down when main
+started, is a withdrawal taken at once. What else a node
+can publish under another agent's topics, such as its manifest or status, is
+taken as given.
+
 Two settings shape the list, both read by whatever writes it (the server, and
 compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
 `broker_accounts`):

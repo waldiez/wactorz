@@ -287,6 +287,16 @@ class NodeManager:
             for agent in info.get("agents", [])
         }
 
+    def last_listed_on(self, name: str) -> str:
+        """The node whose latest heartbeat lists ``name``, recent or not, or "".
+
+        Unlike `running_agent`, a quiet node still answers until main forgets
+        it: what it last said stands until it says something else.
+        """
+        return next(
+            (node for node, info in self.known.items() if name in info.get("agents", [])), ""
+        )
+
     @staticmethod
     def _is_fresh(info: dict[str, Any], now: float) -> bool:
         """Whether a heartbeat is recent enough to count.
@@ -446,6 +456,10 @@ class NodeManager:
             # slow retry, which reports none.
             "slow_retry": _as_names(data.get("slow_retry")),
         }
+        if host := self.host:
+            # After `known` is updated: a held withdrawal is decided by this
+            # heartbeat, not by the one that made it wait.
+            await host.settle_withdrawals(node_name, set(agents))
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)
         await self.follow_signing(node_name, self.known[node_name], before)
@@ -768,6 +782,8 @@ class NodeManager:
             # Drop the node from our tracking. If it comes back, the
             # heartbeat listener will re-add it as a fresh entry.
             self.known.pop(node_name, None)
+            # A withdrawal held for the node's word is decided: it will not speak again.
+            await host.settle_withdrawals(node_name, set())
             if lost:
                 host._queue_notification(
                     {

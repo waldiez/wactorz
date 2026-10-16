@@ -142,46 +142,53 @@ class ManifestRegistry:
         return parts[1] if len(parts) > 1 else ""
 
     async def _forget_agent(self, target_id: str) -> None:
-        """Drop an agent from every table it appears in, and report the loss."""
+        """Drop an agent from every table it appears in, once its loss is accepted.
+
+        The lifecycle decides whether a withdrawal stands; one it refuses or
+        holds leaves the tables as they are, so main goes on offering the
+        agent's capabilities while it still runs.
+        """
         if not target_id:
             return
-        removed = ""
-        for name, manifest in list(self.manifests.items()):
-            if manifest.get("actor_id") == target_id or name == target_id:
-                self.manifests.pop(name, None)
-                removed = name
-                break
-        if not removed:
-            # Nothing in the cache: a withdrawal can arrive before this process
-            # ever saw the manifest it withdraws — after a restart the retained
-            # message is gone, so the tombstone is all there is. The id derives
-            # from the name and nothing else, so the lifecycle can still match
-            # it against the spawn registry.
-            await self._report_withdrawal(target_id)
+        name = next(
+            (
+                n
+                for n, m in self.manifests.items()
+                if m.get("actor_id") == target_id or n == target_id
+            ),
+            "",
+        )
+        # With nothing in the cache — a withdrawal can arrive before this
+        # process ever saw the manifest it withdraws, and after a restart the
+        # retained message is gone — the id is enough: it derives from the name
+        # and nothing else, so the lifecycle can still match it.
+        if not await self._report_withdrawal(target_id, name) or not name:
             return
+        self.manifests.pop(name, None)
         for topic, entries in list(self.topic_registry.items()):
-            kept = [m for m in entries if m.get("name") != removed]
+            kept = [m for m in entries if m.get("name") != name]
             if kept:
                 self.topic_registry[topic] = kept
             else:
                 self.topic_registry.pop(topic, None)
-        self._drop_contract(removed)
-        logger.info("[main] Manifest tombstone — removed %r", removed)
-        await self._report_withdrawal(target_id, removed)
+        self._drop_contract(name)
+        logger.info("[main] Manifest tombstone — removed %r", name)
 
-    async def _report_withdrawal(self, actor_id: str, name: str = "") -> None:
-        """Tell the actor an agent withdrew, so the lifecycle can finish the job.
+    async def _report_withdrawal(self, actor_id: str, name: str = "") -> bool:
+        """Tell the actor an agent withdrew, and whether the withdrawal stands.
 
         The name is passed only when this registry happened to hold a manifest
-        for it; after a restart it will not, and the id is enough.
+        for it; after a restart it will not, and the id is enough. A host that
+        cannot be asked, or fails answering, leaves the withdrawal standing.
         """
         host = self.host
         if host is None:
-            return
+            return True
         try:
-            await host.agent_withdrew(actor_id, name)
+            return await host.agent_withdrew(actor_id, name) is not False
         except Exception as exc:
             logger.warning("[main] Could not act on the withdrawal of %s: %s", actor_id[:8], exc)
+            return True
 
     def _accept_manifest(self, data: dict[str, Any]) -> None:
         """Record a manifest, replacing whatever that agent said before.

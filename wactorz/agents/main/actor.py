@@ -315,9 +315,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         await self.lifecycle._clear_agent_manifest(name, actor_id)
 
-    async def agent_withdrew(self, actor_id: str, name: str = "") -> None:
-        """An agent took its manifest back. Owned by `self.lifecycle`."""
-        await self.lifecycle.agent_withdrew(actor_id, name)
+    async def agent_withdrew(self, actor_id: str, name: str = "") -> bool:
+        """An agent took its manifest back; whether that stands. Owned by `self.lifecycle`."""
+        return await self.lifecycle.agent_withdrew(actor_id, name)
+
+    async def settle_withdrawals(self, node: str, running: set[str]) -> None:
+        """Decide the withdrawals held for ``node``. Owned by `self.lifecycle`."""
+        await self.lifecycle.settle_withdrawals(node, running)
 
     def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         self.lifecycle._record_agent_deletion(name, reason)
@@ -1350,6 +1354,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         target = self._registry.find_by_name(target_name)
         if target:
             await self.send(target.actor_id, command)
+
+    def _node_last_listing(self, name: str) -> str:
+        """The node whose latest heartbeat lists ``name``, recent or not, or ""."""
+        return self.nodes.last_listed_on(name)
 
     def _node_running_agent(self, name: str) -> str:
         """The live remote node running ``name``, or "" if none claims it.

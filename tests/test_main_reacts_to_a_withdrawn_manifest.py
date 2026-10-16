@@ -37,6 +37,10 @@ class Host:
     def _remove_from_spawn_registry(self, name: str) -> None:
         self._spawn_registry.pop(name, None)
 
+    def _node_last_listing(self, _name: str) -> str:
+        # No node reports any agent: every withdrawal here is one that stands.
+        return ""
+
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:

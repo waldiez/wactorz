@@ -35,7 +35,9 @@ def detect(reading: dict) -> dict | None:
 `detect` is still a function: call it in a test, import it elsewhere. As an
 agent it is called once per message on `sensors/imu/#` with the decoded
 payload, and once per task sent to it by chat or by another agent. What it
-returns is published to `anomalies/imu`; `None` publishes nothing. A plain
+returns is published to `anomalies/imu`; `None` publishes nothing. A task's
+payload is untrusted input: on a node, any node on the broker may send one by
+name, so check what the function acts on. A plain
 function runs on a worker thread, so a slow model never holds the event loop
 every other agent shares; a coroutine function runs on the loop.
 

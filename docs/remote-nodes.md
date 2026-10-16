@@ -331,9 +331,14 @@ and is taken only if the heartbeat no longer lists the agent. A node that has
 gone quiet counts too: the withdrawal waits until it speaks again, or until
 main gives up on it after its grace period, which removes its agents anyway.
 Only for a node main does not know at all, such as one that was down when main
-started, is a withdrawal taken at once. What else a node
-can publish under another agent's topics, such as its manifest or status, is
-taken as given.
+started, is a withdrawal taken at once. What else a node can publish under
+another agent's topics, such as its manifest or status, is taken as given.
+
+That includes tasks. A task on `agents/by-name/<name>/task` reaches the agent of
+that name on whichever node runs it, and any node may publish one, so an agent
+on a node is asked by whoever publishes there, another node included. Its
+`handle_task` should treat the payload as untrusted input, as it would text from
+the web: check what it acts on, and never run or install what a task names.
 
 Two settings shape the list, both read by whatever writes it (the server, and
 compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
@@ -519,7 +524,7 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |
 | `agents/{id}/logs` | ← agent | Log messages from `agent.log()` and `agent.alert()`. |
-| `agents/by-name/{name}/task` | → agent | Task addressed to a named agent on any node. Runner routes to local agents by name. |
+| `agents/by-name/{name}/task` | → agent | Task addressed to a named agent on any node. Runner routes to local agents by name. Any node may publish one, so its payload is untrusted input. |
 
 
 ### Why a repair travels in two steps

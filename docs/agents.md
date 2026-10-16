@@ -429,6 +429,8 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `async def process(agent)` | Every `poll_interval` seconds | For periodic work. Timeout: 120s per call. Only started after `setup()` returns (or immediately if no setup). |
 | `async def handle_task(agent, payload)` | On every inbound TASK message | Must return a dict. Timeout: 60s per call. Used for command/response interactions. |
 
+> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
+
 #### Agent API (`agent` object inside generated code)
 
 | Method | Sync/Async | Description |

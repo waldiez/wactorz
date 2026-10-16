@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import PATIENCE_S, until
 from wactorz.agents.dynamic import DynamicAgent
 from wactorz.agents.function_agent import agent, spec_of
 from wactorz.core.actor import Actor
@@ -182,18 +183,26 @@ class TestWaitingAgain:
 
 class TestWhenNobodyAnswers:
     async def test_a_chat_channel_question_is_shown_again_on_the_dashboard(
-        self, wired: Wired
+        self, wired: Wired, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Only the chat channel's wait gives up, and at once: the dashboard's then
+        # waits for as long as the answer takes, so a slow runner cannot make it late.
+        real_wait = wired.actor.wait_for_answer
+        waits: list[float | None] = []
+
+        async def _wait(question_id: str, *, timeout: float | None = None) -> str:
+            waits.append(timeout)
+            if len(waits) == 1:
+                raise asyncio.TimeoutError
+            return await real_wait(question_id, timeout=None)
+
+        monkeypatch.setattr(wired.actor, "wait_for_answer", _wait)
         asking = asyncio.create_task(
             wired.actor.ask_operator(
-                "Changed?", options=["yes", "no"], channel="telegram", user="42", timeout=0.05
+                "Changed?", options=["yes", "no"], channel="telegram", user="42", timeout=60
             )
         )
-        await wired.settle()
-        for _ in range(100):
-            if len(wired.chat_frames) == 2:
-                break
-            await asyncio.sleep(0.01)
+        await until(lambda: len(wired.chat_frames) == 2, "the question shown again")
         first, again = wired.chat_frames
         assert again["id"] == first["id"]
         assert again["content"].startswith("Still waiting for an answer (asked on telegram)")
@@ -203,7 +212,9 @@ class TestWhenNobodyAnswers:
         assert question.fallen_back
 
         await wired.answer("yes", channel="dashboard")
-        assert await asking == "yes"
+        assert await asyncio.wait_for(asking, timeout=PATIENCE_S) == "yes"
+        # Both waits were for the time the caller gave.
+        assert waits == [60, 60]
 
     async def test_then_the_wait_is_given_up_and_the_question_stays_open(
         self, wired: Wired, monkeypatch: pytest.MonkeyPatch

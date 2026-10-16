@@ -355,11 +355,39 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Route interface tasks through the full orchestrator without blocking replies."""
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         if payload.get("_via_interface"):
+            if not self._speaks_for_a_person(msg):
+                logger.warning(
+                    "[%s] Refused a person's turn from %s: not an interface main trusts",
+                    self.name,
+                    msg.sender_id,
+                )
+                await self._reply_to_task(
+                    msg,
+                    {
+                        "error": "only an interface main trusts may pass on a person's message; "
+                        "send the task without _via_interface to have it answered"
+                    },
+                )
+                return
             self.run_detached(
                 self._handle_interface_request(payload, msg), name="interface-request"
             )
             return
         await super()._handle_task(msg)
+
+    def _speaks_for_a_person(self, msg: Message) -> bool:
+        """Whether ``msg``'s sender may hand main a person's turn (``_via_interface``).
+
+        That turn runs slash commands and acts on the spawn and delegate blocks
+        in the reply, as a message the operator typed does, so it is taken only
+        from a catalogue agent in this process still running the catalogue's
+        own program: one the project wrote. Code the model wrote, a catalogue
+        agent running a repair, and an agent the model configured, such as a
+        rule whose task action sends a body of its choosing, could otherwise
+        type ``/nodes run`` or ``/packages allow`` as the operator.
+        """
+        sender = self._registry.get(msg.sender_id) if self._registry else None
+        return getattr(sender, "_trusted", False) is True
 
     async def _handle_interface_request(self, payload: dict[str, Any], msg: Message) -> None:
         """Process one interface turn and reply on its correlation address."""

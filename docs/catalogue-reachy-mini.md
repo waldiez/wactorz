@@ -190,7 +190,12 @@ Use the explicit `ask Wactorz` prefix in chat to bypass Reachy's local robot pla
 
 The prefix forwards the remaining text to main with `_via_interface=True`, so it uses
 the same intent routing, agents, tools, and Home Assistant actuator path as normal
-Wactorz chat. The final text is returned to chat and spoken through Reachy's speaker.
+Wactorz chat, slash commands included. Main takes that only from a catalogue agent
+running the catalogue's own program, as this one does: from an agent the model wrote,
+or from this one once it runs a repair of its program, it answers with an error, since
+the turn would let that code type commands as you. `ask Wactorz` needs the agent on
+main: from a node it has no route there, since main does not take tasks from nodes, and
+Reachy answers from its own commands instead. The final text is returned to chat and spoken through Reachy's speaker.
 Without the prefix, Reachy handles its own robot, camera, speech, microphone, and
 Home Assistant commands first; unhandled text can still fall through to main, but
 `ask Wactorz` is the deterministic interface route.

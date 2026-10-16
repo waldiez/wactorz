@@ -142,7 +142,9 @@ async def run_listener(
     async def _publish(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
         run.published.append((topic, payload))
 
-    async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+    async def _spawn_remote(
+        cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+    ) -> None:
         run.spawned_remote.append((cfg, node))
 
     setattr(main, "_mqtt_publish", _publish)

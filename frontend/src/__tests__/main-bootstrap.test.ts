@@ -110,7 +110,7 @@ vi.mock("../agents/AgentStore", () => ({
 }));
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
-vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 
 describe("main.ts bootstrap", () => {
@@ -275,6 +275,26 @@ describe("main.ts bootstrap", () => {
         }
         expect(mockSent).toEqual([{ type: "answer", agent_id: "a", id: "q1", option: "yes", index: 0 }]);
         expect(answered).toEqual([{ id: "q1", option: "yes" }]);
+    });
+
+    it("a question stays up as a toast with its options, until it is answered", () => {
+        vi.mocked(toast.show).mockClear();
+        vi.mocked(toast.close).mockClear();
+        routerHandler("chat")({
+            id: "q2",
+            from: "installer",
+            to: "user",
+            content: "Install?",
+            timestampMs: 1,
+            agentId: "i",
+            options: ["Install", "Refuse"],
+        });
+        const shown = vi.mocked(toast.show).mock.calls[0]![0];
+        expect(shown.sticky).toBe(true);
+        expect(shown.actions!.map(a => a.label)).toEqual(["Install", "Refuse"]);
+
+        routerHandler("answer")({ id: "q2", agentId: "i", option: "Refuse", index: 1, channel: "dashboard" });
+        expect(toast.close).toHaveBeenCalledWith("q2");
     });
 
     it("handles the app-event listeners", () => {

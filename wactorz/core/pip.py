@@ -44,6 +44,24 @@ def is_installable_name(package: str) -> bool:
     return bool(candidate) and _PACKAGE_NAME.fullmatch(candidate) is not None
 
 
+#: How long one pip run of the installer's may take, in seconds.
+PIP_TIMEOUT_S = 180
+
+#: The variable naming the package index every install uses, such as a private
+#: mirror. Unset, pip uses its own default.
+INDEX_URL_ENV = "WACTORZ_PIP_INDEX_URL"
+
+
+def index_args() -> list[str]:
+    """``--index-url`` and the configured index, or nothing when none is configured.
+
+    The value is the operator's, from this machine's environment; a package
+    list never carries one, which is what `is_installable_name` is for.
+    """
+    url = os.environ.get(INDEX_URL_ENV, "").strip()
+    return ["--index-url", url] if url else []
+
+
 def is_root() -> bool:
     """Whether this process may write where the system package manager keeps its files.
 
@@ -97,6 +115,7 @@ def install_command(packages: Sequence[str]) -> tuple[list[str], dict[str, str]]
         "install",
         "--disable-pip-version-check",
         "--no-input",
+        *index_args(),
     ]
     env: dict[str, str] = {}
     if not in_virtualenv():

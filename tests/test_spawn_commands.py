@@ -275,7 +275,9 @@ class TestChoosingLocalOrRemote:
         async def _local(cfg: dict[str, Any], register: bool = True, **_kw: Any) -> None:
             local.append((cfg, register))
 
-        async def _remote(cfg: dict[str, Any], node: str, save: bool) -> None:
+        async def _remote(
+            cfg: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+        ) -> None:
             remote.append((cfg, node, save))
 
         setattr(main, "_spawn_local_from_config", _local)

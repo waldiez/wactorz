@@ -87,6 +87,9 @@ class _Registry:
     def find_by_name(self, name: str) -> Any:
         return self.main if name == "main" else None
 
+    def get(self, _actor_id: str) -> Any:
+        return None
+
 
 @pytest.fixture(name="installer")
 def installer_fixture(tmp_path: Path) -> InstallerAgent:
@@ -143,9 +146,9 @@ class TestDispatch:
             reached.append((name, payload))
             return {}
 
-        monkeypatch.setattr(installer, "_install_packages", lambda p: _async("install", p))
+        monkeypatch.setattr(installer, "_install_packages", lambda p, _w: _async("install", p))
         monkeypatch.setattr(
-            installer, "_node_install", lambda p: _async("node_install", p["action"])
+            installer, "_node_install", lambda p, _w: _async("node_install", p["action"])
         )
         monkeypatch.setattr(installer, "_node_deploy", lambda p: _async("node_deploy", None))
         monkeypatch.setattr(installer, "_node_run", lambda p: _async("node_run", None))
@@ -242,6 +245,7 @@ class TestLocalInstall:
     async def test_each_package_is_reported_on_its_own(
         self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("WACTORZ_PIP_ALLOW", "broken-pkg")
         ran = _pip(installer, monkeypatch, installed={"PIL"}, failing={"broken-pkg"})
 
         result = await installer._install_packages(
@@ -298,6 +302,22 @@ class TestLocalInstall:
             "install",
             "requests",
         ]
+
+    async def test_pip_uses_the_configured_index(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_PIP_INDEX_URL", "https://mirror.example/simple")
+        commands: list[list[str]] = []
+
+        def _run(cmd: list[str], **_kwargs: Any) -> Any:
+            commands.append(cmd)
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+
+        await installer._pip_install("requests")
+
+        assert commands[0][4:7] == ["--index-url", "https://mirror.example/simple", "requests"]
 
     @pytest.mark.parametrize(
         ("error", "message"),
@@ -385,15 +405,27 @@ class TestNodeInstall:
         assert "python3 -m venv ~/wactorz/venv" in conn.commands[1]
         assert conn.commands[-1].startswith("~/wactorz/venv/bin/pip install numpy")
 
-    async def test_without_a_venv_it_falls_back_to_system_pip_and_reports_failure(
+    async def test_the_configured_index_is_the_one_used(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_PIP_INDEX_URL", "https://mirror.example/simple")
+        conn.answers = {"test -f": (True, "yes")}
+
+        await installer._node_install({"host": "rpi", "packages": ["numpy"]})
+
+        assert "--index-url https://mirror.example/simple numpy" in conn.commands[-1]
+
+    async def test_without_a_venv_it_installs_nothing_rather_than_into_the_system(
         self, installer: InstallerAgent, conn: _Conn
     ) -> None:
-        conn.answers = {"test -f": (True, "no"), "python3 -m pip": (False, "externally managed")}
+        # What an agent asked for would otherwise be installed for everything on the node.
+        conn.answers = {"test -f": (True, "no")}
 
         result = await installer._node_install({"host": "rpi", "packages": ["numpy"]})
 
-        assert "--break-system-packages" in conn.commands[-1]
-        assert result == {"success": False, "host": "rpi", "error": "externally managed"}
+        assert not [c for c in conn.commands if "pip install" in c]
+        assert result["success"] is False
+        assert "No virtualenv at ~/wactorz/venv on rpi" in result["error"]
 
     async def test_a_connection_that_fails_is_reported(
         self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
@@ -1259,7 +1291,7 @@ class TestWhoMayAskForANode:
     async def test_a_local_install_is_still_anyones(
         self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def _install(packages: list[str]) -> dict[str, Any]:
+        async def _install(packages: list[str], _wanted_by: str) -> dict[str, Any]:
             return {"installed": packages}
 
         monkeypatch.setattr(installer, "_install_packages", _install)

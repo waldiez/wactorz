@@ -349,7 +349,8 @@ class Migration:
         """``config`` as ``target_node`` will be sent it, and why it cannot be, or None.
 
         A library agent's code goes as the bundle main makes from its own copy,
-        and every model the agent names is pinned. Done before the agent stops
+        every model the agent names is pinned, and the packages it installs are
+        cleared, which may ask the operator. Done before the agent stops
         wherever it is: a node handed a config with no program starts an empty
         agent and confirms it, and a model that is not stored would otherwise be
         found by the spawn, with the agent running nowhere.
@@ -363,6 +364,15 @@ class Migration:
         unrunnable = problem or why_a_node_cannot_run(config, targets)
         if unrunnable:
             return config, unrunnable
+        packages = config.get("install") or []
+        if isinstance(packages, str):
+            packages = packages.replace(",", " ").split()
+        if packages:
+            refusal = await self.host.spawns._packages_cleared(
+                str(config.get("name", "")), packages
+            )
+            if refusal:
+                return config, refusal
         return await self.host.spawns.pinned_for(config, target_node)
 
     def _registry_config(
@@ -533,7 +543,7 @@ class Migration:
         restored = {k: v for k, v in cfg.items() if k not in ("_initial_state", "replace")}
         restored["name"] = agent_name
         restored["node"] = from_node
-        await self.host._spawn_remote(restored, from_node, save=True)
+        await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
         self._announce(
             f"Migration of '{agent_name}' from '{from_node}' failed: {reason}. "
             f"It is running on '{from_node}' again.",
@@ -831,7 +841,7 @@ class Migration:
         else:
             restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
             restored["node"] = from_node
-            await self.host._spawn_remote(restored, from_node, save=True)
+            await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
         self._announce(
             f"Migration of '{agent_name}' to '{target_node}' failed"
             + (f": {refused}" if refused else "")
@@ -907,7 +917,7 @@ class Migration:
             )
             restored = dict(config)
             restored["node"] = from_node
-            await self.host._spawn_remote(restored, from_node, save=True)
+            await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
             self._announce(
                 f"'{agent_name}' did not come back from '{from_node}' — "
                 f"it has been restarted there.",

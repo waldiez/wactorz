@@ -1047,8 +1047,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
         return self.spawns._inject_llm_bridge_code(config)
 
-    async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
-        await self.spawns._spawn_remote(config, node, save)
+    async def _spawn_remote(
+        self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+    ) -> None:
+        await self.spawns._spawn_remote(config, node, save, restoring=restoring)
 
     def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
         """Sign whatever main addresses to a node's control topics.

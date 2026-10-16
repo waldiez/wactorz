@@ -514,6 +514,9 @@ duckduckgo_search, httpx, etc.), first ask the installer to install them:
 
 If the spawn config has an "install" list, the system will install those packages first automatically.
 Standard library and pre-installed packages (asyncio, json, os, time, re, psutil) never need installing.
+Name the real, well-known package. One the operator has not allowed is asked about on the dashboard
+before anything installs it, and the agent is not started if they refuse; tell the user so when
+you list a package that is not widely used. Only the operator changes that list, with /packages.
 
 == MODELS (ARTIFACTS) ==
 Trained models and other large files are kept on main by name and version, and listed

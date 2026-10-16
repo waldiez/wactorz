@@ -10,7 +10,7 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import { canDirectMessage, messageableNames } from "./agentState";
+import { askingAgents, canDirectMessage, canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
@@ -265,12 +265,12 @@ export class DashboardChat {
         const sorted = this.host
             .sortedAgents()
             .filter(a => !this.sidebarFilter || a.name.toLowerCase().includes(this.sidebarFilter));
-        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name));
+        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this.chatMessages);
     }
 
     private _selectAgent(name: string): void {
         const latest = [...this.host.agents.values()].find(a => a.name === name);
-        if (!latest || !canDirectMessage(latest)) {
+        if (!latest || !canOpenThread(latest, askingAgents(this.chatMessages))) {
             return;
         }
         this.setTarget(name);
@@ -640,6 +640,8 @@ export class DashboardChat {
         if (this.host.getView() === "chat" && this._msgBelongsHere(answered.message)) {
             this.renderChatThread();
         }
+        // The row of an agent that cannot be messaged locks again once nothing it asked is open.
+        this.renderSidebar();
     }
 
     private _wireChatEvents(): void {
@@ -659,6 +661,8 @@ export class DashboardChat {
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
                 this._showSentMessage(stored, Boolean(voiceTarget));
             }
+            // A question may open a thread the sidebar keeps closed otherwise.
+            this.renderSidebar();
         });
 
         // Marked at the press, not at the broker's echo, so a second press cannot answer twice.

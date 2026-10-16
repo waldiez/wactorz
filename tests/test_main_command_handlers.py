@@ -21,6 +21,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands import info, state
 from wactorz.agents.main.commands import nodes as node_cmds
+from wactorz.agents.main.commands import packages as package_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
 from wactorz.config import CONFIG
@@ -879,3 +880,91 @@ class TestRunningACommandOnANode:
 
         assert text.startswith("Usage: /nodes run")
         assert main.calls == []
+
+
+class TestThePackagesInstalledWithoutAsking:
+    """`/packages`: the operator's list, which neither the model nor an agent may change."""
+
+    async def test_allowing_names_the_packages(self, main: _Main) -> None:
+        main.installer_result = {"allowed": ["wactorz-unlisted-probe"], "refused": []}
+
+        text = await package_cmds.manage_packages(_ctx(main), "allow wactorz-unlisted-probe, other")
+
+        assert main.calls == [
+            (
+                "installer",
+                {"action": "packages_allow", "packages": ["wactorz-unlisted-probe", "other"]},
+            )
+        ]
+        assert "wactorz-unlisted-probe" in text
+
+    async def test_a_name_that_is_not_one_is_said_to_be_refused(self, main: _Main) -> None:
+        main.installer_result = {"allowed": [], "refused": ["--index-url=x"]}
+
+        text = await package_cmds.manage_packages(_ctx(main), "allow --index-url=x")
+
+        assert "Not package names: --index-url=x" in text
+
+    async def test_forgetting_takes_them_off(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": [],
+            "forgotten": ["wactorz-unlisted-probe"],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget wactorz-unlisted-probe")
+
+        assert main.calls == [
+            ("installer", {"action": "packages_forget", "packages": ["wactorz-unlisted-probe"]})
+        ]
+        assert "Forgotten: wactorz-unlisted-probe." in text
+
+    async def test_forgetting_says_what_was_taken_off_and_what_was_never_on(
+        self, main: _Main
+    ) -> None:
+        # A misspelt name forgets nothing, and saying it was forgotten would hide the typo.
+        main.installer_result = {
+            "allowed": ["wactorz-unlisted-probe"],
+            "forgotten": [],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget wactorz-ulisted-probe")
+
+        assert "Forgotten" not in text
+        assert "Not on your list: wactorz-ulisted-probe" in text
+
+    async def test_forgetting_a_built_in_one_says_it_stays(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": [],
+            "forgotten": [],
+            "refused": [],
+            "default": ["numpy"],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget NumPy")
+
+        assert "Still allowed, built in or named in WACTORZ_PIP_ALLOW: NumPy" in text
+
+    async def test_with_nothing_after_it_the_list_is_shown(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": ["wactorz-unlisted-probe"],
+            "from_env": ["internal-lib"],
+            "default": ["numpy"],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "")
+
+        assert main.calls == [("installer", {"action": "packages_list"})]
+        assert "wactorz-unlisted-probe" in text and "internal-lib" in text and "numpy" in text
+
+    @pytest.mark.parametrize("argument", ["allow", "forget  ", "remove wactorz-unlisted-probe"])
+    async def test_anything_else_says_how(self, main: _Main, argument: str) -> None:
+        text = await package_cmds.manage_packages(_ctx(main), argument)
+
+        assert text.startswith("Usage: /packages")
+        assert main.calls == []
+
+    def test_a_social_channel_may_not_use_it(self) -> None:
+        assert package_cmds.manage_packages.command.restricted_ok is False  # pyright: ignore[reportFunctionMemberAccess]

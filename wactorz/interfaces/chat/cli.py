@@ -398,6 +398,11 @@ class CLIInterface:
                             print("[error] " + deploy_target_help(node) + "\n")
                             continue
                         host = pkg_target.host or node
+                        # Typed here, so allowed here: the installer would
+                        # otherwise ask on the dashboard about what was just typed.
+                        await self.agent.delegate_to_installer(
+                            {"action": "packages_allow", "packages": packages}, timeout=10.0
+                        )
                         print(f"  Installing {packages} on {host}...")
                         result = await self.agent.delegate_to_installer(
                             {

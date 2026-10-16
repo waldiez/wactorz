@@ -66,6 +66,11 @@ export function sendBlockedReason(agents: AgentInfo[], target: string): string |
         // where "start it" would be wrong: there is nothing left to start.
         return `@${target} is no longer available.`;
     }
+    if (!canDirectMessage(chosen)) {
+        // Its thread is open only for a question it asked; text sent to it
+        // would be read as a task by an agent that takes none from people.
+        return `@${target} can't be messaged — answer its question with the buttons.`;
+    }
     return isReachable(chosen) ? null : `@${target} isn't running — start it and try again.`;
 }
 

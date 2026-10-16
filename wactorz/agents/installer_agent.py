@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -42,8 +43,18 @@ from ..core.node_operations import (
     command_for,
 )
 from ..core.node_signing import next_sequence, node_key
+from ..core.outbound import Answer
+from ..core.packages import (
+    APPROVAL_TIMEOUT_S,
+    DEFAULT_ALLOWED,
+    IMPORT_TO_PACKAGE,
+    PACKAGE_TO_IMPORT,
+    allowed_by_env,
+    normalized,
+    unlisted,
+)
 from ..core.paths import resolve_state_dir
-from ..core.pip import is_installable_name
+from ..core.pip import PIP_TIMEOUT_S, index_args, is_installable_name
 from . import node_service
 from .lookup import find_main_actor
 
@@ -66,8 +77,38 @@ NOT_YET_IN_USE = ".incoming"
 #: beside it in the process reaches the installer through its mailbox as easily,
 #: and a node's shell is not that agent's to use.
 NODE_ACTIONS = frozenset(
-    {"node_deploy", "node_install", "node_install_for_agent", "node_op", "node_run"}
+    {
+        "node_deploy",
+        "node_install",
+        "node_install_for_agent",
+        "node_install_restored",
+        "node_op",
+        "node_run",
+    }
 )
+
+#: The actions about which packages are installed without asking: the list,
+#: clearing a spawn's packages before it goes to a node, and installing an
+#: agent's packages as it is restored, which asks nothing: they were cleared
+#: when it was first placed, and nobody may be there to answer. Only main may
+#: ask for them: an agent that could add to the list, or install without being
+#: asked about, could install anything, and the list is the operator's.
+PACKAGE_ACTIONS = frozenset(
+    {"install_restored", "packages_allow", "packages_clear", "packages_forget", "packages_list"}
+)
+
+#: The choices the operator is offered for a package not on the list.
+INSTALL = "Install"
+REFUSE = "Refuse"
+
+#: The answers a question is closed with when the operator did not pick one:
+#: nobody answered in time, or a yes to another question covered its packages.
+#: Shown as its answer, so its buttons go wherever it is drawn.
+NO_ANSWER = "No answer in time"
+ALLOWED = "Allowed"
+
+#: Where the packages the operator has allowed are kept, as `normalized` names.
+ALLOWED_KEY = "allowed_packages"
 
 #: How long the node's TLS check waits for the broker, in seconds.
 TLS_CHECK_TIMEOUT_S = 5
@@ -255,61 +296,12 @@ def known_hosts_address(host: str) -> str:
         return host
 
 
-# pip package name → importable module name
+@dataclass
+class _Asking:
+    """A question about packages, waiting for the operator."""
 
-
-PACKAGE_TO_IMPORT = {
-    "opencv-python": "cv2",
-    "pillow": "PIL",
-    "scikit-learn": "sklearn",
-    "beautifulsoup4": "bs4",
-    "pymupdf": "fitz",
-    "python-docx": "docx",
-    "python-pptx": "pptx",
-    "pdfplumber": "pdfplumber",
-    "httpx": "httpx",
-    "requests": "requests",
-    "numpy": "numpy",
-    "pandas": "pandas",
-    "torch": "torch",
-    "transformers": "transformers",
-    "ultralytics": "ultralytics",
-    "pyserial": "serial",
-    "duckduckgo-search": "duckduckgo_search",
-    "ddgs": "duckduckgo_search",
-    "asyncssh": "asyncssh",
-    "rich": "rich",
-    "tqdm": "tqdm",
-    "lxml": "lxml",
-    "aiohttp": "aiohttp",
-}
-
-# importable module name → pip package name (for when user gives import names)
-IMPORT_TO_PACKAGE = {
-    "cv2": "opencv-python",
-    "PIL": "pillow",
-    "sklearn": "scikit-learn",
-    "bs4": "beautifulsoup4",
-    "fitz": "pymupdf",
-    "docx": "python-docx",
-    "pptx": "python-pptx",
-    "pdfplumber": "pdfplumber",
-    "httpx": "httpx",
-    "requests": "requests",
-    "numpy": "numpy",
-    "pandas": "pandas",
-    "torch": "torch",
-    "transformers": "transformers",
-    "ultralytics": "ultralytics",
-    "serial": "pyserial",
-    "duckduckgo_search": "duckduckgo-search",
-    "ddgs": "duckduckgo-search",
-    "asyncssh": "asyncssh",
-    "rich": "rich",
-    "tqdm": "tqdm",
-    "lxml": "lxml",
-    "aiohttp": "aiohttp",
-}
+    packages: tuple[str, ...]
+    settled: "asyncio.Future[bool]"
 
 
 class InstallerAgent(Actor):
@@ -328,6 +320,8 @@ class InstallerAgent(Actor):
         #: When the current deploy began: a heartbeat older than this belongs to
         #: whatever ran on the node before it.
         self._deploy_started_at = 0.0
+        #: The questions about packages still waiting for the operator, by id.
+        self._asking: dict[str, _Asking] = {}
 
     def _current_task_description(self) -> str:
         return "idle"
@@ -370,12 +364,24 @@ class InstallerAgent(Actor):
                 "[%s] Refused %r from %s: only main may ask", self.name, action, msg.sender_id
             )
             return {"error": f"'{action}' reaches a node over SSH, and only main may ask for it"}
+        if action in PACKAGE_ACTIONS and not self._asked_by_main(msg):
+            logger.warning(
+                "[%s] Refused %r from %s: only main may ask", self.name, action, msg.sender_id
+            )
+            return {"error": f"'{action}' is the operator's list, and only main may ask for it"}
 
         if action == "install":
             packages = payload.get("packages", [])
             if isinstance(packages, str):
                 packages = [p.strip() for p in packages.replace(",", " ").split()]
-            return await self._install_packages(packages)
+            return await self._install_packages(packages, self._wanted_by(msg, payload))
+
+        if action == "install_restored":
+            # An agent main is restoring: its packages were cleared when it was placed.
+            packages = payload.get("packages", [])
+            if isinstance(packages, str):
+                packages = packages.replace(",", " ").split()
+            return await self._install_packages(packages, self._wanted_by(msg, payload), ask=False)
 
         if action == "check":
             packages = payload.get("packages", [])
@@ -392,7 +398,7 @@ class InstallerAgent(Actor):
         if action == "node_install":
             # Install packages on a remote node via SSH
             # payload: {host, packages}; SSH auth comes from the deploy target
-            return await self._node_install(payload)
+            return await self._node_install(payload, self._wanted_by(msg, payload))
 
         if action == "node_deploy":
             # Full bootstrap: install wactorz on the node + start it as one
@@ -402,7 +408,12 @@ class InstallerAgent(Actor):
         if action == "node_install_for_agent":
             # Install packages needed by a specific agent on its remote node
             # payload: {host, packages, agent_name}; SSH auth comes from the deploy target
-            return await self._node_install(payload)
+            return await self._node_install(payload, self._wanted_by(msg, payload))
+
+        if action == "node_install_restored":
+            # An agent main is putting back on its node: its packages were
+            # cleared when it was placed. Not among the model's actions.
+            return await self._node_install(payload, self._wanted_by(msg, payload), ask=False)
 
         if action == "node_run":
             # A command the operator typed as `/nodes run`, never one the model wrote
@@ -414,13 +425,185 @@ class InstallerAgent(Actor):
             # payload: {node_name or host, operation, params}
             return await self._node_op(payload)
 
+        if action == "packages_clear":
+            # A spawn bound for a node, cleared before it is sent; payload: {packages, agent}
+            packages = payload.get("packages", [])
+            if isinstance(packages, str):
+                packages = packages.replace(",", " ").split()
+            not_names = [p for p in packages if not is_installable_name(str(p))]
+            if not_names:
+                return {"error": f"Not package names: {', '.join(map(str, not_names))}"}
+            refused = await self._cleared(list(packages), self._wanted_by(msg, payload))
+            return self._not_allowed(refused) if refused else {"success": True}
+
+        if action in PACKAGE_ACTIONS:
+            return await self._change_the_list(action, payload)
+
         return {"error": f"Unknown action: {action}"}
+
+    # ── Packages installed without asking ───────────────────────────────────
+
+    def _allowed(self) -> frozenset[str]:
+        """Every package that may be installed without asking, as `normalized` names."""
+        return DEFAULT_ALLOWED | allowed_by_env() | frozenset(self._remembered())
+
+    def _remembered(self) -> list[str]:
+        """The packages the operator has allowed, as `normalized` names."""
+        return [str(name) for name in self.recall(ALLOWED_KEY, [])]
+
+    def _remember(self, packages: Iterable[str]) -> None:
+        names = {normalized(p) for p in packages} | set(self._remembered())
+        self.persist(ALLOWED_KEY, sorted(filter(None, names)))
+
+    def _wanted_by(self, msg: Message, payload: dict) -> str:
+        """Who an install is for, as the operator is told: the agent, or who asked."""
+        agent = str(payload.get("agent") or payload.get("agent_name") or "").strip()
+        if agent:
+            return repr(agent)
+        sender = self._registry.get(msg.sender_id) if self._registry else None
+        return repr(sender.name) if sender is not None else "an agent"
+
+    async def _cleared(self, packages: list[str], wanted_by: str) -> list[str]:
+        """The packages in ``packages`` still not allowed once the operator has been asked.
+
+        Those not on the list are put to the operator on the dashboard, in one
+        question, and waited for. The answer is taken only from the web server
+        in this process (`dashboard_answer`) or from ``/packages allow``, never
+        from the broker: any agent beside this one can publish on the answer
+        topic, so a yes read from there would be the requesting agent's own.
+        """
+        if not packages:
+            return []
+        waiting = unlisted(packages, self._allowed())
+        if not waiting:
+            return []
+        names = ", ".join(waiting)
+        question_id = await self.notify_user(
+            f"{wanted_by} needs {names} installed, and "
+            f"{'it is' if len(waiting) == 1 else 'they are'} not on the list of packages "
+            "installed without asking. Install, and allow from now on? "
+            f"Typing /packages allow {' '.join(waiting)} does the same.",
+            options=(INSTALL, REFUSE),
+        )
+        settled: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self._asking[question_id] = _Asking(tuple(waiting), settled)
+        try:
+            await asyncio.wait_for(asyncio.shield(settled), timeout=APPROVAL_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] No answer within %gs about installing %s",
+                self.name,
+                APPROVAL_TIMEOUT_S,
+                names,
+            )
+            # Closed, so a press that comes later cannot allow a package for a
+            # spawn already refused. The next request for it asks afresh.
+            if self._asking.pop(question_id, None) is not None:
+                await self._close_question(question_id, NO_ANSWER)
+        return unlisted(waiting, self._allowed())
+
+    async def _close_question(self, question_id: str, option: str) -> None:
+        """Mark ``question_id`` answered with ``option`` wherever it is shown."""
+        closing = Answer(
+            id=question_id,
+            agent_id=self.actor_id,
+            option=option,
+            index=-1,
+            channel=self.name,
+            timestamp=time.time(),
+        )
+        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
+
+    async def _settle_allowed(self) -> None:
+        """Let through every question whose packages are all allowed now, and close it."""
+        allowed = self._allowed()
+        for question_id, asking in list(self._asking.items()):
+            if not unlisted(asking.packages, allowed):
+                self._asking.pop(question_id)
+                if not asking.settled.done():
+                    asking.settled.set_result(True)
+                await self._close_question(question_id, ALLOWED)
+
+    @staticmethod
+    def _not_allowed(refused: list[str]) -> dict:
+        names = ", ".join(refused)
+        return {
+            "success": False,
+            "refused": refused,
+            "error": (
+                f"Not installed: {names} {'is' if len(refused) == 1 else 'are'} not on the list "
+                "of packages installed without asking, and the operator did not allow "
+                f"{'it' if len(refused) == 1 else 'them'}. To allow: "
+                f"/packages allow {' '.join(refused)}"
+            ),
+        }
+
+    async def dashboard_answer(self, answer: Answer) -> None:
+        """The operator's pick on the dashboard for a question this installer asked.
+
+        Called by the web server in this process. A pick for a question not
+        asked here, or already settled, changes nothing.
+        """
+        asking = self._asking.pop(answer.id, None)
+        if asking is None:
+            return
+        if not asking.settled.done():
+            asking.settled.set_result(answer.option == INSTALL)
+        if answer.option == INSTALL:
+            self._remember(asking.packages)
+            logger.warning(
+                "[%s] The operator allowed %s on the dashboard",
+                self.name,
+                ", ".join(asking.packages),
+            )
+            # Another spawn waiting for the same packages goes through too.
+            await self._settle_allowed()
+
+    async def _change_the_list(self, action: str, payload: dict) -> dict:
+        """``/packages``: show, add to or take from the operator's list."""
+        packages = payload.get("packages", [])
+        if isinstance(packages, str):
+            packages = packages.replace(",", " ").split()
+        names = [str(p).strip() for p in packages if str(p).strip()]
+        refused = [p for p in names if not is_installable_name(p)]
+        names = [p for p in names if is_installable_name(p)]
+        if action == "packages_allow":
+            self._remember(names)
+            logger.warning("[%s] The operator allowed %s", self.name, ", ".join(names))
+            # Settle every question this answers, and leave the rest waiting.
+            await self._settle_allowed()
+        forgotten: list[str] = []
+        if action == "packages_forget":
+            gone = {normalized(p) for p in names}
+            forgotten = [n for n in self._remembered() if n in gone]
+            self.persist(ALLOWED_KEY, [n for n in self._remembered() if n not in gone])
+        return {
+            "allowed": self._remembered(),
+            "forgotten": forgotten,
+            "default": sorted(DEFAULT_ALLOWED),
+            "from_env": sorted(allowed_by_env()),
+            "refused": refused,
+        }
 
     # ── Core install logic ──────────────────────────────────────────────────
 
-    async def _install_packages(self, packages: list[str]) -> dict:
+    async def _install_packages(
+        self, packages: list[str], wanted_by: str = "an agent", *, ask: bool = True
+    ) -> dict:
         if not packages:
             return {"error": "No packages specified"}
+
+        # Asked about once, for every package that would actually be installed.
+        to_install = []
+        for pkg in packages:
+            pip_name = IMPORT_TO_PACKAGE.get(pkg.strip(), pkg.strip())
+            if not is_installable_name(pip_name):
+                continue
+            if not self._is_installed(PACKAGE_TO_IMPORT.get(pip_name, pip_name)):
+                to_install.append(pip_name)
+        refused = await self._cleared(to_install, wanted_by) if ask else []
+        if refused:
+            return self._not_allowed(refused)
 
         results = {}
         failed = []
@@ -515,7 +698,7 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        cmd = [sys.executable, "-m", "pip", "install", package, "--quiet"]
+        cmd = [sys.executable, "-m", "pip", "install", *index_args(), package, "--quiet"]
         if sys.platform != "win32":
             cmd.append("--break-system-packages")
 
@@ -524,11 +707,11 @@ class InstallerAgent(Actor):
                 result = subprocess.run(  # noqa: S603  # argv, no shell; name pre-screened
                     cmd,
                     capture_output=True,
-                    timeout=180,
+                    timeout=PIP_TIMEOUT_S,
                 )
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
             except subprocess.TimeoutExpired:
-                return False, "pip timed out after 180s"
+                return False, f"pip timed out after {PIP_TIMEOUT_S}s"
             except FileNotFoundError:
                 return False, f"Python executable not found: {sys.executable}"
             except Exception as e:
@@ -1170,7 +1353,9 @@ class InstallerAgent(Actor):
             name="log",
         )
 
-    async def _node_install(self, payload: dict) -> dict:
+    async def _node_install(
+        self, payload: dict, wanted_by: str = "an agent", *, ask: bool = True
+    ) -> dict:
         """Install pip packages on a remote node via SSH.
 
         payload keys:
@@ -1193,24 +1378,27 @@ class InstallerAgent(Actor):
             # Refused rather than filtered: installing a subset silently would
             # report success for a request that was not carried out.
             return {"error": f"Not package names: {', '.join(refused)}"}
+        refused = await self._cleared(packages, wanted_by) if ask else []
+        if refused:
+            return self._not_allowed(refused)
 
         # Two guards, because neither covers the other. `shlex.quote` stops
         # the value being read as *shell* syntax once this string reaches SSH;
         # the allow-list above stops it being read as *pip options*, which a
         # correctly quoted `--index-url=…` still would be.
         pkg_str = " ".join(shlex.quote(p) for p in packages)
+        index = "".join(f"{shlex.quote(arg)} " for arg in index_args())
         self._log_remote(f"Installing {pkg_str} on {host}...")
 
         try:
             async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
-                # Detect the right pip to use:
-                # 1. Venv at ~/wactorz/venv (created by node_deploy) — always prefer this
-                # 2. Fall back to python3 -m pip with --break-system-packages
+                # The venv at ~/wactorz/venv, which a deploy makes; made here
+                # if it is missing, and the install refused if it cannot be.
                 ok, venv_check = await self._ssh_run(
                     conn, "test -f ~/wactorz/venv/bin/pip && echo yes || echo no"
                 )
                 if venv_check.strip() == "yes":
-                    pip_cmd = f"~/wactorz/venv/bin/pip install {pkg_str} -q 2>&1"
+                    pip_cmd = f"~/wactorz/venv/bin/pip install {index}{pkg_str} -q 2>&1"
                     self._log_remote("Using venv pip at ~/wactorz/venv/bin/pip")
                 else:
                     # No venv — try to create one first
@@ -1221,14 +1409,19 @@ class InstallerAgent(Actor):
                     ok, venv_check2 = await self._ssh_run(
                         conn, "test -f ~/wactorz/venv/bin/pip && echo yes || echo no"
                     )
-                    if venv_check2.strip() == "yes":
-                        pip_cmd = f"~/wactorz/venv/bin/pip install {pkg_str} -q 2>&1"
-                        self._log_remote("Venv created successfully")
-                    else:
-                        pip_cmd = (
-                            f"python3 -m pip install {pkg_str} --break-system-packages -q 2>&1"
-                        )
-                        self._log_remote("Venv creation failed — falling back to system pip")
+                    if venv_check2.strip() != "yes":
+                        # Never into the system interpreter: what an agent asked
+                        # for would then be installed for everything on the node.
+                        self._log_remote(f"✗ No virtualenv on {host}, and none could be made")
+                        return {
+                            "success": False,
+                            "host": host,
+                            "error": f"No virtualenv at ~/wactorz/venv on {host}, and "
+                            "python3 -m venv could not make one: install python3-venv there, "
+                            "or deploy the node again.",
+                        }
+                    pip_cmd = f"~/wactorz/venv/bin/pip install {index}{pkg_str} -q 2>&1"
+                    self._log_remote("Venv created successfully")
 
                 ok, output = await self._ssh_run(conn, pip_cmd)
                 if ok:

@@ -254,8 +254,10 @@ class ArtifactHost(ListenerHost, Protocol):
 
     It reads where agents are placed -- the registry and the migrations in
     flight -- to decide what a node may have, and publishes; it changes nothing.
+    ``actor_id`` is for the feed, where a pointer's move is one line of main's.
     """
 
+    actor_id: str
     migration: Migration
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...

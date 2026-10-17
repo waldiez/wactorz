@@ -219,7 +219,9 @@ class TestSpawnedOnMain:
 
         await host._spawn_local_from_config(config)
 
-        assert host.registered[-1]["artifacts"] == {"model": pinned(artifact)}
+        assert host.registered[-1]["artifacts"] == {
+            "model": {**pinned(artifact), "follows": "active"}
+        }
         assert config["artifacts"] == {"model": "imu"}, "the caller's config is left alone"
 
     async def test_a_directory_is_handed_unpacked(

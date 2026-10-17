@@ -19,6 +19,16 @@ what says which node asks: with an account of its own, a node writes under its
 own ``nodes/<node>/`` and nowhere else. What the node does with the bytes is
 check them against the hash its signed spawn named, so a chunk from anyone else
 is a file nobody uses.
+
+**Main says where the pointers stand.** Each name's ``active`` and ``shadow``
+pointers (see `wactorz.core.artifacts`) are published retained on
+``models/<name>/active`` and ``models/<name>/shadow``, the pointer as the store
+keeps it, or an empty payload when it is unset, so a subscriber that comes up
+late sees the same as one that was there. Main publishes what the index says:
+everything at start, and from then on each change it finds, on a short interval,
+so a move the CLI makes beside the server reaches the broker without the two
+talking. A change found is also one line on the feed. Nobody else publishes
+there: a pointer is moved through the store, never by writing to its topic.
 """
 
 from __future__ import annotations
@@ -28,10 +38,11 @@ import functools
 import json
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from ...config import ARTIFACT_MAX_BYTES
-from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
+from ...core.artifacts import POINTERS, ArtifactError, ArtifactStore, Pointer, pinned_in
 from ...core.blob_transfer import send_file, to_node_topic
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
@@ -54,6 +65,26 @@ RECONNECT_DELAY_S = 5.0
 #: request for more is not one an agent made.
 MAX_REQUESTED = 64
 
+#: How often main reads the index for a pointer moved beside it, by the CLI.
+#: The index is one small file, so the read costs nothing worth saving.
+POINTER_POLL_S = 5.0
+
+
+def pointer_topic(name: str, which: str) -> str:
+    """The retained topic that says where ``name``'s ``which`` pointer stands."""
+    return f"models/{name}/{which}"
+
+
+def pointer_message(name: str, which: str, now: Pointer | None, was: Pointer | None) -> str:
+    """One line for the feed: what a pointer's change means."""
+    if now is None:
+        gone = f" (was {was.reference})" if was is not None else ""
+        return f"{name} has no {which} version now{gone}"
+    previous = f" (was {name}:{now.previous})" if now.previous is not None else ""
+    reason = f": {now.reason}" if now.reason else ""
+    return f"{now.reference} is now {which}{previous}, by {now.by}{reason}"
+
+
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -66,6 +97,11 @@ class ArtifactService:
         #: registry says the same once a spawn is saved; this covers the moment
         #: before, when the node may already be asking.
         self.offered: dict[str, set[str]] = {}
+        #: Where each pointer stood when it was last published, by (name,
+        #: pointer); None for one that is unset. Empty until the first look,
+        #: which publishes everything and says nothing on the feed.
+        self.announced: dict[tuple[str, str], Pointer | None] = {}
+        self._looked = False
 
     @property
     def store(self) -> ArtifactStore:
@@ -163,6 +199,79 @@ class ArtifactService:
                 "[%s] Sending %s… to %r for %r", self.host.name, sha[:12], node, data.get("agent")
             )
             await send_file(path, to_node_topic(node, sha), publish)
+
+    # ── Where the pointers stand ──────────────────────────────────────────
+
+    def _standing(self) -> dict[tuple[str, str], Pointer | None]:
+        """Every stored name's pointers, set or not, as the store has them now."""
+        store = self.store
+        standing: dict[tuple[str, str], Pointer | None] = {}
+        for name in store.names():
+            pointers = store.pointers(name)
+            for which in POINTERS:
+                standing[(name, which)] = pointers.get(which)
+        return standing
+
+    async def publish_pointers(self) -> None:
+        """Publish each pointer that moved since the last look, and say so on the feed.
+
+        The first look publishes every pointer of every stored name, set or
+        not, so the broker agrees with the store after a restart, and says
+        nothing on the feed: nothing moved, main only came back. Called by
+        the watcher on its interval, and by whatever moves a pointer through
+        main, so that move is heard at once.
+        """
+        host = self.host
+        if host is None:
+            return
+        standing = await asyncio.to_thread(self._standing)
+        first = not self._looked
+        for key in sorted(set(standing) | set(self.announced)):
+            now = standing.get(key)
+            was = self.announced.get(key)
+            known = key in self.announced
+            if not first and known and now == was:
+                continue
+            name, which = key
+            payload: Any = b"" if now is None else now.payload()
+            await host._mqtt_publish(pointer_topic(name, which), payload, retain=True, qos=1)
+            # A model just stored has pointers to publish and nothing to say:
+            # none of them moved.
+            if first or (not known and now is None):
+                continue
+            message = pointer_message(name, which, now, was)
+            logger.info("[%s] %s", host.name, message)
+            await host._mqtt_publish(
+                f"agents/{host.actor_id}/logs",
+                {
+                    "type": "model",
+                    "message": message,
+                    "model": name,
+                    "pointer": which,
+                    "timestamp": time.time(),
+                },
+            )
+        self.announced = standing
+        self._looked = True
+
+    async def pointer_watcher(self) -> None:
+        """Keep the pointer topics true to the index, until the actor stops."""
+        host = self.host
+        if host is None:
+            return
+        last_error: str | None = None
+        while host.state.value not in ("stopped", "failed"):
+            try:
+                await self.publish_pointers()
+                last_error = None
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                text = str(exc)
+                if text != last_error:
+                    logger.warning("[%s] cannot publish the model pointers: %s", host.name, exc)
+                    last_error = text
+            await asyncio.sleep(POINTER_POLL_S)
 
     # ── The subscription ──────────────────────────────────────────────────
 

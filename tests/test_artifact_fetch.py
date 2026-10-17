@@ -52,10 +52,10 @@ def store_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ArtifactSt
 
 @pytest.fixture(name="stored")
 def stored_fixture(store: ArtifactStore, tmp_path: Path) -> dict[str, Any]:
-    """``imu-detector:1`` in the store, pinned."""
+    """``imu-detector:1`` in the store, pinned as a spawn naming ``imu-detector`` pins it."""
     path = tmp_path / "detector.onnx"
     path.write_bytes(MODEL)
-    return pinned(store.add(path, "imu-detector"))
+    return {**pinned(store.add(path, "imu-detector")), "follows": "active"}
 
 
 @pytest.fixture(name="runner")
@@ -82,6 +82,7 @@ class _Host:
 
     def __init__(self, registry: dict[str, dict[str, Any]] | None = None) -> None:
         self.name = "main"
+        self.actor_id = "main-id"
         self.state = ActorState.RUNNING
         self._mqtt_broker = "localhost"
         self._mqtt_port = 1883

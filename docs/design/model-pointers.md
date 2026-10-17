@@ -79,7 +79,7 @@ A pointer records:
 | `sha256` | The bytes that version held when the pointer was set. A version's bytes never change, but its number can be reused after a remove, so the pointer carries the hash the way a pinned spawn does, and a pointer whose version no longer holds those bytes is reported as dangling rather than followed. |
 | `previous` | The version it named before this move, or null. Enough for a one-step rollback without any history; the history itself is the feed, below. |
 | `moved_at` | When, as a Unix time, like `added_at` on a version. |
-| `by` | Who moved it: `cli`, `chat:<user>`, `dashboard:<user>`, `agent:<name>`, `rule:<name>`, or an extension's name. Free text, like `metadata.source` on a version; recorded, never checked. |
+| `by` | Who moved it: `cli`, `chat`, `dashboard`, `agent:<name>`, `rule:<name>`, or an extension's name. Free text, like `metadata.source` on a version; recorded, never checked. Chat knows the channel a turn came from, not a person's name, so it records where, not who. |
 | `reason` | Why, in the mover's words, or null. The train step writes its margin here; a person writes whatever they would say in a commit message. |
 
 The index format becomes 2. A release that writes format 1 would read a format-2 index
@@ -121,7 +121,9 @@ or `latest`. A node ignores it; main uses it for two things:
 - an agent restarted from its record, whose pin follows a pointer, is re-pinned to where
   that pointer is now rather than to the version it ran before. Following was what the
   spawn asked for, and a restart that revived the version everyone else had moved off
-  would be the one agent serving the old model;
+  would be the one agent serving the old model. While the pointer is unset there is
+  nothing to follow, and the pin keeps the version it ran, as every pin did before
+  there were pointers: a store with no pointers behaves as it always has;
 - the hot swap (below) knows which agents to reload when a pointer moves: those whose pin
   follows it, and no agent that named a version.
 
@@ -133,14 +135,17 @@ The store gets three operations, each one locked index change:
   the reference resolves to. The reference names a version, `latest` included; a bare
   name is refused, since it would mean the pointer being moved. `NAME:shadow` as the
   reference of an `active` move is a promotion.
-- `clear(which, name, *, by, reason=None)` unsets it. Clearing `active` is allowed and
-  explicit: the name goes back to meaning the newest.
+- `clear(which, name)` unsets it, and returns what it was. Clearing `active` is allowed
+  and explicit: the name goes back to meaning the newest. It takes no `by` or `reason`:
+  there is no pointer left to record them on, and the feed line is the caller's to write.
 - `promote(name, *, by, reason=None)` moves `active` to where `shadow` points and clears
   `shadow`, as one change, so no reader sees a moment with both on the same version.
 
 Each returns the move as a record (name, pointer, from, to, hash, when, by, reason),
 which is what gets published and shown. The rules around them:
 
+- **A move is a change.** Moving a pointer to the version it already names is refused,
+  so every move recorded is one; the one it was refused for keeps its `by` and `reason`.
 - **A move is its own act.** `add` never moves a pointer; a version just stored is the
   newest and nothing more. The train step stores and then moves, in two steps, so a
   store followed by a refusal to move is two lines on the feed, not a version that
@@ -185,8 +190,8 @@ through the store or through main, never by publishing here.
 - `wactorz-artifacts list` marks the version each pointer names; `show NAME` includes
   the pointers; `activate NAME:V`, `shadow NAME:V`, `promote NAME`, and
   `clear active|shadow NAME` are the commands, each taking `--reason`.
-- `/artifacts activate|shadow|promote|clear …` in chat does the same, with `by` naming
-  the person.
+- `/artifacts activate|shadow|promote|clear …` in chat does the same, with `by` saying
+  it came from chat; a social channel may list but not move.
 - The summary main's model and the planner read says, per name, which version is
   active and which is shadow, so a request for "the detector" is wired to the one being
   served.
@@ -216,7 +221,8 @@ through the store or through main, never by publishing here.
 
 - **Step 4, item 5** builds the pointers and the topics as written here: the index
   format, `resolve`, the three operations, the refusals, `follows` on a pin, the CLI
-  and chat commands, main publishing the topics.
+  and chat commands, main publishing the topics. Built; the dashboard's model view is
+  not part of it and waits for the dashboard work.
 - **Item 7, hot swap**, is a subscriber to `models/{name}/active` that re-pins and
   reloads the agents whose pin follows it, on main and on nodes.
 - **Item 8, shadow serving**, resolves `NAME:shadow` beside `active` and runs both; the

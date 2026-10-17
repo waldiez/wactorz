@@ -564,6 +564,27 @@ agent can read current state without a request/response round-trip.
 
 ---
 
+### `models/{name}/active` and `models/{name}/shadow`
+**Published by:** Main actor
+**Retained:** yes
+**Trigger:** At start, for every model kept with `wactorz-artifacts`; then whenever a pointer moves, whether in chat or by the command beside the server, which main notices within a few seconds.
+**Purpose:** Where a model's two pointers stand: `active` is the version agents serve, `shadow` one on trial beside it. A spawn that names the model without a version is pinned to `active`. The payload is the pointer as the store keeps it; an unset pointer is an empty retained payload, so a subscriber that comes up late sees the same as one that was there. Read-only for everyone but main: a pointer is moved through the store (`wactorz-artifacts activate|shadow|promote|clear`, `/artifacts` in chat, or `ArtifactStore` from an installed package), never by publishing here.
+
+```json
+{
+  "name":     "imu-detector",
+  "pointer":  "active",
+  "version":  3,
+  "sha256":   "…",
+  "previous": 2,
+  "moved_at": 1760000000.0,
+  "by":       "cli",
+  "reason":   "auc 0.95 on imu-2026"
+}
+```
+
+---
+
 ### Node control and status topics
 **Published by:** Main actor and remote runner
 **Purpose:** Remote node lifecycle, reconciliation, and task routing.
@@ -684,6 +705,8 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/blob/{sha256}` | Main actor | An agent's blob, in chunks, as main places it, or an artifact the node asked for |
 | `nodes/{node}/blob_return/{sha256}` | Remote runner | An agent's blob, in chunks, as the node hands it back |
 | `nodes/{node}/artifact_request` | Remote runner | The artifacts an agent spawned here names that the node does not hold |
+| `models/{name}/active` | Main actor | Retained: the version of a model agents serve, or empty when none is marked; at start and on each move |
+| `models/{name}/shadow` | Main actor | Retained: the version of a model on trial beside the active one, or empty; at start and on each move |
 | `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |

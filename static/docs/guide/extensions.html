@@ -168,9 +168,11 @@ frontend/src/
 </code></pre></div>
 
 <p>At startup the monitor calls <code>setup_all(app)</code>, which auto-discovers every module
-or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook and wires it in.
-<code>collect_public_config(app)</code> gathers each extension's non-secret browser config
-and merges it into <code>/api/config</code>. Nothing in core references a specific extension.</p>
+or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook, and every
+extension an installed package registers under the <code>wactorz.extensions</code> entry
+point, and wires them in. <code>collect_public_config(app)</code> gathers each extension's
+non-secret browser config and merges it into <code>/api/config</code>. Nothing in core
+references a specific extension.</p>
 <p>An extension is <strong>opt-in and self-disabling</strong>: it reads its own environment and
 no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <hr />
@@ -240,6 +242,22 @@ in place:</p>
 <p>The registry itself is on <code>app[contract.ACTOR_REGISTRY]</code> (set by core before
 <code>setup_all()</code>; <code>None</code> in standalone mode). A raising factory or one returning
 <code>None</code> is skipped — never fatal.</p>
+<h3 id="from-another-package">From another package</h3>
+<p>An extension does not have to live in this repository. Any package that is
+<code>pip install</code>ed beside Wactorz can register one, free or commercial, and it is
+loaded exactly like a module under <code>wactorz/ext/</code>, after the built-ins:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># pyproject.toml of the other package</span>
+<span class="k">[project.entry-points.</span><span class="s2">"wactorz.extensions"</span><span class="k">]</span>
+<span class="n">mlops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wactorz_mlops.ext"</span>
+</code></pre></div>
+
+<p>The value names a module with the hooks above, or <code>module:object</code> for an object
+that has them. The entry point's name is the extension's short name: it namespaces
+<code>public_config()</code> on <code>/api/config</code> (<code>{"mlops": {...}}</code>) and is what another
+extension's <code>__deps__</code> refers to. A name a built-in extension already uses is
+refused with a log line, so a package cannot stand in for one; a package that
+fails to import, or has no <code>setup()</code>, is logged and skipped like a broken module
+under <code>wactorz/ext/</code>. Restart Wactorz after installing or removing such a package.</p>
 <h3 id="requirements">Requirements</h3>
 <ul>
 <li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
@@ -400,6 +418,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <h2 id="checklist">Checklist</h2>
 <ul>
 <li>[ ] Backend <code>setup()</code> registers routes under <code>/api/&lt;ext&gt;/…</code></li>
+<li>[ ] A packaged extension is named in <code>[project.entry-points."wactorz.extensions"]</code></li>
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
 <li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>

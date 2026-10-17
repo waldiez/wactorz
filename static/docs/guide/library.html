@@ -288,6 +288,11 @@ writing a script. Three ways, all equivalent:</p>
 <td>anything <code>pip install</code>ed</td>
 </tr>
 <tr>
+<td><code>[project.entry-points."wactorz.extensions"]</code> in <code>pyproject.toml</code></td>
+<td>your package</td>
+<td>a server extension (routes, <code>/api/config</code> values) loaded like those in <code>wactorz/ext/</code>; see the extensions guide</td>
+</tr>
+<tr>
 <td><code>wactorz.run(agents=[...])</code> or <code>serve(...)</code></td>
 <td>a script</td>
 <td>development</td>

@@ -24,9 +24,11 @@ frontend/src/
 ```
 
 At startup the monitor calls `setup_all(app)`, which auto-discovers every module
-or package under `wactorz/ext/` that exposes a `setup(app)` hook and wires it in.
-`collect_public_config(app)` gathers each extension's non-secret browser config
-and merges it into `/api/config`. Nothing in core references a specific extension.
+or package under `wactorz/ext/` that exposes a `setup(app)` hook, and every
+extension an installed package registers under the `wactorz.extensions` entry
+point, and wires them in. `collect_public_config(app)` gathers each extension's
+non-secret browser config and merges it into `/api/config`. Nothing in core
+references a specific extension.
 
 An extension is **opt-in and self-disabling**: it reads its own environment and
 no-ops when unconfigured, so shipping one forces nothing on anyone.
@@ -87,6 +89,26 @@ def actor_decorator(app):
 The registry itself is on `app[contract.ACTOR_REGISTRY]` (set by core before
 `setup_all()`; `None` in standalone mode). A raising factory or one returning
 `None` is skipped — never fatal.
+
+### From another package
+
+An extension does not have to live in this repository. Any package that is
+`pip install`ed beside Wactorz can register one, free or commercial, and it is
+loaded exactly like a module under `wactorz/ext/`, after the built-ins:
+
+```toml
+# pyproject.toml of the other package
+[project.entry-points."wactorz.extensions"]
+mlops = "wactorz_mlops.ext"
+```
+
+The value names a module with the hooks above, or `module:object` for an object
+that has them. The entry point's name is the extension's short name: it namespaces
+`public_config()` on `/api/config` (`{"mlops": {...}}`) and is what another
+extension's `__deps__` refers to. A name a built-in extension already uses is
+refused with a log line, so a package cannot stand in for one; a package that
+fails to import, or has no `setup()`, is logged and skipped like a broken module
+under `wactorz/ext/`. Restart Wactorz after installing or removing such a package.
 
 ### Requirements
 
@@ -243,6 +265,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 ## Checklist
 
 - [ ] Backend `setup()` registers routes under `/api/<ext>/…`
+- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload

@@ -277,6 +277,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
         # Send nodes the models their agents name, when they ask for them
         self._tasks.append(asyncio.create_task(self.artifact_service.listener()))
+        # Say on models/<name>/active and /shadow where each model's pointers stand
+        self._tasks.append(asyncio.create_task(self.artifact_service.pointer_watcher()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

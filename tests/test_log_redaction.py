@@ -532,9 +532,11 @@ class TestNoCatastrophicBacktracking:
         ],
     )
     def test_completes_promptly(self, hostile: str) -> None:
-        started = time.perf_counter()
+        # CPU time, not wall time: a backtracking pattern burns the one, while
+        # a loaded machine running the suite in parallel inflates only the other.
+        started = time.process_time()
         scrub(hostile)
-        assert time.perf_counter() - started < 1.0, "pattern backtracks on hostile input"
+        assert time.process_time() - started < 1.0, "pattern backtracks on hostile input"
 
 
 class TestDeployPositional:

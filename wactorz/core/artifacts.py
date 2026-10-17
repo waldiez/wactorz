@@ -23,6 +23,15 @@ torch module. They are refused unless the caller allows them, and recorded as
 such, so that whatever loads one later can refuse it in turn. Every other
 format here is data: loading it runs nothing from the file.
 
+Two pointers may sit on a name, beside its versions: ``active``, the version
+agents serve, and ``shadow``, a version under trial that sees the same data and
+is acted on by nobody. A bare name resolves to ``active`` once it is set, and to
+the newest version until then; ``name:latest`` is always the newest, and
+``name:active`` and ``name:shadow`` name the pointers themselves. Storing a
+version never moves a pointer: a move is its own act, with who made it and why.
+A version a pointer names cannot be removed until the pointer is moved off it.
+``docs/design/model-pointers.md`` records the decision.
+
 The index is changed under a lock on the store's directory, so a command adding
 a model while the server runs does not lose what either of them wrote. The
 directory's name starts with ``..``, which no agent's name may, so it never
@@ -57,8 +66,18 @@ STORE_DIRNAME = "..artifacts"
 #: whenever it is missing, so `wactorz-state export` leaves it out.
 UNPACKED_DIRNAME = "..unpacked-artifacts"
 
-#: The layout of the index this module writes, and the only one it reads.
-INDEX_FORMAT = 1
+#: The layout of the index this module writes. Format 1 is the same without
+#: pointers: read as having none, and written back in this format. Any other is
+#: refused outright, since a release that did not know the pointers and
+#: rewrote the index would drop them, and a model silently served wrong is the
+#: worse failure.
+INDEX_FORMAT = 2
+_READ_FORMATS = (1, INDEX_FORMAT)
+
+#: The pointers a name may carry, and the only ones: a pointer is a role a
+#: version plays, and these are the roles. Anything else said of a version is
+#: metadata.
+POINTERS = ("active", "shadow")
 
 #: A SHA-256, as a file in the store is named.
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -148,6 +167,43 @@ class Artifact:
         return f"{self.reference}@{self.sha256}"
 
 
+@dataclass(frozen=True)
+class Pointer:
+    """Where one of a name's pointers stands: the version it names, and the move that put it there."""
+
+    name: str
+    #: ``active`` or ``shadow``.
+    pointer: str
+    version: int
+    #: The bytes the version held when the pointer was set. A version's bytes
+    #: never change, but its number can be reused after a remove, so the
+    #: pointer carries the hash as a pinned spawn does, and one whose version
+    #: no longer holds these bytes is reported rather than followed.
+    sha256: str
+    #: The version it named before this move, or None: enough for one step back.
+    previous: int | None
+    moved_at: float
+    #: Who moved it -- ``cli``, ``chat``, ``agent:<name>``, an extension's name.
+    #: Recorded, never checked.
+    by: str
+    #: Why, in the mover's words, or None.
+    reason: str | None = None
+
+    @property
+    def reference(self) -> str:
+        """``name:version``."""
+        return f"{self.name}:{self.version}"
+
+    def payload(self) -> dict[str, Any]:
+        """The pointer as the retained ``models/<name>/<pointer>`` topic carries it."""
+        return asdict(self)
+
+
+#: What follows the name in a reference: None for a bare name, ``"latest"``, one
+#: of `POINTERS`, or a version number.
+Selector = int | str | None
+
+
 def name_error(name: str) -> str | None:
     """Why ``name`` cannot name an artifact, or None if it can."""
     if not _NAME.match(name):
@@ -158,16 +214,24 @@ def name_error(name: str) -> str | None:
     return None
 
 
-def parse_reference(reference: str) -> tuple[str, int | None]:
-    """The name and version in ``name``, ``name:latest`` or ``name:3``; None for the latest."""
+def parse_reference(reference: str) -> tuple[str, Selector]:
+    """The name in ``reference`` and what follows it; see `Selector`.
+
+    A bare ``name`` and ``name:latest`` are told apart, since they resolve
+    differently once a pointer is set.
+    """
     name, _, version = reference.partition(":")
     error = name_error(name)
     if error:
         raise ArtifactError(error)
-    if version in ("", "latest"):
+    if version == "":
         return name, None
+    if version == "latest" or version in POINTERS:
+        return name, version
     if not version.isdigit() or int(version) < 1:
-        raise ArtifactError(f"{reference!r}: a version is 'latest' or a number from 1")
+        raise ArtifactError(
+            f"{reference!r}: a version is 'latest', 'active', 'shadow' or a number from 1"
+        )
     return name, int(version)
 
 
@@ -232,19 +296,40 @@ class ArtifactStore:
     def pin(self, wanted: Any) -> dict[str, Any]:
         """What a spawn config names, as the exact version it is to run.
 
-        ``wanted`` is a reference -- ``name``, ``name:latest``, ``name:3`` --
-        or an entry pinned before, which must still name the same bytes: an
-        agent restarted from its record runs what it ran, or does not start.
-        Raises `ArtifactError` saying why it cannot be pinned.
+        ``wanted`` is a reference -- ``name``, ``name:latest``, ``name:3``,
+        ``name:active``, ``name:shadow`` -- or an entry pinned before. A
+        reference that followed a pointer (a bare name, or the pointer named)
+        is pinned with ``follows`` saying which, and pinned again later goes
+        to where that pointer is now, while it is set: following was what the
+        spawn asked for, and an agent restarted on the version everyone else
+        moved off would be the one serving the old model. With no pointer to
+        follow, and for an entry that named a version, the entry must still
+        name the same bytes: such an agent runs what it ran, or does not
+        start. Raises `ArtifactError` saying why it cannot be pinned.
         """
         if isinstance(wanted, str):
-            return pinned(self.resolve(wanted))
+            _, selector = parse_reference(wanted)
+            entry = pinned(self.resolve(wanted))
+            if selector is None or selector == "active":
+                entry["follows"] = "active"
+            elif selector == "shadow":
+                entry["follows"] = "shadow"
+            return entry
         if isinstance(wanted, Mapping) and "sha256" in wanted:
             entry = check_pinned(wanted)
-            held = self.resolve(f"{entry['name']}:{entry['version']}")
+            follows = entry.get("follows")
+            name = str(entry["name"])
+            if follows in POINTERS and self.pointer(name, follows) is not None:
+                return self.pin(f"{name}:{follows}")
+            # No pointer to follow: the version it ran, as a store without
+            # pointers has always had it.
+            held = self.resolve(f"{name}:{entry['version']}")
             if held.sha256 != entry["sha256"]:
                 raise ArtifactError(f"{held.reference} no longer holds the bytes it was pinned to")
-            return pinned(held)
+            repinned = pinned(held)
+            if follows in POINTERS:
+                repinned["follows"] = follows
+            return repinned
         raise ArtifactError(f"{wanted!r} is not a reference to an artifact")
 
     def pin_all(self, wanted: Any) -> dict[str, dict[str, Any]]:
@@ -265,28 +350,35 @@ class ArtifactStore:
 
     def names(self) -> list[str]:
         """Every name with at least one version, in order."""
-        return sorted(self._read_index())
+        return sorted(self._read_all()[0])
 
     def versions(self, name: str) -> list[Artifact]:
         """Every version of ``name``, oldest first; empty when there is none."""
-        return [_artifact(name, entry) for entry in self._read_index().get(name, [])]
+        return [_artifact(name, entry) for entry in self._read_all()[0].get(name, [])]
 
     def resolve(self, reference: str) -> Artifact:
-        """The artifact ``name``, ``name:latest`` or ``name:3`` names.
+        """The artifact a reference names: the one rule, for every caller.
 
-        Raises `ArtifactNotFoundError` when there is none, `ArtifactError` when the
-        reference is not one.
+        A bare ``name`` is ``active`` when that is set, else the newest;
+        ``name:latest`` is the newest whatever the pointers say; ``name:active``
+        and ``name:shadow`` are the pointers, an error when unset; ``name:3``
+        is that version. Raises `ArtifactNotFoundError` when there is none,
+        `ArtifactError` when the reference is not one or a pointer dangles.
         """
-        name, version = parse_reference(reference)
-        versions = self.versions(name)
-        if not versions:
-            raise ArtifactNotFoundError(reference)
-        if version is None:
-            return versions[-1]
-        for artifact in versions:
-            if artifact.version == version:
-                return artifact
-        raise ArtifactNotFoundError(reference)
+        name, selector = parse_reference(reference)
+        artifacts, pointers = self._read_all()
+        return _resolve_in(artifacts, pointers, name, selector, reference)
+
+    def pointer(self, name: str, which: str) -> Pointer | None:
+        """Where ``name``'s ``active`` or ``shadow`` pointer stands, or None when unset."""
+        return self.pointers(name).get(_pointer_name(which))
+
+    def pointers(self, name: str) -> dict[str, Pointer]:
+        """``name``'s pointers that are set, by pointer name."""
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        return _pointers_of(name, self._read_all()[1])
 
     def verify(self, artifact: Artifact) -> str | None:
         """Why the file holding ``artifact`` is not what was stored, or None when it is."""
@@ -337,7 +429,7 @@ class ArtifactStore:
         # read as it does, and nobody else needs to wait for that.
         sha256, size = self._take_in(path, fmt)
         with self._locked():
-            index = self._read_index()
+            index, pointers = self._read_all()
             versions = index.setdefault(name, [])
             entry = {
                 "version": max((v["version"] for v in versions), default=0) + 1,
@@ -349,19 +441,21 @@ class ArtifactStore:
                 "metadata": dict(metadata or {}),
             }
             versions.append(entry)
-            self._write_index(index)
+            self._write_all(index, pointers)
         return _artifact(name, entry)
 
     def remove(self, reference: str, *, every_version: bool = False) -> list[Artifact]:
         """Remove the version ``reference`` names, or with ``every_version`` all of a name's.
 
         A bare name is refused without ``every_version``: it reads like one
-        thing and would remove several. A file is deleted once no version of
-        any name still holds it. Returns what was removed; raises
-        `ArtifactNotFoundError` when that is nothing.
+        thing and would remove several. A version a pointer names is refused
+        until the pointer is moved off it; every version of a name takes the
+        name's pointers with it. A file is deleted once no version of any name
+        still holds it. Returns what was removed; raises `ArtifactNotFoundError`
+        when that is nothing.
         """
-        name, version = parse_reference(reference)
-        everything = version is None and ":" not in reference
+        name, selector = parse_reference(reference)
+        everything = selector is None
         if everything != every_version:
             raise ArtifactError(
                 f"{reference!r} names one version; every version is removed by the bare name"
@@ -369,22 +463,29 @@ class ArtifactStore:
                 else f"{reference!r} would remove every version: name one, or ask for every version"
             )
         with self._locked():
-            index = self._read_index()
+            index, pointers = self._read_all()
             versions = index.get(name, [])
             if everything:
                 gone, kept = versions, []
-            elif version is None:
-                gone, kept = versions[-1:], versions[:-1]
+                pointers.pop(name, None)
             else:
+                if not versions:
+                    raise ArtifactNotFoundError(reference)
+                version = _resolve_in(index, pointers, name, selector, reference).version
                 gone = [v for v in versions if v["version"] == version]
                 kept = [v for v in versions if v["version"] != version]
+                for which, entry in pointers.get(name, {}).items():
+                    if entry["version"] == version:
+                        raise ArtifactError(
+                            f"{name}:{version} is the {which} version; move the pointer first"
+                        )
             if not gone:
                 raise ArtifactNotFoundError(reference)
             if kept:
                 index[name] = kept
             else:
                 index.pop(name, None)
-            self._write_index(index)
+            self._write_all(index, pointers)
             still_held = {v["sha256"] for entries in index.values() for v in entries}
             for entry in gone:
                 if entry["sha256"] not in still_held:
@@ -392,6 +493,87 @@ class ArtifactStore:
                         (self.objects / entry["sha256"]).unlink()
                     shutil.rmtree(self.unpacked / entry["sha256"], ignore_errors=True)
         return [_artifact(name, entry) for entry in gone]
+
+    def move(self, which: str, reference: str, *, by: str, reason: str | None = None) -> Pointer:
+        """Point ``name``'s ``which`` at the version ``reference`` names, and say who and why.
+
+        The reference names a version, ``latest`` included; a bare name is
+        refused, since it would mean the pointer being moved. Moving
+        ``active`` onto the version ``shadow`` names is a promotion and clears
+        ``shadow``; pointing ``shadow`` at the active version is refused,
+        since a trial of a model against itself measures nothing. A move to
+        where the pointer already is is refused too, so every move is a
+        change. Raises `ArtifactError` saying why.
+        """
+        which = _pointer_name(which)
+        name, selector = parse_reference(reference)
+        if selector is None or selector == which:
+            raise ArtifactError(
+                f"{reference!r} would mean the {which} pointer itself: name the version "
+                f"to move it to, as {name}:3 or {name}:latest"
+            )
+        with self._locked():
+            artifacts, pointers = self._read_all()
+            target = _resolve_in(artifacts, pointers, name, selector, reference)
+            standing = pointers.get(name, {})
+            current = standing.get(which)
+            if current is not None and current["version"] == target.version:
+                raise ArtifactError(f"{target.reference} is already {which}")
+            other = "shadow" if which == "active" else "active"
+            if standing.get(other, {}).get("version") == target.version:
+                if which == "shadow":
+                    raise ArtifactError(
+                        f"{target.reference} is active; a shadow is a different version"
+                    )
+                standing.pop(other, None)
+            standing[which] = _pointer_entry(target, current, by, reason)
+            pointers[name] = standing
+            self._write_all(artifacts, pointers)
+        return _pointer(name, which, standing[which])
+
+    def clear(self, which: str, name: str) -> Pointer:
+        """Unset ``name``'s ``which`` pointer; what it was. Raises `ArtifactError` when it was unset.
+
+        Cleared, ``active`` leaves the bare name meaning the newest again.
+        Nothing is left to record who cleared it on; the caller says so where
+        it reports the change.
+        """
+        which = _pointer_name(which)
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            artifacts, pointers = self._read_all()
+            standing = pointers.get(name, {})
+            if which not in standing:
+                raise ArtifactError(f"{name} has no {which} version")
+            was = standing.pop(which)
+            if standing:
+                pointers[name] = standing
+            else:
+                pointers.pop(name, None)
+            self._write_all(artifacts, pointers)
+        return _pointer(name, which, was)
+
+    def promote(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
+        """Move ``name``'s ``active`` to where ``shadow`` points and clear ``shadow``, as one change.
+
+        Raises `ArtifactError` when there is no shadow to promote.
+        """
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            artifacts, pointers = self._read_all()
+            standing = pointers.get(name, {})
+            if "shadow" not in standing:
+                raise ArtifactError(f"{name} has no shadow version to promote")
+            target = _resolve_in(artifacts, pointers, name, "shadow", f"{name}:shadow")
+            standing["active"] = _pointer_entry(target, standing.get("active"), by, reason)
+            del standing["shadow"]
+            pointers[name] = standing
+            self._write_all(artifacts, pointers)
+        return _pointer(name, "active", standing["active"])
 
     # ── Inside ────────────────────────────────────────────────────────────
 
@@ -443,20 +625,29 @@ class ArtifactStore:
                 raise
             part.unlink(missing_ok=True)
 
-    def _read_index(self) -> dict[str, list[dict[str, Any]]]:
+    def _read_all(self) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+        """The index: every name's versions, and every name's pointers."""
         if not self.index_path.exists():
-            return {}
+            return {}, {}
         try:
             stored = json.loads(self.index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ArtifactError(f"the index at {self.index_path} cannot be read: {exc}") from exc
-        if not isinstance(stored, dict) or stored.get("format") != INDEX_FORMAT:
+        if not isinstance(stored, dict) or stored.get("format") not in _READ_FORMATS:
             raise ArtifactError(f"the index at {self.index_path} is not one this release reads")
-        return stored.get("artifacts", {})
+        return stored.get("artifacts", {}), stored.get("pointers", {})
 
-    def _write_index(self, index: Mapping[str, list[dict[str, Any]]]) -> None:
+    def _write_all(
+        self,
+        index: Mapping[str, list[dict[str, Any]]],
+        pointers: Mapping[str, dict[str, Any]],
+    ) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        body = {"format": INDEX_FORMAT, "artifacts": {name: index[name] for name in sorted(index)}}
+        body = {
+            "format": INDEX_FORMAT,
+            "artifacts": {name: index[name] for name in sorted(index)},
+            "pointers": {name: pointers[name] for name in sorted(pointers) if pointers[name]},
+        }
         write_text(self.index_path, json.dumps(body, indent=2))
 
     @contextlib.contextmanager
@@ -491,6 +682,81 @@ def _artifact(name: str, entry: Mapping[str, Any]) -> Artifact:
     )
 
 
+def _pointer_name(which: str) -> str:
+    if which not in POINTERS:
+        raise ArtifactError(f"{which!r} is not a pointer: one of {', '.join(POINTERS)}")
+    return which
+
+
+def _pointer(name: str, which: str, entry: Mapping[str, Any]) -> Pointer:
+    return Pointer(
+        name=name,
+        pointer=which,
+        version=int(entry["version"]),
+        sha256=str(entry["sha256"]),
+        previous=None if entry.get("previous") is None else int(entry["previous"]),
+        moved_at=float(entry["moved_at"]),
+        by=str(entry.get("by", "")),
+        reason=None if entry.get("reason") is None else str(entry["reason"]),
+    )
+
+
+def _pointers_of(name: str, pointers: Mapping[str, dict[str, Any]]) -> dict[str, Pointer]:
+    return {which: _pointer(name, which, entry) for which, entry in pointers.get(name, {}).items()}
+
+
+def _pointer_entry(
+    target: Artifact, current: Mapping[str, Any] | None, by: str, reason: str | None
+) -> dict[str, Any]:
+    """A pointer at ``target``, as the index keeps it, moved from ``current``."""
+    return {
+        "version": target.version,
+        "sha256": target.sha256,
+        "previous": None if current is None else int(current["version"]),
+        "moved_at": time.time(),
+        "by": by,
+        "reason": reason,
+    }
+
+
+def _resolve_in(
+    artifacts: Mapping[str, list[dict[str, Any]]],
+    pointers: Mapping[str, dict[str, Any]],
+    name: str,
+    selector: Selector,
+    reference: str,
+) -> Artifact:
+    """`ArtifactStore.resolve`, over an index already read."""
+    versions = [_artifact(name, entry) for entry in artifacts.get(name, [])]
+    if not versions:
+        raise ArtifactNotFoundError(reference)
+    standing = pointers.get(name, {})
+    if selector is None:
+        selector = "active" if "active" in standing else "latest"
+    if selector == "latest":
+        return versions[-1]
+    if selector in POINTERS:
+        entry = standing.get(selector)
+        if entry is None:
+            raise ArtifactError(f"{name} has no {selector} version")
+        for artifact in versions:
+            if artifact.version == entry["version"]:
+                if artifact.sha256 != entry["sha256"]:
+                    raise ArtifactError(
+                        f"{name}'s {selector} pointer names {artifact.reference}, which no "
+                        "longer holds the bytes it was set to; move the pointer"
+                    )
+                return artifact
+        raise ArtifactError(
+            f"{name}'s {selector} pointer names {name}:{entry['version']}, which is not stored; "
+            "move the pointer"
+        )
+    for artifact in versions:
+        if artifact.version == selector:
+            return artifact
+    raise ArtifactNotFoundError(reference)
+
+
 def pinned(artifact: Artifact) -> dict[str, Any]:
     """``artifact`` as a spawn config carries it: enough to fetch it and check it."""
     return {
@@ -522,6 +788,9 @@ def check_pinned(entry: Any) -> dict[str, Any]:
         raise ArtifactError(error)
     if entry.get("format") not in FORMATS:
         raise ArtifactError(f"{entry!r} is not in a format this release knows")
+    follows = entry.get("follows")
+    if follows is not None and follows not in POINTERS:
+        raise ArtifactError(f"{entry!r} follows {follows!r}, which is not a pointer")
     return dict(entry)
 
 
@@ -593,7 +862,8 @@ def summary(store: ArtifactStore, *, limit: int = 50) -> list[str]:
     """One line per name in ``store``: its newest version, format, size, arrays and what was said of it.
 
     For a person reading a list and for a model choosing one, so it says what
-    tells models apart and nothing that does not: no hashes, no times. The arrays
+    tells models apart and nothing that does not: no hashes, no times. Where a
+    pointer is set, the line says which version is active or shadow. The arrays
     are the names code reads the model by, where the format has named arrays;
     see `wactorz.core.model_contents`.
     """
@@ -606,6 +876,8 @@ def summary(store: ArtifactStore, *, limit: int = 50) -> list[str]:
         line = f"{name} — newest {newest.reference} ({newest.format}, {human_size(newest.size)})"
         if len(versions) > 1:
             line += f", {len(versions)} versions"
+        for which, pointer in store.pointers(name).items():
+            line += f", {which} {pointer.reference}"
         if newest.runs_code:
             line += ", runs code when it loads"
         if held := _held_by(store, newest):

@@ -28,6 +28,7 @@ from .info import (
     show_registry,
     show_topics,
 )
+from .models import activate_model, clear_model_pointer, promote_model, shadow_model
 from .nodes import deploy_node, remove_node, restart_node, run_on_node, shutdown_node
 from .packages import manage_packages
 from .state import (
@@ -41,6 +42,11 @@ from .state import (
 
 registry.add(show_nodes)
 registry.add(show_topics)
+# The verbs ahead of the listing, whose prefix would otherwise take them as a name.
+registry.add(activate_model)
+registry.add(shadow_model)
+registry.add(promote_model)
+registry.add(clear_model_pointer)
 registry.add(show_artifacts)
 registry.add(show_mqtt_status)
 registry.add(show_bus)

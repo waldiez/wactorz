@@ -793,8 +793,15 @@ class NodeRunner:
         )
 
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
-        """Publish a heartbeat for the runner process itself, so the node appears."""
+        """Publish a heartbeat for the runner process itself, so the node appears.
+
+        A heartbeat that cannot be built or sent is retried on the next
+        interval, and the reason is logged once per distinct failure: a node
+        that never appears on the dashboard is otherwise a silence with
+        nothing to read.
+        """
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.node.{self.node_name}"))
+        last_error: str | None = None
         while self._running:
             try:
                 agent_names = list(self.agents)
@@ -825,10 +832,15 @@ class NodeRunner:
                         "slow_retry": self.supervisor.slow_retrying(),
                     },
                 )
+                last_error = None
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as exc:
+                text = f"{type(exc).__name__}: {exc}"
+                if text != last_error:
+                    logger.warning("[%s] heartbeat not sent: %s", self.node_name, text)
+                    last_error = text
                 await asyncio.sleep(interval)
 
     # ── Control plane ─────────────────────────────────────────────────────────

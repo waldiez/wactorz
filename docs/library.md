@@ -147,6 +147,7 @@ writing a script. Three ways, all equivalent:
 | --- | ----- | --- |
 | `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:Sink` | the environment | a configured deployment |
 | `[project.entry-points."wactorz.agents"]` in `pyproject.toml` | your package | anything `pip install`ed |
+| `[project.entry-points."wactorz.extensions"]` in `pyproject.toml` | your package | a server extension (routes, `/api/config` values) loaded like those in `wactorz/ext/`; see the extensions guide |
 | `wactorz.run(agents=[...])` or `serve(...)` | a script | development |
 
 The target must be importable from where `wactorz` starts: a package that is

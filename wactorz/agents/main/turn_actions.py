@@ -17,8 +17,7 @@ asked to describe it, which is why it can be read and tested on its own.
 from dataclasses import dataclass
 from typing import Any
 
-from ..mixins import SpawnPlaceholder
-from .placement import KeptHere, NotSpawned, PlacedOnNode
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, SpawnPlaceholder
 
 
 @dataclass(frozen=True)

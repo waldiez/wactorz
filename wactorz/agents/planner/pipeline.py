@@ -24,6 +24,7 @@ from ...core.artifacts import ArtifactError, ArtifactStore, summary
 from ...core.paths import resolve_state_dir
 from ...plugins import AgentPlugin
 from ..lookup import find_main_actor
+from ..mixins.spawning import PlacedOnNode
 from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from ..prompts.planner_prompts import (
     HA_FEASIBILITY_PROMPT,
@@ -176,7 +177,7 @@ class PipelineMixin(_Host):
             await self._log("Step missing name — skipping")
             return StepOutcome()
 
-        if self._registry and self._registry.find_by_name(name):
+        if self._registry and (self._registry.find_by_name(name) or self._running_on_a_node(name)):
             await self._log(f"'{name}' already running — skipping")
             self._spawn_results[name] = {"ok": True, "status": "already_running"}
             return StepOutcome(wired=f"**{name}** (already active)", rule_agent=name)
@@ -202,11 +203,20 @@ class PipelineMixin(_Host):
             return StepOutcome(wired=f"**{name}** — spawn failed: {e}")
 
         if not actor:
-            self._spawn_results[name] = {"ok": False, "status": "spawn_returned_none"}
-            return StepOutcome(wired=f"**{name}** — failed to spawn")
+            # Kept when the spawn said why it failed: placement refused it, or
+            # its node never reported it.
+            known = self._spawn_results.get(name) or {}
+            if known.get("ok") is not False:
+                known = {"ok": False, "status": "spawn_returned_none"}
+                self._spawn_results[name] = known
+            why = f": {known['error']}" if known.get("error") else ""
+            return StepOutcome(wired=f"**{name}** — failed to spawn{why}")
 
         self._spawned_by_planner.append(name)
         self._spawn_results[name] = {"ok": True, "status": "spawned"}
+        if isinstance(actor, PlacedOnNode):
+            # Saved with its node, or a restart would bring it back on main.
+            spawn_cfg["node"] = actor.node
         self._register_for_restore(spawn_cfg, name, task)
 
         topics = spawn_cfg.get("mqtt_topics", [])

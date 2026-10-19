@@ -197,6 +197,28 @@ class DelegationManager:
           2. Remote node   — MQTT request/reply via agents/by-name/{name}/task
           3. Returns None if the agent is unknown in both
         """
+        return await self._delegate(
+            target_name, {"text": task}, {"text": task, "payload": task}, timeout
+        )
+
+    async def delegate_payload(
+        self, target_name: str, payload: dict[str, Any], timeout: float = 60.0
+    ) -> dict | None:
+        """`delegate_task` for a structured task: ``payload`` reaches the agent as it is.
+
+        The planner's route to an agent it did not find in its own process,
+        which on a node it cannot reach itself.
+        """
+        return await self._delegate(target_name, payload, payload, timeout)
+
+    async def _delegate(
+        self,
+        target_name: str,
+        local: dict[str, Any],
+        remote: dict[str, Any],
+        timeout: float,
+    ) -> dict | None:
+        """``local`` to the agent here, or ``remote`` to it on its node; None if neither has it."""
         if not self.host._registry:
             return None
 
@@ -204,7 +226,7 @@ class DelegationManager:
         if target:
             # ── Local path (fast, in-process) ────────────────────────────────
             try:
-                return await ask_through(self.host, target_name, {"text": task}, timeout=timeout)
+                return await ask_through(self.host, target_name, local, timeout=timeout)
             except ReplyError as exc:
                 # The agent's own account of its failure is the answer here;
                 # every caller reads the reply's fields and says what it finds.
@@ -230,7 +252,7 @@ class DelegationManager:
         async with self._reply_topic() as (reply_topic, future):
             await self.host._mqtt_publish(
                 f"agents/by-name/{target_name}/task",
-                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
+                {**remote, "_reply_topic": reply_topic, "_remote_task": True},
             )
             try:
                 return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)

@@ -26,18 +26,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ...config import CONFIG, MODEL_CODE_NODE, MODEL_CODE_ON_MAIN
 from ...core.outbound import Answer
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.refusals import REFUSED, UNANSWERED, RecentRefusals
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["KeptHere", "NotSpawned", "PlacedOnNode", "Placement", "runs_model_code"]
 
 #: What a spawn names to run in main's own process.
 MAIN = "main"
@@ -47,39 +49,6 @@ RUN_ON_MAIN = "Run on main"
 REFUSE = "Refuse"
 #: How a question nobody answered in time is closed on every dashboard.
 NO_ANSWER = "No answer in time"
-
-
-@dataclass(frozen=True)
-class PlacedOnNode:
-    """A spawn sent to a node: there is no actor here to return, only where it went.
-
-    ``running`` is whether main has heard from the node. One that has not is
-    sent the agent all the same: its desired state is kept on the broker, and
-    the node starts the agent when it starts.
-    """
-
-    name: str
-    node: str
-    running: bool
-
-
-@dataclass(frozen=True)
-class KeptHere:
-    """A spawn not sent, because an agent of its name already runs here.
-
-    ``node`` is where the spawn would have gone; ``replace`` moves it there.
-    """
-
-    name: str
-    node: str
-
-
-@dataclass(frozen=True)
-class NotSpawned:
-    """A spawn refused before anything started, and why, as the turn reports it."""
-
-    name: str
-    reason: str
 
 
 def runs_model_code(config: dict[str, Any]) -> bool:

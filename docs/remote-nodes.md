@@ -562,7 +562,9 @@ code the model wrote, naming no node, runs on the sandbox node rather than in
 main's process. The chat says so: "Spawned 'scraper' on node 'sandbox'". An
 agent that runs main's own classes is not moved: an LLM agent, a rule, a
 schedule, a catalogue or library agent. Nor is an agent restored from main's
-records, or one you move with `/migrate`.
+records, or one you move with `/migrate`. The agents the planner spawns for a
+plan go the same way: one sent to the node is waited for until the node reports
+it running, and the plan's steps reach it through main.
 
 A spawn the model wrote that names `main` is asking for main's credentials, and
 `WACTORZ_MODEL_CODE_ON_MAIN` decides what happens to it. With `ask`, the default,

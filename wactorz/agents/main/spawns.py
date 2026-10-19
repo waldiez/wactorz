@@ -33,7 +33,7 @@ from ...core.packages import (
 )
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
-from .placement import KeptHere, NotSpawned, PlacedOnNode
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode
 
 if TYPE_CHECKING:
     from ...core.actor import Actor

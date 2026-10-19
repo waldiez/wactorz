@@ -35,6 +35,7 @@ import hashlib
 import importlib
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from ...core.actor import Actor, ActorState, ReplyError, ask_through
@@ -98,6 +99,39 @@ class SpawnPlaceholder:
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<SpawnPlaceholder {self.name!r}>"
+
+
+@dataclass(frozen=True)
+class PlacedOnNode:
+    """A spawn sent to a node: there is no actor here to return, only where it went.
+
+    ``running`` is whether main has heard from the node. One that has not is
+    sent the agent all the same: its desired state is kept on the broker, and
+    the node starts the agent when it starts.
+    """
+
+    name: str
+    node: str
+    running: bool
+
+
+@dataclass(frozen=True)
+class KeptHere:
+    """A spawn not sent, because an agent of its name already runs here.
+
+    ``node`` is where the spawn would have gone; ``replace`` moves it there.
+    """
+
+    name: str
+    node: str
+
+
+@dataclass(frozen=True)
+class NotSpawned:
+    """A spawn refused before anything started, and why, as the turn reports it."""
+
+    name: str
+    reason: str
 
 
 if TYPE_CHECKING:

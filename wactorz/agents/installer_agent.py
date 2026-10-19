@@ -23,7 +23,6 @@ import asyncssh
 from .._version import __version__
 from ..config import (
     CONFIG,
-    NODE_SIGNING,
     DeployTarget,
     deploy_env_prefix,
     deploy_name_error,
@@ -31,11 +30,11 @@ from ..config import (
     deploy_target_for_host,
     reserved_node_name_error,
 )
-from ..core import broker_accounts
 from ..core.actor import Actor, Message, MessageType
 from ..core.installed_wheel import installed_from_a_direct_reference, wheel_of_installed
 from ..core.mqtt import client_id, install_id, mqtt_client
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
+from ..core.node_env import node_account, node_env_text
 from ..core.node_operations import (
     COMMAND_TIMEOUT_S,
     OPERATION_TIMEOUT_S,
@@ -43,7 +42,6 @@ from ..core.node_operations import (
     OperationRefused,
     command_for,
 )
-from ..core.node_signing import next_sequence, node_key
 from ..core.outbound import Answer
 from ..core.packages import (
     APPROVAL_TIMEOUT_S,
@@ -162,13 +160,6 @@ FIRST_HEARTBEAT_TIMEOUT_S = 45
 
 _TLS_MODE_ON = frozenset({"on", "1", "true", "yes"})
 _TLS_MODE_OFF = frozenset({"off", "0", "false", "no"})
-
-
-class UnusableNodeAccountError(ValueError):
-    """A node's name cannot be the broker account it would be deployed with."""
-
-    def __init__(self, problem: str) -> None:
-        super().__init__(problem)
 
 
 class UnknownTlsModeError(ValueError):
@@ -947,24 +938,17 @@ class InstallerAgent(Actor):
         node's.
         """
         username, password = self._node_account(target, node_name)
-        lines = [
-            f"WACTORZ_NODE={shlex.quote(node_name)}",
-            f"WACTORZ_BROKER={shlex.quote(broker)}",
-            f"WACTORZ_PORT={shlex.quote(str(port))}",
-            f"WACTORZ_NODE_KEY={shlex.quote(node_key(node_name))}",
-            f"WACTORZ_CONTROL_SINCE={next_sequence()}",
-            f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
-        ]
-        if tls is not None and tls.enabled:
-            lines.append("MQTT_TLS=1")
-            lines.append(f"MQTT_TLS_CA={shlex.quote(tls.ca)}")
-            lines.append(f"MQTT_TLS_CHECK_HOSTNAME={1 if tls.check_hostname else 0}")
+        enabled = tls is not None and tls.enabled
+        body = node_env_text(
+            node_name,
+            broker,
+            port,
+            username=username,
+            password=password,
+            tls_ca=tls.ca if tls is not None and enabled else None,
+            check_hostname=bool(tls is not None and tls.check_hostname),
+        )
         credentials = bool(username or password)
-        if credentials:
-            lines.append(f"MQTT_USERNAME={shlex.quote(username)}")
-            lines.append(f"MQTT_PASSWORD={shlex.quote(password)}")
-
-        body = "\n".join(lines) + "\n"
         remote = f"{home}/wactorz/.env"
         async with sftp.open(remote, "w") as handle:
             await handle.write(body)
@@ -990,22 +974,11 @@ class InstallerAgent(Actor):
 
     @staticmethod
     def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
-        """The broker account a node presents: one of its own, a derived one, or the server's.
+        """The broker account a node presents; see :func:`wactorz.core.node_env.node_account`.
 
-        A derived account only where the broker has one -- the brokers Wactorz
-        configures, with `WACTORZ_NODE_ACCOUNTS` set -- because an account no broker
-        knows leaves the node authenticating against nothing. Anywhere else the
-        server's own account stays the default, as it has been. A `broker_user` or
-        `broker_password` set for the target wins over both.
+        A `broker_user` or `broker_password` set for the target wins.
         """
-        default_user, default_password = CONFIG.mqtt_username or "", CONFIG.mqtt_password or ""
-        if CONFIG.node_accounts:
-            problem = broker_accounts.name_error(node_name)
-            if problem:
-                raise UnusableNodeAccountError(problem)
-            default_user = node_name
-            default_password = broker_accounts.password(node_name)
-        return target.broker_user or default_user, target.broker_password or default_password
+        return node_account(node_name, target.broker_user, target.broker_password)
 
     async def _decide_node_tls(
         self, conn: Any, sftp: Any, target: DeployTarget, home: str, broker: str, plain_port: int

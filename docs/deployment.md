@@ -69,6 +69,7 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | `python` | prometheus | `wactorz-prometheus:9090` | `127.0.0.1:9090` |
 | `python` | alertmanager | `alertmanager:9093` | `127.0.0.1:9093` |
 | `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
+| `sandbox` | wactorz-sandbox | — | none: it dials the broker |
 
 Every port except the broker's TLS one is published to this host only. Reach the
 dashboard and the API from elsewhere through a TLS proxy; `HA_EXTERNAL_BIND=0.0.0.0`
@@ -88,6 +89,29 @@ has none.
 docker compose --profile python up -d
 # Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)
 ```
+
+### The sandbox node
+
+Code the model writes can run in a container of its own, holding none of
+main's credentials. Set `WACTORZ_MODEL_CODE_NODE=sandbox` in `.env` and add the
+profile:
+
+```bash
+docker compose --profile python --profile sandbox up -d
+```
+
+`sandbox-env`, a one-shot, writes the node what `/deploy` writes any node: its
+name, the broker, its signing key and broker account, and the CA with TLS. It
+writes them into a volume that only `wactorz-sandbox` mounts. It runs again on
+every `docker compose up`, so after the broker's CA or the node's account
+changes, `docker compose --profile python --profile sandbox up -d` hands the
+node the new ones. The sandbox
+container mounts neither `.env` nor `./state`, and its network has the broker on
+it and nothing else, so main's API and Home Assistant are out of its reach. The
+packages its agents install go into its own volume. It is limited by
+`WACTORZ_SANDBOX_MEM_LIMIT` (default `2g`) and `WACTORZ_SANDBOX_PIDS_LIMIT`
+(`1024`). See [a node on main's own machine](remote-nodes.md#a-node-on-mains-own-machine)
+for what goes there and what stays on main.
 
 ### Health probes
 

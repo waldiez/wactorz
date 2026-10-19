@@ -555,6 +555,11 @@ The node's log is in the system journal, which its user cannot read, so a
 deploy that fails cannot bring back the log's last lines. Read them with
 `journalctl -u wactorz-node`.
 
+In the compose stack the node is a container instead: see
+[the sandbox node](deployment.md#the-sandbox-node). It needs no `DEPLOY_TARGETS`
+entry, since nothing reaches it over SSH: the node `WACTORZ_MODEL_CODE_NODE`
+names gets a broker account either way.
+
 #### Sending model-written code there
 
 Set `WACTORZ_MODEL_CODE_NODE=sandbox` in main's `.env` and a `<spawn>` whose
@@ -574,8 +579,8 @@ answered within two minutes, it is not spawned, and for ten minutes the same
 spawn is refused without asking again. `allow` lets it run on main without
 asking, and `never` refuses it.
 
-If the node named is not one of `DEPLOY_TARGETS`, such a spawn is refused,
-never quietly run on main. If it is, but the node is not running, the agent is
+If the node named is neither one of `DEPLOY_TARGETS` nor a node main has
+heard from, such a spawn is refused, never quietly run on main. If it is, but the node is not running, the agent is
 sent all the same and starts when the node does; the chat says so.
 
 ---

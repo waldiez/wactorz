@@ -68,6 +68,11 @@ class PlacementHost(Protocol):
     name: str
     actor_id: str
 
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """The nodes main has heard from: a node with no deploy target, in a container, is one."""
+        ...
+
     async def notify_user(self, text: str, *, options: Sequence[str] = ...) -> str: ...
 
     async def _mqtt_publish(
@@ -94,12 +99,15 @@ class Placement:
             return await self._on_main(config, name)
         if named:
             return config
-        if MODEL_CODE_NODE not in {target.name for target in CONFIG.deploy_targets}:
+        known = {target.name for target in CONFIG.deploy_targets} | set(self.host._known_nodes)
+        if MODEL_CODE_NODE not in known:
             return NotSpawned(
                 name,
                 f"code the model writes runs on node '{MODEL_CODE_NODE}' "
-                "(WACTORZ_MODEL_CODE_NODE), which is not a deploy target here. Set it up "
-                f"with `sudo wactorz-node setup-local`, then `/deploy {MODEL_CODE_NODE}`",
+                "(WACTORZ_MODEL_CODE_NODE), which is neither a deploy target here nor a node "
+                "main has heard from. Set it up with `sudo wactorz-node setup-local`, then "
+                f"`/deploy {MODEL_CODE_NODE}`; in the compose stack, start it with "
+                "`--profile sandbox`",
             )
         return {**config, "node": MODEL_CODE_NODE}
 

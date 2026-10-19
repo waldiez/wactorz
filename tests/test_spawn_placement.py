@@ -55,6 +55,12 @@ class _Host:
         self.questions: list[dict[str, Any]] = []
         self.published: list[tuple[str, Any]] = []
         self.asked = asyncio.Event()
+        #: The nodes main has heard from, by name.
+        self.heard: dict[str, dict[str, Any]] = {}
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        return self.heard
 
     async def notify_user(self, text: str, *, options: Any = ()) -> str:
         self.questions.append({"text": text, "options": list(options)})
@@ -156,6 +162,21 @@ class TestOffMain:
         assert isinstance(placed, NotSpawned)
         assert "setup-local" in placed.reason
         assert f"/deploy {NODE}" in placed.reason
+        assert "--profile sandbox" in placed.reason
+
+    async def test_a_node_main_has_heard_from_will_do(
+        self, host: _Host, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The compose stack's sandbox is a container, not a machine /deploy reaches.
+        monkeypatch.setattr(
+            placement, "CONFIG", dataclasses.replace(placement.CONFIG, deploy_targets=())
+        )
+        host.heard[NODE] = {"agents": []}
+
+        placed = await Placement(host).place(dynamic())
+
+        assert isinstance(placed, dict)
+        assert placed["node"] == NODE
 
 
 @pytest.mark.usefixtures("sandboxed")

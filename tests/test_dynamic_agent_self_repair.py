@@ -377,6 +377,13 @@ async def process(agent):
     subprocess.run(["true"])
 """
 
+REPAIR_THAT_ADDS_ASYNCIO = """
+import asyncio
+
+async def process(agent):
+    await asyncio.create_subprocess_exec("true")
+"""
+
 REPAIR_THAT_ADDS_JSON = """
 import json
 
@@ -399,6 +406,36 @@ class TestWhatARepairMayDo:
         # The first answer was refused and cost a round; the second was taken.
         assert len(llm.prompts) == 2
         assert "subprocess" not in agent._code
+
+    async def test_the_next_prompt_says_why_the_last_repair_was_refused(
+        self, tmp_path: Path
+    ) -> None:
+        # Otherwise the model, told only that the code still fails, may spend
+        # its remaining rounds on the same refused import.
+        llm = ScriptedLLM(REPAIR_THAT_ADDS_A_SHELL, REPAIRED_PROCESS)
+        agent = make_agent(tmp_path, CRASHING_PROCESS, llm)
+        await agent.on_start()
+
+        await until(lambda: agent._api.state.get("repaired_runs", 0) >= 1)
+        await shut_down(agent)
+
+        first, second = llm.prompts
+        assert "were not run" not in first
+        assert "were not run" in second
+        assert "imports subprocess" in second
+
+    async def test_a_repair_may_not_add_asyncio(self, tmp_path: Path) -> None:
+        # asyncio starts processes and opens connections without subprocess or
+        # socket being imported, so it is not one of the modules that only compute.
+        llm = ScriptedLLM(REPAIR_THAT_ADDS_ASYNCIO, REPAIRED_PROCESS)
+        agent = make_agent(tmp_path, CRASHING_PROCESS, llm)
+        await agent.on_start()
+
+        await until(lambda: agent._api.state.get("repaired_runs", 0) >= 1)
+        await shut_down(agent)
+
+        assert len(llm.prompts) == 2
+        assert "create_subprocess_exec" not in agent._code
 
     async def test_a_repair_may_import_a_module_that_only_computes(self, tmp_path: Path) -> None:
         llm = ScriptedLLM(REPAIR_THAT_ADDS_JSON)

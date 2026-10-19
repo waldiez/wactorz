@@ -420,6 +420,7 @@ class TestWhatARepairMayImport:
             ("import socket, json\n", ["socket"]),
             ("from urllib import request\n", ["urllib"]),
             ("import importlib.util\n", ["importlib"]),
+            ("import asyncio\n", ["asyncio"]),
         ],
     )
     def test_a_module_the_original_did_not_have_is_named(

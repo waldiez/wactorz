@@ -155,11 +155,12 @@ PROCESS_ANTIPATTERNS: list[tuple[str, str]] = [
 #: Modules a repair may import though the program it repairs did not: standard
 #: modules that only compute. A missing ``import json`` is among the commonest
 #: crashes a repair fixes, and none of these reaches a process, a socket or a
-#: file the program could not reach already.
+#: file the program could not reach already. ``asyncio`` is not one of them: it
+#: starts processes and opens connections (``create_subprocess_exec``,
+#: ``open_connection``) without ``subprocess`` or ``socket`` being imported.
 REPAIR_MAY_IMPORT = frozenset(
     {
         "abc",
-        "asyncio",
         "bisect",
         "collections",
         "copy",

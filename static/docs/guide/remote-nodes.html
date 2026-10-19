@@ -628,6 +628,47 @@ node holding the old one.</p>
 <div class="highlight"><pre><span></span><code>ssh-keyscan<span class="w"> </span><span class="m">192</span>.168.1.52<span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$DEPLOY_KNOWN_HOSTS</span><span class="s2">"</span><span class="w">   </span><span class="c1"># after verifying the fingerprint</span>
 </code></pre></div>
 
+<h3 id="a-node-on-mains-own-machine">A node on main's own machine</h3>
+<p>Main holds every credential the deployment has: the model's API key, Home
+Assistant's token, the SSH keys for your nodes, the key that signs commands to
+them. Code a model writes, possibly from an email or a web page it read, is
+safer run somewhere that holds none of them. A node holds none of them. A node
+on main's own machine, under a user of its own, gives that code a place to run
+without a second machine.</p>
+<p>On Linux with systemd, set it up once, as root, from the directory main runs in:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>.venv/bin/wactorz-node<span class="w"> </span>setup-local
+</code></pre></div>
+
+<p>It makes a system user, <code>wactorz-node</code>, with its home in <code>/var/lib/wactorz-node</code>.
+It makes an SSH key in main's state directory and lets that user accept it from
+this machine only. It lets that user restart its own unit and run nothing else
+as root. It installs the unit, and it prints the lines to add to main's <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">DEPLOY_TARGETS</span><span class="o">=</span><span class="nb">local</span><span class="w">            </span><span class="c1"># with your other nodes, if you have any</span>
+<span class="nv">DEPLOY_LOCAL_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1
+<span class="nv">DEPLOY_LOCAL_USER</span><span class="o">=</span>wactorz-node
+<span class="nv">DEPLOY_LOCAL_KEY</span><span class="o">=</span>/path/to/state/local_node_ed25519
+</code></pre></div>
+
+<p>Restart main, then <code>/deploy local</code>. From there it is a node like any other:
+<code>/deploy local</code> again upgrades it, and the packages its agents install reach it
+the way they reach every node. SSH has to be running on the machine, and
+<code>AllowUsers</code> in <code>sshd_config</code>, if you use it, has to include <code>wactorz-node</code>.</p>
+<p>The unit is sandboxed, which the units on other nodes are not: only
+<code>~/wactorz/state</code> is writable, the venv it runs from is read-only, the homes
+and main's <code>.env</code> and state directory are hidden, and it has no devices, no
+capabilities and no way to gain privilege. A deploy restarts this unit and
+never rewrites it, so the sandbox can be changed only by running
+<code>setup-local</code> again. An agent that needs a camera or GPIO belongs on a node
+with the device.</p>
+<p>The node's user must not be able to read main's secrets. Inside the unit they
+are hidden, but a package install runs outside it, as that user. So setup
+stops while main's <code>.env</code> or state directory is readable by <code>wactorz-node</code>.
+Run it again with <code>--fix-permissions</code> to make them readable by main's user
+alone. <code>--main-user</code>, <code>--env-file</code> and <code>--state-dir</code> name main's user and
+files, where <code>sudo</code> and the current directory do not.</p>
+<p>The node's log is in the system journal, which its user cannot read, so a
+deploy that fails cannot bring back the log's last lines. Read them with
+<code>journalctl -u wactorz-node</code>.</p>
 <hr />
 <h2 id="mqtt-topics">MQTT topics</h2>
 <p>The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.</p>

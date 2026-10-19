@@ -113,6 +113,25 @@ class TestQueries:
         assert isinstance(api.query_ha_states(as_dataframe=True), list)
 
 
+def test_pandas_going_missing_after_a_frame_was_built_is_still_seen(
+    api: AgentAPI, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The awaitable frame class is built once; whether pandas can be imported
+    # must still be asked on every call, not remembered from the first.
+    pytest.importorskip("pandas")
+    api.query_ts(as_dataframe=True)
+    real_import = builtins.__import__
+
+    def _import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "pandas":
+            raise ImportError("no pandas here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+
+    assert isinstance(api.query_ts(as_dataframe=True), list)
+
+
 class TestAwaitedOnMain:
     """`await agent.query_ts(...)` is written once and runs on main and on a node."""
 

@@ -57,16 +57,14 @@ class AwaitableDict(dict):
 
 
 @functools.cache
-def _awaitable_frame_type() -> type:
-    """A pandas DataFrame subclass that awaits to itself, built once on first use.
+def _awaitable_frame_type(frame: type) -> type:
+    """A subclass of ``frame``, pandas' DataFrame, that awaits to itself, built once.
 
-    Built here rather than at module level because pandas is optional, and
-    importing this module must not require it. A frame's own operations return
-    plain DataFrames, so only the frame a query hands back is awaitable.
+    A frame's own operations return plain DataFrames, so only the frame a query
+    hands back is awaitable.
     """
-    import pandas as pd  # optional dependency: the `data` extra
 
-    class AwaitableFrame(pd.DataFrame):
+    class AwaitableFrame(frame):
         def __await__(self) -> Any:
             return _itself(self)
 
@@ -74,5 +72,12 @@ def _awaitable_frame_type() -> type:
 
 
 def awaitable_frame(rows: list[dict[str, Any]]) -> Any:
-    """``rows`` as a pandas DataFrame that awaits to itself. Raises ImportError without pandas."""
-    return _awaitable_frame_type()(rows)
+    """``rows`` as a pandas DataFrame that awaits to itself. Raises ImportError without pandas.
+
+    pandas is imported on every call, not only when the class is first built:
+    whether it can be imported is asked each time, so the answer is never one
+    remembered from an earlier call.
+    """
+    import pandas as pd  # optional dependency: the `data` extra
+
+    return _awaitable_frame_type(pd.DataFrame)(rows)

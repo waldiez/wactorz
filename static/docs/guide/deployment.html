@@ -394,6 +394,16 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>The package index every install uses, such as a private mirror. Unset, pip uses PyPI</td>
 </tr>
 <tr>
+<td><code>WACTORZ_MODEL_CODE_NODE</code></td>
+<td>—</td>
+<td>The node code the model writes runs on when its spawn names none, usually <code>sandbox</code> (see <a href="../guide/remote-nodes.html#a-node-on-mains-own-machine">a node on main's own machine</a>). Unset, such code runs on main</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MODEL_CODE_ON_MAIN</code></td>
+<td><code>ask</code></td>
+<td>With <code>WACTORZ_MODEL_CODE_NODE</code> set, what happens to a spawn the model wrote that names main: <code>ask</code> on the dashboard, <code>allow</code>, or <code>never</code></td>
+</tr>
+<tr>
 <td><code>WACTORZ_AGENTS</code></td>
 <td>—</td>
 <td>Agents this deployment brings, as <code>package.module:attr</code> targets (an <code>Actor</code> subclass or a function declared with <code>@wactorz.agent</code>), comma separated. Supervised at startup beside the built-ins; see <a href="../guide/agents.html#bringing-your-own-agents">Bringing your own agents</a></td>

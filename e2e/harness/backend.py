@@ -43,6 +43,8 @@ LEFT_EMPTY = (
     "MQTT_TLS_CA",
     "MQTT_TLS_CHECK_HOSTNAME",
     "WACTORZ_LOG_FORMAT",
+    "WACTORZ_MODEL_CODE_NODE",
+    "WACTORZ_MODEL_CODE_ON_MAIN",
 )
 
 #: The line `_print_ready_banner` puts on stdout once everything is actually up.

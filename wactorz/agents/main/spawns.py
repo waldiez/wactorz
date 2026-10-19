@@ -33,6 +33,7 @@ from ...core.packages import (
 )
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
+from .placement import KeptHere, NotSpawned, PlacedOnNode
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -559,6 +560,25 @@ class SpawnService:
             )
         return True
 
+    async def _kept_here(self, asked: dict[str, Any], placed: dict[str, Any]) -> KeptHere | None:
+        """The agent of that name already running here, when placement moved its spawn off main.
+
+        A spawn sent to a node while an agent of the same name runs here would
+        leave two answering to one name. Without ``replace`` the one here stays,
+        as a spawn of a running name always has; with it, the one here is stopped
+        and the spawn goes on to the node.
+        """
+        if placed.get("node") == asked.get("node") or self.host._registry is None:
+            return None
+        existing = self.host._registry.find_by_name(str(placed.get("name", "")))
+        if existing is None:
+            return None
+        if not placed.get("replace"):
+            return KeptHere(existing.name, str(placed["node"]))
+        await self.host._stop_for_replace(existing, existing.name)
+        self._remove_from_spawn_registry(existing.name)
+        return None
+
     async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
         """Run every `<spawn>` block the model wrote, and strip them from the reply."""
         pattern = r"<spawn>(.*?)</spawn>"
@@ -574,7 +594,18 @@ class SpawnService:
                         continue
                 if not self._is_runnable(config):
                     continue
-                actor = await self._spawn_from_config(config, save=True)
+                placed = await self.host.placement.place(config)
+                if isinstance(placed, NotSpawned):
+                    logger.warning(
+                        "[%s] Not spawning %r: %s", self.host.name, placed.name, placed.reason
+                    )
+                    spawned.append(placed)
+                    continue
+                kept = await self._kept_here(config, placed)
+                if kept is not None:
+                    spawned.append(kept)
+                    continue
+                actor = await self._spawn_from_config(placed, save=True)
                 if actor:
                     spawned.append(actor)
             except Exception:
@@ -586,7 +617,7 @@ class SpawnService:
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
-    ) -> Actor | SpawnPlaceholder | None:
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         """Spawn one agent from a config dict.
 
         Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
@@ -599,7 +630,11 @@ class SpawnService:
         """
         node = config.get("node", "").strip()
         if node:
-            return await self._spawn_remote(config, node, save, restoring=from_registry)
+            if not await self._spawn_remote(config, node, save, restoring=from_registry):
+                return None
+            return PlacedOnNode(
+                str(config.get("name", "remote-agent")), node, node in self.host._known_nodes
+            )
         return await self.host._spawn_local_from_config(
             config, register=save, from_registry=from_registry
         )
@@ -822,8 +857,8 @@ class SpawnService:
 
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
-    ) -> None:
-        """Publish a spawn command to a node, which runs the agent there.
+    ) -> bool:
+        """Publish a spawn command to a node, which runs the agent there; False if refused.
 
         A remote agent appears in the dashboard like a local one, because both
         talk to the same broker.
@@ -847,7 +882,7 @@ class SpawnService:
                 node,
                 problem,
             )
-            return
+            return False
         # The node's targets are asked for only when they decide: a host that
         # cannot say -- a test's stand-in -- places code and LLM agents as before.
         targets: Collection[str] = ()
@@ -858,11 +893,11 @@ class SpawnService:
             )
             if problem:
                 await self._refuse_remote_spawn(config, node, f"{problem}.")
-                return
+                return False
         unrunnable = why_a_node_cannot_run(config, targets)
         if unrunnable:
             await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
-            return
+            return False
         mismatch = self.host._node_version_mismatch(node)
         if mismatch:
             # Before the install, the spawn and the desired state: a node on
@@ -879,11 +914,11 @@ class SpawnService:
                     "timestamp": time.time(),
                 },
             )
-            return
+            return False
         config, problem = await self.pinned_for(config, node)
         if problem:
             await self._refuse_remote_spawn(config, node, f"{problem}.")
-            return
+            return False
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 
@@ -893,7 +928,7 @@ class SpawnService:
 
         logger.info("[%s] Spawning %r on remote node %r", self.host.name, name, node)
         if packages and not await self._packages_placed(config, node, packages, restoring):
-            return
+            return False
 
         # Not retained, and that is the whole point. A retained spawn is handed
         # to the node again on every reconnect, so an agent withdrawn after this
@@ -925,3 +960,4 @@ class SpawnService:
 
         if save:
             self._save_to_spawn_registry(config)
+        return True

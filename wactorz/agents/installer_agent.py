@@ -29,6 +29,7 @@ from ..config import (
     deploy_name_error,
     deploy_target,
     deploy_target_for_host,
+    reserved_node_name_error,
 )
 from ..core import broker_accounts
 from ..core.actor import Actor, Message, MessageType
@@ -55,6 +56,7 @@ from ..core.packages import (
 )
 from ..core.paths import resolve_state_dir
 from ..core.pip import PIP_TIMEOUT_S, index_args, is_installable_name
+from ..core.refusals import REFUSED, UNANSWERED, RecentRefusals
 from . import node_service
 from .lookup import find_main_actor
 
@@ -322,6 +324,9 @@ class InstallerAgent(Actor):
         self._deploy_started_at = 0.0
         #: The questions about packages still waiting for the operator, by id.
         self._asking: dict[str, _Asking] = {}
+        #: Packages the operator refused, or was asked about and did not answer,
+        #: lately: asked for again in that time, they are refused without asking.
+        self._refusals = RecentRefusals()
 
     def _current_task_description(self) -> str:
         return "idle"
@@ -452,6 +457,8 @@ class InstallerAgent(Actor):
         return [str(name) for name in self.recall(ALLOWED_KEY, [])]
 
     def _remember(self, packages: Iterable[str]) -> None:
+        for package in packages:
+            self._refusals.forget(normalized(package))
         names = {normalized(p) for p in packages} | set(self._remembered())
         self.persist(ALLOWED_KEY, sorted(filter(None, names)))
 
@@ -477,6 +484,21 @@ class InstallerAgent(Actor):
         waiting = unlisted(packages, self._allowed())
         if not waiting:
             return []
+        standing = [
+            (package, refusal)
+            for package in waiting
+            if (refusal := self._refusals.standing(normalized(package))) is not None
+        ]
+        if standing:
+            # The spawn needs every one of them, so one refused lately settles it.
+            logger.warning(
+                "[%s] Not asking again about %s for %s: %s",
+                self.name,
+                ", ".join(waiting),
+                wanted_by,
+                "; ".join(f"{package} was {refusal.said()}" for package, refusal in standing),
+            )
+            return waiting
         names = ", ".join(waiting)
         question_id = await self.notify_user(
             f"{wanted_by} needs {names} installed, and "
@@ -497,9 +519,12 @@ class InstallerAgent(Actor):
                 names,
             )
             # Closed, so a press that comes later cannot allow a package for a
-            # spawn already refused. The next request for it asks afresh.
+            # spawn already refused. A request for them soon after is refused
+            # without asking; after that, it asks afresh.
             if self._asking.pop(question_id, None) is not None:
                 await self._close_question(question_id, NO_ANSWER)
+                for package in waiting:
+                    self._refusals.remember(normalized(package), UNANSWERED)
         return unlisted(waiting, self._allowed())
 
     async def _close_question(self, question_id: str, option: str) -> None:
@@ -549,6 +574,9 @@ class InstallerAgent(Actor):
             return
         if not asking.settled.done():
             asking.settled.set_result(answer.option == INSTALL)
+        if answer.option != INSTALL:
+            for package in asking.packages:
+                self._refusals.remember(normalized(package), REFUSED)
         if answer.option == INSTALL:
             self._remember(asking.packages)
             logger.warning(
@@ -1472,7 +1500,7 @@ class InstallerAgent(Actor):
         # Before anything reaches the network: a name that cannot be an MQTT
         # topic level yields a runner the broker refuses on every operation,
         # so it would retry forever while this deploy reported success.
-        name_problem = deploy_name_error(str(node_name))
+        name_problem = deploy_name_error(str(node_name)) or reserved_node_name_error(str(node_name))
         if name_problem:
             self._log_remote(f"Refusing deploy: {name_problem}")
             return {

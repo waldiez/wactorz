@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from ..prompts.assemble import PromptFragment
     from .artifact_service import ArtifactService
     from .migration import Migration
+    from .placement import Placement
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -72,6 +73,8 @@ class SpawnHost(Protocol):
     _result_futures: dict[str, Any]
     #: Pins the artifacts a config names before it goes to a node.
     artifact_service: ArtifactService
+    #: Decides where a spawn the model wrote runs.
+    placement: Placement
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:
@@ -92,6 +95,8 @@ class SpawnHost(Protocol):
     def _node_takes_bundles(self, node_name: str) -> bool:
         """Whether a node builds a library agent from code sent with its spawn."""
         ...
+
+    async def _stop_for_replace(self, existing: Any, name: str) -> None: ...
 
     def recall(self, key: str) -> Any: ...
 
@@ -332,7 +337,7 @@ class MigrationHost(NodeHost, Protocol):
 
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
-    ) -> None: ...
+    ) -> bool: ...
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = ..., *, from_registry: bool = ...

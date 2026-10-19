@@ -109,7 +109,11 @@ def test_a_package_allowed_goes_to_the_node_and_stays_allowed(
         what="the node to be running 'sampler'",
         interval=NODE_POLL_S,
     )
-    dashboard.expect_like("main", r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>")
+    dashboard.expect_like(
+        "main",
+        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        rf"ℹ️ Spawned 'sampler' on node '{NODE_NAME}'",
+    )
 
     dashboard.say("/packages", to="main")
     dashboard.expect_like(

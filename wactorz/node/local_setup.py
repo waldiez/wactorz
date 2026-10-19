@@ -13,7 +13,9 @@ none of them: a node. This sets one up on the same machine, once, as root:
   :func:`wactorz.agents.node_service.sandboxed_unit_file`), enabled but not
   started: nothing is installed in it until main deploys.
 
-From then on the node is like any other: ``/deploy local`` installs wactorz
+The node is called ``sandbox``: ``local`` and ``main`` already mean main itself
+(``/migrate <agent> local`` moves an agent to main). From then on it is like
+any other node: ``/deploy sandbox`` installs wactorz
 into a venv there over SSH, writes its settings, and restarts the unit, and
 packages reach it the way they reach every node. A deploy restarts this unit and
 never rewrites it, so the sandbox stays root's to change.
@@ -50,11 +52,11 @@ from ..agents.node_service import (
 logger = logging.getLogger(__name__)
 
 #: The node's name, its system user's, and the deploy target main knows it by.
-NODE = "local"
+NODE = "sandbox"
 NODE_USER = "wactorz-node"
 
 #: The key main deploys with, under its state directory.
-KEY_NAME = "local_node_ed25519"
+KEY_NAME = "sandbox_node_ed25519"
 
 #: How the key is limited in the node user's ``authorized_keys``: from this
 #: machine only, and no forwarding or terminal. Exec and SFTP, which is what a
@@ -62,6 +64,7 @@ KEY_NAME = "local_node_ed25519"
 KEY_OPTIONS = 'from="127.0.0.1,::1",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty'
 
 #: The comment the key carries, by which an earlier one is found and replaced.
+#: Kept as it was when the node had another name, so those keys are replaced too.
 KEY_COMMENT = "wactorz-local-node"
 
 #: Characters a path may not hold to be written into a unit or sudoers file:
@@ -101,12 +104,12 @@ class SetupError(Exception):
     @classmethod
     def not_linux(cls) -> "SetupError":
         return cls(
-            "A local node needs Linux with systemd. Elsewhere, model-written code stays on main."
+            "A sandbox node needs Linux with systemd. Elsewhere, model-written code stays on main."
         )
 
     @classmethod
     def no_systemd(cls) -> "SetupError":
-        return cls("systemd is not running here, and the local node is a systemd unit.")
+        return cls("systemd is not running here, and the sandbox node is a systemd unit.")
 
     @classmethod
     def no_main_user(cls) -> "SetupError":
@@ -182,7 +185,7 @@ def main_from(args: argparse.Namespace, run: Run) -> Main:
 
 
 def setup(main: Main, run: Run, layout: Layout, *, fix_permissions: bool) -> Path:
-    """Set the local node up for ``main``, returning the key main deploys with."""
+    """Set the sandbox node up for ``main``, returning the key main deploys with."""
     if layout.unit.exists() and not _ours(layout.unit):
         raise SetupError.foreign_unit(layout.unit)
     _ensure_user(run, layout)
@@ -242,7 +245,10 @@ def _ensure_key(run: Run, main: Main, key: Path) -> None:
     """The key main deploys with, made as main's user so only main can read it."""
     if key.exists():
         return
-    _must(run, ["install", "-d", "-m", "0700", "-o", main.user, str(main.state_dir)])
+    if not main.state_dir.exists():
+        # Only when missing: on an existing directory `install -d` would also
+        # change its mode, which is `--fix-permissions`'s to do, and said.
+        _must(run, ["install", "-d", "-m", "0700", "-o", main.user, str(main.state_dir)])
     _must(
         run,
         [
@@ -262,7 +268,7 @@ def _ensure_key(run: Run, main: Main, key: Path) -> None:
             str(key),
         ],
     )
-    logger.info("Made the key main deploys the local node with: %s", key)
+    logger.info("Made the key main deploys the sandbox node with: %s", key)
 
 
 def _authorize(run: Run, layout: Layout, key: Path) -> None:
@@ -325,7 +331,7 @@ def _check_secrets(run: Run, main: Main, *, fix_permissions: bool) -> None:
 
 
 def deploy_settings(key: Path) -> str:
-    """What main's ``.env`` needs for ``/deploy local``, besides ``local`` in ``DEPLOY_TARGETS``."""
+    """What main's ``.env`` needs for ``/deploy sandbox``, besides the node in ``DEPLOY_TARGETS``."""
     return "\n".join(
         [
             f"DEPLOY_{NODE.upper()}_HOST=127.0.0.1",
@@ -384,7 +390,7 @@ def main(argv: Sequence[str]) -> int:
         print(exc, file=sys.stderr)
         return 1
     print(
-        f"The local node is set up. In main's .env, add {NODE} to DEPLOY_TARGETS and add "
+        f"The {NODE} node is set up. In main's .env, add {NODE} to DEPLOY_TARGETS and add "
         f"these lines; then restart main and run /deploy {NODE}.\n\n{deploy_settings(key)}"
     )
     return 0

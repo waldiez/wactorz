@@ -20,6 +20,7 @@ from ...config import (
 )
 from ...core.actor import Actor, Message, MessageType
 from ...core.node_signing import node_control_properties
+from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
 from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
@@ -40,6 +41,7 @@ from .manifests import ManifestRegistry
 from .memory import MemoryMixin
 from .migration import Migration
 from .nodes import NodeManager
+from .placement import PlacedOnNode, Placement
 from .planning import PlanningMixin, starts_with_bypass
 from .routing import RoutingMixin
 from .spawns import SpawnService
@@ -164,8 +166,18 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.artifact_service = ArtifactService(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
+        self.placement = Placement(self)
         self.delegation = DelegationManager(self)
         self.lifecycle = LifecycleService(self)
+
+    async def dashboard_answer(self, answer: Answer) -> None:
+        """A press on the dashboard for a question main asked, handed over in this process.
+
+        Main's questions are permissions -- whether code the model wrote may run
+        here -- so their answers are taken from the web server, never from the
+        broker (see :class:`~wactorz.core.outbound.TakesDashboardAnswers`).
+        """
+        await self.placement.dashboard_answer(answer)
 
     def _current_interface_source(self) -> str:
         """Return the task-local interface excluded from delegation this turn."""
@@ -1075,7 +1087,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
-    ) -> Actor | SpawnPlaceholder | None:
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         return await self.spawns._spawn_from_config(config, save, from_registry=from_registry)
 
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -1083,8 +1095,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
-    ) -> None:
-        await self.spawns._spawn_remote(config, node, save, restoring=restoring)
+    ) -> bool:
+        return await self.spawns._spawn_remote(config, node, save, restoring=restoring)
 
     def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
         """Sign whatever main addresses to a node's control topics.

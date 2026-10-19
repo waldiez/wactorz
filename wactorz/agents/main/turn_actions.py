@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..mixins import SpawnPlaceholder
+from .placement import KeptHere, NotSpawned, PlacedOnNode
 
 
 @dataclass(frozen=True)
@@ -46,12 +47,30 @@ class TurnActions:
         anything the spawn returned.
         """
         parts: list[str] = []
-        live = [a.name for a in self.spawned if not isinstance(a, SpawnPlaceholder)]
+        elsewhere = (SpawnPlaceholder, PlacedOnNode, NotSpawned, KeptHere)
+        live = [a.name for a in self.spawned if not isinstance(a, elsewhere)]
         installing = [a.name for a in self.spawned if isinstance(a, SpawnPlaceholder)]
+        replaced = '"replace": true' in response or '"replace":true' in response
+        action = "Replaced" if replaced else "Spawned"
         if live:
-            replaced = '"replace": true' in response or '"replace":true' in response
-            action = "Replaced" if replaced else "Spawned"
             parts.append(f"{action} {_named(live)} — will auto-restore on restart")
+        for placed in (a for a in self.spawned if isinstance(a, PlacedOnNode)):
+            parts.append(
+                f"{action} '{placed.name}' on node '{placed.node}'"
+                + (
+                    ""
+                    if placed.running
+                    else f", which is not running: it starts there when the node does "
+                    f"(/deploy {placed.node})"
+                )
+            )
+        for kept in (a for a in self.spawned if isinstance(a, KeptHere)):
+            parts.append(
+                f"'{kept.name}' is already running here, so it was not spawned again; "
+                f"\"replace\": true moves it to node '{kept.node}'"
+            )
+        for refused in (a for a in self.spawned if isinstance(a, NotSpawned)):
+            parts.append(f"Did not spawn '{refused.name}': {refused.reason}")
         if installing:
             parts.append(f"Installing packages for {_named(installing)} — will appear shortly")
         # Deletions are unquoted because both paths already wrote them that way;

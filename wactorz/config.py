@@ -320,6 +320,38 @@ def _node_signing_mode() -> str:
 
 NODE_SIGNING = _node_signing_mode()
 
+#: The node model-written code runs on when its spawn names none, usually
+#: ``sandbox`` (see ``wactorz-node setup-local``). Empty keeps such code on main,
+#: where it has every credential main holds.
+MODEL_CODE_NODE = _unquote(os.getenv("WACTORZ_MODEL_CODE_NODE", "") or "").strip()
+
+#: What happens when a spawn the model wrote asks for main by name, while
+#: ``WACTORZ_MODEL_CODE_NODE`` sends model-written code elsewhere: ``ask`` the
+#: operator on the dashboard, ``allow`` it, or refuse it (``never``).
+MODEL_CODE_ON_MAIN_MODES = ("ask", "allow", "never")
+
+#: The mode when none is set, or when the one set is not a mode.
+DEFAULT_MODEL_CODE_ON_MAIN = "ask"
+
+
+def _model_code_on_main() -> str:
+    """The configured mode, or ``DEFAULT_MODEL_CODE_ON_MAIN`` when unset or unrecognised."""
+    value = _unquote(os.getenv("WACTORZ_MODEL_CODE_ON_MAIN", "") or "").strip().lower()
+    if not value:
+        return DEFAULT_MODEL_CODE_ON_MAIN
+    if value not in MODEL_CODE_ON_MAIN_MODES:
+        warnings.warn(
+            f"WACTORZ_MODEL_CODE_ON_MAIN={value!r} is not one of "
+            f"{', '.join(MODEL_CODE_ON_MAIN_MODES)} — using {DEFAULT_MODEL_CODE_ON_MAIN!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_MODEL_CODE_ON_MAIN
+    return value
+
+
+MODEL_CODE_ON_MAIN = _model_code_on_main()
+
 #: How a log line is written: ``text`` for a person reading it, ``json`` for a
 #: collector that parses it.
 LOG_FORMATS = ("text", "json")
@@ -423,6 +455,10 @@ def _env_slug(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", name.strip().upper()).strip("_")
 
 
+#: Names that already mean main itself, in `/migrate` and on the dashboard, so a
+#: node may not take them.
+RESERVED_NODE_NAMES = frozenset({"local", "main"})
+
 #: Characters a node name may not contain, because it becomes one level of an
 #: MQTT topic: ``#`` and ``+`` are the wildcards, ``/`` is the level separator.
 _NODE_NAME_FORBIDDEN = ("#", "+", "/")
@@ -454,6 +490,23 @@ def deploy_name_error(node_name: str) -> str | None:
         )
     if name != node_name:
         return f"Node name {node_name!r} has leading or trailing whitespace."
+    return None
+
+
+def reserved_node_name_error(node_name: str) -> str | None:
+    """Why ``node_name`` may not be given to a new node, or None if it may.
+
+    Checked where a node is made -- ``/deploy`` and ``setup-local`` -- and not
+    where one starts: a node already running under such a name keeps starting,
+    and is renamed by deploying it again under another.
+    """
+    name = (node_name or "").strip()
+    if name.lower() in RESERVED_NODE_NAMES:
+        return (
+            f"Node name {name!r} already means main itself: `/migrate <agent> {name}` moves an "
+            "agent to main, and the dashboard lists main's agents under 'local'. Give the "
+            "node another name; a node on main's own machine is usually 'sandbox'."
+        )
     return None
 
 

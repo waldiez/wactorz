@@ -195,7 +195,7 @@ The `"install"` list is usually written by the model, and a plausible guess at a
 
 - A package on the list of packages installed without asking goes through at once. That list holds what the catalogue and the examples install, the packages the installer knows by their import names (`cv2` → `opencv-python`), those named in `WACTORZ_PIP_ALLOW` on main, and those you have allowed since.
 - A package already installed where the agent runs is not asked about on main, since nothing is installed. A node installs whatever the spawn lists, so there every package not on the list is asked about.
-- Anything else is asked about on the dashboard: a notice that stays until you answer names the agent and the packages, with **Install** and **Refuse**. The same question is in the installer's thread in Chat, which opens while it asks, so a notice you dismissed is not lost. **Install** allows them from then on, and lets through any other spawn waiting for the same packages. **Refuse**, or no answer within two minutes, means the agent is not sent, and the dashboard says why; a question nobody answered closes as "No answer in time", and asking for the agent again asks again.
+- Anything else is asked about on the dashboard: a notice that stays until you answer names the agent and the packages, with **Install** and **Refuse**. The same question is in the installer's thread in Chat, which opens while it asks, so a notice you dismissed is not lost. **Install** allows them from then on, and lets through any other spawn waiting for the same packages. **Refuse**, or no answer within two minutes, means the agent is not sent, and the dashboard says why; a question nobody answered closes as "No answer in time". For ten minutes after either, a request for the same package is refused without asking (main's log says when it was refused), so a model retrying the spawn does not put the question to you again; `/packages allow` lifts that at once.
 - `/packages` shows the list, `/packages allow <name> …` adds to it and `/packages forget <name> …` takes off what you added. Forgetting applies to agents placed from then on: an agent already saved keeps the packages it was placed with, and is reinstalled with them when it is restored, so that a restart never waits on you. Delete the agent to be rid of them. Typing `/deploy-pkg` in the terminal allows the packages it names.
 
 Only the dashboard's own button counts: the installer is handed the press by the web server in the same process and does not listen for answers on the broker, where any agent could publish one. The same applies to an agent spawned on main, and to a move to a node with `/migrate`, which clears the list before the agent stops. An agent put back where it already ran — restored at start, or after a move that failed — is not asked about again: its packages were cleared when it was first placed.
@@ -522,14 +522,17 @@ this machine only. It lets that user restart its own unit and run nothing else
 as root. It installs the unit, and it prints the lines to add to main's `.env`:
 
 ```bash
-DEPLOY_TARGETS=local            # with your other nodes, if you have any
-DEPLOY_LOCAL_HOST=127.0.0.1
-DEPLOY_LOCAL_USER=wactorz-node
-DEPLOY_LOCAL_KEY=/path/to/state/local_node_ed25519
+DEPLOY_TARGETS=sandbox          # with your other nodes, if you have any
+DEPLOY_SANDBOX_HOST=127.0.0.1
+DEPLOY_SANDBOX_USER=wactorz-node
+DEPLOY_SANDBOX_KEY=/path/to/state/sandbox_node_ed25519
 ```
 
-Restart main, then `/deploy local`. From there it is a node like any other:
-`/deploy local` again upgrades it, and the packages its agents install reach it
+Restart main, then `/deploy sandbox`. The node is called `sandbox` because
+`local` and `main` already mean main itself: `/migrate <agent> local` moves an
+agent to main, and the dashboard lists main's agents under `local`. No node can
+be deployed under either name. From there it is a node like any other:
+`/deploy sandbox` again upgrades it, and the packages its agents install reach it
 the way they reach every node. SSH has to be running on the machine, and
 `AllowUsers` in `sshd_config`, if you use it, has to include `wactorz-node`.
 
@@ -551,6 +554,27 @@ files, where `sudo` and the current directory do not.
 The node's log is in the system journal, which its user cannot read, so a
 deploy that fails cannot bring back the log's last lines. Read them with
 `journalctl -u wactorz-node`.
+
+#### Sending model-written code there
+
+Set `WACTORZ_MODEL_CODE_NODE=sandbox` in main's `.env` and a `<spawn>` whose
+code the model wrote, naming no node, runs on the sandbox node rather than in
+main's process. The chat says so: "Spawned 'scraper' on node 'sandbox'". An
+agent that runs main's own classes is not moved: an LLM agent, a rule, a
+schedule, a catalogue or library agent. Nor is an agent restored from main's
+records, or one you move with `/migrate`.
+
+A spawn the model wrote that names `main` is asking for main's credentials, and
+`WACTORZ_MODEL_CODE_ON_MAIN` decides what happens to it. With `ask`, the default,
+the dashboard asks you, with **Run on main** and **Refuse**, and only the
+dashboard's button counts, never an answer on the broker. Refused, or not
+answered within two minutes, it is not spawned, and for ten minutes the same
+spawn is refused without asking again. `allow` lets it run on main without
+asking, and `never` refuses it.
+
+If the node named is not one of `DEPLOY_TARGETS`, such a spawn is refused,
+never quietly run on main. If it is, but the node is not running, the agent is
+sent all the same and starts when the node does; the chat says so.
 
 ---
 

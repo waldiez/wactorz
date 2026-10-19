@@ -80,7 +80,13 @@ def test_main_starts_an_agent_on_the_node(
 ) -> None:
     dashboard.say("please start a counter on the node", to="main")
 
-    dashboard.expect_like("main", r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>")
+    # The reply ends saying where the agent went: a spawn on a node has no actor
+    # here to report, and the turn used to say nothing about it at all.
+    dashboard.expect_like(
+        "main",
+        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        rf"ℹ️ Spawned 'counter' on node '{NODE_NAME}'",
+    )
     waiting.until(
         lambda: "counter" in _on_the_node(app),
         what="the node to be running 'counter'",
@@ -186,7 +192,8 @@ def test_an_agent_on_the_node_asks_the_model_through_the_server(
     dashboard.expect_like(
         "main",
         rf"✅ System: Migration of 'counter' from 'local' → '{NODE_NAME}' complete\.\s+"
-        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>",
+        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        rf"ℹ️ Spawned 'asker' on node '{NODE_NAME}'",
     )
     waiting.until(
         lambda: "asker" in _on_the_node(app),
@@ -225,7 +232,11 @@ def test_an_agent_on_the_node_that_ends_itself_leaves_the_dashboard_once(
     # agent's manifest and main forgets it. Its card must go once and stay gone,
     # through the node's heartbeats that no longer list it.
     dashboard.say("please start a finisher on the node", to="main")
-    dashboard.expect_like("main", r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>")
+    dashboard.expect_like(
+        "main",
+        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        rf"ℹ️ Spawned 'far-finisher' on node '{NODE_NAME}'",
+    )
     dashboard.watch_card("far-finisher")
 
     waiting.until(

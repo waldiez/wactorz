@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from wactorz.agents.node_service import MANAGED_MARKER, UNIT_NAME
+from wactorz.config import RESERVED_NODE_NAMES
 from wactorz.node import cli as node_cli
 from wactorz.node import local_setup
 from wactorz.node.local_setup import (
@@ -196,6 +197,16 @@ class TestRunAgain:
         assert layout.unit.read_text().startswith("[Unit]")
 
 
+class TestAStateDirectoryAlreadyThere:
+    def test_keeps_its_mode_unless_asked_to_fix_it(self, main: Main, layout: Layout) -> None:
+        # Making main's files private is --fix-permissions's to do, and said.
+        machine = FakeMachine()
+
+        setup(main, machine, layout, fix_permissions=False)
+
+        assert not machine.ran("install", "-d", str(main.state_dir))
+
+
 class TestMainsSecrets:
     def test_setup_stops_while_the_node_could_read_them(self, main: Main, layout: Layout) -> None:
         machine = FakeMachine(readable=[main.env_file])
@@ -304,10 +315,15 @@ class TestTheCommand:
         settings = local_setup.deploy_settings(tmp_path / KEY_NAME).splitlines()
 
         assert settings == [
-            "DEPLOY_LOCAL_HOST=127.0.0.1",
-            f"DEPLOY_LOCAL_USER={NODE_USER}",
-            f"DEPLOY_LOCAL_KEY={tmp_path / KEY_NAME}",
+            "DEPLOY_SANDBOX_HOST=127.0.0.1",
+            f"DEPLOY_SANDBOX_USER={NODE_USER}",
+            f"DEPLOY_SANDBOX_KEY={tmp_path / KEY_NAME}",
         ]
+
+    def test_the_node_is_not_given_a_name_that_means_main(self) -> None:
+        # `/migrate <agent> local` moves an agent to main, and the dashboard lists
+        # main's agents under 'local'.
+        assert local_setup.NODE not in RESERVED_NODE_NAMES
 
     def test_the_node_command_hands_setup_local_its_arguments(
         self, monkeypatch: pytest.MonkeyPatch

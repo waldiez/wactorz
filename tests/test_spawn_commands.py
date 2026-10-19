@@ -23,6 +23,7 @@ import pytest
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.placement import Placement
 from wactorz.agents.main.spawns import SpawnService, _parse_spawn_config
 
 _SPAWN_FAILED = "spawn failed"
@@ -90,6 +91,7 @@ class _Main:
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
         main.spawns = SpawnService(main)
+        main.placement = Placement(main)
         setattr(main, "_registry", registry if registry is not None else _Registry())
 
         self.configs: list[dict[str, Any]] = []

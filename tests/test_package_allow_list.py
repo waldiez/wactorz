@@ -274,6 +274,60 @@ class TestAskingTheOperator:
         assert installer.installed == [UNLISTED]
 
 
+class TestAskingAgainSoonAfter:
+    """A model told no often tries again; the operator is not asked again for a while."""
+
+    async def test_a_refusal_stands_without_asking_again(self, installer: _Installer) -> None:
+        pending = installer.install(UNLISTED)
+        await installer.until_asked()
+        await installer.agent.dashboard_answer(installer.press(installer_agent.REFUSE))
+        await pending
+        installer.asked.clear()
+
+        result = await installer.ask("install", packages=[UNLISTED])
+
+        assert result["refused"] == [UNLISTED]
+        assert not installer.asked.is_set()
+
+    async def test_so_does_a_question_nobody_answered(
+        self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An operator who is away would otherwise find the same question asked
+        # once per retry.
+        monkeypatch.setattr(installer_agent, "APPROVAL_TIMEOUT_S", 0.01)
+        await installer.ask("install", packages=[UNLISTED])
+        installer.asked.clear()
+
+        result = await installer.ask("install", packages=[UNLISTED])
+
+        assert result["refused"] == [UNLISTED]
+        assert not installer.asked.is_set()
+
+    async def test_after_a_while_it_is_asked_about_afresh(
+        self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(installer_agent, "APPROVAL_TIMEOUT_S", 0.01)
+        monkeypatch.setattr(installer.agent._refusals, "_remembered_s", 0.0)
+        await installer.ask("install", packages=[UNLISTED])
+        installer.asked.clear()
+
+        await installer.ask("install", packages=[UNLISTED])
+
+        assert installer.asked.is_set()
+
+    async def test_allowing_it_by_command_lifts_the_refusal(self, installer: _Installer) -> None:
+        pending = installer.install(UNLISTED)
+        await installer.until_asked()
+        await installer.agent.dashboard_answer(installer.press(installer_agent.REFUSE))
+        await pending
+
+        await installer.ask("packages_allow", packages=[UNLISTED])
+        result = await installer.ask("install", packages=[UNLISTED])
+
+        assert result["success"]
+        assert installer.installed == [UNLISTED]
+
+
 class TestWhoMaySayYes:
     async def test_an_answer_on_the_broker_topic_is_not_listened_to(
         self, installer: _Installer, monkeypatch: pytest.MonkeyPatch

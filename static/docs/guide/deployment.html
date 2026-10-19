@@ -254,6 +254,12 @@ one-time sign-in link in <code>docker compose logs wactorz-python</code>. Set <c
 <td><code>homeassistant:8123</code></td>
 <td><code>127.0.0.1:8123</code></td>
 </tr>
+<tr>
+<td><code>sandbox</code></td>
+<td>wactorz-sandbox</td>
+<td>—</td>
+<td>none: it dials the broker</td>
+</tr>
 </tbody>
 </table>
 <p>Every port except the broker's TLS one is published to this host only. Reach the
@@ -272,6 +278,25 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <span class="c1"># Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)</span>
 </code></pre></div>
 
+<h3 id="the-sandbox-node">The sandbox node</h3>
+<p>Code the model writes can run in a container of its own, holding none of
+main's credentials. Set <code>WACTORZ_MODEL_CODE_NODE=sandbox</code> in <code>.env</code> and add the
+profile:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>--profile<span class="w"> </span>sandbox<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p><code>sandbox-env</code>, a one-shot, writes the node what <code>/deploy</code> writes any node: its
+name, the broker, its signing key and broker account, and the CA with TLS. It
+writes them into a volume that only <code>wactorz-sandbox</code> mounts. It runs again on
+every <code>docker compose up</code>, so after the broker's CA or the node's account
+changes, <code>docker compose --profile python --profile sandbox up -d</code> hands the
+node the new ones. The sandbox
+container mounts neither <code>.env</code> nor <code>./state</code>, and its network has the broker on
+it and nothing else, so main's API and Home Assistant are out of its reach. The
+packages its agents install go into its own volume. It is limited by
+<code>WACTORZ_SANDBOX_MEM_LIMIT</code> (default <code>2g</code>) and <code>WACTORZ_SANDBOX_PIDS_LIMIT</code>
+(<code>1024</code>). See <a href="../guide/remote-nodes.html#a-node-on-mains-own-machine">a node on main's own machine</a>
+for what goes there and what stays on main.</p>
 <h3 id="health-probes">Health probes</h3>
 <p>Both servers answer the same probes, with no key:</p>
 <ul>

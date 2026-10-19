@@ -672,6 +672,10 @@ files, where <code>sudo</code> and the current directory do not.</p>
 <p>The node's log is in the system journal, which its user cannot read, so a
 deploy that fails cannot bring back the log's last lines. Read them with
 <code>journalctl -u wactorz-node</code>.</p>
+<p>In the compose stack the node is a container instead: see
+<a href="../guide/deployment.html#the-sandbox-node">the sandbox node</a>. It needs no <code>DEPLOY_TARGETS</code>
+entry, since nothing reaches it over SSH: the node <code>WACTORZ_MODEL_CODE_NODE</code>
+names gets a broker account either way.</p>
 <h4 id="sending-model-written-code-there">Sending model-written code there</h4>
 <p>Set <code>WACTORZ_MODEL_CODE_NODE=sandbox</code> in main's <code>.env</code> and a <code>&lt;spawn&gt;</code> whose
 code the model wrote, naming no node, runs on the sandbox node rather than in
@@ -688,8 +692,8 @@ dashboard's button counts, never an answer on the broker. Refused, or not
 answered within two minutes, it is not spawned, and for ten minutes the same
 spawn is refused without asking again. <code>allow</code> lets it run on main without
 asking, and <code>never</code> refuses it.</p>
-<p>If the node named is not one of <code>DEPLOY_TARGETS</code>, such a spawn is refused,
-never quietly run on main. If it is, but the node is not running, the agent is
+<p>If the node named is neither one of <code>DEPLOY_TARGETS</code> nor a node main has
+heard from, such a spawn is refused, never quietly run on main. If it is, but the node is not running, the agent is
 sent all the same and starts when the node does; the chat says so.</p>
 <hr />
 <h2 id="mqtt-topics">MQTT topics</h2>

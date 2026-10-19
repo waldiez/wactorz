@@ -28,6 +28,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A message to an agent on a node is delivered just after the server restarts.** For the first few seconds, until the node next reported, `@agent` for an agent running on a node got "Agent @agent not found.", though the node had kept it running. Until a node reports after a start, main now routes to it the agents it placed there.
+
 - **Deeply nested generated code no longer takes the process down on Windows.** The safety check parses an agent's code before it runs, and CPython's parser recurses once per level of nesting, stopping itself with an error only if the stack lasts that long. A thread on Windows gets a megabyte, which code nested thousands of levels deep uses up first, and the overflow killed the whole process, every actor in it. The parse now runs on a thread with room enough to reach the parser's own guard, and whatever parses is measured: deeper than the tokenizer's own bracket limit, it is refused as nested too deeply, so the compile that would follow on the ordinary stack never sees it.
 
 - **A node whose heartbeat cannot be built or sent now says why.** The failure was retried silently, so a node missing from the dashboard was a silence with nothing to read; it is logged once per distinct reason.

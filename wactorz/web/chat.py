@@ -82,17 +82,30 @@ NO_MAIN_FOR_NODES = (
 
 
 def remote_node_for(name: str) -> str | None:
-    """The node running ``name``, or None if no node recently said it has it."""
+    """The node running ``name``, or None if no node recently said it has it.
+
+    A node's heartbeat is what says so. Just after main starts no node has
+    reported yet, though the nodes kept running, so for that long the spawn
+    registry answers instead: an agent it places on a node main has not heard
+    from since starting is taken to be there. Once the node reports, or the
+    window passes, only the heartbeat counts -- a node that never comes back is
+    then said to have nothing, rather than every message to it waiting out the
+    reply timeout.
+    """
     # Main itself, not the orchestrator: the node table is main's.
     main_actor = find_main_actor(runtime.registry)
     if not main_actor:
         return None
-    for node_name, nd in main_actor._known_nodes.items():
+    known = main_actor._known_nodes
+    for node_name, nd in known.items():
         if time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS and name in nd.get(
             "agents", []
         ):
             return node_name
-    return None
+    if time.time() - main_actor.metrics.start_time >= NODE_FRESH_SECONDS:
+        return None
+    placed = str(main_actor._get_spawn_registry().get(name, {}).get("node") or "").strip()
+    return placed if placed and placed not in known else None
 
 
 def routable(name: str) -> bool:

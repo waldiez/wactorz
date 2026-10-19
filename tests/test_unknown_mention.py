@@ -43,14 +43,24 @@ def _agent(name: str) -> Any:
     return agent
 
 
-def _main_with_nodes(nodes: dict[str, dict[str, Any]]) -> Any:
+def _main_with_nodes(
+    nodes: dict[str, dict[str, Any]],
+    *,
+    placed: dict[str, str] | None = None,
+    started: float | None = None,
+) -> Any:
     """A main actor whose heartbeat table says what runs where.
 
     `_known_nodes` reads through `self.nodes`, so the table is put where the
-    property looks for it rather than on the actor.
+    property looks for it rather than on the actor. ``placed`` is what its
+    spawn registry places on which node, and ``started`` when it started:
+    long ago unless a test says otherwise.
     """
     main = _agent("main")
     main.nodes = SimpleNamespace(known=nodes)
+    registry = {name: {"name": name, "node": node} for name, node in (placed or {}).items()}
+    main.spawns = SimpleNamespace(_get_spawn_registry=lambda: registry)
+    main.metrics = SimpleNamespace(start_time=time.time() - 3600 if started is None else started)
     return main
 
 
@@ -105,6 +115,41 @@ class TestWhoATurnBelongsTo:
         runtime.registry = _Registry(_main_with_nodes(nodes))
 
         assert chat.turn_attribution("@collector how hot", "collector") == "collector"
+
+
+class TestJustAfterMainStarts:
+    """No node has reported yet, though the nodes kept running across the restart."""
+
+    def test_an_agent_the_registry_places_on_a_node_is_routed_there(self) -> None:
+        main = _main_with_nodes({}, placed={"counter": "edge"}, started=time.time())
+        runtime.registry = _Registry(main)
+
+        assert chat.remote_node_for("counter") == "edge"
+        assert chat.turn_attribution("@counter five", "main") == "counter"
+
+    def test_once_the_node_reports_its_heartbeat_decides(self) -> None:
+        # It reported without the agent: the registry's word no longer counts.
+        nodes = {"edge": {"last_seen": time.time(), "agents": ["asker"]}}
+        main = _main_with_nodes(nodes, placed={"counter": "edge"}, started=time.time())
+        runtime.registry = _Registry(main)
+
+        assert chat.remote_node_for("counter") is None
+
+    def test_after_the_window_a_node_that_never_reported_has_nothing(self) -> None:
+        # Routed there for ever, every message to a node that is gone would
+        # wait out the whole reply timeout.
+        long_ago = time.time() - chat.NODE_FRESH_SECONDS - 1
+        main = _main_with_nodes({}, placed={"counter": "edge"}, started=long_ago)
+        runtime.registry = _Registry(main)
+
+        assert chat.remote_node_for("counter") is None
+
+    def test_an_agent_placed_on_main_is_not_taken_for_a_remote_one(self) -> None:
+        main = _main_with_nodes({}, placed={"greeter": ""}, started=time.time())
+        runtime.registry = _Registry(main)
+
+        assert chat.remote_node_for("greeter") is None
+        assert chat.remote_node_for("nobody") is None
 
 
 class TestTheAnswerThatFindsNothing:

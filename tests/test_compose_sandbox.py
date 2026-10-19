@@ -24,6 +24,9 @@ from wactorz.node import compose_env
 ROOT = Path(__file__).resolve().parents[1]
 STACKS = ("compose.yaml", "compose.dev.yaml")
 
+#: Each stack's app service, whose profiles the sandbox runs with.
+APP_SERVICES = {"compose.yaml": "wactorz-python", "compose.dev.yaml": "wactorz"}
+
 
 def _env(path: Path) -> dict[str, str]:
     pairs = (line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
@@ -99,6 +102,18 @@ class TestWhatTheSandboxIsTold:
 
         assert compose_env.main(["--out", str(tmp_path / "out")]) == 1
 
+    def test_kept_on_main_the_sandbox_is_told_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A settings file left from before would start a node with no account.
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / ".env").write_text("WACTORZ_NODE=sandbox\n")
+        monkeypatch.setattr(compose_env, "MODEL_CODE_NODE", "main")
+
+        assert compose_env.main(["--out", str(out)]) == 0
+        assert not (out / ".env").exists()
+
     def test_the_node_is_the_one_model_code_is_sent_to(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -120,6 +135,14 @@ class TestItsBrokerAccount:
         )
 
         assert broker_certificates.account_nodes() == ["raspberrypi", "sandbox"]
+
+    def test_none_when_the_code_is_kept_on_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(broker_certificates, "MODEL_CODE_NODE", "main")
+        monkeypatch.setattr(
+            broker_certificates, "CONFIG", dataclasses.replace(CONFIG, deploy_targets=())
+        )
+
+        assert broker_certificates.account_nodes() == []
 
     def test_once_when_it_is_also_a_deploy_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(broker_certificates, "MODEL_CODE_NODE", "sandbox")
@@ -175,11 +198,22 @@ class TestTheContainer:
         assert "no-new-privileges:true" in sandbox["security_opt"]
         assert "ports" not in sandbox
 
-    def test_is_opt_in_until_it_is_the_default(self, stack: str) -> None:
+    def test_runs_with_the_app(self, stack: str) -> None:
         services = _services(stack)
+        app = APP_SERVICES[stack]
 
-        assert services["wactorz-sandbox"]["profiles"] == ["sandbox"]
-        assert services["sandbox-env"]["profiles"] == ["sandbox"]
+        for name in ("wactorz-sandbox", "sandbox-env"):
+            assert set(services[app]["profiles"]) <= set(services[name]["profiles"])
+
+    def test_gets_a_broker_account_unless_the_code_is_kept_on_main(self, stack: str) -> None:
+        certs = _services(stack)["mqtt-certs"]["environment"]
+
+        assert certs["WACTORZ_MODEL_CODE_NODE"] == "${WACTORZ_MODEL_CODE_NODE:-sandbox}"
+
+    def test_without_settings_it_waits_rather_than_retrying(self, stack: str) -> None:
+        command = "\n".join(_services(stack)["wactorz-sandbox"]["command"])
+
+        assert "exec sleep infinity" in command
 
     def test_its_settings_are_written_without_a_network(self, stack: str) -> None:
         # The one container that reads main's state reaches nothing.

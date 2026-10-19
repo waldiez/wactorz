@@ -79,6 +79,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", required=True, help="The directory the sandbox container reads.")
     parser.add_argument("--broker", default="mosquitto", help="The broker, as the node reaches it.")
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
+    if MODEL_CODE_NODE.lower() == "main":
+        # The code kept on main: the sandbox has no account to connect with, so it
+        # is told nothing, and its container waits instead of retrying for ever.
+        (Path(args.out) / ".env").unlink(missing_ok=True)
+        logger.info("WACTORZ_MODEL_CODE_NODE=main: the sandbox node is not started")
+        return 0
     node = MODEL_CODE_NODE or DEFAULT_NODE
     try:
         env = write(Path(args.out), args.broker, node)

@@ -193,6 +193,8 @@ class NodeHost(ManifestHost, Protocol):
 
     async def settle_withdrawals(self, node: str, running: set[str]) -> None: ...
 
+    def node_reported(self, node: str) -> None: ...
+
 
 class LifecycleHost(Protocol):
     """What deleting an agent needs from the actor.

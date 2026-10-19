@@ -333,6 +333,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """An agent took its manifest back; whether that stands. Owned by `self.lifecycle`."""
         return await self.lifecycle.agent_withdrew(actor_id, name)
 
+    def node_reported(self, node: str) -> None:
+        """A node's heartbeat arrived: the first from the model-code node moves the model's agents.
+
+        In the background, as a move takes a round trip to the node and back,
+        and the heartbeat listener must not wait for it.
+        """
+        if self.placement.claim_rehoming(node):
+            self._tasks.append(asyncio.create_task(self.placement.rehome(node)))
+
     async def settle_withdrawals(self, node: str, running: set[str]) -> None:
         """Decide the withdrawals held for ``node``. Owned by `self.lifecycle`."""
         await self.lifecycle.settle_withdrawals(node, running)

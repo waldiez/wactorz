@@ -320,9 +320,10 @@ def _node_signing_mode() -> str:
 
 NODE_SIGNING = _node_signing_mode()
 
-#: The node model-written code runs on when its spawn names none, usually
-#: ``sandbox`` (see ``wactorz-node setup-local``). Empty keeps such code on main,
-#: where it has every credential main holds.
+#: The node model-written code runs on when its spawn names none. Unset, it is
+#: ``sandbox`` whenever a node by that name exists (see ``wactorz-node
+#: setup-local``) and main otherwise; ``main`` keeps such code on main, where it
+#: has every credential main holds.
 MODEL_CODE_NODE = _unquote(os.getenv("WACTORZ_MODEL_CODE_NODE", "") or "").strip()
 
 #: What happens when a spawn the model wrote asks for main by name, while

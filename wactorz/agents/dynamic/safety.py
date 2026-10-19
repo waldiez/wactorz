@@ -422,6 +422,14 @@ TOO_DEEP = "code nested too deeply to check"
 _PARSE_STACK_BYTES = 64 * 1024 * 1024
 
 
+def parse_program(code: str) -> ast.AST:
+    """An agent's program parsed, deep nesting refused rather than crashing the process.
+
+    For anything outside this module that reads a program's structure; see `_parse`.
+    """
+    return _parse(code)
+
+
 def _parse(code: str) -> ast.AST:
     """``ast.parse(code)``, run where a too-deep program is an error and not a crash.
 

@@ -24,6 +24,7 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD, NodeManager
+from wactorz.agents.main.placement import Placement
 from wactorz.core.actor import ActorState
 
 
@@ -128,6 +129,7 @@ async def run_heartbeats(
     main.nodes = NodeManager(main, main.manifests)
     main.migration = Migration(main, main.nodes)
     main.lifecycle = LifecycleService(main)
+    main.placement = Placement(main)
     main.state = ActorState.RUNNING
     main._mqtt_broker = "localhost"
     main._mqtt_port = 1883

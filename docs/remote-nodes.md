@@ -557,14 +557,27 @@ deploy that fails cannot bring back the log's last lines. Read them with
 
 In the compose stack the node is a container instead: see
 [the sandbox node](deployment.md#the-sandbox-node). It needs no `DEPLOY_TARGETS`
-entry, since nothing reaches it over SSH: the node `WACTORZ_MODEL_CODE_NODE`
-names gets a broker account either way.
+entry, since nothing reaches it over SSH: it gets a broker account, as the node
+`WACTORZ_MODEL_CODE_NODE` names does.
 
 #### Sending model-written code there
 
-Set `WACTORZ_MODEL_CODE_NODE=sandbox` in main's `.env` and a `<spawn>` whose
-code the model wrote, naming no node, runs on the sandbox node rather than in
-main's process. The chat says so: "Spawned 'scraper' on node 'sandbox'". An
+Once there is a node named `sandbox` — a deploy target, or a node main hears
+from — a `<spawn>` whose code the model wrote, naming no node, runs there
+rather than in main's process. The chat says so: "Spawned 'scraper' on node
+'sandbox'". `WACTORZ_MODEL_CODE_NODE` names another node instead, and `main`
+keeps the code on main.
+
+The model's agents already running on main move to the sandbox the first time
+it reports after a start, as `/migrate` would move them, state and all, and the
+chat lists them. One stays on main, named in the chat with the reason, when it
+reads the history without `await` (`agent.query_ts(...)` rather than
+`await agent.query_ts(...)`), which only main answers that way, or when its move
+is refused. The agents move one after another, each as `/migrate` would move
+it, so with many it takes a while. A move clears the agent's packages as
+`/migrate` does: an agent with a package not on the list asks you about it on
+the dashboard, and one whose question goes unanswered stays on main, which the
+chat says. An
 agent that runs main's own classes is not moved: an LLM agent, a rule, a
 schedule, a catalogue or library agent. Nor is an agent restored from main's
 records, or one you move with `/migrate`. The agents the planner spawns for a

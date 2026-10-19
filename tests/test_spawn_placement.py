@@ -13,13 +13,14 @@ Unset, nothing changes: every spawn runs where it did.
 import asyncio
 import dataclasses
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from wactorz.agents.main import placement
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.placement import (
     REFUSE,
@@ -61,6 +62,21 @@ class _Host:
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
         return self.heard
+
+    # What the move to a sandbox reads; nothing here is moved (see test_rehoming.py).
+    @property
+    def _registry(self) -> Any:
+        return None
+
+    @property
+    def migration(self) -> Migration:
+        return cast("Migration", None)  # no move is made from these tests
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
+        return {}
+
+    def _queue_notification(self, notice: dict[str, Any]) -> None:
+        return None
 
     async def notify_user(self, text: str, *, options: Any = ()) -> str:
         self.questions.append({"text": text, "options": list(options)})
@@ -120,14 +136,58 @@ class TestWhatCountsAsModelCode:
         assert not runs_model_code(config)
 
 
-class TestUnset:
-    async def test_every_spawn_runs_where_it_did(
-        self, host: _Host, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(placement, "MODEL_CODE_NODE", "")
+@pytest.fixture(name="unset")
+def unset_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WACTORZ_MODEL_CODE_NODE unset, on an install with no deploy targets."""
+    monkeypatch.setattr(placement, "MODEL_CODE_NODE", "")
+    monkeypatch.setattr(
+        placement, "CONFIG", dataclasses.replace(placement.CONFIG, deploy_targets=())
+    )
 
+
+@pytest.mark.usefixtures("unset")
+class TestUnset:
+    async def test_without_a_sandbox_every_spawn_runs_where_it_did(self, host: _Host) -> None:
         for config in (dynamic(), dynamic(node="main"), dynamic(node="raspberrypi")):
             assert await Placement(host).place(config) == config
+        assert host.questions == []
+
+    async def test_a_sandbox_main_has_heard_from_is_used(self, host: _Host) -> None:
+        # The compose stack's sandbox: a node main hears, not a deploy target.
+        host.heard[placement.DEFAULT_NODE] = {"agents": []}
+
+        placed = await Placement(host).place(dynamic())
+
+        assert isinstance(placed, dict)
+        assert placed["node"] == placement.DEFAULT_NODE
+
+    async def test_a_sandbox_that_is_a_deploy_target_is_used(
+        self, host: _Host, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # setup-local's, before it has reported since this start.
+        monkeypatch.setattr(
+            placement,
+            "CONFIG",
+            dataclasses.replace(
+                placement.CONFIG, deploy_targets=(DeployTarget(name=placement.DEFAULT_NODE),)
+            ),
+        )
+
+        placed = await Placement(host).place(dynamic())
+
+        assert isinstance(placed, dict)
+        assert placed["node"] == placement.DEFAULT_NODE
+
+    async def test_main_keeps_the_code_on_main_though_there_is_a_sandbox(
+        self, host: _Host, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(placement, "MODEL_CODE_NODE", "main")
+        host.heard[placement.DEFAULT_NODE] = {"agents": []}
+
+        config = dynamic(node="main")
+
+        assert await Placement(host).place(dynamic()) == dynamic()
+        assert await Placement(host).place(config) == config
         assert host.questions == []
 
 

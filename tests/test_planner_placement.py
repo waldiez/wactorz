@@ -134,7 +134,11 @@ class TestUnset:
     async def test_the_planner_spawns_here_as_it_always_has(
         self, setup: Setup, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Unset, and no node named sandbox: the code stays where it always ran.
         monkeypatch.setattr(placement, "MODEL_CODE_NODE", "")
+        monkeypatch.setattr(
+            placement, "CONFIG", dataclasses.replace(placement.CONFIG, deploy_targets=())
+        )
 
         await setup.planner._spawn_agent(dynamic())
 

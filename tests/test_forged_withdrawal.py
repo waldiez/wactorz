@@ -216,6 +216,9 @@ class _NodeHost:
         listed = self.nodes.known.get(node)
         self.listed_when_settled.append(listed["agents"] if listed else [])
 
+    def node_reported(self, node: str) -> None:
+        return None
+
 
 class TestTheNextHeartbeat:
     async def test_it_settles_what_was_held_by_what_it_carries(self) -> None:

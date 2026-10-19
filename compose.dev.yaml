@@ -224,6 +224,8 @@ services:
       # both must agree. WACTORZ_NODE_ACCOUNTS=0 in .env keeps every node on the
       # shared account.
       WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
+      # The sandbox node below gets a broker account; `main` gives it none.
+      WACTORZ_MODEL_CODE_NODE: "${WACTORZ_MODEL_CODE_NODE:-sandbox}"
     # Issued as the runtime user -- docker-entrypoint.sh fixes the state directory's
     # ownership and drops privileges, as in the app -- into this container's /tmp.
     # Root then copies the certificate into the folder and hands it to the folder's
@@ -328,15 +330,15 @@ services:
 
   # ── Sandbox node ─────────────────────────────────────────────────────────────
   # Where code the model writes runs, holding none of main's credentials (see
-  # docs/remote-nodes.md, "A node on main's own machine"). Opt-in until it is the
-  # default: `--profile sandbox`, with WACTORZ_MODEL_CODE_NODE=sandbox in .env.
+  # docs/remote-nodes.md, "A node on main's own machine"). Runs with the app;
+  # WACTORZ_MODEL_CODE_NODE=main in .env keeps the code on main and leaves it idle.
   #
   # One-shot. Writes the sandbox node what /deploy writes any node -- its name,
   # the broker, its signing key and broker account, and the CA with TLS -- into a
   # volume only the sandbox mounts. It reads main's settings and state to do so;
   # the sandbox never does.
   sandbox-env:
-    profiles: [sandbox]
+    profiles: [app, sandbox]
     build:
       context: .
       dockerfile: Dockerfile
@@ -374,7 +376,7 @@ services:
   # broker alone, so main's API and Home Assistant are not reachable from it.
   # Agents' packages install into its own volume.
   wactorz-sandbox:
-    profiles: [sandbox]
+    profiles: [app, sandbox]
     build:
       context: .
       dockerfile: Dockerfile
@@ -388,7 +390,12 @@ services:
     # owns them: root here holds no capability to read another user's file.
     entrypoint: ["docker-entrypoint.sh", "/bin/sh", "-c"]
     command:
-      - set -a && . /run/wactorz-sandbox/.env && set +a && exec wactorz-node
+      - |
+        if [ ! -s /run/wactorz-sandbox/.env ]; then
+          echo "[sandbox] Not started: WACTORZ_MODEL_CODE_NODE=main keeps the code on main."
+          exec sleep infinity
+        fi
+        set -a && . /run/wactorz-sandbox/.env && set +a && exec wactorz-node
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID, KILL]
     security_opt: ["no-new-privileges:true"]

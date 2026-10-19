@@ -20,7 +20,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .config import CONFIG, MODEL_CODE_NODE
+from .config import CONFIG, MODEL_CODE_NODE, RESERVED_NODE_NAMES
 from .core import broker_accounts, broker_tls
 from .core.mqtt_tls import SYSTEM_TRUST, client_context, generated_ca_path, tls_enabled
 
@@ -102,7 +102,8 @@ def account_nodes() -> list[str]:
     """
     usable = []
     for name in [*(target.name for target in CONFIG.deploy_targets), MODEL_CODE_NODE]:
-        if not name or name in usable:
+        # `main` as the model-code node means "keep the code on main": no node.
+        if not name or name in usable or name.lower() in RESERVED_NODE_NAMES:
             continue
         problem = broker_accounts.name_error(name)
         if problem:

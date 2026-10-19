@@ -92,13 +92,11 @@ docker compose --profile python up -d
 
 ### The sandbox node
 
-Code the model writes can run in a container of its own, holding none of
-main's credentials. Set `WACTORZ_MODEL_CODE_NODE=sandbox` in `.env` and add the
-profile:
-
-```bash
-docker compose --profile python --profile sandbox up -d
-```
+Code the model writes runs in a container of its own, holding none of main's
+credentials: `wactorz-sandbox` starts with the app, under the `python`, `full`
+and `sandbox` profiles, and main sends the model's code there once it reports.
+`WACTORZ_MODEL_CODE_NODE=main` in `.env` keeps the code on main instead, and
+leaves the sandbox container idle.
 
 `sandbox-env`, a one-shot, writes the node what `/deploy` writes any node: its
 name, the broker, its signing key and broker account, and the CA with TLS. It
@@ -174,8 +172,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_DOCUMENT_DIRS` | your Documents folder | The folders an agent that converts files (the doc-to-pptx agent) may read from and write to, separated like `PATH`. Anything under `WACTORZ_STATE_DIR` stays out of reach whatever is named here. See [Doc → PPTX agent](catalogue-doc-to-pptx.md) |
 | `WACTORZ_PIP_ALLOW` | — | Packages an agent may have installed without the operator being asked, separated by commas or spaces, in addition to the built-in list. Anything else is asked about on the dashboard first; `/packages` shows the whole list. See [the packages an agent installs](remote-nodes.md#the-packages-an-agent-installs) |
 | `WACTORZ_PIP_INDEX_URL` | — | The package index every install uses, such as a private mirror. Unset, pip uses PyPI |
-| `WACTORZ_MODEL_CODE_NODE` | — | The node code the model writes runs on when its spawn names none, usually `sandbox` (see [a node on main's own machine](remote-nodes.md#a-node-on-mains-own-machine)). Unset, such code runs on main |
-| `WACTORZ_MODEL_CODE_ON_MAIN` | `ask` | With `WACTORZ_MODEL_CODE_NODE` set, what happens to a spawn the model wrote that names main: `ask` on the dashboard, `allow`, or `never` |
+| `WACTORZ_MODEL_CODE_NODE` | `sandbox` if there is one | The node code the model writes runs on when its spawn names none. Unset, it is the node named `sandbox` whenever one exists (see [a node on main's own machine](remote-nodes.md#a-node-on-mains-own-machine)), and main otherwise. `main` keeps such code on main |
+| `WACTORZ_MODEL_CODE_ON_MAIN` | `ask` | While the model's code goes to a node, what happens to a spawn the model wrote that names main: `ask` on the dashboard, `allow`, or `never` |
 | `WACTORZ_AGENTS` | — | Agents this deployment brings, as `package.module:attr` targets (an `Actor` subclass or a function declared with `@wactorz.agent`), comma separated. Supervised at startup beside the built-ins; see [Bringing your own agents](agents.md#bringing-your-own-agents) |
 | `WACTORZ_PIPELINES` | — | Pipelines this deployment brings, as `package.module:attr` targets of what `wactorz.pipeline()` returned, comma separated; their steps, schedule and rules are supervised at startup |
 | `WACTORZ_HA_AGENTS` | `auto` | Whether the Home Assistant agents start: `auto` starts them when `HA_URL` and `HA_TOKEN` are set, `on` and `off` decide outright |

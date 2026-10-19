@@ -460,6 +460,7 @@ class NodeManager:
             # After `known` is updated: a held withdrawal is decided by this
             # heartbeat, not by the one that made it wait.
             await host.settle_withdrawals(node_name, set(agents))
+            host.node_reported(node_name)
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)
         await self.follow_signing(node_name, self.known[node_name], before)

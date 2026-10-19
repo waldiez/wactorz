@@ -320,7 +320,11 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   signed with that node's key, and main replies only on that node's own
   <code>nodes/&lt;name&gt;/reply/...</code> topics: a request naming any other reply topic gets
   nothing at all. An unsigned request follows <code>WACTORZ_NODE_SIGNING</code> like a command:
-  <code>enforce</code> answers it with an error, <code>warn</code> answers it and main says so in chat.</li>
+  <code>enforce</code> answers it with an error, <code>warn</code> answers it and main says so in chat.
+  Reads of main's stored history (<code>main/history_request</code>, behind <code>agent.query_ts</code> and
+  its kind on a node) are admitted the same way, and run only the queries the agent
+  API offers, never SQL a request supplies. A node main deployed may read all of
+  that history: sensor readings, detections and Home Assistant state changes.</li>
 </ul>
 <hr />
 <h2 id="secrets-logs-and-stored-data">Secrets, logs and stored data</h2>

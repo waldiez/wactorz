@@ -159,11 +159,12 @@
 </code></pre></div>
 
 <p>Agents on a node appear in the central dashboard alongside local ones. The only visual difference is a <code>node</code> field in their heartbeat payload showing which machine they run on.</p>
-<p>Four things differ on a node, and nothing else does:</p>
+<p>These differ on a node, and nothing else does:</p>
 <ul>
 <li><strong>Publishing</strong> goes through a bounded in-memory queue rather than the server's SQLite-backed outbox. A node has no outbox, so the queue is sized for a long outage and every dropped message is counted.</li>
 <li><strong>Agent state</strong> is JSON under <code>~/wactorz/state/</code> rather than a pickle, so it survives the node and main running different Python versions — and so a migration can ship it over MQTT.</li>
 <li><strong>The LLM</strong> stays on main. <code>agent.llm.chat(...)</code> works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node.</li>
+<li><strong>The history</strong> stays on main too. <code>await agent.query_ts(...)</code>, <code>query_detections</code>, <code>query_ha_states</code> and <code>ts_stats</code> read main's database over the broker (<code>main/history_request</code>), signed like an LLM request, a page at a time. On a node they must be awaited. Any node main deployed may read all of main's recorded history: sensor readings, detections and Home Assistant state changes.</li>
 <li><strong>Tasks</strong> arrive on an MQTT topic rather than in a mailbox, and the reply goes back the same way.</li>
 </ul>
 <blockquote>
@@ -454,9 +455,9 @@ refused. A node may:</p>
 <li>publish and read its own <code>nodes/&lt;name&gt;/...</code>;</li>
 <li>publish and read the agent traffic every host shares, <code>agents/#</code> — except
   <code>agents/+/commands</code>, which stops agents on the server;</li>
-<li>write, and not read, <code>main/llm_request</code> and <code>main/reply/#</code>: it asks main's
-  model and answers main's tasks, without seeing what another node asks or
-  answers;</li>
+<li>write, and not read, <code>main/llm_request</code>, <code>main/history_request</code> and
+  <code>main/reply/#</code>: it asks main's model, reads main's history and answers main's
+  tasks, without seeing what another node asks or answers;</li>
 <li>publish and read the data topics agents use by convention — <code>custom/#</code>,
   <code>sensors/#</code>, <code>home/#</code>, <code>schedule/#</code> — and read
   <code>homeassistant/state_changes/#</code>.</li>

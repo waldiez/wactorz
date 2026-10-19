@@ -279,12 +279,11 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <h3 id="the-sandbox-node">The sandbox node</h3>
-<p>Code the model writes can run in a container of its own, holding none of
-main's credentials. Set <code>WACTORZ_MODEL_CODE_NODE=sandbox</code> in <code>.env</code> and add the
-profile:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>--profile<span class="w"> </span>sandbox<span class="w"> </span>up<span class="w"> </span>-d
-</code></pre></div>
-
+<p>Code the model writes runs in a container of its own, holding none of main's
+credentials: <code>wactorz-sandbox</code> starts with the app, under the <code>python</code>, <code>full</code>
+and <code>sandbox</code> profiles, and main sends the model's code there once it reports.
+<code>WACTORZ_MODEL_CODE_NODE=main</code> in <code>.env</code> keeps the code on main instead, and
+leaves the sandbox container idle.</p>
 <p><code>sandbox-env</code>, a one-shot, writes the node what <code>/deploy</code> writes any node: its
 name, the broker, its signing key and broker account, and the CA with TLS. It
 writes them into a volume that only <code>wactorz-sandbox</code> mounts. It runs again on
@@ -420,13 +419,13 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 </tr>
 <tr>
 <td><code>WACTORZ_MODEL_CODE_NODE</code></td>
-<td>—</td>
-<td>The node code the model writes runs on when its spawn names none, usually <code>sandbox</code> (see <a href="../guide/remote-nodes.html#a-node-on-mains-own-machine">a node on main's own machine</a>). Unset, such code runs on main</td>
+<td><code>sandbox</code> if there is one</td>
+<td>The node code the model writes runs on when its spawn names none. Unset, it is the node named <code>sandbox</code> whenever one exists (see <a href="../guide/remote-nodes.html#a-node-on-mains-own-machine">a node on main's own machine</a>), and main otherwise. <code>main</code> keeps such code on main</td>
 </tr>
 <tr>
 <td><code>WACTORZ_MODEL_CODE_ON_MAIN</code></td>
 <td><code>ask</code></td>
-<td>With <code>WACTORZ_MODEL_CODE_NODE</code> set, what happens to a spawn the model wrote that names main: <code>ask</code> on the dashboard, <code>allow</code>, or <code>never</code></td>
+<td>While the model's code goes to a node, what happens to a spawn the model wrote that names main: <code>ask</code> on the dashboard, <code>allow</code>, or <code>never</code></td>
 </tr>
 <tr>
 <td><code>WACTORZ_AGENTS</code></td>

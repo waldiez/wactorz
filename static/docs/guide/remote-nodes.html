@@ -674,12 +674,24 @@ deploy that fails cannot bring back the log's last lines. Read them with
 <code>journalctl -u wactorz-node</code>.</p>
 <p>In the compose stack the node is a container instead: see
 <a href="../guide/deployment.html#the-sandbox-node">the sandbox node</a>. It needs no <code>DEPLOY_TARGETS</code>
-entry, since nothing reaches it over SSH: the node <code>WACTORZ_MODEL_CODE_NODE</code>
-names gets a broker account either way.</p>
+entry, since nothing reaches it over SSH: it gets a broker account, as the node
+<code>WACTORZ_MODEL_CODE_NODE</code> names does.</p>
 <h4 id="sending-model-written-code-there">Sending model-written code there</h4>
-<p>Set <code>WACTORZ_MODEL_CODE_NODE=sandbox</code> in main's <code>.env</code> and a <code>&lt;spawn&gt;</code> whose
-code the model wrote, naming no node, runs on the sandbox node rather than in
-main's process. The chat says so: "Spawned 'scraper' on node 'sandbox'". An
+<p>Once there is a node named <code>sandbox</code> — a deploy target, or a node main hears
+from — a <code>&lt;spawn&gt;</code> whose code the model wrote, naming no node, runs there
+rather than in main's process. The chat says so: "Spawned 'scraper' on node
+'sandbox'". <code>WACTORZ_MODEL_CODE_NODE</code> names another node instead, and <code>main</code>
+keeps the code on main.</p>
+<p>The model's agents already running on main move to the sandbox the first time
+it reports after a start, as <code>/migrate</code> would move them, state and all, and the
+chat lists them. One stays on main, named in the chat with the reason, when it
+reads the history without <code>await</code> (<code>agent.query_ts(...)</code> rather than
+<code>await agent.query_ts(...)</code>), which only main answers that way, or when its move
+is refused. The agents move one after another, each as <code>/migrate</code> would move
+it, so with many it takes a while. A move clears the agent's packages as
+<code>/migrate</code> does: an agent with a package not on the list asks you about it on
+the dashboard, and one whose question goes unanswered stays on main, which the
+chat says. An
 agent that runs main's own classes is not moved: an LLM agent, a rule, a
 schedule, a catalogue or library agent. Nor is an agent restored from main's
 records, or one you move with <code>/migrate</code>. The agents the planner spawns for a

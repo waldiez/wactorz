@@ -13,14 +13,22 @@ provider or the call raises.
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Any
 
 import pytest
 
+from wactorz.agents.main import history as main_history
 from wactorz.agents.main import llm_bridge
 from wactorz.agents.main.actor import MainActor
-from wactorz.agents.main.llm_bridge import REFUSED_UNSIGNED, LLMBridge, reply_topic_for
+from wactorz.agents.main.history import HISTORY_TOPIC
+from wactorz.agents.main.llm_bridge import (
+    REFUSED_UNSIGNED,
+    REFUSED_UNSIGNED_HISTORY,
+    LLMBridge,
+    reply_topic_for,
+)
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
@@ -31,12 +39,13 @@ from wactorz.core.node_signing import (
     request_signed_for,
     sign_request,
 )
+from wactorz.core.persistence import WactorzDB
 from wactorz.node.signing import ControlGuard
 
 
 class _Message:
-    def __init__(self, payload: bytes) -> None:
-        self.topic = "main/llm_request"
+    def __init__(self, payload: bytes, topic: str = "main/llm_request") -> None:
+        self.topic = topic
         self.payload = payload
 
 
@@ -103,6 +112,7 @@ class _Run:
         self.main = main
         self.llm = llm
         self.published: list[tuple[str, Any]] = []
+        self.subscribed: list[str] = []
         self.persisted = 0
         self.notices: list[dict[str, Any]] = []
 
@@ -121,7 +131,7 @@ class _Run:
 PERSISTED = "<persisted>"
 
 
-def request(*, signed: bool = True, **over: Any) -> _Message:
+def request(*, signed: bool = True, topic: str = "main/llm_request", **over: Any) -> _Message:
     """A bridge request as a remote agent publishes it.
 
     The reply topic is unique per call, as the runner makes it -- it mints a
@@ -139,7 +149,7 @@ def request(*, signed: bool = True, **over: Any) -> _Message:
     }
     if signed:
         body = sign_request(body, bytes.fromhex(node_key(str(body["node"]))))
-    return _Message(json.dumps(body).encode())
+    return _Message(json.dumps(body).encode(), topic)
 
 
 async def run_bridge(
@@ -179,6 +189,7 @@ async def run_bridge(
     monkeypatch.setattr("wactorz.agents.main.llm_bridge.mqtt_client", broker)
 
     await asyncio.wait_for(main._llm_bridge_listener(), timeout=5)
+    run.subscribed = broker.client.subscribed
     run.persisted = sum(1 for topic, _ in run.published if topic == PERSISTED)
     run.published = [p for p in run.published if p[0] != PERSISTED]
     return run
@@ -500,6 +511,93 @@ class TestOnlyANodeItDeployedIsAnswered:
 
         assert len(run.replies) == 1
         assert len(llm.calls) == 1
+
+
+def history_request(*, signed: bool = True, **over: Any) -> _Message:
+    """A history read as a node's agent publishes it, to `main/history_request`."""
+    fields: dict[str, Any] = {"query": "ts", "filters": {"field": "temp"}, **over}
+    return request(signed=signed, topic=HISTORY_TOPIC, prompt=None, **fields)
+
+
+@pytest.fixture(name="history")
+def history_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> WactorzDB:
+    """Main's database, holding one recent temperature reading."""
+    db = WactorzDB(str(tmp_path / "wactorz.db"))
+    db.write_sensor(time.time(), "sensors/t", "sensor.kitchen", "temp", 21.5)
+    monkeypatch.setattr(main_history, "get_db", lambda: db)
+    return db
+
+
+class TestHistoryReads:
+    """A node's agent reads main's stored history through the same admission."""
+
+    async def test_both_topics_are_subscribed(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        run = await run_bridge(monkeypatch, [], llm=_LLM())
+
+        assert set(run.subscribed) == {"main/llm_request", HISTORY_TOPIC}
+
+    async def test_a_signed_read_is_answered_with_rows(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        llm = _LLM()
+        run = await run_bridge(monkeypatch, [history_request()], llm=llm)
+
+        assert [row["value"] for row in run.only_reply["rows"]] == [21.5]
+        assert run.only_reply["next"] is None
+        assert llm.calls == [], "a history read is not a model call"
+
+    async def test_an_unsigned_read_is_refused_with_an_error(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "enforce")
+
+        run = await run_bridge(monkeypatch, [history_request(signed=False)], llm=_LLM())
+
+        assert run.only_reply == {"error": REFUSED_UNSIGNED_HISTORY}
+
+    async def test_a_reply_topic_outside_the_node_s_space_gets_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        forged = history_request(_reply_topic="nodes/rpi-garage/reply/abcd1234")
+
+        run = await run_bridge(monkeypatch, [forged], llm=_LLM())
+
+        assert run.replies == []
+
+    async def test_a_bad_read_is_answered_with_why(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        run = await run_bridge(monkeypatch, [history_request(query="users")], llm=_LLM())
+
+        assert "unknown query" in run.only_reply["error"]
+
+    async def test_a_failing_read_still_replies(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        def _broken(**_kwargs: Any) -> Any:
+            raise RuntimeError("disk gone")
+
+        monkeypatch.setattr(history, "query_sensor", _broken)
+
+        run = await run_bridge(monkeypatch, [history_request(), request()], llm=_LLM())
+
+        assert "disk gone" in run.replies[0][1]["error"]
+        assert run.replies[1][1] == {"text": "the answer"}, "the bridge kept serving"
+
+    async def test_a_request_replayed_onto_the_other_topic_is_answered_once(
+        self, monkeypatch: pytest.MonkeyPatch, history: WactorzDB
+    ) -> None:
+        # The signature covers the payload, not the topic it was sent to.
+        captured = history_request()
+        replayed = _Message(captured.payload, "main/llm_request")
+        llm = _LLM()
+
+        run = await run_bridge(monkeypatch, [captured, replayed], llm=llm)
+
+        assert len(run.replies) == 1
+        assert llm.calls == []
 
 
 class TestWhatTheBridgeRemembersIsBounded:

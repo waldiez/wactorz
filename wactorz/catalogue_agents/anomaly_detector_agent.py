@@ -537,7 +537,7 @@ async def _rebuild_baselines(agent) -> None:
             field = None
 
         try:
-            rows = agent.query_ts(
+            rows = await agent.query_ts(
                 hours=baseline_hours,
                 entity_id=entity_id,
                 field=field,
@@ -580,7 +580,7 @@ async def _rebuild_baselines(agent) -> None:
 
     # Also build baselines from HA state changes
     try:
-        ha_rows = agent.query_ha_states(hours=baseline_hours, limit=200_000)
+        ha_rows = await agent.query_ha_states(hours=baseline_hours, limit=200_000)
         if ha_rows:
             ha_by_entity = {}
             for r in ha_rows:

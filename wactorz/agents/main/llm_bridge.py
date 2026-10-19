@@ -1,4 +1,4 @@
-"""Main answering LLM calls for agents running on other machines.
+"""Main answering LLM calls, and reads of its history, for agents on other machines.
 
 An edge node holds no API key. An agent there publishes its request to
 `main/llm_request` with a topic to answer on; main runs the call with its own
@@ -18,6 +18,10 @@ under ``nodes/<that node>/reply/``. A reply topic anywhere else is refused
 outright; a request without a valid signature follows ``WACTORZ_NODE_SIGNING``,
 as a command to a node does: ``enforce`` answers with an error, ``warn``
 answers and says so in chat.
+
+The same admission serves ``main/history_request``, where an agent on a node
+reads main's stored time series, detections and Home Assistant state changes:
+what is answered there, and how, is :mod:`.history`.
 
 Calls made here spend main's budget, so their usage is folded into main's
 totals. Attribution is per node rather than per agent: the request does not
@@ -43,6 +47,7 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.node_signing import request_signed_for
+from .history import HISTORY_TOPIC, answer_history
 
 if TYPE_CHECKING:
     from ...core.actor import ActorState
@@ -75,6 +80,9 @@ _REPLY_TOPIC = re.compile(r"nodes/(?P<node>[^/#+]+)/reply/[0-9a-f]+")
 #: What an unsigned request is told when main refuses it.
 REFUSED_UNSIGNED = "[LLM error: request not signed for this node — deploy the node again]"
 
+#: What an unsigned history read is told, in the reply's ``error``.
+REFUSED_UNSIGNED_HISTORY = "request not signed for this node — deploy the node again"
+
 
 class BridgeHost(Protocol):
     """What the bridge needs from the actor that owns it.
@@ -102,7 +110,7 @@ class BridgeHost(Protocol):
 
 
 class LLMBridge:
-    """Serves `main/llm_request` from the host's LLM provider."""
+    """Serves `main/llm_request` from the host's LLM provider, and `main/history_request`."""
 
     def __init__(self, host: BridgeHost) -> None:
         self.host = host
@@ -131,7 +139,10 @@ class LLMBridge:
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     await client.subscribe(REQUEST_TOPIC, qos=1)
-                    logger.info("[main] LLM bridge listening on %s", REQUEST_TOPIC)
+                    await client.subscribe(HISTORY_TOPIC, qos=1)
+                    logger.info(
+                        "[main] LLM bridge listening on %s and %s", REQUEST_TOPIC, HISTORY_TOPIC
+                    )
                     last_error = None
                     async for message in client.messages:
                         try:
@@ -140,7 +151,7 @@ class LLMBridge:
                             logger.debug("[main] Undecodable bridge request: %s", exc)
                             continue
                         if isinstance(data, dict):
-                            await self.answer(data)
+                            await self.answer(data, str(message.topic))
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -161,11 +172,13 @@ class LLMBridge:
                     )
                 await asyncio.sleep(RECONNECT_DELAY_S)
 
-    async def answer(self, data: dict[str, Any]) -> None:
+    async def answer(self, data: dict[str, Any], topic: str = REQUEST_TOPIC) -> None:
         """Run one request and publish the result to the topic it named.
 
-        A request with no reply topic is dropped: there is nowhere to answer,
-        and the caller cannot be waiting on something it did not ask for.
+        ``topic`` is where the request arrived, which says what it asks for: a
+        model call, or a read of the history. A request with no reply topic is
+        dropped: there is nowhere to answer, and the caller cannot be waiting on
+        something it did not ask for.
         """
         reply_topic = data.get("_reply_topic")
         if not reply_topic:
@@ -204,17 +217,29 @@ class LLMBridge:
                     agent_name,
                     node_name,
                 )
-                await self.host._mqtt_publish(reply_topic, {"text": REFUSED_UNSIGNED})
+                refusal = (
+                    {"error": REFUSED_UNSIGNED_HISTORY}
+                    if topic == HISTORY_TOPIC
+                    else {"text": REFUSED_UNSIGNED}
+                )
+                await self.host._mqtt_publish(reply_topic, refusal)
                 return
             self._warn_unsigned(node_name, agent_name)
 
         # Remembered only now that the request is one this bridge will answer.
         # Remembered before the signature was read, a request anyone could send
         # -- unsigned, naming a reply topic it had seen or guessed -- would have
-        # the node's own request for that topic taken for its repeat.
+        # the node's own request for that topic taken for its repeat. One memory
+        # for both topics: the signature covers the payload, not the topic it was
+        # published to, so a request replayed onto the other must count as
+        # already answered.
         self._answered[reply_topic] = None
         while len(self._answered) > ANSWERED_MEMORY:
             self._answered.popitem(last=False)
+
+        if topic == HISTORY_TOPIC:
+            await self._answer_history(data, reply_topic, agent_name, node_name)
+            return
 
         logger.info("[main] LLM bridge: request from %r on %r", agent_name, node_name)
 
@@ -226,6 +251,35 @@ class LLMBridge:
             len(text),
             reply_topic,
         )
+
+    async def _answer_history(
+        self, data: dict[str, Any], reply_topic: str, agent_name: str, node_name: str
+    ) -> None:
+        """Read the history ``data`` asks for and publish the page, or why there is none.
+
+        Every path replies, as for a model call: a failed read is an ``error``
+        rather than silence the caller can only time out on.
+        """
+        try:
+            reply = await answer_history(data)
+        except Exception as exc:
+            logger.exception("[main] History read failed for %r on %r", agent_name, node_name)
+            reply = {"error": f"history read failed: {exc}"}
+        if "error" in reply:
+            logger.info(
+                "[main] History read from %r on %r refused: %s",
+                agent_name,
+                node_name,
+                reply["error"],
+            )
+        else:
+            logger.debug(
+                "[main] History read from %r on %r: %s",
+                agent_name,
+                node_name,
+                data.get("query"),
+            )
+        await self.host._mqtt_publish(reply_topic, reply)
 
     def _first_report(self, key: str) -> bool:
         """Whether ``key`` has not been reported yet, remembering it if so."""
@@ -257,7 +311,7 @@ class LLMBridge:
             {
                 "severity": "warning",
                 "message": (
-                    f"Node '{node_name}' asked main's LLM without a signature, and was answered "
+                    f"Node '{node_name}' sent main a request without a signature, and was answered "
                     "because WACTORZ_NODE_SIGNING=warn. Deploy it again so it signs its "
                     f"requests: /deploy {node_name}"
                 ),

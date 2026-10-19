@@ -448,10 +448,10 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `agent.state` | — | In-memory dict (not persisted) |
 | `agent.window(topic, seconds)` | **sync** | Create a sliding time window over an MQTT topic stream |
 | `agent.declare_contract(...)` | **sync** | Register a TopicBus contract for auto-wiring |
-| `agent.query_ts(hours, field, ...)` | **sync** | Query historical sensor data from SQLite |
-| `agent.query_detections(hours, ...)` | **sync** | Query historical YOLO detections from SQLite |
-| `agent.query_ha_states(hours, ...)` | **sync** | Query historical HA state changes from SQLite |
-| `agent.ts_stats()` | **sync** | Row counts for all time-series tables |
+| `await agent.query_ts(hours, field, ...)` | async | Query historical sensor data from main's SQLite |
+| `await agent.query_detections(hours, ...)` | async | Query historical YOLO detections from main's SQLite |
+| `await agent.query_ha_states(hours, ...)` | async | Query historical HA state changes from main's SQLite |
+| `await agent.ts_stats()` | async | Row counts for all time-series tables |
 | `agent.agents()` | **sync** | List all currently running agents |
 | `agent.topics(keyword)` | **sync** | List known MQTT topics |
 
@@ -462,18 +462,25 @@ Any dynamic agent can query historical data collected by the TimeSeriesCollector
 ```python
 async def handle_task(agent, payload):
     # Get last 24h of temperature readings
-    rows = agent.query_ts(hours=24, field='temp')
+    rows = await agent.query_ts(hours=24, field='temp')
 
     # Get as pandas DataFrame for ML training
-    df = agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
+    df = await agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
 
     # Query YOLO detections
-    df = agent.query_detections(hours=12, class_name='person', as_dataframe=True)
+    df = await agent.query_detections(hours=12, class_name='person', as_dataframe=True)
 
     # Check available data volume
-    stats = agent.ts_stats()
+    stats = await agent.ts_stats()
     # {'sensor_readings': 145230, 'detections': 8920, ...}
 ```
+
+The history lives in main's database. On a node, a query reads it from main
+over the broker, a page at a time, so there it must be awaited; written with
+`await`, the same code runs on main and on a node. On main the call without
+`await` works too, as it always has. On a node that form fails as soon as
+its result is used, and the error says to add `await`. If main does not answer
+a read, the agent gets no rows (`None` for a DataFrame) and the node logs why.
 
 #### Code safety
 

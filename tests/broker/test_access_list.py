@@ -156,7 +156,9 @@ class TestWhatAgentsShare:
 
 
 class TestAskingMain:
-    @pytest.mark.parametrize("topic", ["main/llm_request", "main/reply/abc/123"])
+    @pytest.mark.parametrize(
+        "topic", ["main/llm_request", "main/history_request", "main/reply/abc/123"]
+    )
     async def test_it_writes_and_never_reads(self, locked: tuple[str, int], topic: str) -> None:
         # Reading would let a node watch what the others answer, and learn a
         # reply topic to forge an answer into.

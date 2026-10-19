@@ -108,6 +108,22 @@ class DynamicAgent(Actor):
     The LLM writes setup/process/handle_task functions; this class runs them.
     """
 
+    #: Whether the stored history (`agent.query_ts` and the rest) is read from
+    #: main over the broker rather than from this process's database: true only
+    #: where the agent is hosted away from main, which overrides the two
+    #: methods below.
+    reads_history_from_main = False
+
+    async def read_history(
+        self, query: str, filters: dict[str, Any], *, hours: float, limit: int
+    ) -> list[dict[str, Any]] | None:
+        """Rows of main's history, read over the broker. See `reads_history_from_main`."""
+        raise NotImplementedError("this host reads the history from its own database")
+
+    async def read_history_stats(self) -> dict[str, Any] | None:
+        """Row counts of main's history, read over the broker. See `reads_history_from_main`."""
+        raise NotImplementedError("this host reads the history from its own database")
+
     def __init__(
         self,
         code: str,  # LLM-generated Python source

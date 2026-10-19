@@ -1,10 +1,16 @@
 """Reading back what the system has recorded, from inside generated code.
 
-Every query is synchronous and returns a list, so generated code can iterate
+On main every query answers at once with a list, so generated code can iterate
 the result without awaiting it; with `as_dataframe=True` it returns a pandas
 frame when pandas is installed and the same list when it is not. Before
 persistence is initialised there is nothing to read, which is an empty list
 rather than an error.
+
+On a node the rows come from main over the broker, so there a query must be
+awaited, and `await agent.query_ts(...)` is the form that runs in both places:
+main's results await to themselves. A bare call on a node fails the moment its
+result is used, saying how to fix it, rather than looking like no history. The
+transport itself is pinned in `test_history_over_the_bridge.py`.
 """
 
 import builtins
@@ -105,6 +111,119 @@ class TestQueries:
         assert isinstance(api.query_ts(as_dataframe=True), list)
         assert isinstance(api.query_detections(as_dataframe=True), list)
         assert isinstance(api.query_ha_states(as_dataframe=True), list)
+
+
+class TestAwaitedOnMain:
+    """`await agent.query_ts(...)` is written once and runs on main and on a node."""
+
+    async def test_rows_await_to_themselves(self, api: AgentAPI, db: WactorzDB) -> None:
+        rows = await api.query_ts(hours=24, field="temp")
+
+        assert [row["value"] for row in rows] == [21.5]
+
+    async def test_the_other_queries_too(self, api: AgentAPI, db: WactorzDB) -> None:
+        assert [r["class_name"] for r in await api.query_detections(class_name="cat")] == ["cat"]
+        assert len(await api.query_ha_states(domain="light")) == 1
+        assert (await api.ts_stats())["detections"] == 2
+
+    async def test_a_frame_awaits_to_itself(self, api: AgentAPI, db: WactorzDB) -> None:
+        pd = pytest.importorskip("pandas")
+
+        frame = await api.query_ts(as_dataframe=True)
+
+        assert isinstance(frame, pd.DataFrame)
+        assert list(frame["value"]) == [21.5]
+
+    async def test_without_persistence_an_awaited_query_is_empty(self, api: AgentAPI) -> None:
+        assert await api.query_ts() == []
+        assert await api.ts_stats() == {}
+
+
+class _NodeHosted(DynamicAgent):
+    """A DynamicAgent hosted away from main, whose history main is asked for."""
+
+    reads_history_from_main = True
+
+    def __init__(self, rows: list[dict[str, Any]] | None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.rows = rows
+        self.asked: list[tuple[str, dict[str, Any], float, int]] = []
+
+    async def read_history(
+        self, query: str, filters: dict[str, Any], *, hours: float, limit: int
+    ) -> list[dict[str, Any]] | None:
+        self.asked.append((query, filters, hours, limit))
+        return self.rows
+
+    async def read_history_stats(self) -> dict[str, Any] | None:
+        return None if self.rows is None else {"sensor_readings": len(self.rows)}
+
+
+def _on_a_node(tmp_path: Path, rows: list[dict[str, Any]] | None) -> tuple[AgentAPI, _NodeHosted]:
+    actor = _NodeHosted(rows, name="probe", code="", persistence_dir=str(tmp_path))
+    return AgentAPI(actor), actor
+
+
+class TestOnANode:
+    async def test_an_awaited_query_asks_main(self, tmp_path: Path) -> None:
+        api, actor = _on_a_node(tmp_path, [{"value": 21.5}])
+
+        rows = await api.query_ts(hours=6, field="temp", limit=10)
+
+        assert rows == [{"value": 21.5}]
+        assert actor.asked == [("ts", {"field": "temp"}, 6, 10)]
+
+    async def test_filters_are_sent_by_the_names_main_reads(self, tmp_path: Path) -> None:
+        # The agent's `agent_name` is the database's `agent`; filters left
+        # unset are not sent at all.
+        api, actor = _on_a_node(tmp_path, [])
+
+        await api.query_detections(agent_name="camera")
+        await api.query_ha_states(domain="light")
+
+        assert actor.asked[0][:2] == ("detections", {"agent": "camera", "min_confidence": 0.0})
+        assert actor.asked[1][:2] == ("ha_states", {"domain": "light"})
+
+    async def test_main_is_not_asked_until_it_is_awaited(self, tmp_path: Path) -> None:
+        api, actor = _on_a_node(tmp_path, [])
+
+        api.query_ts()
+
+        assert actor.asked == []
+
+    @pytest.mark.parametrize(
+        "use",
+        [list, len, bool, lambda rows: rows[0], lambda rows: "x" in rows, lambda rows: rows.head()],
+        ids=["iterate", "len", "bool", "index", "contains", "frame-method"],
+    )
+    def test_a_bare_call_says_to_await_it(self, tmp_path: Path, use: Any) -> None:
+        api, _actor = _on_a_node(tmp_path, [])
+
+        with pytest.raises(TypeError, match=r"await agent\.query_ts"):
+            use(api.query_ts())
+
+    async def test_a_frame_comes_back_as_on_main(self, tmp_path: Path) -> None:
+        pd = pytest.importorskip("pandas")
+        api, _actor = _on_a_node(tmp_path, [{"value": 1.0}, {"value": 2.0}])
+
+        frame = await api.query_ts(as_dataframe=True)
+
+        assert isinstance(frame, pd.DataFrame)
+        assert list(frame["value"]) == [1.0, 2.0]
+
+    async def test_no_answer_from_main_is_empty_as_on_main_without_a_database(
+        self, tmp_path: Path
+    ) -> None:
+        api, _actor = _on_a_node(tmp_path, None)
+
+        assert await api.query_ts() == []
+        assert await api.query_ts(as_dataframe=True) is None
+        assert await api.ts_stats() == {}
+
+    async def test_stats_are_asked_of_main(self, tmp_path: Path) -> None:
+        api, _actor = _on_a_node(tmp_path, [{}, {}])
+
+        assert await api.ts_stats() == {"sensor_readings": 2}
 
 
 class TestWorldState:

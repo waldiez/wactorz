@@ -6,17 +6,19 @@ node used to carry its own lightweight retelling of that contract, and the two
 drifted: a program that worked on main would reach for ``agent.run_in_background``
 or ``agent.send_to_many`` on a node and find nothing there.
 
-What this subclass adds is the four things that are true only on a node:
+What this subclass adds is what is true only on a node:
 
 - **Where its messages go.** There is no ``MQTTPublisher`` here, so the actor
   publishes through the runner's bounded queue.
 - **Where its memory lives.** JSON under the node's state directory, so it
   survives a reboot and can be shipped to another machine by a migration.
 - **What answers its LLM calls.** Main does, over the broker — see :mod:`.llm`.
+- **Where its history comes from.** Main's database, read over the broker a page
+  at a time — see :mod:`.history`.
 - **How it is asked to do something.** A task arrives on an MQTT topic rather
   than in a mailbox, and the reply goes back the same way.
 
-All but the LLM calls hold for a library agent a node builds too, and live in
+All but the LLM calls and the history hold for a library agent a node builds too, and live in
 `NodeHosted` (see :mod:`.hosted`), which both put in front of their own class.
 """
 
@@ -30,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
 from ..core.topic_bus import TopicContract
 from ..monitoring.agent_metrics import RecentDurations
+from .history import read_history, read_stats
 from .hosted import NodeHosted
 from .llm import BridgeProvider, request_over_mqtt
 
@@ -108,6 +111,19 @@ class NodeAgent(NodeHosted, DynamicAgent):
     async def ask_main(self, topic: str, payload: dict[str, Any], timeout: float) -> Any:
         """Publish a request to main and wait for the reply it sends back."""
         return await request_over_mqtt(self, topic, payload, timeout)
+
+    #: Main keeps the history; see `DynamicAgent.reads_history_from_main`.
+    reads_history_from_main = True
+
+    async def read_history(
+        self, query: str, filters: dict[str, Any], *, hours: float, limit: int
+    ) -> list[dict[str, Any]] | None:
+        """Rows of main's history, asked of main a page at a time."""
+        return await read_history(self, query, filters, hours=hours, limit=limit)
+
+    async def read_history_stats(self) -> dict[str, Any] | None:
+        """Row counts of main's history tables, asked of main."""
+        return await read_stats(self)
 
     # ── Tasks, which arrive on a topic rather than in a mailbox ───────────────
 

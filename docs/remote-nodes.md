@@ -17,11 +17,12 @@ Dashboard  ◄──MQTT──  agents/{id}/heartbeat  ◄──┘  heartbeats 
 
 Agents on a node appear in the central dashboard alongside local ones. The only visual difference is a `node` field in their heartbeat payload showing which machine they run on.
 
-Four things differ on a node, and nothing else does:
+These differ on a node, and nothing else does:
 
 - **Publishing** goes through a bounded in-memory queue rather than the server's SQLite-backed outbox. A node has no outbox, so the queue is sized for a long outage and every dropped message is counted.
 - **Agent state** is JSON under `~/wactorz/state/` rather than a pickle, so it survives the node and main running different Python versions — and so a migration can ship it over MQTT.
 - **The LLM** stays on main. `agent.llm.chat(...)` works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node.
+- **The history** stays on main too. `await agent.query_ts(...)`, `query_detections`, `query_ha_states` and `ts_stats` read main's database over the broker (`main/history_request`), signed like an LLM request, a page at a time. On a node they must be awaited. Any node main deployed may read all of main's recorded history: sensor readings, detections and Home Assistant state changes.
 - **Tasks** arrive on an MQTT topic rather than in a mailbox, and the reply goes back the same way.
 
 > Earlier releases deployed a single self-contained `remote_runner.py` instead, which carried its own copy of the agent contract. A node deployed that way keeps working — main reads its heartbeat as `runtime: runner` — and redeploying it installs the package. Agent state files carry over untouched.
@@ -310,9 +311,9 @@ refused. A node may:
 - publish and read its own `nodes/<name>/...`;
 - publish and read the agent traffic every host shares, `agents/#` — except
   `agents/+/commands`, which stops agents on the server;
-- write, and not read, `main/llm_request` and `main/reply/#`: it asks main's
-  model and answers main's tasks, without seeing what another node asks or
-  answers;
+- write, and not read, `main/llm_request`, `main/history_request` and
+  `main/reply/#`: it asks main's model, reads main's history and answers main's
+  tasks, without seeing what another node asks or answers;
 - publish and read the data topics agents use by convention — `custom/#`,
   `sensors/#`, `home/#`, `schedule/#` — and read
   `homeassistant/state_changes/#`.

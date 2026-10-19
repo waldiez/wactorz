@@ -403,14 +403,52 @@ and refuses an unsigned or wrongly signed request under
 
 ---
 
+### `main/history_request`
+**Published by:** Agents running on a node (`wactorz-node`)
+**Subscribed by:** MainActor's LLM bridge (`agents/main/llm_bridge.py`, answered by `agents/main/history.py`)
+**Purpose:** `agent.query_ts`, `query_detections`, `query_ha_states` and `ts_stats` on a node, read from main's database.
+
+```json
+{
+  "query":        "ts",
+  "filters":      {"entity_id": "sensor.kitchen", "field": "temp"},
+  "hours":        24,
+  "since":        1760000000.0,
+  "offset":       0,
+  "limit":        100000,
+  "agent":        "collector",
+  "node":         "rpi-kitchen",
+  "_reply_topic": "nodes/rpi-kitchen/reply/{id}",
+  "_sig":         "{hex HMAC-SHA256}"
+}
+```
+
+`query` is `ts`, `detections`, `ha_states` or `stats`. Each takes only its own
+filters: `topic`, `entity_id` and `field`; `agent`, `class_name` and
+`min_confidence`; `entity_id` and `domain`. Signed and admitted exactly as a
+`main/llm_request`. `since` and `offset` are absent on the first page; after
+that the node sends back the `since` main answered with and the `next` offset,
+until `next` is null.
+
+---
+
 ### `nodes/{node}/reply/{id}`
 **Published by:** MainActor's LLM bridge
-**Trigger:** Reply to a `main/llm_request`
+**Trigger:** Reply to a `main/llm_request` or a `main/history_request`
 **Purpose:** Per-request reply channel for one node (random id, one-shot).
 
 ```json
 { "text": "..." }
 ```
+
+A history read is answered with one page, the rows that fit in one message:
+
+```json
+{ "rows": [{"ts": 1760000000.0, "value": 21.5}], "since": 1760000000.0, "next": 812 }
+```
+
+`skipped` counts rows too large for any page. A read main refuses is
+answered with `{"error": "..."}`, and `stats` with `{"stats": {...}}`.
 
 ---
 
@@ -710,6 +748,7 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |
+| `main/history_request` | Remote agents | Read main's stored history, a page at a time |
 | `main/reply/{actor_id}/{uuid}` | Main / RPC responders | Ephemeral reply channel |
 | `home/state/{domain}/{entity_id}` | SharedStateHub | HA state mirror (retained) |
 | `home/presence/{zone}` | SharedStateHub | Occupancy per zone (retained) |

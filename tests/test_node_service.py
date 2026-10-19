@@ -5,10 +5,12 @@ identical to a supervised one until the power blinks. Every test here is about
 which rung was reached and whether that answer is honest.
 """
 
+import logging
+
 import pytest
 
 from wactorz.agents import node_service
-from wactorz.agents.node_service import NOHUP, ROOT, SUDO, USER
+from wactorz.agents.node_service import MANAGED, NOHUP, ROOT, SUDO, USER
 
 
 class FakeNode:
@@ -41,9 +43,16 @@ def _unprivileged(**over: tuple[bool, str]) -> FakeNode:
         "systemctl --user show": (True, "Version=252\n"),
         "show-user": (True, "Linger=yes\n"),
         "sudo -n true": (False, ""),
+        # No unit set up beforehand by setup-local: the usual remote node.
+        "grep -qxF": (False, ""),
     }
     answers.update(over)
     return FakeNode(**answers)
+
+
+def _set_up_locally(**over: tuple[bool, str]) -> FakeNode:
+    """The local node's user: unprivileged, with root's unit and leave to restart it."""
+    return _unprivileged(**{"grep -qxF": (True, ""), **over})
 
 
 class TestTheLadder:
@@ -94,9 +103,121 @@ class TestTheLadder:
                 return (True, "1000\n")
             if "systemctl --user show" in command:
                 return (True, "Version=252\n")
+            if "grep -qxF" in command:
+                return (False, "")
             return (True, "")
 
         assert await node_service.install(answer, user="pi", home="/home/pi") is USER
+
+
+class TestAUnitSetUpBeforehand:
+    """The local node's unit is root's, written once by `wactorz-node setup-local`."""
+
+    async def test_it_is_taken_ahead_of_a_user_unit(self) -> None:
+        node = _set_up_locally(**{"sudo -n true": (True, "")})
+
+        assert await node_service.install(node, user="wactorz-node", home="/var/lib/x") is MANAGED
+
+    async def test_it_is_restarted_and_never_rewritten(self) -> None:
+        # The sandbox is root's to change: a deploy that wrote its own unit here
+        # would replace it with the unsandboxed one.
+        node = _set_up_locally()
+
+        await node_service.install(node, user="wactorz-node", home="/var/lib/x")
+
+        assert node.ran(f"sudo -n systemctl restart {node_service.UNIT_NAME}")
+        assert not node.ran("cat >")
+        assert not node.ran("tee")
+        assert not node.ran("daemon-reload")
+
+    async def test_it_is_not_removed_as_stale(self) -> None:
+        node = _set_up_locally()
+
+        await node_service.install(node, user="wactorz-node", home="/var/lib/x")
+
+        assert not node.ran(f"rm -f {node_service.SYSTEM_UNIT_PATH}")
+        assert node.ran("rm -f /var/lib/x/.config/systemd/user/wactorz-node.service")
+
+    async def test_both_the_marker_and_the_leave_to_restart_are_asked(self) -> None:
+        node = _set_up_locally()
+
+        await node_service.install(node, user="wactorz-node", home="/var/lib/x")
+
+        (probe,) = [c for c in node.commands if "grep -qxF" in c]
+        assert node_service.SYSTEM_UNIT_PATH in probe
+        assert node.ran(f"sudo -n -l systemctl restart {node_service.UNIT_NAME}")
+
+    async def test_a_marked_unit_sudo_will_not_restart_is_said(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The rule names one systemctl and sudo finds another: the deploy takes a
+        # weaker rung, and says why rather than looking as if setup were undone.
+        node = _set_up_locally(**{"sudo -n -l": (False, ""), "show-user": (True, "Linger=no\n")})
+
+        with caplog.at_level(logging.WARNING, logger=node_service.__name__):
+            rung = await node_service.install(node, user="wactorz-node", home="/var/lib/x")
+
+        assert rung is NOHUP
+        assert "sudo will not let this user restart" in caplog.text
+
+    async def test_an_unmarked_unit_says_nothing(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger=node_service.__name__):
+            await node_service.install(_unprivileged(), user="pi", home="/home/pi")
+
+        assert "setup-local" not in caplog.text
+
+    async def test_a_failed_restart_falls_back_and_says_so(self) -> None:
+        node = _set_up_locally(**{"sudo -n systemctl restart": (False, "")})
+
+        assert await node_service.install(node, user="wactorz-node", home="/var/lib/x") is NOHUP
+
+
+class TestTheSandboxedUnit:
+    def _unit(self, hidden: list[str] | None = None) -> str:
+        return node_service.sandboxed_unit_file(
+            "/var/lib/wactorz-node", "wactorz-node", hidden or []
+        )
+
+    def test_it_says_who_wrote_it_on_its_first_line(self) -> None:
+        assert self._unit().splitlines()[0] == node_service.MANAGED_MARKER
+
+    def test_only_the_state_directory_is_writable(self) -> None:
+        lines = self._unit().splitlines()
+
+        assert "ProtectSystem=strict" in lines
+        assert [line for line in lines if line.startswith("ReadWritePaths=")] == [
+            "ReadWritePaths=/var/lib/wactorz-node/wactorz/state"
+        ]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "NoNewPrivileges=yes",
+            "CapabilityBoundingSet=",
+            "ProtectHome=yes",
+            "PrivateTmp=yes",
+            "PrivateDevices=yes",
+            "ProtectProc=invisible",
+            "RestrictSUIDSGID=yes",
+        ],
+    )
+    def test_it_holds_the_code_in(self, line: str) -> None:
+        assert line in self._unit().splitlines()
+
+    def test_main_s_secrets_are_hidden_from_it(self) -> None:
+        unit = self._unit(["/srv/main/.env", "/srv/main/state"])
+
+        assert "InaccessiblePaths=-/srv/main/.env" in unit.splitlines()
+        assert "InaccessiblePaths=-/srv/main/state" in unit.splitlines()
+
+    def test_a_percent_is_not_read_as_a_specifier(self) -> None:
+        assert "InaccessiblePaths=-/srv/100%%/state" in self._unit(["/srv/100%/state"]).splitlines()
+
+    def test_the_sandbox_is_in_the_service_section(self) -> None:
+        unit = self._unit()
+
+        assert unit.index("[Service]") < unit.index("NoNewPrivileges=yes") < unit.index("[Install]")
+        assert "User=wactorz-node" in unit.splitlines()
 
 
 class TestWhenSystemdIsThereButUnusable:

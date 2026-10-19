@@ -608,6 +608,9 @@ class _FakeConn:
         # these tests is the paths, not which unit gets installed.
         if "id -u" in command:
             stdout = "1000"
+        # No unit set up beforehand by setup-local, as on any remote node.
+        if "grep -qxF" in command:
+            return SimpleNamespace(stdout="", stderr="", exit_status=1)
         return SimpleNamespace(stdout=stdout, stderr="", exit_status=0)
 
     def start_sftp_client(self) -> _FakeSftpClient:

@@ -501,6 +501,57 @@ Learned keys live in `<WACTORZ_STATE_DIR>/known_hosts`, or wherever `DEPLOY_KNOW
 ssh-keyscan 192.168.1.52 >> "$DEPLOY_KNOWN_HOSTS"   # after verifying the fingerprint
 ```
 
+### A node on main's own machine
+
+Main holds every credential the deployment has: the model's API key, Home
+Assistant's token, the SSH keys for your nodes, the key that signs commands to
+them. Code a model writes, possibly from an email or a web page it read, is
+safer run somewhere that holds none of them. A node holds none of them. A node
+on main's own machine, under a user of its own, gives that code a place to run
+without a second machine.
+
+On Linux with systemd, set it up once, as root, from the directory main runs in:
+
+```bash
+sudo .venv/bin/wactorz-node setup-local
+```
+
+It makes a system user, `wactorz-node`, with its home in `/var/lib/wactorz-node`.
+It makes an SSH key in main's state directory and lets that user accept it from
+this machine only. It lets that user restart its own unit and run nothing else
+as root. It installs the unit, and it prints the lines to add to main's `.env`:
+
+```bash
+DEPLOY_TARGETS=local            # with your other nodes, if you have any
+DEPLOY_LOCAL_HOST=127.0.0.1
+DEPLOY_LOCAL_USER=wactorz-node
+DEPLOY_LOCAL_KEY=/path/to/state/local_node_ed25519
+```
+
+Restart main, then `/deploy local`. From there it is a node like any other:
+`/deploy local` again upgrades it, and the packages its agents install reach it
+the way they reach every node. SSH has to be running on the machine, and
+`AllowUsers` in `sshd_config`, if you use it, has to include `wactorz-node`.
+
+The unit is sandboxed, which the units on other nodes are not: only
+`~/wactorz/state` is writable, the venv it runs from is read-only, the homes
+and main's `.env` and state directory are hidden, and it has no devices, no
+capabilities and no way to gain privilege. A deploy restarts this unit and
+never rewrites it, so the sandbox can be changed only by running
+`setup-local` again. An agent that needs a camera or GPIO belongs on a node
+with the device.
+
+The node's user must not be able to read main's secrets. Inside the unit they
+are hidden, but a package install runs outside it, as that user. So setup
+stops while main's `.env` or state directory is readable by `wactorz-node`.
+Run it again with `--fix-permissions` to make them readable by main's user
+alone. `--main-user`, `--env-file` and `--state-dir` name main's user and
+files, where `sudo` and the current directory do not.
+
+The node's log is in the system journal, which its user cannot read, so a
+deploy that fails cannot bring back the log's last lines. Read them with
+`journalctl -u wactorz-node`.
+
 ---
 
 ## MQTT topics

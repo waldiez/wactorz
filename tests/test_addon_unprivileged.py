@@ -151,8 +151,12 @@ class TestTheHandOver:
 
     def test_the_secrets_and_the_brokers_folder_are_not_handed_over(self, addon: str) -> None:
         # The options and the generated key reach the app through its
-        # environment; the broker's folder belongs to the broker's user.
-        assert "/data/options.json | /data/api_key | /data/mosquitto) continue ;;" in _drop(addon)
+        # environment; the broker's folder belongs to the broker's user, and the
+        # sandbox node's to the sandbox's.
+        assert (
+            '/data/options.json | /data/api_key | /data/mosquitto | "$SANDBOX_HOME") continue ;;'
+            in _drop(addon)
+        )
 
     def test_runtime_installs_and_the_home_directory_go_under_the_state_directory(
         self, addon: str

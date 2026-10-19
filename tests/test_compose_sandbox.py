@@ -10,6 +10,7 @@ quietly hand the sandbox main's state, main's settings, or main's network.
 
 import dataclasses
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,7 @@ class TestWhatTheSandboxIsTold:
         assert "API_KEY" not in text
         assert "OPENAI" not in text
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX file modes")
     def test_the_file_is_the_node_s_alone(self, tmp_path: Path) -> None:
         env = compose_env.write(tmp_path / "out", "mosquitto", "sandbox")
 

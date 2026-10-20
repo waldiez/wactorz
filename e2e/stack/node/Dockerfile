@@ -5,7 +5,7 @@
 # It has no systemd, so the deploy starts the node the way it does on a machine
 # without one. A deploy to a real machine, with a unit, is the journey marked
 # `real_node`.
-FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81
+FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
 
 # Unpinned on purpose: a pinned Debian version stops resolving once a security
 # update replaces it.

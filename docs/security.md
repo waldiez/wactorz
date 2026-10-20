@@ -161,6 +161,18 @@ the broker. Anything that can publish to it can drive Wactorz.
   its kind on a node) are admitted the same way, and run only the queries the agent
   API offers, never SQL a request supplies. A node main deployed may read all of
   that history: sensor readings, detections and Home Assistant state changes.
+- **An operator's answer is not authenticated.** The pick an agent receives from
+  `ask_operator` or `notify_user` arrives on its `agents/<id>/answer` topic, where
+  any node, and anything else holding broker access, can publish one. It says what
+  someone answered, never that you did: do not make it the approval for anything
+  you would not let the agent do unasked. Packages are the exception: they are
+  approved through the dashboard itself, never the broker.
+- **Main's deploy credentials open every node.** The SSH key or password a
+  `DEPLOY_<NODE>_*` block names gives a shell on that node, as the user it names,
+  so whoever holds main's environment holds every node, as with its broker account.
+  A node deployed as root, or as a user with passwordless sudo, hands over root
+  with it. Deploy nodes as a user without sudo: see "Run as a service" in
+  `remote-nodes.md`.
 
 ---
 
@@ -211,6 +223,8 @@ the broker. Anything that can publish to it can drive Wactorz.
    the node keys are derived from, and the key of the CA nodes trust the broker by.
 8. Treat the ability to spawn agents as equivalent to shell access, and hand it
    out on that basis.
+9. Deploy each edge node as a user without sudo, with lingering enabled, so the
+   deploy key main holds is not root on the node.
 
 ---
 

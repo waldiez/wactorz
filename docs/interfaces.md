@@ -376,6 +376,7 @@ if answer == "maintenance":
 
 - The question is written into the agent's state until it is answered, so a restart in between loses nothing. When the agent starts it listens again, and a pick that arrives while nothing waits for it reaches `on_operator_answer(question, option)` on an `Actor`, or `async def on_answer(agent, question, option)` in a generated agent's program. `me.open_questions()` lists what is still unanswered, and `await me.wait_for_answer(question_id)` waits for one of them by id.
 - The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, so the operator can answer there as well.
+- The answer is not authenticated. It arrives on the agent's `agents/{id}/answer` topic, and anything that can publish to the broker, any node included, can publish one there. Read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.
 - `timeout` is seconds; `None` waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then `asyncio.TimeoutError` is raised, and the question stays open: a later pick still reaches `on_operator_answer`.
 
 A rule can ask without any code, with the `ask_operator` action:

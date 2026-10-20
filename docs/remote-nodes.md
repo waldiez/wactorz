@@ -106,6 +106,24 @@ WantedBy=multi-user.target
 A user unit is the same minus `User=`, with `WantedBy=default.target`, and lives
 at `~/.config/systemd/user/wactorz-node.service`.
 
+**Deploy as a user without sudo.** Main keeps the deploy key for every node it
+deploys, so whoever holds main's environment has a shell on each one as the deploy
+user: as root, when that user is root or has passwordless sudo. A user unit needs
+neither. On the node, as root, enable lingering for the user once, and remove the
+system unit an earlier deploy may have installed, which a user without sudo cannot:
+
+```bash
+sudo loginctl enable-linger pi
+sudo systemctl disable --now wactorz-node
+sudo rm -f /etc/systemd/system/wactorz-node.service
+```
+
+Then take away the user's passwordless sudo, if it has one, and `/deploy` the
+node again: it installs a user unit. What needs root on the node is then yours to do there: system packages,
+such as `python3-venv`, and a `/nodes run` that starts with `sudo`. A node on main's
+own machine (see below) is set up differently: its user may restart its own unit
+and nothing else.
+
 Four details worth knowing if you write one by hand:
 
 - **`Restart=on-failure`, not `always`.** `/nodes shutdown` exits cleanly on

@@ -247,7 +247,7 @@ class TestThePlannerAndFactsPrompts:
         examples must have survived the split on either profile.
         """
         rendered = decompose_prompt(()).format(
-            workers_desc="WORKERS", topic_schema_ctx="TOPICS", task="TASK"
+            workers_desc="WORKERS", topic_schema_ctx="TOPICS", nodes_ctx="NODES", task="TASK"
         )
         assert "WORKERS" in rendered and "TASK" in rendered
         assert '{"city": "str — city name to fetch weather for"}' in rendered

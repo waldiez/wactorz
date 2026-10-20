@@ -28,9 +28,11 @@ from ..mixins.spawning import PlacedOnNode
 from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from ..prompts.planner_prompts import (
     HA_FEASIBILITY_PROMPT,
+    NODE_PLACEMENT_RULES,
     pipeline_design_prompt,
     rule_conflict_prompt,
 )
+from .nodes import nodes_section
 from .parsing import extract_json_array, extract_json_object, loads_lenient
 
 if TYPE_CHECKING:
@@ -399,6 +401,11 @@ class PipelineMixin(_Host):
             "",
             "═══ STORED MODELS ═══",
             models_section,
+            "",
+            "═══ NODES (the machines an agent can run on) ═══",
+            nodes_section(find_main_actor(self._registry) if self._registry else None),
+            "",
+            NODE_PLACEMENT_RULES,
             "",
             "═══ OUTPUT FORMAT ═══",
             "JSON array. Each element:",

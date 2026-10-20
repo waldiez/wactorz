@@ -178,7 +178,15 @@ From the main Wactorz chat, add a `"node"` field to any spawn request. The plann
 ```
 "deploy a temperature sensor agent to rpi-livingroom"
 "spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds"
+"alert me when the CPU of rpi-livingroom stays above 80%"
 ```
+
+The planner is told which nodes there are, what each machine is and what it runs.
+An agent that needs a machine itself -- a camera on it, or its own CPU, memory, disk
+or temperature -- goes on that node, and reads the machine with `psutil`, which every
+node has: no MQTT topic or Home Assistant entity has to publish those readings. A
+node that cannot take an agent now, being offline or deployed before nodes signed
+what they publish, is listed as such, and a plan that needs it says so instead.
 
 #### Manual spawn via chat
 

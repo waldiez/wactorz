@@ -42,6 +42,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The planner can put an agent on the node you name, and knows a machine measures itself.** Asked to "spawn a CPU monitor agent on raspberrypi", it looked only for an MQTT topic or a Home Assistant entity publishing the CPU, found none, planned an agent whose only job was to ask you for one, and placed it on the sandbox, since its step named no node. Both of its prompts now list the nodes: what each machine is, what it runs, which one takes code the model writes, and which cannot take an agent now and why. A step may name one of them as its `node`. They also say that an agent reads the machine it runs on with `psutil`, which every node has, so a request about a machine's own CPU, memory or disk is planned as an agent there; when the request names a node, Home Assistant is not searched for it. A plan that cannot be built now says what is missing, instead of spawning an agent to ask.
+
 - **The add-ons' embedded broker no longer locks the add-on out once a node has an account.** Its access list was generated before the add-on's own broker account was named, so it gave the whole broker only to clients with no account, and the add-on, which connects with one, could reach nothing on its own broker as soon as a deploy target was configured. The account is now named first.
 
 - **A message to an agent on a node is delivered just after the server restarts.** For the first few seconds, until the node next reported, `@agent` for an agent running on a node got "Agent @agent not found.", though the node had kept it running. Until a node reports after a start, main now routes to it the agents it placed there.

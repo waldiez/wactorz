@@ -11,8 +11,10 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+from ...config import CONFIG
 from ...core.actor import ask_through
 from ...core.mqtt import mqtt_client
+from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
     from .hosts import PlannerHost
@@ -64,6 +66,7 @@ class ContextMixin(_Host):
             r"\benergy\b": ["energy", "power", "kwh", "watt"],
             r"\bcpu\b": ["cpu", "processor"],
             r"\bmemory\b": ["memory", "ram"],
+            r"\bdisk\b": ["disk", "storage"],
             r"\bco2\b": ["co2", "carbon"],
             r"\bair quality\b": ["air", "quality", "voc", "pm25"],
             r"\blight level\b": ["light", "lux", "illumin"],
@@ -86,6 +89,14 @@ class ContextMixin(_Host):
 
         if not matched_concepts:
             return task, ""  # No vague data references found
+
+        # A named machine's own readings are read there, whatever else matches:
+        # a Home Assistant "processor" sensor measures Home Assistant's host.
+        named = [
+            node for node in self._node_names() if re.search(rf"\b{re.escape(node)}\b", task_lower)
+        ]
+        if named and set(matched_concepts) <= MACHINE_CONCEPTS:
+            return unresolved(task, matched_concepts)
 
         # ── Search TopicRegistry first ─────────────────────────────────────
         try:
@@ -112,19 +123,13 @@ class ContextMixin(_Host):
             logger.debug("[%s] HA entity search failed: %s", self.name, e)
 
         # ── Nothing found — return task unchanged with a note ──────────────
-        concepts_str = ", ".join(set(matched_concepts[:4]))
-        enriched = (
-            f"{task} "
-            f"[NOTE: No registered MQTT topics or HA entities found matching: {concepts_str}. "
-            f"If the user has a sensor agent running, it may not have published yet. "
-            f"Ask the user to specify the exact MQTT topic or HA entity ID, "
-            f"or check agent.topics() for available data streams.]"
-        )
-        note = (
-            f"No data source found for: {concepts_str}. "
-            f"You may need to specify the exact topic or entity."
-        )
-        return enriched, note
+        return unresolved(task, matched_concepts)
+
+    def _node_names(self) -> list[str]:
+        """The nodes main knows of, lower-cased: those it has heard from and its deploy targets."""
+        main = find_main_actor(self._registry) if self._registry else None
+        known = set(main.nodes.known) if main is not None else set()
+        return sorted({n.lower() for n in known | {t.name for t in CONFIG.deploy_targets}})
 
     async def _fetch_ha_entities(self) -> list[dict[str, Any]]:
         """Ask home-assistant-agent for its entity list, or an empty list.
@@ -462,5 +467,38 @@ def describe_ha_source(task: str, candidates: list[dict[str, Any]]) -> tuple[str
         + ", ".join(f"`{c['entity_id']}`" for c in candidates[:3])
         + (" and more" if len(candidates) > 3 else "")
         + " — planner will pick the most relevant."
+    )
+    return enriched, note
+
+
+#: What a machine measures about itself: an agent on it reads these with psutil,
+#: so no topic or entity has to publish them. Temperature is not among them: the
+#: temperature "of" a node is as often a sensor wired to it as the board's own,
+#: so it is searched for, and the model is told psutil can read the board's.
+MACHINE_CONCEPTS = frozenset({"cpu", "processor", "memory", "ram", "disk", "storage"})
+
+
+def unresolved(task: str, concepts: list[str]) -> tuple[str, str]:
+    """``task`` with a note for the model, and one for the user, when no source was found.
+
+    A machine's own readings have a source wherever an agent runs, so asking
+    for one only says where. For anything else the model is told to report
+    what is missing rather than plan around it, never to plan an agent that
+    asks: the plan is shown before anything runs, which is the place to ask.
+    """
+    concepts_str = ", ".join(sorted(set(concepts))[:4])
+    if set(concepts) <= MACHINE_CONCEPTS:
+        enriched = (
+            f"{task} [NOTE: {concepts_str} is a reading of a machine. An agent on that machine "
+            f"reads it with psutil; see NODES for which machine.]"
+        )
+        return enriched, f"Read on the machine itself: {concepts_str}."
+    enriched = (
+        f"{task} [NOTE: No registered MQTT topics or HA entities found matching: {concepts_str}. "
+        f"A sensor agent may not have published yet. If nothing listed can provide it, report "
+        f"what is missing instead of planning an agent to ask for it.]"
+    )
+    note = (
+        f"No data source found for: {concepts_str}. You may need to name the exact topic or entity."
     )
     return enriched, note

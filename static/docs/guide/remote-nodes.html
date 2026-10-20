@@ -609,8 +609,10 @@ an agent can sign as any other agent on its own node.</p>
 <ul>
 <li><code>enforce</code> (the default) refuses it. A node deployed before nodes signed what they
   publish still counts as up, so its agents are not removed, but main believes
-  nothing else its heartbeats say, sends it no tasks, and says in chat that it
-  needs <code>/deploy &lt;node&gt;</code>. After upgrading main, deploy every node again.</li>
+  nothing else its heartbeats say, sends it no tasks, refuses to spawn or move an
+  agent there, and says in chat that it needs <code>/deploy &lt;node&gt;</code>. The dashboard
+  shows the node's agents as main knows them. After upgrading main, deploy every
+  node again.</li>
 <li><code>warn</code> takes it, and says so in chat and the log.</li>
 </ul>
 <p>Each heartbeat is taken once, so one captured and delivered again does not make a

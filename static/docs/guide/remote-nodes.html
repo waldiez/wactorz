@@ -315,8 +315,15 @@ and the account is not in the <code>systemd-journal</code> group), so it reports
 <h4 id="natural-language-via-planner">Natural language (via planner)</h4>
 <div class="highlight"><pre><span></span><code>"deploy a temperature sensor agent to rpi-livingroom"
 "spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds"
+"alert me when the CPU of rpi-livingroom stays above 80%"
 </code></pre></div>
 
+<p>The planner is told which nodes there are, what each machine is and what it runs.
+An agent that needs a machine itself -- a camera on it, or its own CPU, memory, disk
+or temperature -- goes on that node, and reads the machine with <code>psutil</code>, which every
+node has: no MQTT topic or Home Assistant entity has to publish those readings. A
+node that cannot take an agent now, being offline or deployed before nodes signed
+what they publish, is listed as such, and a plan that needs it says so instead.</p>
 <h4 id="manual-spawn-via-chat">Manual spawn via chat</h4>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w">          </span><span class="s2">"temp-sensor-agent"</span><span class="p">,</span>

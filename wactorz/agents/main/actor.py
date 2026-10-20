@@ -574,6 +574,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if excess > 0:
             del self._pending_notifications[:excess]
 
+    def _withdraw_notifications(self, about: str) -> None:
+        """Drop the queued notices about ``about`` that are no longer true.
+
+        A notice says what it is about in its ``about`` field. It waits for the
+        next chat reply, and what it said may have stopped being so meanwhile.
+        """
+        self._pending_notifications[:] = [
+            n for n in self._pending_notifications if n.get("about") != about
+        ]
+
     def _drain_notifications(self) -> str:
         """Pop queued monitor notifications as a formatted prefix string."""
         if not self._pending_notifications:
@@ -1188,6 +1198,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _node_version_mismatch(self, node_name: str) -> str | None:
         """Why ``node_name`` cannot take an agent from this server, or None."""
         return self.nodes.version_mismatch(node_name)
+
+    def _node_refuses_tasks(self, node_name: str) -> str | None:
+        """Why main would hear nothing an agent on ``node_name`` says, or None."""
+        return self.nodes.refuses_tasks(node_name)
 
     def _online_node_names(self) -> list[str]:
         """Names of all nodes currently considered online."""

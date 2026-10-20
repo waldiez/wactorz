@@ -123,6 +123,8 @@ class PlacementHost(Protocol):
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
 
+    def _node_refuses_tasks(self, node_name: str) -> str | None: ...
+
     def _queue_notification(self, notice: dict[str, Any]) -> None: ...
 
     @property
@@ -160,7 +162,23 @@ class Placement:
         return {target.name for target in CONFIG.deploy_targets} | set(self.host._known_nodes)
 
     async def place(self, config: dict[str, Any]) -> dict[str, Any] | NotSpawned:
-        """``config`` as it should be spawned, naming the node it goes to; or why not at all."""
+        """``config`` as it should be spawned, naming the node it goes to; or why not at all.
+
+        A node main would not hear from is refused here, whoever chose it, so
+        the caller can say why at once rather than wait for an agent that never
+        counts as started.
+        """
+        placed = await self._placed(config)
+        if isinstance(placed, NotSpawned):
+            return placed
+        node = str(placed.get("node") or "").strip()
+        unheard = self.host._node_refuses_tasks(node) if node else None
+        if unheard:
+            return NotSpawned(str(config.get("name") or ""), unheard)
+        return placed
+
+    async def _placed(self, config: dict[str, Any]) -> dict[str, Any] | NotSpawned:
+        """Where ``config`` goes by the rules for code the model writes, or why not at all."""
         node = self.model_code_node()
         if not node or not runs_model_code(config):
             return config

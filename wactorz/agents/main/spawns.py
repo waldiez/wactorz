@@ -855,6 +855,36 @@ class SpawnService:
             },
         )
 
+    async def _node_cannot_take(self, config: dict[str, Any], node: str, restoring: bool) -> bool:
+        """Whether ``node`` itself rules the agent out, said where the user looks if so."""
+        mismatch = self.host._node_version_mismatch(node)
+        if mismatch:
+            # Before the install, the spawn and the desired state: a node on
+            # other code must not be handed an agent it may not be able to run,
+            # and must not be told to keep running it after a reboot.
+            logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
+            await self.host._mqtt_publish(
+                f"agents/{self.host.actor_id}/logs",
+                {
+                    "type": "error",
+                    "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
+                    "child_name": config.get("name"),
+                    "node": node,
+                    "timestamp": time.time(),
+                },
+            )
+            return True
+        unheard = None if restoring else self.host._node_refuses_tasks(node)
+        if unheard:
+            # Sent anyway, the agent would run while main ignored everything it
+            # said, and whoever spawned it would wait for it to appear until
+            # they gave up. Restoring is let through: the node's retained
+            # desired state already names the agent, and it is heard from once
+            # the node is deployed again.
+            await self._refuse_remote_spawn(config, node, f"{unheard}.")
+            return True
+        return False
+
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
     ) -> bool:
@@ -898,22 +928,7 @@ class SpawnService:
         if unrunnable:
             await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
             return False
-        mismatch = self.host._node_version_mismatch(node)
-        if mismatch:
-            # Before the install, the spawn and the desired state: a node on
-            # other code must not be handed an agent it may not be able to run,
-            # and must not be told to keep running it after a reboot.
-            logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
-            await self.host._mqtt_publish(
-                f"agents/{self.host.actor_id}/logs",
-                {
-                    "type": "error",
-                    "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
-                    "child_name": config.get("name"),
-                    "node": node,
-                    "timestamp": time.time(),
-                },
-            )
+        if await self._node_cannot_take(config, node, restoring):
             return False
         config, problem = await self.pinned_for(config, node)
         if problem:

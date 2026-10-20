@@ -13,6 +13,7 @@ import logging
 import time
 from typing import Any
 
+from ..agents.lookup import find_main_actor
 from ..core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -54,7 +55,43 @@ async def handle_message(topic: str, payload: str) -> None:
 
     Extracted from the listener loop so it can be exercised without a broker —
     the loop around it is connection management, this is the part with rules.
+
+    A node's heartbeat is the exception while main runs: anything on the broker
+    can publish one, so the dashboard is shown what main took from it instead,
+    which main hands over once it has checked it (see `_watch_main_nodes`).
     """
+    if _is_node_heartbeat(topic) and _watch_main_nodes():
+        return
+    await _dispatch(topic, payload)
+
+
+def _is_node_heartbeat(topic: str) -> bool:
+    parts = topic.split("/")
+    return len(parts) == 3 and parts[0] == "nodes" and parts[2] == "heartbeat"
+
+
+def _watch_main_nodes() -> bool:
+    """Whether main's node table is there to show nodes from, watching it if so.
+
+    Asked on each heartbeat rather than once at start: main may come up after
+    this server does. Watching is idempotent, so asking again costs a lookup.
+    """
+    nodes = getattr(find_main_actor(runtime.registry), "nodes", None)
+    watchers = getattr(nodes, "watchers", None)
+    if not isinstance(watchers, list):
+        return False
+    if _show_node_heartbeat not in watchers:
+        watchers.append(_show_node_heartbeat)
+    return True
+
+
+async def _show_node_heartbeat(node: str, taken: dict[str, Any]) -> None:
+    """Show the browsers a heartbeat as main took it."""
+    await _dispatch(f"nodes/{node}/heartbeat", json.dumps(taken))
+
+
+async def _dispatch(topic: str, payload: str) -> None:
+    """Take one message into the live state, and tell the browsers."""
     event: dict[str, Any] | None = events.parse_topic(topic, payload)
     # State first, and for every message: the filter below decides only whether a
     # browser is shown the raw frame, not whether the server takes it in.

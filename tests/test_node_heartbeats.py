@@ -151,6 +151,11 @@ async def run_heartbeats(
     )
     setattr(main, "_queue_notification", run.notifications.append)
 
+    def _withdraw(about: str) -> None:
+        run.notifications[:] = [n for n in run.notifications if n.get("about") != about]
+
+    setattr(main, "_withdraw_notifications", _withdraw)
+
     async def _clear(name: str, actor_id: str | None = None) -> None:
         run.cleared_manifests.append(name)
 
@@ -624,6 +629,18 @@ class TestAnUnsignedHeartbeat:
         refusal = run.main.nodes.refuses_tasks("rpi")
         assert refusal is not None and "/deploy rpi" in refusal
 
+    async def test_the_notice_is_withdrawn_once_the_node_signs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Deployed again before anyone chatted: the queued notice would reach
+        # the chat after the deploy that made it untrue.
+        _signing(monkeypatch, "enforce")
+
+        run = await run_heartbeats(monkeypatch, [unsigned_heartbeat(), heartbeat()])
+
+        assert run.notifications == []
+        assert run.main.nodes.refuses_tasks("rpi") is None
+
     async def test_one_after_a_signed_one_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The node signs, so this came from something else, which must not be
         # able to make main refuse the node's tasks.
@@ -699,3 +716,20 @@ class TestWhereATaskGoes:
         )
 
         assert run.main.nodes.node_for("planner") == ""
+
+
+class TestWithdrawingANotice:
+    def test_only_the_notices_about_it_go(self) -> None:
+        main = MainActor.__new__(MainActor)
+        main._pending_notifications = [
+            {"about": "unsigned-node:rpi", "message": "rpi does not sign"},
+            {"about": "unsigned-node:pc", "message": "pc does not sign"},
+            {"message": "something else"},
+        ]
+
+        main._withdraw_notifications("unsigned-node:rpi")
+
+        assert [n["message"] for n in main._pending_notifications] == [
+            "pc does not sign",
+            "something else",
+        ]

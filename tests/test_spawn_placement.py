@@ -58,6 +58,8 @@ class _Host:
         self.asked = asyncio.Event()
         #: The nodes main has heard from, by name.
         self.heard: dict[str, dict[str, Any]] = {}
+        #: Nodes main would hear nothing from, and why: deployed before signing.
+        self.unheard: dict[str, str] = {}
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
@@ -74,6 +76,9 @@ class _Host:
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
         return {}
+
+    def _node_refuses_tasks(self, node_name: str) -> str | None:
+        return self.unheard.get(node_name)
 
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         return None
@@ -237,6 +242,33 @@ class TestOffMain:
 
         assert isinstance(placed, dict)
         assert placed["node"] == NODE
+
+
+@pytest.mark.usefixtures("sandboxed")
+class TestANodeMainWouldNotHearFrom:
+    """Refused at once, with how to fix it, rather than sent to an agent nobody hears."""
+
+    async def test_the_node_for_model_code_is_refused(self, host: _Host) -> None:
+        host.unheard[NODE] = f"deploy it again: /deploy {NODE}"
+
+        placed = await Placement(host).place(dynamic())
+
+        assert isinstance(placed, NotSpawned)
+        assert f"/deploy {NODE}" in placed.reason
+
+    async def test_a_node_the_spawn_names_is_refused(self, host: _Host) -> None:
+        host.unheard["raspberrypi"] = "deploy it again: /deploy raspberrypi"
+
+        placed = await Placement(host).place(dynamic(node="raspberrypi"))
+
+        assert isinstance(placed, NotSpawned)
+        assert placed.name == "scraper"
+
+    async def test_an_agent_that_runs_no_model_code_is_refused_too(self, host: _Host) -> None:
+        host.unheard["raspberrypi"] = "deploy it again: /deploy raspberrypi"
+        config = {"name": "helper", "type": "llm", "node": "raspberrypi"}
+
+        assert isinstance(await Placement(host).place(config), NotSpawned)
 
 
 @pytest.mark.usefixtures("sandboxed")

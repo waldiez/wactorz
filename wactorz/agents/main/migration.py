@@ -1156,7 +1156,11 @@ class Migration:
                 f"'{current_node or 'local'}'.",
             }
 
-        mismatch = None if is_target_local else self.host._node_version_mismatch(target_node)
+        mismatch = None
+        if not is_target_local:
+            mismatch = self.host._node_version_mismatch(target_node)
+            unheard = self.host._node_refuses_tasks(target_node)
+            mismatch = mismatch or (f"{unheard}." if unheard else None)
         if mismatch:
             # Same footing as an offline target: nothing has moved yet, so the
             # agent simply stays where it is.

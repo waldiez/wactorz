@@ -88,6 +88,9 @@ class _Host:
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
         return self.spawn_registry
 
+    def _node_refuses_tasks(self, node_name: str) -> str | None:
+        return None
+
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         self.notices.append(notice)
 

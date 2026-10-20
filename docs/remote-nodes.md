@@ -476,8 +476,10 @@ A message main cannot check follows `WACTORZ_NODE_SIGNING`, as a command does:
 
 - `enforce` (the default) refuses it. A node deployed before nodes signed what they
   publish still counts as up, so its agents are not removed, but main believes
-  nothing else its heartbeats say, sends it no tasks, and says in chat that it
-  needs `/deploy <node>`. After upgrading main, deploy every node again.
+  nothing else its heartbeats say, sends it no tasks, refuses to spawn or move an
+  agent there, and says in chat that it needs `/deploy <node>`. The dashboard
+  shows the node's agents as main knows them. After upgrading main, deploy every
+  node again.
 - `warn` takes it, and says so in chat and the log.
 
 Each heartbeat is taken once, so one captured and delivered again does not make a

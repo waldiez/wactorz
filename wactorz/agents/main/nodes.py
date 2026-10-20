@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from ..._version import __version__
@@ -63,6 +63,9 @@ VANISH_MISS_THRESHOLD = 3
 #: a node's absence — deciding its agents are gone waits considerably longer, so
 #: a brief network gap costs a grey dot rather than a deletion.
 ONLINE_WINDOW_S = 30.0
+
+#: Told of each heartbeat main takes, with the node and what main took from it.
+HeartbeatWatcher = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 #: How many runs of one node's runner to remember the newest heartbeat of. A
 #: heartbeat from a run forgotten is taken as a new run's; a node restarts far
@@ -140,6 +143,11 @@ def _runner_restarted(record: dict[str, Any], before: dict[str, Any]) -> bool:
     return False
 
 
+def _unsigned_notice(node_name: str) -> str:
+    """What the chat notice saying ``node_name`` does not sign is about, to withdraw it by."""
+    return f"unsigned-node:{node_name}"
+
+
 def remote_actor_id(agent_name: str) -> str:
     """The actor id a remote agent has, derived from its name.
 
@@ -183,6 +191,9 @@ class NodeManager:
         self.heartbeat_counts: dict[str, OrderedDict[str, int]] = {}
         #: Nodes already said in chat to be sending unsigned heartbeats.
         self.unsigned_reported: set[str] = set()
+        #: Told of every heartbeat taken, as main took it: the dashboard shows a
+        #: node from this, never from the broker, where anyone may publish one.
+        self.watchers: list[HeartbeatWatcher] = []
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Every known node, with its age resolved to an `online` flag.
@@ -551,7 +562,12 @@ class NodeManager:
             self._say_unsigned(node_name)
             if NODE_SIGNING == "enforce":
                 self._take_unsigned(node_name, data, before)
+                await self._tell_watchers(
+                    node_name, {**data, "agents": self.known[node_name]["agents"]}
+                )
                 return
+        if signed:
+            self._now_signed(node_name)
         agents = data.get("agents", [])
         previous = set((before or {}).get("agents", []))
         await self._prune_vanished(node_name, set(agents), previous)
@@ -591,6 +607,19 @@ class NodeManager:
         self._touch_monitor(agents)
         await self.follow_signing(node_name, self.known[node_name], before)
         self.follow_restarts(node_name, self.known[node_name], before)
+        await self._tell_watchers(node_name, data)
+
+    async def _tell_watchers(self, node_name: str, taken: dict[str, Any]) -> None:
+        """Hand a heartbeat, as main took it, to whatever watches the node table.
+
+        A watcher that fails is logged and the rest are still told: what shows
+        a node must not stop main recording it.
+        """
+        for watcher in list(self.watchers):
+            try:
+                await watcher(node_name, taken)
+            except Exception:
+                logger.exception("[main] A node watcher failed on %r's heartbeat", node_name)
 
     def _take_unsigned(
         self, node_name: str, data: dict[str, Any], before: dict[str, Any] | None
@@ -634,6 +663,7 @@ class NodeManager:
         host._queue_notification(
             {
                 "severity": "warning",
+                "about": _unsigned_notice(node_name),
                 "message": (
                     f"Node '{node_name}' does not sign what it publishes, {outcome}. It was "
                     f"deployed before nodes signed their messages. Deploy it again: "
@@ -641,6 +671,18 @@ class NodeManager:
                 ),
             }
         )
+
+    def _now_signed(self, node_name: str) -> None:
+        """A node said to be unsigned has signed: what was said is no longer so.
+
+        A notice still queued is dropped, since it would reach the chat after
+        the deploy that made it untrue. One already shown was true when it was.
+        """
+        if node_name not in self.unsigned_reported:
+            return
+        self.unsigned_reported.discard(node_name)
+        if self.host is not None:
+            self.host._withdraw_notifications(_unsigned_notice(node_name))
 
     def follow_restarts(
         self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None

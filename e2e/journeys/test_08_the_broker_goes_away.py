@@ -1,6 +1,9 @@
 """The broker stops and comes back: the page says so, and so does an agent it cannot reach."""
 
+import time
+
 from harness import backend, broker, browser, waiting
+from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME, Run
 
 LIVE = "● live"
@@ -41,6 +44,26 @@ def test_it_comes_back_and_the_page_says_so(
     waiting.until(lambda: dashboard.connection() == LIVE, what="the header to say live again")
     waiting.until(
         lambda: app.rest.raw("GET", "/ready").status == 200, what="the server to be ready again"
+    )
+    # Main routes to an agent on a node by the node's latest heartbeat, and a
+    # broker slow to come back leaves the one before the outage too old: the
+    # node counts as back once it has reported again.
+    back = time.time()
+    waiting.until(
+        lambda: _reported_since(app, back, "counter"),
+        what=f"node {NODE_NAME!r} to report 'counter' again",
+        interval=NODE_POLL_S,
+    )
+
+
+def _reported_since(app: backend.Backend, since: float, agent: str) -> bool:
+    """Whether the node has sent a heartbeat listing ``agent`` since ``since``."""
+    return any(
+        n.get("node") == NODE_NAME
+        and float(n.get("last_seen") or 0) > since
+        and agent in (n.get("agents") or [])
+        for n in app.rest.nodes()
+        if isinstance(n, dict)
     )
 
 

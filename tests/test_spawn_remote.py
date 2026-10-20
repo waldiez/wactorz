@@ -144,7 +144,7 @@ class TestWhatGoesOverTheWireVersusWhatIsSaved:
 
         await main.spawn(llm_agent())
 
-        assert main.saved == [llm_agent()]
+        assert main.saved == [{**llm_agent(), "node": "rpi"}]
 
     async def test_the_callers_config_is_left_alone(self) -> None:
         # The same dict is handed to several writers, so synthesis copies.

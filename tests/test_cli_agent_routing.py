@@ -17,15 +17,19 @@ import types
 from dataclasses import replace
 from typing import Any, cast
 
+import aiomqtt
 import pytest
 
 from wactorz import config
 from wactorz.agents.main import MainActor
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.config import DeployTarget
 from wactorz.core.registry import ActorRegistry
 from wactorz.interfaces.chat import cli
 from wactorz.interfaces.chat.cli import CLIInterface, resolve_host
 from wactorz.orchestration import MainOrchestrator
+
+from .node_messages import SignedMessage
 
 
 class _Registry:
@@ -42,7 +46,8 @@ class _Registry:
 class _Main:
     def __init__(self) -> None:
         self._registry: _Registry | None = _Registry()
-        self._known_nodes: dict[str, Any] = {}
+        #: The node table, with no host: every node may speak for any agent.
+        self.nodes = NodeManager()
         self._mqtt_broker = "broker"
         self._mqtt_port = 1883
         self.actor_id = "main-id"
@@ -50,6 +55,14 @@ class _Main:
         self.delegated: Any = None
         self.installer_result: dict[str, Any] = {"success": True}
         self.installer_calls: list[dict[str, Any]] = []
+
+    @property
+    def _known_nodes(self) -> dict[str, Any]:
+        return self.nodes.known
+
+    @_known_nodes.setter
+    def _known_nodes(self, value: dict[str, Any]) -> None:
+        self.nodes.known = value
 
     async def delegate_task(self, name: str, message: str, timeout: float = 60.0) -> Any:
         return self.delegated
@@ -153,17 +166,15 @@ class TestLocalAgents:
         assert await _cli(main)._get_agent_response("a", "hi") == reply
 
 
-class _Message:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
-
-
 class _Client:
     def __init__(self, payload: bytes | None) -> None:
         self._payload = payload
         self.subscribed: list[str] = []
+        #: The keyword arguments each connection was opened with.
+        self.connected: list[dict[str, Any]] = []
 
-    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Client":
+    def __call__(self, _host: str, _port: int, **kwargs: Any) -> "_Client":
+        self.connected.append(kwargs)
         return self
 
     async def __aenter__(self) -> "_Client":
@@ -182,7 +193,8 @@ class _Client:
     async def _stream(self) -> Any:
         if self._payload is None:
             await asyncio.Event().wait()
-        yield _Message(self._payload or b"")
+        # From node `rpi`, signed on the topic subscribed.
+        yield SignedMessage(self.subscribed[-1], self._payload or b"", node="rpi")
 
 
 @pytest.fixture(name="quick")
@@ -236,6 +248,20 @@ class TestRemoteAgents:
         (topic, task) = main.published[0]
         assert topic == "agents/by-name/cam/task"
         assert client.subscribed == [task["_reply_topic"]]
+
+    async def test_the_reply_is_read_over_mqtt_5(
+        self, monkeypatch: pytest.MonkeyPatch, quick: None
+    ) -> None:
+        # The node's signature travels in user properties, which an MQTT 3.1.1
+        # connection never receives: every reply would read as unsigned.
+        main = _Main()
+        main._known_nodes = {"rpi": {"agents": ["cam"]}}
+        client = _Client(b"{}")
+        monkeypatch.setattr(cli, "mqtt_client", client)
+
+        await _cli(main)._get_remote_agent_response("cam", "snap")
+
+        assert client.connected[0]["protocol"] == aiomqtt.ProtocolVersion.V5
 
     async def test_a_silent_node_times_out(
         self, monkeypatch: pytest.MonkeyPatch, quick: None

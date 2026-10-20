@@ -59,6 +59,7 @@ from ..core.mqtt import (
     mqtt_client,
     reconnect_wait,
     session_kwargs,
+    user_properties,
 )
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
@@ -80,7 +81,6 @@ from .signing import (
     ControlGuard,
     message_bytes,
     server_mismatch,
-    user_properties,
 )
 from .state import JsonState, agent_state, flush_states, state_path
 
@@ -179,6 +179,7 @@ class NodeRunner:
             os.environ.get("WACTORZ_NODE_SIGNING", ""),
             self.state_dir,
         )
+        self.publisher.signer = self._control.publication_signer()
 
     @staticmethod
     def _resolve_state_dir(state_dir: str | None) -> Path:

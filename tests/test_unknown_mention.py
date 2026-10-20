@@ -57,8 +57,13 @@ def _main_with_nodes(
     long ago unless a test says otherwise.
     """
     main = _agent("main")
-    main.nodes = SimpleNamespace(known=nodes)
     registry = {name: {"name": name, "node": node} for name, node in (placed or {}).items()}
+    main.nodes = SimpleNamespace(
+        known=nodes,
+        # As main's own: a node speaks for what the registry places on it, or
+        # for what it places nowhere.
+        speaks_for=lambda node, name: registry.get(name, {}).get("node", node) == node,
+    )
     main.spawns = SimpleNamespace(_get_spawn_registry=lambda: registry)
     main.metrics = SimpleNamespace(start_time=time.time() - 3600 if started is None else started)
     return main

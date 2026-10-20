@@ -35,7 +35,9 @@ from ...core.mqtt import (
     install_id,
     mqtt_client,
     session_kwargs,
+    user_properties,
 )
+from ...core.node_publications import admit
 
 if TYPE_CHECKING:
     from .hosts import DelegationHost
@@ -121,8 +123,13 @@ class DelegationManager:
         self.host = host
 
     @contextlib.asynccontextmanager
-    async def _reply_topic(self) -> AsyncGenerator[tuple[str, asyncio.Future]]:
+    async def _reply_topic(self, node: str) -> AsyncGenerator[tuple[str, asyncio.Future]]:
         """A reply topic that is already subscribed, and the future its answer lands in.
+
+        The answer is the first message there signed by ``node``, the node the
+        task goes to. Every node can read the task and publish on its reply
+        topic, so one that is not signed by it is passed over and the wait goes
+        on, rather than ending with whatever arrived first.
 
         **Subscribing before the caller publishes is the whole point.** Both
         call sites used to publish first and subscribe after, so an agent that
@@ -154,9 +161,12 @@ class DelegationManager:
                     await client.subscribe(topic, qos=1)
                     subscribed.set()
                     async for msg in client.messages:
+                        raw = bytes(msg.payload or b"")
+                        if not admit(node, topic, raw, user_properties(msg), "a task reply"):
+                            continue
                         try:
                             if not future.done():
-                                future.set_result(json.loads(msg.payload.decode()))
+                                future.set_result(json.loads(raw.decode()))
                         except Exception as exc:
                             logger.debug(
                                 "[%s] Undecodable reply on %r: %s", self.host.name, topic, exc
@@ -237,19 +247,20 @@ class DelegationManager:
                 return None
 
         # ── Remote path: check if agent is on a known node ───────────────────
-        remote_node = None
-        for node_name, nd in self.host._known_nodes.items():
-            if target_name in nd.get("agents", []):
-                remote_node = node_name
-                break
-
+        remote_node = self.host.nodes.node_for(target_name)
         if not remote_node:
             logger.warning(
                 "[%s] delegate_task: %r not found locally or remotely", self.host.name, target_name
             )
             return None
+        refusal = self.host.nodes.refuses_tasks(remote_node)
+        if refusal:
+            logger.warning(
+                "[%s] delegate_task: %r not sent: %s", self.host.name, target_name, refusal
+            )
+            return {"error": refusal}
 
-        async with self._reply_topic() as (reply_topic, future):
+        async with self._reply_topic(remote_node) as (reply_topic, future):
             await self.host._mqtt_publish(
                 f"agents/by-name/{target_name}/task",
                 {**remote, "_reply_topic": reply_topic, "_remote_task": True},
@@ -556,7 +567,10 @@ class DelegationManager:
 
     async def _ask_node(self, target_name: str, node: str, message: str) -> str:
         """Ask an agent on another machine, over the broker."""
-        async with self._reply_topic() as (reply_topic, future):
+        refusal = self.host.nodes.refuses_tasks(node)
+        if refusal:
+            return f"{target_name} was not asked: {refusal}."
+        async with self._reply_topic(node) as (reply_topic, future):
             await self.host._mqtt_publish(
                 f"agents/by-name/{target_name}/task",
                 {
@@ -576,13 +590,6 @@ class DelegationManager:
                     f"{REMOTE_MENTION_TIMEOUT_S:.0f}s."
                 )
             return f"**{target_name}** (on {node}): {_readable(result)}"
-
-    def _node_claiming(self, target_name: str) -> str | None:
-        """The node whose last heartbeat listed this agent, if any."""
-        for node_name, info in self.host._known_nodes.items():
-            if target_name in info.get("agents", []):
-                return node_name
-        return None
 
     async def ask_home_assistant(self, text: str) -> str:
         """Put a question to the Home Assistant agent, and say what came back.
@@ -628,7 +635,7 @@ class DelegationManager:
         if target:
             return await self._ask_here(target_name, message)
 
-        node = self._node_claiming(target_name)
+        node = self.host.nodes.node_for(target_name)
         if node:
             return await self._ask_node(target_name, node, message)
 

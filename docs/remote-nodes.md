@@ -341,8 +341,11 @@ direction, so it can neither drive, impersonate nor watch another node;
 `system/`; and whatever else shares the broker, such as `zigbee2mqtt/` or Home
 Assistant's discovery topics.
 
-`agents/#` being open means a node can publish under any agent's topics, and
-a message there does not say who sent it. Main therefore does not take an
+`agents/#` being open means a node can publish under any agent's topics. What
+main takes from there as an agent's word -- the reply to a task, its manifest,
+the data samples it records for the planner -- it takes only signed by the node
+it places that agent on (see "What a node publishes is signed" below). Main
+does not take an
 agent's withdrawal, the empty manifest that says it is gone, from that alone:
 one for an agent still running on main is ignored, and one for an agent on a
 node waits for that node's next heartbeat, which only the node can publish,
@@ -351,7 +354,7 @@ gone quiet counts too: the withdrawal waits until it speaks again, or until
 main gives up on it after its grace period, which removes its agents anyway.
 Only for a node main does not know at all, such as one that was down when main
 started, is a withdrawal taken at once. What else a node can publish under
-another agent's topics, such as its manifest or status, is taken as given.
+another agent's topics, such as its status or logs, is taken as given.
 
 That includes tasks. A task on `agents/by-name/<name>/task` reaches the agent of
 that name on whichever node runs it, and any node may publish one, so an agent
@@ -452,6 +455,33 @@ The keys are derived from a secret in `<WACTORZ_STATE_DIR>/node_signing.key`. Ba
 it up with the rest of the state directory. To rotate the keys, delete it and deploy
 every node again: until a node is redeployed, it reports or refuses what the new
 secret signs.
+
+#### What a node publishes is signed
+
+The other direction uses the same key. A node signs everything it publishes, and
+main checks the signature against the node it expects to hear from: for a node's
+heartbeat and reports, the node whose topic it is; for an agent's task reply,
+manifest or data samples, the node main's own records place the agent on, never
+the one a heartbeat claims. An agent on main is spoken for by no node: main reads
+its manifest from the agent itself. An agent main has no record of, one a node
+started by itself, belongs to the node that first speaks for it.
+
+So code running on one node, the sandbox included, can speak only for that node's
+agents. It cannot answer a task sent to another node's agent before that agent
+does, since main waits for the reply its own node signed. And it cannot describe
+another agent to the planner. A signature names the machine, not the agent on it:
+an agent can sign as any other agent on its own node.
+
+A message main cannot check follows `WACTORZ_NODE_SIGNING`, as a command does:
+
+- `enforce` (the default) refuses it. A node deployed before nodes signed what they
+  publish still counts as up, so its agents are not removed, but main believes
+  nothing else its heartbeats say, sends it no tasks, and says in chat that it
+  needs `/deploy <node>`. After upgrading main, deploy every node again.
+- `warn` takes it, and says so in chat and the log.
+
+Each heartbeat is taken once, so one captured and delivered again does not make a
+node that has gone away look up.
 
 ### Encrypted connections (TLS)
 

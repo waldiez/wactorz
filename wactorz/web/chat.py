@@ -22,7 +22,8 @@ from aiomqtt import MqttError
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..core.actor import ActorState, Message, MessageType
-from ..core.mqtt import mqtt_client
+from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
+from ..core.node_publications import admit
 from ..core.task_text import reply_text, task_payload
 from ..core.turns import acting_as, turn_scope
 from ..monitoring import chat_metrics
@@ -98,8 +99,10 @@ def remote_node_for(name: str) -> str | None:
         return None
     known = main_actor._known_nodes
     for node_name, nd in known.items():
-        if time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS and name in nd.get(
-            "agents", []
+        if (
+            time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS
+            and name in nd.get("agents", [])
+            and main_actor.nodes.speaks_for(node_name, name)
         ):
             return node_name
     if time.time() - main_actor.metrics.start_time >= NODE_FRESH_SECONDS:
@@ -478,6 +481,12 @@ async def _route_chat(
         if main_actor:
             remote_node = destination.remote_node
 
+            refusal = main_actor.nodes.refuses_tasks(remote_node) if remote_node else None
+            if refusal:
+                await reply_fn(f"[error] @{target_name} was not asked: {refusal}.")
+                await _end_fn()
+                return
+
             if remote_node:
                 if blocks:
                     # The files are on this disk; a remote node cannot read them,
@@ -493,8 +502,7 @@ async def _route_chat(
                 }
                 try:
                     async with mqtt_client(
-                        main_actor._mqtt_broker,
-                        main_actor._mqtt_port,
+                        main_actor._mqtt_broker, main_actor._mqtt_port, **v5_kwargs()
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
@@ -509,6 +517,16 @@ async def _route_chat(
 
                             async def _get_reply():
                                 async for msg in client.messages:
+                                    # Any node can answer here: only the one
+                                    # the task went to is listened to.
+                                    if not admit(
+                                        remote_node,
+                                        reply_topic,
+                                        bytes(msg.payload or b""),
+                                        user_properties(msg),
+                                        "a task reply",
+                                    ):
+                                        continue
                                     try:
                                         data = json.loads(msg.payload.decode())
                                         text_out = reply_text(data)

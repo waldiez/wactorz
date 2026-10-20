@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from ..prompts.assemble import PromptFragment
     from .artifact_service import ArtifactService
     from .migration import Migration
+    from .nodes import NodeManager
     from .placement import Placement
 
 from ..mixins.host import ActorHost, LLMHost
@@ -42,15 +43,34 @@ class ListenerHost(Protocol):
     _mqtt_port: int
 
 
-class ManifestHost(ListenerHost, Protocol):
-    """The manifest registry needs a connection, and somewhere to report a loss.
+class VoiceHost(Protocol):
+    """What deciding who may speak for an agent reads: main's own records of where agents are."""
 
-    It owns its own tables and answers from them, so this stays at one method.
-    A withdrawn manifest is the wire's way of saying an agent is gone, and the
-    registry is the only thing listening — but removing an agent belongs to the
-    lifecycle, not to a table of capabilities, so it hands the name over rather
-    than growing the reach to act on it.
+    _registry: Any
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    @property
+    def migration(self) -> Migration:
+        """Where a move under way is taking an agent, before the registry says so."""
+        ...
+
+
+class ManifestHost(ListenerHost, VoiceHost, Protocol):
+    """The manifest registry needs a connection, somewhere to report a loss, and where agents are.
+
+    It owns its own tables and answers from them. A withdrawn manifest is the
+    wire's way of saying an agent is gone, and the registry is the only thing
+    listening — but removing an agent belongs to the lifecycle, not to a table
+    of capabilities, so it hands the name over rather than growing the reach to
+    act on it. Where agents are is read so a manifest is taken only from the
+    node main places its agent on.
     """
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """The heartbeat table: which node lists an agent main placed nowhere."""
+        ...
 
     async def agent_withdrew(self, actor_id: str, name: str = ...) -> bool: ...
 
@@ -139,6 +159,8 @@ class DelegationHost(Protocol):
     _result_futures: dict[str, Any]
     _mqtt_broker: str
     _mqtt_port: int
+    #: Which node a task for an agent goes to, and whether it can answer.
+    nodes: NodeManager
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:

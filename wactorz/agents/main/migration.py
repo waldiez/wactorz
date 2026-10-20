@@ -452,6 +452,21 @@ class Migration:
                     agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
                 )
 
+    def moving_to(self, agent_name: str) -> str:
+        """The node a move under way is starting ``agent_name`` on, or "" for none.
+
+        The spawn registry names the target only once it confirms, and the
+        agent speaks from there before that: its manifest and its first replies.
+        """
+        return next(
+            (
+                str(p.get("target_node") or "")
+                for p in self.pending_spawns.values()
+                if p.get("agent_name") == agent_name
+            ),
+            "",
+        )
+
     def _placed(self, agent_name: str) -> bool:
         """Whether a handed-back agent is running here, or waiting on a target to confirm it.
 

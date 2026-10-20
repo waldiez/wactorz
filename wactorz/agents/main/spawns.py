@@ -959,5 +959,7 @@ class SpawnService:
         )
 
         if save:
-            self._save_to_spawn_registry(config)
+            # Under the node it went to, whatever the config said: the entry is
+            # what main checks the node's word about this agent against.
+            self._save_to_spawn_registry({**config, "node": node})
         return True

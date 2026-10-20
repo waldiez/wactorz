@@ -476,6 +476,11 @@ class Actor(ABC):
         #: `_resolve_pending_result` as the RESULT is received, ahead of the
         #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
+        #: The manifest this actor last published, as it published it (see
+        #: `_send_manifest`). Main reads its own agents' manifests from here
+        #: rather than from the broker, where any node may publish one under
+        #: their names.
+        self._published_manifest: dict[str, Any] | None = None
         #: Who waits for the person's answer to a question, by question id:
         #: one future per question, and how many waiters share it.
         self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
@@ -2013,6 +2018,15 @@ class Actor(ABC):
             "output_schema": output_schema or {},
             "timestamp": time.time(),
         }
+        await self._send_manifest(manifest)
+
+    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+        """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
+
+        Every manifest goes out through here, so the copy main trusts for its
+        own agents is always the one last sent.
+        """
+        self._published_manifest = manifest
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:

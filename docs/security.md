@@ -148,8 +148,17 @@ the broker. Anything that can publish to it can drive Wactorz.
   the default, a node refuses a command not signed for it; with `warn` it acts on
   it and main says so in chat, to find out what sends unsigned commands before
   refusing them. A node deployed before signing holds no key and checks nothing
-  until it is deployed again, and a node takes the mode at its next `/deploy`. Commands are what is signed: an
-  agent's own messages, and what an agent reads from the broker, are not.
+  until it is deployed again, and a node takes the mode at its next `/deploy`.
+- **Main takes a node's word only from that node.** A node signs everything it
+  publishes with the same key, and main checks it against the node it expects:
+  an agent's task reply, manifest and data samples count only signed by the node
+  main's own records place the agent on, and a node's heartbeat only signed by
+  that node. So code on one node, the sandbox included, cannot answer for
+  another node's agent or describe one to the planner. An unsigned message
+  follows `WACTORZ_NODE_SIGNING`; under `enforce` a node deployed before this
+  stays up but is sent no tasks until it is deployed again. A signature names
+  the machine, not the agent on it, and an agent's status, logs and what agents
+  read from each other on the broker are still not checked.
 - **Main's LLM answers only the nodes it deployed.** An agent on a node asks main's
   LLM over the broker (`main/llm_request`), and main answers with its own budget and
   an account the broker lets write anywhere. So a request names its node and is
@@ -214,8 +223,9 @@ the broker. Anything that can publish to it can drive Wactorz.
    broker has the accounts. Deploy every node again, then rotate the account they
    shared. Where another system shares that broker, name its account in
    `WACTORZ_BROKER_ACCOUNTS`.
-5. Deploy every edge node again after upgrading, so it holds a signing key and
-   refuses unsigned commands (`WACTORZ_NODE_SIGNING=enforce`, the default).
+5. Deploy every edge node again after upgrading, so it holds a signing key,
+   refuses unsigned commands and signs what it publishes
+   (`WACTORZ_NODE_SIGNING=enforce`, the default).
    Publish the broker's `8883` where nodes can reach it first, so the deploy puts
    them on TLS, and check the deploy log says so.
 6. Give Wactorz only the credentials the agents you run actually need.

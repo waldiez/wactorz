@@ -9,7 +9,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
+from ...core.node_publications import admit
 from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -183,10 +184,10 @@ class MessagingMixin(_Host):
         remote_node = None
         main = find_main_actor(registry)
         if main:
-            for node_name, nd in main._known_nodes.items():
-                if agent_name in nd.get("agents", []):
-                    remote_node = node_name
-                    break
+            remote_node = main.nodes.node_for(agent_name) or None
+            refusal = main.nodes.refuses_tasks(remote_node) if remote_node else None
+            if refusal:
+                return {"error": refusal}
 
         if not remote_node and not self._actor._node:
             logger.warning(
@@ -230,7 +231,13 @@ class MessagingMixin(_Host):
         subscribed = asyncio.Event()
         reply_task = asyncio.create_task(
             await_remote_reply(
-                future, reply_topic, self._actor, agent_name, timeout, subscribed=subscribed
+                future,
+                reply_topic,
+                self._actor,
+                agent_name,
+                timeout,
+                subscribed=subscribed,
+                node=remote_node,
             )
         )
         try:
@@ -349,23 +356,32 @@ async def await_remote_reply(
     timeout: float,
     *,
     subscribed: asyncio.Event | None = None,
+    node: str | None = None,
 ) -> dict[str, Any] | None:
     """Wait for a remote agent's reply, cleaning up the pending future either way.
 
     ``subscribed`` is set once the reply topic is subscribed, so the caller can
     publish the task only then -- and set as well if that never happens, so the
     caller is not left waiting on a subscription that is not coming.
+
+    ``node`` is the node the task went to, when the caller is main and knows
+    it: the reply is then the first message signed by that node, since any node
+    can publish on the topic. On a node there is no key to check one with, and
+    the first message is the reply.
     """
     try:
         broker = getattr(actor, "_mqtt_broker", "localhost")
         port = getattr(actor, "_mqtt_port", 1883)
-        async with mqtt_client(broker, port) as client:
+        async with mqtt_client(broker, port, **v5_kwargs()) as client:
             await client.subscribe(reply_topic)
             if subscribed is not None:
                 subscribed.set()
             async for msg in client.messages:
+                raw = bytes(msg.payload or b"")
+                if node and not admit(node, reply_topic, raw, user_properties(msg), "a reply"):
+                    continue
                 try:
-                    data = json.loads(msg.payload.decode())
+                    data = json.loads(raw.decode())
                     if not future.done():
                         future.set_result(data)
                 except Exception as exc:

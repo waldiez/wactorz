@@ -43,7 +43,10 @@ MAX_OPTION_CHARS = 60
 ANSWER_LEAF = "answer"
 
 #: A reply that is a number, with whatever punctuation a person adds to one.
-_NUMBER = re.compile(r"^\s*\(?\s*(\d{1,2})\s*[).:]?\s*$")
+#: Matched in full against the reply with its ends stripped, so no two
+#: repeats sit side by side: a pattern where they did took time in the square
+#: of a long run of spaces, which anyone on a chat channel can send.
+_NUMBER = re.compile(r"\(?\s*(\d{1,2})\s*[).:]?")
 
 
 def check_options(options: Iterable[Any]) -> tuple[str, ...]:
@@ -243,7 +246,7 @@ def pick_option(reply: str, options: Sequence[str]) -> int | None:
     """
     if not options:
         return None
-    match = _NUMBER.match(reply or "")
+    match = _NUMBER.fullmatch((reply or "").strip())
     if match:
         n = int(match.group(1))
         return n - 1 if 1 <= n <= len(options) else None

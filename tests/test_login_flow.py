@@ -137,6 +137,21 @@ class TestSigningIn:
 
         assert resp.headers["Location"] == "/"
 
+    @pytest.mark.parametrize("hidden", ["\t", "\n", "\r", "\x00", "\x7f"])
+    async def test_a_host_hidden_behind_a_control_character_is_refused(
+        self, client: TestClient, hidden: str
+    ) -> None:
+        # A browser drops tabs and newlines before reading a URL, and aiohttp
+        # drops them from a Location, so `/<tab>/host` would arrive as `//host`.
+        resp = await client.post(
+            "/login",
+            data={"key": KEY, "next": f"/{hidden}/elsewhere.example/"},
+            allow_redirects=False,
+        )
+
+        assert resp.status == 302
+        assert resp.headers["Location"] == "/"
+
     async def test_a_scheme_relative_target_is_refused_too(self, client: TestClient) -> None:
         # `//host` starts with a slash, so a "must be absolute" check alone
         # waves it through while a browser reads it as another host.

@@ -44,6 +44,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The sign-in page no longer sends you to another site.** Its `next` address had to start with a single `/`, but a tab or newline after that slash got through: a browser drops those characters before reading an address, and so does the server's redirect, so a link to `/login?next=/%09/elsewhere.example` led whoever signed in, or was already signed in, to `elsewhere.example`. Any control character in `next` now sends you to the dashboard instead.
+
+- **Reading a reply to an agent's question takes time in proportion to the reply.** A choice sent on Telegram, Discord or WhatsApp is read as a number when it looks like one, and the pattern that checked took time in the square of the reply's length on a long run of spaces, while every agent waited. The channels' own limit on a message's length kept that short; it is now linear whatever the length.
+
 - **An agent described by a prompt alone is an LLM agent everywhere.** A spawn with a `system_prompt`, no `code` and no `type` ran as an LLM agent when main started it directly, but a spawn the model wrote in chat was skipped as "dynamic agent has no code", a spawn of one on a node or a move there was refused as having no program, and one named like a catalogue agent got the catalogue's agent instead. Each of them now reads it as an LLM agent, as if it said `"type": "llm"`: it runs, on main or on a node, and a plan's summary calls it one.
 
 - **An agent spawned under a catalogue agent's name runs as the kind it was asked to be.** A spawn named like a catalogue agent, such as `weather-agent`, started the catalogue's agent in its place whatever its `type`, so an LLM, rule, scheduled, Home Assistant or module agent of that name never ran. The catalogue's agent now stands in only for code the model wrote (`dynamic`, the default) and for a `native` spawn, so that a maintained agent is still not rewritten every time it is asked for; any other kind runs as written. `"replace": true` still spawns it as written, whatever its type.

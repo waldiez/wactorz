@@ -25,6 +25,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.placement import Placement
 from wactorz.agents.main.spawns import SpawnService, _parse_spawn_config
+from wactorz.agents.mixins import agent_type
 
 _SPAWN_FAILED = "spawn failed"
 
@@ -223,6 +224,24 @@ class TestNotLettingTheModelRewriteARecipe:
 
         assert catalogue.spawned == ["weather-agent"]
         assert not main.configs
+
+    async def test_a_prompt_with_no_type_is_an_llm_agent_and_runs_as_asked(self) -> None:
+        catalogue = _Catalogue()
+        main = _Main(registry=_Registry(catalogue=catalogue), catalog_match="weather-agent")
+        config = {"name": "weather-agent", "system_prompt": "You forecast for farmers."}
+
+        await main.process(block(**config))
+
+        assert not catalogue.spawned
+        assert main.configs == [config]
+
+    async def test_a_prompt_with_no_type_and_no_recipe_is_spawned_not_skipped(self) -> None:
+        main = _Main(catalog_match=None)
+        config = {"name": "farm-forecaster", "system_prompt": "You forecast for farmers."}
+
+        await main.process(block(**config))
+
+        assert main.configs == [config]
 
     async def test_a_name_matching_no_recipe_spawns_as_written(self) -> None:
         main = _Main(catalog_match=None)
@@ -426,3 +445,21 @@ class TestParseSpawnConfig:
     def test_code_that_never_yields_valid_json_is_refused(self) -> None:
         with pytest.raises(ValueError, match="no closing quote"):
             _parse_spawn_config('{"name": , "code": "x\n')
+
+
+@pytest.mark.parametrize(
+    ("config", "kind"),
+    [
+        ({}, "dynamic"),
+        ({"code": "x = 1"}, "dynamic"),
+        ({"system_prompt": "Be brief."}, "llm"),
+        ({"type": "dynamic", "system_prompt": "Be brief."}, "llm"),
+        ({"type": "Dynamic", "system_prompt": "Be brief.", "code": "x = 1"}, "dynamic"),
+        ({"system_prompt": "   "}, "dynamic"),
+        ({"type": " LLM "}, "llm"),
+        ({"type": "rule", "system_prompt": "Be brief."}, "rule"),
+        ({"type": None}, "dynamic"),
+    ],
+)
+def test_the_kind_of_agent_a_config_describes(config: dict[str, Any], kind: str) -> None:
+    assert agent_type(config) == kind

@@ -7,7 +7,14 @@ module a mixin currently lives in. When a concern is split or renamed, only this
 file changes; no call site moves.
 """
 
-from .spawning import KeptHere, NotSpawned, PlacedOnNode, SpawnMixin, SpawnPlaceholder
+from .spawning import (
+    KeptHere,
+    NotSpawned,
+    PlacedOnNode,
+    SpawnMixin,
+    SpawnPlaceholder,
+    agent_type,
+)
 
 __all__ = [
     "KeptHere",
@@ -15,4 +22,5 @@ __all__ = [
     "PlacedOnNode",
     "SpawnMixin",
     "SpawnPlaceholder",
+    "agent_type",
 ]

@@ -33,7 +33,7 @@ from ...core.packages import (
 )
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
-from ..mixins import KeptHere, NotSpawned, PlacedOnNode
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -75,12 +75,12 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
     """
     if (config.get("code") or "").strip():
         return None
-    agent_type = (config.get("type") or "dynamic").strip().lower()
-    if agent_type == "llm":
+    kind = agent_type(config)
+    if kind == "llm":
         return None
-    if agent_type == "dynamic":
+    if kind == "dynamic":
         return "it has no program to send there"
-    if agent_type == MODULE_TYPE:
+    if kind == MODULE_TYPE:
         target = str(config.get("target") or "").strip()
         if target and (target in node_targets or isinstance(config.get("bundle"), dict)):
             return None
@@ -91,7 +91,7 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
             f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
         )
     return (
-        f"it is a {agent_type} agent, built into this server, and a node runs only an "
+        f"it is a {kind} agent, built into this server, and a node runs only an "
         f"agent whose program goes with it: generated code, an LLM agent, or a library "
         f"agent from a package installed there"
     )
@@ -106,7 +106,7 @@ def catalogue_may_stand_in(config: dict[str, Any]) -> bool:
     rule, scheduled, Home Assistant or module agent -- describes a different
     agent that happens to share the name, and runs as asked.
     """
-    return (config.get("type") or "dynamic").strip().lower() in ("dynamic", "native")
+    return agent_type(config) in ("dynamic", "native")
 
 
 def with_models_of(config: dict[str, Any]) -> dict[str, Any]:
@@ -557,14 +557,16 @@ class SpawnService:
         """Whether this config describes something that could actually start.
 
         A dynamic agent with no code is a model that stopped mid-sentence, not
-        an agent. An LLM agent without a prompt gets a default, because one that
-        answers generically is more use than one that never arrives.
+        an agent; one with a prompt and no code is an LLM agent (see
+        :func:`agent_type`). An LLM agent without a prompt gets a default,
+        because one that answers generically is more use than one that never
+        arrives.
         """
-        agent_type = config.get("type", "dynamic")
-        if agent_type == "dynamic" and not (config.get("code", "") or "").strip():
+        kind = agent_type(config)
+        if kind == "dynamic" and not (config.get("code", "") or "").strip():
             logger.error("[%s] Dynamic agent has no code: %s", self.host.name, config.get("name"))
             return False
-        if agent_type == "llm" and not (config.get("system_prompt", "") or "").strip():
+        if kind == "llm" and not (config.get("system_prompt", "") or "").strip():
             logger.warning(
                 "[%s] LLM agent has no system_prompt, using default: %s",
                 self.host.name,
@@ -668,7 +670,7 @@ class SpawnService:
             return config
         if (config.get("code") or "").strip():
             return config
-        if (config.get("type") or "").strip().lower() != "llm":
+        if agent_type(config) != "llm":
             return config
 
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
@@ -680,6 +682,9 @@ class SpawnService:
 
         out = dict(config)
         out["code"] = bridge
+        # Named, so the config still reads as an LLM agent now it carries code:
+        # a move home takes the bridge code out again by this.
+        out["type"] = "llm"
         # description and capabilities are commonly already set by the LLM
         # at spawn time; fill in sensible defaults if not so list_capabilities
         # still works on the remote side.

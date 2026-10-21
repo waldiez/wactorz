@@ -309,9 +309,17 @@ lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs
 	$(require-uv)
 	uv lock
 
+# Advisories the audit passes over, each with the reason. Pillow fixes these in
+# 13.0, which needs Python 3.11, so the lock keeps 12.3 for Python 3.10 alone and
+# no fixed release exists there; every other Python, the images included, locks
+# 13. Remove them when Python 3.10 is dropped or Pillow ships a fix for it.
+AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
+	GHSA-q45j-58j2-45rg GHSA-462x-pgg6-55fp GHSA-8g5g-8vmr-9782 GHSA-c6hw-5grf-ff96 \
+	GHSA-p4wg-p73j-c528 GHSA-pchr-8j38-3x4p
+
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)
-	uv audit --locked --preview-features audit-command
+	uv audit --locked --preview-features audit-command $(addprefix --ignore ,$(AUDIT_IGNORE))
 
 install-frontend: ## Install frontend dependencies
 	cd $(FRONTEND_DIR) && $(PKG_MGR) install

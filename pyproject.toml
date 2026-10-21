@@ -173,6 +173,12 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # proposes older ones in their place. Kept in the lockfile as a span, so
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
+# A security fix younger than that is let through by name, up to the day it was
+# taken: certifi drops emSign roots whose intermediate keys were compromised
+# (GHSA-6q48-6c7w-9gw2), pip vendors that certifi, and Pillow 13 fixes decoder
+# memory-safety flaws (GHSA-8g5g-8vmr-9782 and others). An entry can go once the
+# release it admits is older than the window.
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", pip = "2026-10-21T00:00:00Z", pillow = "2026-10-21T00:00:00Z" }
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

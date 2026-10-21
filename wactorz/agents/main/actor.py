@@ -30,6 +30,7 @@ from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
 from .artifact_service import ArtifactService
+from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
@@ -978,13 +979,23 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Same as the non-streaming path — see _prefix_with_live_context for why.
         prefixed_text = self._prefix_with_live_context(text)
 
-        # Stream the LLM response chunk by chunk
+        # Stream the LLM response chunk by chunk. The action blocks in it run
+        # below, once the reply is whole, so the user is sent the text around them.
         full_chunks = []
+        shown_chunks = []
+        blocks = ActionBlockFilter()
         async for chunk in self.chat_stream(prefixed_text, attachments):
             if isinstance(chunk, dict):
                 break  # usage dict — discard, already tracked inside chat_stream
             full_chunks.append(chunk)
-            yield chunk
+            shown = blocks.feed(chunk)
+            if shown:
+                shown_chunks.append(shown)
+                yield shown
+        rest = blocks.flush()
+        if rest:
+            shown_chunks.append(rest)
+            yield rest
 
         # Replace the prefixed user message in history with the clean original
         # so future turns aren't polluted with stale prefixes.
@@ -993,7 +1004,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         full_response = "".join(full_chunks)
         # Everything the user is sent, for the chat log: the stream above, then
         # whatever is appended to it below.
-        sent = [full_response]
+        sent = ["".join(shown_chunks)]
 
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
@@ -1002,8 +1013,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         _, deleted, missing = await self._process_delete_commands(full_response)
 
         # Execute structured <delegate>{...}</delegate> blocks first (preferred
-        # form). The raw block was already streamed to the user above, so append
-        # each result as an additional chunk — same approach as @mention results.
+        # form). The stream above left the block out, so append each result as
+        # an additional chunk — same approach as @mention results.
         full_response, _delegate_results = await self._process_delegate_commands(full_response)
         for _r in _delegate_results:
             extra = "\n" + _r

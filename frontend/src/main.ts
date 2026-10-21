@@ -349,7 +349,7 @@ function recomputeLive(): void {
     }
     _feedLive = live;
     if (!live) {
-        emit("af-connection-status", { status: "demo" });
+        emit("af-connection-status", { status: "disconnected" });
         return;
     }
     emit("af-connection-status", { status: "live" });
@@ -534,7 +534,7 @@ fetch(`${_apiBase}/api/feed`)
 seedServerConfig()
     .then(haChanged => {
         if (haChanged) {
-            emit("af-connection-status", { status: _feedLive ? "live" : "demo" });
+            emit("af-connection-status", { status: _feedLive ? "live" : "disconnected" });
         }
         // Boot TTS after config is seeded — reads availability from safeStorage.
         const available = safeStorage.get("wactorz-tts-available") === "1";

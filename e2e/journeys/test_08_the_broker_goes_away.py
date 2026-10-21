@@ -15,7 +15,7 @@ def test_the_page_says_when_the_broker_is_gone(dashboard: browser.Dashboard, run
     broker.stop(run)
 
     waiting.until(lambda: dashboard.connection() != LIVE, what="the header to stop saying live")
-    assert dashboard.connection() == "◎ Demo fallback"
+    assert dashboard.connection() == "◎ Disconnected…"
 
 
 def test_main_still_answers_without_it(dashboard: browser.Dashboard) -> None:

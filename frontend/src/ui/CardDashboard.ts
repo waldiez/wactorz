@@ -516,7 +516,7 @@ export class CardDashboard {
                 ? "● live"
                 : this.connState === "connecting"
                   ? "○ Connecting…"
-                  : "◎ Demo fallback";
+                  : "◎ Disconnected…";
     }
 
     private _renderHealth(): void {

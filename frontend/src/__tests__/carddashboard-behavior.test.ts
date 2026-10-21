@@ -77,7 +77,7 @@ describe("CardDashboard behaviour", () => {
         it.each([
             ["live", "● live"],
             ["connecting", "○ Connecting…"],
-            ["demo", "◎ Demo fallback"],
+            ["disconnected", "◎ Disconnected…"],
         ])("renders the %s badge", (status, text) => {
             cd.show([agent("main")]);
             document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status } }));

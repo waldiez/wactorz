@@ -81,7 +81,7 @@
   background: rgba(96, 165, 250, 0.08);
   animation: af-connecting-blink 1s ease-in-out infinite;
 }
-.af-conn-demo {
+.af-conn-disconnected {
   color: #a78bfa;
   border-color: rgba(167, 139, 250, 0.35);
   background: rgba(167, 139, 250, 0.08);

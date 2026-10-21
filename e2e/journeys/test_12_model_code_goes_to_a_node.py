@@ -42,7 +42,7 @@ def test_the_models_agents_start_on_main_while_no_node_is_set(
         dashboard.say(ask, to="main")
         dashboard.expect_like(
             "main",
-            r"Starting it\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+            r"Starting it\.\n+"
             rf"ℹ️ Spawned '{name}' — will auto-restore on restart",
         )
 
@@ -102,7 +102,7 @@ def test_a_new_agent_the_model_writes_goes_to_the_node(
 
     dashboard.expect_like(
         "main",
-        r"Starting it\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"Starting it\.\n+"
         rf"ℹ️ Spawned 'tallier-two' on node '{NODE_NAME}'",
     )
     waiting.until(

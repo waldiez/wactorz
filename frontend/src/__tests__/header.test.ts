@@ -44,7 +44,7 @@ describe("buildHeader", () => {
     it("marks the current view active (class + aria-current)", () => {
         const header = buildHeader({
             view: "feed",
-            connState: "demo",
+            connState: "disconnected",
             onSetView: vi.fn(),
             haUrl: null,
             extraViews: [],

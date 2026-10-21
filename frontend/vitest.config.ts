@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
 // Coverage floors — ratchet up as coverage grows, never down. Lines, statements
 // and functions share TARGET; branches trail (defensive guards + flag-gated
 // paths cover slower), so they keep a small offset.
-const TARGET = 95;
+const TARGET = 96;
 const BRANCHES_FLOOR = TARGET - 5;
 
 export default defineConfig({

@@ -41,7 +41,7 @@ def test_the_model_checks_the_nodes_disk(dashboard: browser.Dashboard) -> None:
     # `df -h`, run on the node by name: its header, and the root filesystem.
     dashboard.expect_like(
         "main",
-        r"Checking\.\n<delegate>.*</delegate>\n"
+        r"Checking\.\n+"
         r"✅ installer completed: output=Filesystem\s+Size\s+Used\s+Avail.*\s/\n.*",
     )
 
@@ -51,7 +51,7 @@ def test_a_command_the_model_writes_is_refused(dashboard: browser.Dashboard) -> 
 
     dashboard.expect_like(
         "main",
-        r"Rebooting it\.\n<delegate>.*</delegate>\n"
+        r"Rebooting it\.\n+"
         r"\[installer: 'node_run' is not something the assistant may ask for\..*/nodes run.*\]",
     )
     assert node.running()
@@ -91,7 +91,7 @@ def test_an_unlisted_package_waits_for_a_yes_and_a_no_starts_nothing(
     )
     assert app.rest.agent("prober") is None
     dashboard.read_thread_of("main")
-    dashboard.expect_like("main", r"Starting it\.\n<spawn>\n\{.*\}\n</spawn>.*")
+    dashboard.expect_like("main", r"Starting it\..*")
 
 
 def test_a_package_allowed_goes_to_the_node_and_stays_allowed(
@@ -111,7 +111,7 @@ def test_a_package_allowed_goes_to_the_node_and_stays_allowed(
     )
     dashboard.expect_like(
         "main",
-        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"Starting it there\.\n+"
         rf"ℹ️ Spawned 'sampler' on node '{NODE_NAME}'",
     )
 

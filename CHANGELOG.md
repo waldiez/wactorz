@@ -44,6 +44,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Main's streamed replies no longer show the blocks it acts on.** When main's model starts, deletes or asks an agent, it writes a `<spawn>`, `<delete>` or `<delegate>` block holding JSON into its reply. Replies through the API had them removed, but a streamed reply, as the dashboard, the CLI and the chat stream route get it, showed each block as raw JSON before the line saying what was done. The stream now leaves them out as it goes, and the dashboard also removes them from replies recorded with them.
+
+- **The dashboard says "Disconnected…" when it has lost the server or the broker.** The header badge read "◎ Demo fallback" then, though the dashboard has no demo mode.
+
 - **The sign-in page no longer sends you to another site.** Its `next` address had to start with a single `/`, but a tab or newline after that slash got through: a browser drops those characters before reading an address, and so does the server's redirect, so a link to `/login?next=/%09/elsewhere.example` led whoever signed in, or was already signed in, to `elsewhere.example`. Any control character in `next` now sends you to the dashboard instead.
 
 - **Reading a reply to an agent's question takes time in proportion to the reply.** A choice sent on Telegram, Discord or WhatsApp is read as a number when it looks like one, and the pattern that checked took time in the square of the reply's length on a long run of spaces, while every agent waited. The channels' own limit on a message's length kept that short; it is now linear whatever the length.

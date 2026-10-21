@@ -11,6 +11,7 @@ import type { ChatMessage } from "../../types/agent";
 import { uid } from "../../ids";
 import { AgentStreams } from "../../io/agentStreams";
 import { MAIN_AGENT } from "../../agents/naming";
+import { stripActionBlocks } from "../../agents/actionBlocks";
 import { renderAgentMarkdown } from "./chatThread";
 import { TURN_IDLE_TIMEOUT_MS } from "./chatIobar";
 import { el } from "../dom";
@@ -60,6 +61,11 @@ function buildWaitingRow(from: string): HTMLElement {
         body.appendChild(dot);
     }
     return row;
+}
+
+/** What of a reply still arriving the live row shows. */
+function shownWhileStreaming(text: string): string {
+    return stripActionBlocks(text, { streaming: true });
 }
 
 export class ChatStreamUI {
@@ -177,7 +183,7 @@ export class ChatStreamUI {
             this._ensureRow();
         }
         if (this._body) {
-            this._body.textContent = this._streams.text(active);
+            this._body.textContent = shownWhileStreaming(this._streams.text(active));
         }
         this.host.scrollThread();
     }
@@ -190,7 +196,8 @@ export class ChatStreamUI {
         // at all -- an error or a stop -- which would otherwise leave the row
         // waiting for something that is no longer coming.
         this.endWait(detail?.from ?? null);
-        const text = this._streams.take(from);
+        const shown = stripActionBlocks(this._streams.take(from));
+        const text = shown.trim() ? shown : "";
         if (text) {
             this.host.commit({
                 id: uid("stream"),
@@ -201,9 +208,15 @@ export class ChatStreamUI {
             });
         }
         this._targets.delete(from);
-        if (this._body && text && this._rowFrom === from) {
-            this._body.textContent = "";
-            this._body.appendChild(renderAgentMarkdown(text));
+        if (this._body && this._rowFrom === from) {
+            if (text) {
+                this._body.textContent = "";
+                this._body.appendChild(renderAgentMarkdown(text));
+            } else {
+                // A reply that was nothing but action blocks leaves no message,
+                // so its live row would otherwise stay as an empty bubble.
+                this._row?.remove();
+            }
             this._row = this._body = this._rowFrom = null;
         }
     }
@@ -215,7 +228,7 @@ export class ChatStreamUI {
         if (!active) {
             return null;
         }
-        const text = this._streams.text(active);
+        const text = shownWhileStreaming(this._streams.text(active));
         if (!text) {
             return null;
         }
@@ -227,7 +240,7 @@ export class ChatStreamUI {
     reattachRow(thread: HTMLElement): void {
         const active = this._streams.activeFrom;
         if (active) {
-            this._buildRow(thread, active, this._streams.text(active));
+            this._buildRow(thread, active, shownWhileStreaming(this._streams.text(active)));
         }
     }
 

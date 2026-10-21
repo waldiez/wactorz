@@ -84,7 +84,7 @@ def test_main_starts_an_agent_on_the_node(
     # here to report, and the turn used to say nothing about it at all.
     dashboard.expect_like(
         "main",
-        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"Starting it there\.\n+"
         rf"ℹ️ Spawned 'counter' on node '{NODE_NAME}'",
     )
     waiting.until(
@@ -192,7 +192,7 @@ def test_an_agent_on_the_node_asks_the_model_through_the_server(
     dashboard.expect_like(
         "main",
         rf"✅ System: Migration of 'counter' from 'local' → '{NODE_NAME}' complete\.\s+"
-        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"Starting it there\.\n+"
         rf"ℹ️ Spawned 'asker' on node '{NODE_NAME}'",
     )
     waiting.until(
@@ -212,7 +212,7 @@ def test_an_llm_agent_on_the_node_answers_through_the_server(
     # The plainest agent there is -- a system prompt -- on the node: main writes
     # the code that runs it there, and its every answer comes through the server.
     dashboard.say("please start a helper on the node", to="main")
-    dashboard.expect_like("main", r"(?s).*Starting it there\.\n<spawn>\n\{.*\}\n</spawn>.*")
+    dashboard.expect_like("main", r"(?s).*Starting it there\..*")
     waiting.until(
         lambda: "helper" in _on_the_node(app),
         what="the node to be running 'helper'",
@@ -234,7 +234,7 @@ def test_an_agent_on_the_node_that_ends_itself_leaves_the_dashboard_once(
     dashboard.say("please start a finisher on the node", to="main")
     dashboard.expect_like(
         "main",
-        r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"Starting it there\.\n+"
         rf"ℹ️ Spawned 'far-finisher' on node '{NODE_NAME}'",
     )
     dashboard.watch_card("far-finisher")

@@ -215,8 +215,8 @@ describe("main.ts bootstrap", () => {
         wsHandler("mqttStatus")(true); // both up → live: prunes + seeds
         wsHandler("mqttStatus")(true); // unchanged → recompute early-returns
         wsHandler("connected")(); // unchanged → seeded guard holds
-        wsHandler("mqttStatus")(false); // broker down → demo
-        wsHandler("disconnected")(); // /ws down → stays demo
+        wsHandler("mqttStatus")(false); // broker down → disconnected
+        wsHandler("disconnected")(); // /ws down → stays disconnected
         expect(true).toBe(true);
     });
 

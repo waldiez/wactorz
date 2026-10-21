@@ -320,6 +320,18 @@ def _node_signing_mode() -> str:
 
 NODE_SIGNING = _node_signing_mode()
 
+#: How many model calls a minute main's bridge answers for one node, after a
+#: burst of as many. Past it a call is refused at once, saying why, rather than
+#: queued: an agent on a node -- often code the model wrote -- that calls in a
+#: loop would otherwise spend main's budget as fast as the provider answers. 0
+#: sets no limit.
+BRIDGE_CALLS_PER_MINUTE = _env_int("WACTORZ_BRIDGE_CALLS_PER_MINUTE", 60)
+
+#: How many pages of main's history (``query_ts`` and the like on a node) the
+#: bridge answers for one node a minute, after a burst of as many. A page holds
+#: as many rows as fit in one broker message. 0 sets no limit.
+BRIDGE_HISTORY_PAGES_PER_MINUTE = _env_int("WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE", 600)
+
 #: The node model-written code runs on when its spawn names none. Unset, it is
 #: ``sandbox`` whenever a node by that name exists (see ``wactorz-node
 #: setup-local``) and main otherwise; ``main`` keeps such code on main, where it

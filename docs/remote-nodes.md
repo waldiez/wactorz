@@ -21,7 +21,7 @@ These differ on a node, and nothing else does:
 
 - **Publishing** goes through a bounded in-memory queue rather than the server's SQLite-backed outbox. A node has no outbox, so the queue is sized for a long outage and every dropped message is counted.
 - **Agent state** is JSON under `~/wactorz/state/` rather than a pickle, so it survives the node and main running different Python versions — and so a migration can ship it over MQTT.
-- **The LLM** stays on main. `agent.llm.chat(...)` works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node.
+- **The LLM** stays on main. `agent.llm.chat(...)` works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node. Main answers each node up to `WACTORZ_BRIDGE_CALLS_PER_MINUTE` calls a minute (60), and history pages up to `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE` (600); past that, a call comes back as an `[LLM error: ...]` text saying why, and a history read fails and says so in the node's log.
 - **The history** stays on main too. `await agent.query_ts(...)`, `query_detections`, `query_ha_states` and `ts_stats` read main's database over the broker (`main/history_request`), signed like an LLM request, a page at a time. On a node they must be awaited. Any node main deployed may read all of main's recorded history: sensor readings, detections and Home Assistant state changes.
 - **Tasks** arrive on an MQTT topic rather than in a mailbox, and the reply goes back the same way.
 

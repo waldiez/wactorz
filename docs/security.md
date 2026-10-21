@@ -170,6 +170,13 @@ the broker. Anything that can publish to it can drive Wactorz.
   its kind on a node) are admitted the same way, and run only the queries the agent
   API offers, never SQL a request supplies. A node main deployed may read all of
   that history: sensor readings, detections and Home Assistant state changes.
+  Each node gets so many model calls and history pages a minute
+  (`WACTORZ_BRIDGE_CALLS_PER_MINUTE`, 60, and
+  `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE`, 600) and only a few running at once;
+  past either, a request is refused at once with a reply saying why, and the
+  first refusal for a node is said on the dashboard. So one node's agent in a loop
+  neither spends main's budget as fast as the provider answers nor holds up the
+  other nodes' requests. A spending cap over all calls is `LLM_COST_LIMIT_USD`.
 - **An operator's answer is not authenticated.** The pick an agent receives from
   `ask_operator` or `notify_user` arrives on its `agents/<id>/answer` topic, where
   any node, and anything else holding broker access, can publish one. It says what

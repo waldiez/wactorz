@@ -23,6 +23,11 @@ The same admission serves ``main/history_request``, where an agent on a node
 reads main's stored time series, detections and Home Assistant state changes:
 what is answered there, and how, is :mod:`.history`.
 
+**One node cannot crowd out the rest.** Requests are answered concurrently,
+each kind in a lane of its own with a rate, a number running and a number
+waiting per node (see :mod:`.bridge_limits`). Past the rate, or with too many
+already waiting, a request is refused at once with a reply saying why.
+
 Calls made here spend main's budget, so their usage is folded into main's
 totals. Attribution is per node rather than per agent: the request does not
 carry the remote agent's actor id, which is what the per-agent metrics path
@@ -38,7 +43,7 @@ import re
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ...config import NODE_SIGNING
+from ...config import BRIDGE_CALLS_PER_MINUTE, BRIDGE_HISTORY_PAGES_PER_MINUTE, NODE_SIGNING
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -47,6 +52,7 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.node_signing import request_signed_for
+from .bridge_limits import Lane
 from .history import HISTORY_TOPIC, answer_history
 
 if TYPE_CHECKING:
@@ -82,6 +88,20 @@ REFUSED_UNSIGNED = "[LLM error: request not signed for this node — deploy the 
 
 #: What an unsigned history read is told, in the reply's ``error``.
 REFUSED_UNSIGNED_HISTORY = "request not signed for this node — deploy the node again"
+
+#: How many of one node's model calls run at once, and how many more may wait
+#: for a slot. A node's agent waits for its answer, so a request waiting longer
+#: than that agent does is answered for nobody; the queue is kept short.
+CALLS_RUNNING_PER_NODE = 2
+CALLS_WAITING_PER_NODE = 8
+
+#: How many model calls run at once, from all nodes together.
+CALLS_RUNNING = 4
+
+#: The same three for history pages. A reader asks for one page at a time.
+HISTORY_RUNNING_PER_NODE = 2
+HISTORY_WAITING_PER_NODE = 8
+HISTORY_RUNNING = 4
 
 
 class BridgeHost(Protocol):
@@ -120,6 +140,22 @@ class LLMBridge:
         #: node that sends many says so once rather than on every call. Newest
         #: last, and bounded -- see `REPORTED_MEMORY`.
         self._reported: OrderedDict[str, None] = OrderedDict()
+        self.calls = Lane(
+            per_minute=BRIDGE_CALLS_PER_MINUTE,
+            burst=BRIDGE_CALLS_PER_MINUTE,
+            running_per_node=CALLS_RUNNING_PER_NODE,
+            waiting_per_node=CALLS_WAITING_PER_NODE,
+            running=CALLS_RUNNING,
+        )
+        self.history = Lane(
+            per_minute=BRIDGE_HISTORY_PAGES_PER_MINUTE,
+            burst=BRIDGE_HISTORY_PAGES_PER_MINUTE,
+            running_per_node=HISTORY_RUNNING_PER_NODE,
+            waiting_per_node=HISTORY_WAITING_PER_NODE,
+            running=HISTORY_RUNNING,
+        )
+        #: Requests being answered, each in a task of its own.
+        self._answering: set[asyncio.Task[None]] = set()
 
     async def listen(self) -> None:
         """Answer requests until the actor stops.
@@ -127,7 +163,22 @@ class LLMBridge:
         Reconnects on failure. The first failure is logged at warning and
         repeats of the same one at debug: a broker that is down stays down, and
         a line per retry buries the outage that caused them.
+
+        Each request is answered in a task of its own, so a slow model call
+        holds up nothing but itself. Cancelled, the bridge cancels what it is
+        still answering; stopped, it lets that finish first.
         """
+        try:
+            await self._listen()
+        except asyncio.CancelledError:
+            for task in self._answering:
+                task.cancel()
+            raise
+        finally:
+            if self._answering:
+                await asyncio.gather(*self._answering, return_exceptions=True)
+
+    async def _listen(self) -> None:
         host = self.host
         last_error: str | None = None
         while host.state.value not in ("stopped", "failed"):
@@ -151,9 +202,7 @@ class LLMBridge:
                             logger.debug("[main] Undecodable bridge request: %s", exc)
                             continue
                         if isinstance(data, dict):
-                            await self.answer(data, str(message.topic))
-            except asyncio.CancelledError:
-                break
+                            self._dispatch(data, str(message.topic))
             except Exception as exc:
                 if host.state.value in ("stopped", "failed"):
                     break
@@ -171,6 +220,17 @@ class LLMBridge:
                         int(RECONNECT_DELAY_S),
                     )
                 await asyncio.sleep(RECONNECT_DELAY_S)
+
+    def _dispatch(self, data: dict[str, Any], topic: str) -> None:
+        """Answer ``data`` in a task of its own, kept until it is done."""
+        task = asyncio.create_task(self.answer(data, topic))
+        self._answering.add(task)
+        task.add_done_callback(self._answered_one)
+
+    def _answered_one(self, task: asyncio.Task[None]) -> None:
+        self._answering.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("[main] LLM bridge: answering a request failed", exc_info=task.exception())
 
     async def answer(self, data: dict[str, Any], topic: str = REQUEST_TOPIC) -> None:
         """Run one request and publish the result to the topic it named.
@@ -237,13 +297,19 @@ class LLMBridge:
         while len(self._answered) > ANSWERED_MEMORY:
             self._answered.popitem(last=False)
 
-        if topic == HISTORY_TOPIC:
-            await self._answer_history(data, reply_topic, agent_name, node_name)
+        history = topic == HISTORY_TOPIC
+        lane = self.history if history else self.calls
+        refused = lane.admit(node_name)
+        if refused is not None:
+            await self._refuse(refused, history, reply_topic, agent_name, node_name)
             return
 
-        logger.info("[main] LLM bridge: request from %r on %r", agent_name, node_name)
-
-        text = await self._complete(data, agent_name, node_name)
+        async with lane.slot(node_name):
+            if history:
+                await self._answer_history(data, reply_topic, agent_name, node_name)
+                return
+            logger.info("[main] LLM bridge: request from %r on %r", agent_name, node_name)
+            text = await self._complete(data, agent_name, node_name)
         await self.host._mqtt_publish(reply_topic, {"text": text})
         logger.info(
             "[main] LLM bridge: replied to %r (%s chars) → %s",
@@ -280,6 +346,59 @@ class LLMBridge:
                 data.get("query"),
             )
         await self.host._mqtt_publish(reply_topic, reply)
+
+    async def _refuse(
+        self, why: str, history: bool, reply_topic: str, agent_name: str, node_name: str
+    ) -> None:
+        """Tell the caller its request is over its node's limit, and say so once per node.
+
+        Only a rate refusal reaches the dashboard: it means an agent asks more
+        often than the setting allows, which the operator may want to raise. A
+        busy one means the node's requests are waiting on main and clears as
+        they are answered, so it is logged.
+        """
+        lane = self.history if history else self.calls
+        what = "history pages" if history else "model calls"
+        if why == "rate":
+            reason = (
+                f"node {node_name!r} asked main for more than {lane.per_minute} {what} "
+                "a minute; try again shortly"
+            )
+            setting = (
+                "WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE"
+                if history
+                else "WACTORZ_BRIDGE_CALLS_PER_MINUTE"
+            )
+            if self._first_report(f"rate:{what}:{node_name}"):
+                logger.warning(
+                    "[main] LLM bridge: refused %r on %r: %s", agent_name, node_name, reason
+                )
+                self.host._queue_notification(
+                    {
+                        "severity": "warning",
+                        "message": (
+                            f"Node '{node_name}' asks main for more than {lane.per_minute} {what} "
+                            f"a minute, and main refuses the rest (the first refused came from "
+                            f"'{agent_name}'). If an agent there needs that many, raise {setting} "
+                            "in main's .env."
+                        ),
+                    }
+                )
+        else:
+            reason = (
+                f"node {node_name!r} already has as many {what} waiting on main as it may; "
+                "try again when they are answered"
+            )
+            self._report_once(
+                f"busy:{what}:{node_name}",
+                "[main] LLM bridge: refused %r on %r: %s",
+                agent_name,
+                node_name,
+                reason,
+            )
+        await self.host._mqtt_publish(
+            reply_topic, {"error": reason} if history else {"text": f"[LLM error: {reason}]"}
+        )
 
     def _first_report(self, key: str) -> bool:
         """Whether ``key`` has not been reported yet, remembering it if so."""

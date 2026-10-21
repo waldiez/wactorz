@@ -399,7 +399,10 @@ over every other field, written canonically (sorted keys, compact separators);
 see `sign_request` in `core/node_signing.py`. Main answers only when
 `_reply_topic` is `nodes/<node>/reply/<hex id>` for the `node` the request names,
 and refuses an unsigned or wrongly signed request under
-`WACTORZ_NODE_SIGNING=enforce` with an error reply.
+`WACTORZ_NODE_SIGNING=enforce` with an error reply. Past
+`WACTORZ_BRIDGE_CALLS_PER_MINUTE` calls a minute from one node, or with as many
+of that node's calls waiting as main lets wait, the reply is
+`{"text": "[LLM error: ...]"}` saying why, sent at once.
 
 ---
 
@@ -428,7 +431,9 @@ filters: `topic`, `entity_id` and `field`; `agent`, `class_name` and
 `min_confidence`; `entity_id` and `domain`. Signed and admitted exactly as a
 `main/llm_request`. `since` and `offset` are absent on the first page; after
 that the node sends back the `since` main answered with and the `next` offset,
-until `next` is null.
+until `next` is null. Each page counts against
+`WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE` for the node; past it, the reply is an
+`error` saying why.
 
 ---
 

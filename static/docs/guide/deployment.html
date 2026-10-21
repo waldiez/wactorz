@@ -483,6 +483,16 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Days the per-minute metrics history of every agent and node is kept (<code>/api/history/...</code>); <code>0</code> keeps it for ever. A metrics reset clears it</td>
 </tr>
 <tr>
+<td><code>WACTORZ_BRIDGE_CALLS_PER_MINUTE</code></td>
+<td><code>60</code></td>
+<td>Model calls main answers for one node's agents a minute, after a burst of as many; past it a call is refused at once with an error saying why, and the dashboard says so the first time. Read on main; <code>0</code> sets no limit</td>
+</tr>
+<tr>
+<td><code>WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE</code></td>
+<td><code>600</code></td>
+<td>Pages of main's history (<code>query_ts</code> and the like on a node) main answers for one node a minute, after a burst of as many; past it a read fails, saying why. Read on main; <code>0</code> sets no limit</td>
+</tr>
+<tr>
 <td><code>WACTORZ_MIGRATION_MAX_STATE_BYTES</code></td>
 <td><code>8388608</code></td>
 <td>Largest agent state a <code>/migrate</code> ships, as JSON; a larger one is refused before the agent stops, and <code>--force</code> does not override it. Set on main, which sends it to the node it asks; <code>0</code> sets no limit</td>

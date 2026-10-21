@@ -78,8 +78,12 @@ describe("buildHeader", () => {
         });
         document.body.appendChild(header);
         const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
-        expect(audioBtn.getAttribute("aria-haspopup")).toBe("true");
-        expect(audioBtn.getAttribute("aria-controls")).toBeTruthy();
+        // A disclosure, not a menu: no popup role is promised, and the panel it
+        // controls is a group named after it.
+        expect(audioBtn.hasAttribute("aria-haspopup")).toBe(false);
+        const panel = document.getElementById(audioBtn.getAttribute("aria-controls")!)!;
+        expect(panel.getAttribute("role")).toBe("group");
+        expect(panel.getAttribute("aria-label")).toBe("Audio settings");
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         audioBtn.click(); // open: toggles `.open` and positions the popover
         expect(document.querySelector("div.open")).not.toBeNull();

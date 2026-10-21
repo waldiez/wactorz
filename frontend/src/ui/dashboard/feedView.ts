@@ -24,7 +24,7 @@ import { SYSTEM_AGENT_NAMES } from "./agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";
 import { timeLabel } from "../../time";
-import { button, el, option } from "../dom";
+import { button, clickable, el, expanded, live, option } from "../dom";
 import { agentPicker, listenForPicks, paintActive, tagRow, turnPicker } from "./feedPicks";
 
 const TYPE_CLASS: Record<string, string> = {
@@ -210,24 +210,14 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
  */
 function attachExpander(row: HTMLElement, fullText: string, extraClass = ""): void {
     row.classList.add("af-feed-expandable");
-    row.tabIndex = 0;
-    row.setAttribute("role", "button");
-    row.setAttribute("aria-expanded", "false");
 
     const full = el("pre", `af-feed-full ${extraClass}`.trim(), fullText);
     full.hidden = true;
     row.appendChild(full);
 
-    const toggle = () => {
+    clickable(expanded(row, false), "", () => {
         full.hidden = !full.hidden;
-        row.setAttribute("aria-expanded", String(!full.hidden));
-    };
-    row.addEventListener("click", toggle);
-    row.addEventListener("keydown", e => {
-        if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggle();
-        }
+        expanded(row, !full.hidden);
     });
 }
 
@@ -582,11 +572,9 @@ function populateFeed(feed: HTMLElement, items: ActivityItem[], filters: FeedFil
 export function buildFeedView(items: ActivityItem[], opts: FeedViewOptions): HTMLElement {
     const wrap = el("div", "af-feed-wrap");
 
-    const feed = el("div", "af-feed");
-    feed.id = "af-feed-view";
     // Append-only activity log — announce new rows to screen readers as they arrive.
-    feed.setAttribute("role", "log");
-    feed.setAttribute("aria-live", "polite");
+    const feed = live(el("div", "af-feed"), "log", "Activity");
+    feed.id = "af-feed-view";
 
     wrap.appendChild(buildToolbar(feed, opts));
     populateFeed(feed, items, opts.filters);

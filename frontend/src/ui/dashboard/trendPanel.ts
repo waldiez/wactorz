@@ -12,7 +12,7 @@
  * draw — an agent that never spent anything, a node with no temperature
  * sensor — is left out rather than drawn empty.
  */
-import { button, el } from "../dom";
+import { button, dialog, el, pressed, testId } from "../dom";
 import { fetchHistory, type HistoryRow } from "./history";
 import {
     buildLineChart,
@@ -336,11 +336,11 @@ export class TrendPanel {
                 this.close();
             }
         });
-        const panel = el("div", "af-trend-panel");
-        panel.setAttribute("role", "dialog");
-        panel.setAttribute("aria-modal", "true");
-        panel.setAttribute("aria-label", `History of ${this._name}`);
-        const body = el("div", "af-trend-body");
+        const panel = testId(
+            dialog(el("div", "af-trend-panel"), `History of ${this._name}`),
+            "history-panel",
+        );
+        const body = testId(el("div", "af-trend-body"), "history-body");
         body.appendChild(el("div", "af-chart-empty", "Loading…"));
         panel.append(this._buildHead(), this._buildWindows(), body);
         overlay.appendChild(panel);
@@ -367,12 +367,12 @@ export class TrendPanel {
         for (const [hours, label] of WINDOWS) {
             const b = button("af-mini-btn af-trend-window", label);
             b.dataset["hours"] = String(hours);
-            b.setAttribute("aria-pressed", String(hours === this._hours));
+            pressed(b, hours === this._hours);
             b.addEventListener("click", () => {
                 this._hours = hours;
                 windows
                     .querySelectorAll<HTMLButtonElement>(".af-trend-window")
-                    .forEach(w => w.setAttribute("aria-pressed", String(w === b)));
+                    .forEach(w => pressed(w, w === b));
                 void this._load();
             });
             windows.appendChild(b);

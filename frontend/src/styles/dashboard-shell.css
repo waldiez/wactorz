@@ -45,6 +45,10 @@
   gap: 4px;
   align-items: center;
 }
+/* A landmark for assistive technology only: its buttons lay out as the header's own. */
+.af-view-nav {
+  display: contents;
+}
 .af-title {
   font-size: 14px;
   font-weight: 600;

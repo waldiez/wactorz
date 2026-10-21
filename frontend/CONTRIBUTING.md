@@ -49,6 +49,7 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 - [ ] Cleaned up in a `destroy()` method (remove event listeners)
 - [ ] Instantiated in the matching numbered section of `main.ts` (see its header map)
 - [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
+- [ ] What a person acts on or reads has a role and a name (see [Finding elements](#finding-elements))
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)
@@ -107,6 +108,22 @@ handlers in its eight numbered sections. It is **covered** by `src/__tests__/mai
   cover (a tag computed at runtime, `<template>`, `<style>`)
 - No `innerHTML` with user-controlled strings (XSS); icon markup from the icon registry is the exception
 - Use CSS classes for state (`.active`, `.hidden`) rather than inline styles where possible
+- Give assistive technology what it reads with the helpers in `src/ui/dom.ts` rather than
+  `setAttribute` by hand: `labelled`, `dialog`, `live`, `list` / `listItem`, `clickable`,
+  `expanded`, `pressed`, `focusables`
+
+### Finding elements
+
+Tests find an element the way a person using a screen reader does: by its role and the name
+read out for it — `getByRole("button", { name: "Stop weather" })` in the end-to-end harness,
+`byRole(root, "button", "Stop weather")` from `src/__tests__/queries.ts` in a unit test. So a
+locator that works is also a check that the element is accessible.
+
+Where an element has no such name (a card's state line, a message's sender, the parts of a
+toast), mark it with `testId(node, "…")` from `src/ui/dom.ts`. The ids are listed in
+`src/ui/testIds.ts`, and `testids.test.ts` checks that list against what
+`e2e/harness/browser.py` looks for, in both directions. Never find an element by class: classes
+belong to the styles and move with them.
 
 **Events**
 

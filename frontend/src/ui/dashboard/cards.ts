@@ -10,7 +10,7 @@
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "./settings";
-import { button, el } from "../dom";
+import { button, el, labelled, listItem, testId } from "../dom";
 import { buildSparkline, lastValue, type Point } from "./trend";
 
 /** Compact token count for the card meta line: 1234 → "1.2k", 1_200_000 → "1.2M". */
@@ -64,24 +64,27 @@ export function buildHostBar(
 
     const { cpuPct, cpuText, memPct, memText } = hostBarValues(cpu, memUsed, memTotal);
 
-    bar.innerHTML = `
-      <div class="af-host-label">APP</div>
-      <div class="af-host-metric">
-        <div class="af-host-metric-label">CPU</div>
-        <div class="af-host-bar-track">
-          <div class="af-host-bar-fill af-host-bar-fill-cpu" style="width:${cpuPct.toFixed(1)}%"></div>
-        </div>
-        <div class="af-host-metric-val af-host-cpu-val">${cpuText}</div>
-      </div>
-      <div class="af-host-metric">
-        <div class="af-host-metric-label">MEM</div>
-        <div class="af-host-bar-track">
-          <div class="af-host-bar-fill af-host-bar-fill-mem" style="width:${memPct.toFixed(1)}%"></div>
-        </div>
-        <div class="af-host-metric-val af-host-mem-val">${memText}</div>
-      </div>
-    `;
+    bar.append(
+        el("div", "af-host-label", "APP"),
+        hostMetric("CPU", "cpu", cpuPct, cpuText),
+        hostMetric("MEM", "mem", memPct, memText),
+    );
     return bar;
+}
+
+/** One reading of the host bar: its label, a filled track, and the value in words. */
+function hostMetric(label: string, kind: "cpu" | "mem", pct: number, text: string): HTMLElement {
+    const fill = el("div", `af-host-bar-fill af-host-bar-fill-${kind}`);
+    fill.style.width = `${pct.toFixed(1)}%`;
+    const track = el("div", "af-host-bar-track");
+    track.appendChild(fill);
+    const metric = el("div", "af-host-metric");
+    metric.append(
+        el("div", "af-host-metric-label", label),
+        track,
+        el("div", `af-host-metric-val af-host-${kind}-val`, text),
+    );
+    return metric;
 }
 
 export interface StatCardData {
@@ -97,20 +100,25 @@ interface StatSpec {
     value: string;
     detail: string;
     accent: string;
-    extra: string;
+    /** How much of a limit is used, drawn as a bar under the detail; null for none. */
+    bar: { pct: number; color: string } | null;
 }
 
-function costExtraBar(pct: number, barColor: string): string {
-    return `
-      <div style="margin-top:8px;background:rgba(255,255,255,0.08);border-radius:4px;height:6px;overflow:hidden">
-        <div style="width:${pct}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.4s"></div>
-      </div>`;
+/** The spend-limit bar under the Cost card's detail. */
+function costBar({ pct, color }: { pct: number; color: string }): HTMLElement {
+    const track = el("div");
+    track.style.cssText =
+        "margin-top:8px;background:rgba(255,255,255,0.08);border-radius:4px;height:6px;overflow:hidden";
+    const fill = el("div");
+    fill.style.cssText = `width:${pct}%;height:100%;background:${color};border-radius:4px;transition:width 0.4s`;
+    track.appendChild(fill);
+    return track;
 }
 
 /** Detail/accent/progress-bar for the Cost stat card from the spend-limit info. */
-function costSummary(lim: CostLimitInfo | null): { detail: string; accent: string; extra: string } {
+function costSummary(lim: CostLimitInfo | null): Pick<StatSpec, "detail" | "accent" | "bar"> {
     if (!lim || typeof lim.limit_usd !== "number" || lim.limit_usd <= 0) {
-        return { detail: "reported by actors", accent: "#f59e0b", extra: "" };
+        return { detail: "reported by actors", accent: "#f59e0b", bar: null };
     }
     const barColor = lim.limit_reached ? "#ef4444" : lim.warning ? "#f59e0b" : "#22d3a0";
     const pct = Math.min(lim.pct_used ?? 0, 100);
@@ -119,7 +127,7 @@ function costSummary(lim: CostLimitInfo | null): { detail: string; accent: strin
     return {
         detail: `$${(lim.spend_usd ?? 0).toFixed(4)} / $${lim.limit_usd.toFixed(2)} ${periodLabel}`,
         accent: lim.limit_reached ? "#ef4444" : "#f59e0b",
-        extra: costExtraBar(pct, barColor),
+        bar: { pct, color: barColor },
     };
 }
 
@@ -140,14 +148,14 @@ function computeStatSpecs(data: StatCardData): StatSpec[] {
             value: String(agents.length),
             detail: `${healthy} running`,
             accent: "#60a5fa",
-            extra: "",
+            bar: null,
         },
         {
             label: "Messages",
             value: String(msgs),
             detail: "processed across actors",
             accent: "#22d3a0",
-            extra: "",
+            bar: null,
         },
         { label: "Cost", value: `$${cost.toFixed(4)}`, ...costInfo },
         {
@@ -155,7 +163,7 @@ function computeStatSpecs(data: StatCardData): StatSpec[] {
             value: String(data.feedCount),
             detail: "since dashboard loaded",
             accent: "#8b5cf6",
-            extra: "",
+            bar: null,
         },
     ];
 }
@@ -163,18 +171,15 @@ function computeStatSpecs(data: StatCardData): StatSpec[] {
 /** Render the summary stat cards (agents, messages, cost, feed count) into `container`. */
 export function buildStatCards(container: HTMLElement, data: StatCardData): void {
     container.innerHTML = "";
-    computeStatSpecs(data).forEach(({ label, value, detail, accent, extra }) => {
+    computeStatSpecs(data).forEach(({ label, value, detail, accent, bar }) => {
         const card = el("div", "af-stat-card");
         card.style.borderColor = `${accent}44`;
-        // Safe innerHTML: label/value/detail/accent/extra all come from
-        // computeStatSpecs — fixed strings, numbers and hex colors, never
-        // user- or agent-supplied input.
-        card.innerHTML = `
-        <div class="af-stat-label">${label}</div>
-        <div class="af-stat-value" style="color:${accent}">${value}</div>
-        <div class="af-stat-detail">${detail}</div>
-        ${extra}
-      `;
+        const shown = el("div", "af-stat-value", value);
+        shown.style.color = accent;
+        card.append(el("div", "af-stat-label", label), shown, el("div", "af-stat-detail", detail));
+        if (bar) {
+            card.appendChild(costBar(bar));
+        }
         container.appendChild(card);
     });
 }
@@ -188,7 +193,12 @@ export interface WactorCardCallbacks {
     onHistory: (agent: AgentInfo) => void;
 }
 
-/** Append the start/stop/delete action buttons appropriate to the state. */
+/** Append the start/stop/delete action buttons appropriate to the state.
+ *
+ *  Every card has the same buttons, so each is named after its agent as well:
+ *  to someone moving between them by name, "Stop" alone does not say which
+ *  agent it stops. The name starts with the word on the button, so a person
+ *  who speaks the visible label to control the page still matches it. */
 export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
     if (!canDirectMessage(agent)) {
         return;
@@ -198,7 +208,7 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
     // undone by starting it again, and deleting one is not. They sit next to each
     // other, so sharing a colour invited the second when the first was meant.
     const add = (label: string, action: AgentAction, tone: "" | "caution" | "danger" = "") => {
-        const b = button(`af-mini-btn${tone ? ` ${tone}` : ""}`, label);
+        const b = labelled(button(`af-mini-btn${tone ? ` ${tone}` : ""}`, label), `${label} ${agent.name}`);
         b.dataset["action"] = action;
         controls.appendChild(b);
     };
@@ -222,7 +232,7 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
     const controls = el("div", "af-card-controls");
 
     if (canDirectMessage(agent)) {
-        const chatBtn = button("af-mini-btn af-chat-btn", "Chat");
+        const chatBtn = labelled(button("af-mini-btn af-chat-btn", "Chat"), `Chat with ${agent.name}`);
         chatBtn.hidden = stateLabel(agent.state) === "stopped";
         chatBtn.addEventListener("click", e => {
             e.stopPropagation();
@@ -230,7 +240,7 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
         });
         controls.appendChild(chatBtn);
     }
-    const history = button("af-mini-btn af-history-btn", "History");
+    const history = labelled(button("af-mini-btn af-history-btn", "History"), `History of ${agent.name}`);
     history.addEventListener("click", () => cb.onHistory(agent));
     controls.appendChild(history);
     appendActionBtns(controls, agent);
@@ -257,17 +267,18 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
 
     const name = el("div", "af-card-name", agent.name);
 
-    const stateLbl = el("div", "af-card-state-label", stateLabel(agent.state));
+    const stateLbl = testId(el("div", "af-card-state-label", stateLabel(agent.state)), "agent-state");
     stateLbl.style.color = color;
 
     const meta = el("div", "af-card-meta");
     // Cost only when actually spent — an idle LLM agent reports $0.0000, which is noise.
     const cost = agent.costUsd ?? 0;
-    meta.innerHTML = `
-      <span>♥ <span class="af-card-hb-time">${hbMs ? relTime(hbMs) : "—"}</span></span>
-      <span>${agent.messagesProcessed ?? 0} msgs</span>
-      ${cost > 0 ? `<span>$${cost.toFixed(4)}</span>` : ""}
-    `;
+    const heartbeat = el("span", "", "♥ ");
+    heartbeat.appendChild(el("span", "af-card-hb-time", hbMs ? relTime(hbMs) : "—"));
+    meta.append(heartbeat, el("span", "", `${agent.messagesProcessed ?? 0} msgs`));
+    if (cost > 0) {
+        meta.appendChild(el("span", "", `$${cost.toFixed(4)}`));
+    }
 
     card.append(dot, name, stateLbl, meta);
     appendTokenLine(card, agent);
@@ -288,7 +299,7 @@ function appendTokenLine(card: HTMLElement, agent: AgentInfo): void {
 
 /** Build a single agent ("wactor") card, wiring its control buttons to `cb`. */
 export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCallbacks): HTMLElement {
-    const card = el("div", "af-card");
+    const card = listItem(testId(el("div", "af-card"), "agent-card"), agent.name);
     card.dataset["id"] = agent.id;
     card.dataset["name"] = agent.name;
     card.dataset["state"] = stateLabel(agent.state);

@@ -15,7 +15,7 @@ import { VERSION_KEY } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { buildSignOutButton } from "./signOut";
 import { iconMarkup, type IconName } from "./icons";
-import { button, el, externalLink, iconButton } from "../dom";
+import { button, el, expanded, externalLink, iconButton, live, testId } from "../dom";
 
 export interface HeaderOpts {
     view: View;
@@ -134,20 +134,25 @@ export function releaseHeaderPopovers(): void {
 }
 
 /** Toggle `popover` from `btn`, positioning it under the button, closing on
- *  outside click. `onClose` runs whenever the popover is dismissed. */
+ *  outside click. `onClose` runs whenever the popover is dismissed.
+ *
+ *  A disclosure, not a menu: the button says whether the panel is open and
+ *  which one it is, and the panel is a group named after the button. A menu
+ *  role would promise arrow-key navigation between its entries. */
 function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTMLElement) => void): void {
     document.body.appendChild(popover);
     popover.dataset.afPopover = "";
     if (!popover.id) {
         popover.id = uid("af-pop");
     }
-    btn.setAttribute("aria-haspopup", "true");
+    popover.setAttribute("role", "group");
+    popover.setAttribute("aria-label", btn.getAttribute("aria-label") ?? "");
     btn.setAttribute("aria-controls", popover.id);
-    btn.setAttribute("aria-expanded", "false");
+    expanded(btn, false);
     btn.addEventListener("click", e => {
         e.stopPropagation();
         const open = popover.classList.toggle("open");
-        btn.setAttribute("aria-expanded", String(open));
+        expanded(btn, open);
         if (open) {
             const r = btn.getBoundingClientRect();
             popover.style.top = `${r.bottom + 6}px`;
@@ -162,7 +167,7 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
         if (!popover.contains(e.target as Node)) {
             onClose?.(popover);
             popover.classList.remove("open");
-            btn.setAttribute("aria-expanded", "false");
+            expanded(btn, false);
         }
     };
     document.addEventListener("click", outsideClick);
@@ -172,7 +177,7 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
         if ((e as KeyboardEvent).key === "Escape" && popover.classList.contains("open")) {
             onClose?.(popover);
             popover.classList.remove("open");
-            btn.setAttribute("aria-expanded", "false");
+            expanded(btn, false);
             btn.focus();
         }
     };
@@ -207,7 +212,11 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
     icon.style.opacity = "0.9";
 
     const title = el("span", "af-title", "Wactorz");
-    const connBadge = el("span", `af-conn-badge af-conn-${connState}`, "○ Connecting…");
+    // Read out when it changes, so losing the server is heard and not only seen.
+    const connBadge = testId(
+        live(el("span", `af-conn-badge af-conn-${connState}`, "○ Connecting…"), "status"),
+        "connection",
+    );
 
     left.append(icon, title, buildVersion(), connBadge);
     return left;
@@ -226,6 +235,10 @@ function buildHeaderRight(
 ): HTMLElement {
     const right = el("div", "af-header-right");
 
+    // Laid out as if its buttons were the header's own (`display: contents`).
+    const nav = el("nav", "af-view-nav");
+    nav.setAttribute("aria-label", "Views");
+    right.appendChild(nav);
     const allViews = [...BUILTIN_VIEWS, ...extraViews, SETTINGS_VIEW];
     allViews.forEach(({ key, label, icon }) => {
         const btn = button(`af-view-btn${key === view ? " active" : ""}`);
@@ -235,7 +248,7 @@ function buildHeaderRight(
         }
         viewButtonContent(btn, icon, label);
         btn.addEventListener("click", () => onSetView(key));
-        right.appendChild(btn);
+        nav.appendChild(btn);
     });
     // Devices links out to the HA UI rather than embedding a controllable view.
     right.appendChild(buildHaNavLink(haUrl, false));
@@ -300,14 +313,13 @@ export function releaseBottomNav(): void {
  *  the sheet from outside is `buildBottomNav`'s job, since those listeners sit
  *  on `document` and outlive a rebuild. */
 function wireMoreSheet(sheet: HTMLElement, moreBtn: HTMLButtonElement): void {
-    moreBtn.setAttribute("aria-haspopup", "true");
-    moreBtn.setAttribute("aria-expanded", "false");
+    expanded(moreBtn, false);
     moreBtn.addEventListener("click", e => {
         e.stopPropagation();
         sheet.classList.toggle("open");
         const open = sheet.classList.contains("open");
         moreBtn.classList.toggle("active", open);
-        moreBtn.setAttribute("aria-expanded", String(open));
+        expanded(moreBtn, open);
     });
 }
 
@@ -367,6 +379,7 @@ export function buildBottomNav(opts: {
 }): HTMLElement {
     const { view, onSetView, haUrl, extraViews } = opts;
     const nav = el("nav", "af-bottom-nav");
+    nav.setAttribute("aria-label", "Views");
 
     const sheet = el("div", "af-bottom-sheet");
     const moreBtn = button("af-bottom-tab af-bottom-more-btn");
@@ -384,7 +397,7 @@ export function buildBottomNav(opts: {
     const closeSheet = () => {
         sheet.classList.remove("open");
         moreBtn.classList.remove("active");
-        moreBtn.setAttribute("aria-expanded", "false");
+        expanded(moreBtn, false);
     };
     const keydown: EventListener = e => {
         if ((e as KeyboardEvent).key === "Escape" && sheet.classList.contains("open")) {

@@ -35,7 +35,7 @@ import { OverviewView } from "./dashboard/overview";
 import { OverviewData } from "./dashboard/overviewData";
 import { TrendPanel } from "./dashboard/trendPanel";
 import type { AgentAction } from "./dashboard/cards";
-import { el } from "./dom";
+import { el, testId } from "./dom";
 import { MetricsController } from "./dashboard/metrics";
 import { confirmDialog } from "./dashboard/confirmDialog";
 import { seedServerConfig } from "../config/serverConfig";
@@ -435,6 +435,11 @@ export class CardDashboard {
         const body = this.root.querySelector<HTMLElement>(".af-body")!;
         body.innerHTML = "";
         this._mountActiveView(body);
+        // Marked once it is in place, so a test waiting for it waits for the view.
+        const mounted = body.lastElementChild;
+        if (mounted instanceof HTMLElement) {
+            testId(mounted, `view-${this.view}`);
+        }
         this._syncViewChrome();
     }
 
@@ -599,7 +604,8 @@ export class CardDashboard {
         const root = el("div", "cd-root");
         root.id = "card-dashboard";
 
-        const body = el("div", "af-body");
+        // The page's main content: whichever view is open.
+        const body = el("main", "af-body");
 
         // The iobar is owned by the chat controller and appended in the constructor.
         const onSetView = (v: View) => this._setView(v);

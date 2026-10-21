@@ -11,6 +11,9 @@ const TARGET = 96;
 const BRANCHES_FLOOR = TARGET - 5;
 
 export default defineConfig({
+    // The test-id contract (testids.test.ts) reads the end-to-end harness, which
+    // sits outside the frontend; this lets Vite read that folder and no other.
+    server: { fs: { allow: [".", "../e2e/harness"] } },
     test: {
         environment: "happy-dom",
         pool: "vmThreads",

@@ -18,7 +18,8 @@
  * chooses it. Nothing destructive happens without the user aiming at it.
  */
 
-import { button, el } from "../dom";
+import { uid } from "../../ids";
+import { button, dialog, el, focusables, testId } from "../dom";
 
 /** What to ask, and what to call the button that agrees to it. */
 export interface ConfirmOptions {
@@ -30,36 +31,29 @@ export interface ConfirmOptions {
     confirmLabel: string;
 }
 
-/** Elements inside the dialog that can hold focus, in tab order. */
-function focusables(root: HTMLElement): HTMLElement[] {
-    return [...root.querySelectorAll<HTMLElement>("button, [href], [tabindex]:not([tabindex='-1'])")];
-}
-
 /** The overlay and its two buttons, assembled but not yet wired. */
 function buildOverlay(opts: ConfirmOptions): {
     overlay: HTMLElement;
     confirmBtn: HTMLButtonElement;
     cancelBtn: HTMLButtonElement;
 } {
-    const overlay = el("div", "af-confirm-backdrop");
-    overlay.setAttribute("role", "dialog");
-    overlay.setAttribute("aria-modal", "true");
-    overlay.setAttribute("aria-label", opts.title);
+    const overlay = testId(dialog(el("div", "af-confirm-backdrop"), opts.title), "confirm-dialog");
 
     // Dialog buttons wear the same chrome as a card's own controls. The title,
     // message and label are set as text: an agent is named by whoever spawned
     // it, and the name reaches the browser over MQTT.
-    const cancelBtn = button("af-mini-btn af-confirm-cancel", "Cancel");
-    const confirmBtn = button("af-mini-btn danger af-confirm-ok", opts.confirmLabel);
+    const cancelBtn = testId(button("af-mini-btn af-confirm-cancel", "Cancel"), "confirm-cancel");
+    const confirmBtn = testId(button("af-mini-btn danger af-confirm-ok", opts.confirmLabel), "confirm-ok");
     const actions = el("div", "af-confirm-actions");
     actions.append(cancelBtn, confirmBtn);
 
+    // The message is the dialog's description, read after its name when it opens.
+    const message = testId(el("div", "af-confirm-message", opts.message), "confirm-message");
+    message.id = uid("af-confirm-message");
+    overlay.setAttribute("aria-describedby", message.id);
+
     const box = el("div", "af-confirm");
-    box.append(
-        el("div", "af-confirm-title", opts.title),
-        el("div", "af-confirm-message", opts.message),
-        actions,
-    );
+    box.append(testId(el("div", "af-confirm-title", opts.title), "confirm-title"), message, actions);
     overlay.appendChild(box);
     return { overlay, confirmBtn, cancelBtn };
 }

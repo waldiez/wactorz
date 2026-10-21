@@ -19,8 +19,7 @@ def test_a_browser_that_has_not_signed_in_is_asked_for_the_key(
 
 def test_a_wrong_key_does_not_get_in(visitor: browser.Dashboard) -> None:
     visitor.page.goto(visitor.base_url, wait_until="domcontentloaded")
-    visitor.page.fill(browser.LOGIN_KEY, "not-the-key")
-    visitor.page.click(browser.LOGIN_SUBMIT)
+    visitor.submit_key("not-the-key")
     visitor.page.wait_for_load_state("domcontentloaded")
 
     assert visitor.at_sign_in

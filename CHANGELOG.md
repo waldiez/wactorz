@@ -44,6 +44,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The dashboard says more to screen readers.** An agent's card is an item of a list named "Agents", named after its agent, and its buttons say which agent they act on ("Stop weather", "History of weather"); the nodes panel is a list of nodes the same way. The view buttons are a navigation landmark, the open view is the page's main content, and the chat is a conversation log, so new messages are read out. The connection badge is read out when it changes, so losing the server is heard as well as seen. A toast that asks a question is a group named after the agent asking. The header's popovers no longer claim to be menus, which promised arrow-key navigation they do not have; they are named after the button that opens them. The confirm dialog reads out what it is about to do along with its question.
+
 - **Main's streamed replies no longer show the blocks it acts on.** When main's model starts, deletes or asks an agent, it writes a `<spawn>`, `<delete>` or `<delegate>` block holding JSON into its reply. Replies through the API had them removed, but a streamed reply, as the dashboard, the CLI and the chat stream route get it, showed each block as raw JSON before the line saying what was done. The stream now leaves them out as it goes, and the dashboard also removes them from replies recorded with them.
 
 - **The dashboard says "Disconnected…" when it has lost the server or the broker.** The header badge read "◎ Demo fallback" then, though the dashboard has no demo mode.

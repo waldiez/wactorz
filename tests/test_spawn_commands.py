@@ -177,6 +177,53 @@ class TestNotLettingTheModelRewriteARecipe:
         assert not catalogue.spawned
         assert main.spawned_names == ["smart-energy-agent"]
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"type": "llm", "system_prompt": "You forecast for farmers."},
+            {"type": "rule", "rule": {"when": "x", "then": "y"}},
+            {"type": "scheduled", "schedule": "every 1h", "task": "forecast"},
+            {"type": "ha_actuator", "entity_id": "switch.fan"},
+            {"type": "module", "target": "pkg.mod:Agent"},
+        ],
+    )
+    async def test_another_kind_of_agent_under_a_recipe_s_name_runs_as_asked(
+        self, config: dict[str, Any]
+    ) -> None:
+        catalogue = _Catalogue()
+        main = _Main(
+            registry=_Registry(running=("weather-agent",), catalogue=catalogue),
+            catalog_match="weather-agent",
+        )
+
+        _, spawned = await main.process(block(name="weather-agent", **config))
+
+        assert not catalogue.spawned
+        assert main.spawned_names == ["weather-agent"]
+        assert main.configs[0] == {"name": "weather-agent", **config}
+        assert [a.name for a in spawned] == ["weather-agent"]
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"type": "native"},
+            {},  # the name alone: asked for the agent, not a new one
+        ],
+    )
+    async def test_a_native_or_bare_spawn_of_a_recipe_s_name_is_the_catalogue_s(
+        self, config: dict[str, Any]
+    ) -> None:
+        catalogue = _Catalogue()
+        main = _Main(
+            registry=_Registry(catalogue=catalogue, appears_after_spawn="weather-agent"),
+            catalog_match="weather-agent",
+        )
+
+        await main.process(block(name="weather-agent", **config))
+
+        assert catalogue.spawned == ["weather-agent"]
+        assert not main.configs
+
     async def test_a_name_matching_no_recipe_spawns_as_written(self) -> None:
         main = _Main(catalog_match=None)
 

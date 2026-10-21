@@ -97,6 +97,18 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
     )
 
 
+def catalogue_may_stand_in(config: dict[str, Any]) -> bool:
+    """Whether the catalogue's agent of the same name may run in place of ``config``.
+
+    The catalogue stands in for code the model wrote, so a recipe it maintains
+    is not rewritten, unreviewed, every time it is asked for; and for a native
+    agent, which only the catalogue builds. A spawn of any other kind -- an LLM,
+    rule, scheduled, Home Assistant or module agent -- describes a different
+    agent that happens to share the name, and runs as asked.
+    """
+    return (config.get("type") or "dynamic").strip().lower() in ("dynamic", "native")
+
+
 def with_models_of(config: dict[str, Any]) -> dict[str, Any]:
     """``config`` naming, as ``artifacts``, the models a library agent declares in its code.
 
@@ -587,7 +599,7 @@ class SpawnService:
         for match in re.findall(pattern, response, re.DOTALL):
             try:
                 config = _parse_spawn_config(match.strip())
-                if not config.get("replace"):
+                if not config.get("replace") and catalogue_may_stand_in(config):
                     substitute = await self._catalogue_substitute(config.get("name", ""))
                     if substitute is not None:
                         spawned.append(substitute)

@@ -44,6 +44,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent spawned under a catalogue agent's name runs as the kind it was asked to be.** A spawn named like a catalogue agent, such as `weather-agent`, started the catalogue's agent in its place whatever its `type`, so an LLM, rule, scheduled, Home Assistant or module agent of that name never ran. The catalogue's agent now stands in only for code the model wrote (`dynamic`, the default) and for a `native` spawn, so that a maintained agent is still not rewritten every time it is asked for; any other kind runs as written. `"replace": true` still spawns it as written, whatever its type.
+
 - **The images and locked installs take certifi 2026.10.19, pip 26.2.2 and Pillow 13.0.0.** certifi drops the emSign root certificates whose intermediate keys were compromised (GHSA-6q48-6c7w-9gw2), pip carries that certifi for its own downloads, and Pillow 13 fixes out-of-bounds reads and writes in its GIF, TIFF, JPEG, EPS and PDF handling. Pillow 13 needs Python 3.11, so an install on Python 3.10 keeps Pillow 12.3, for which no fix exists.
 
 - **The manual agent judges a link by its host.** A search result counted as ManualsLib's, or as one of the trusted manual sites, when the site's name appeared anywhere in its URL, so `https://elsewhere.example/?r=manualslib.com` was ranked as a trusted source and had `/download.pdf` added to it, and a link that merely mentioned a search engine was dropped. The agent now compares the link's host, or a subdomain of it, with each site. Every download was and still is checked to reach a public address only.

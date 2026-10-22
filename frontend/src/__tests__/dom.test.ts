@@ -141,6 +141,11 @@ describe("live", () => {
     it("is named when given a label", () => {
         expect(live(el("div"), "log", "Conversation").getAttribute("aria-label")).toBe("Conversation");
     });
+
+    it("lets the keyboard reach a log, which scrolls, and leaves a status line out of the tab order", () => {
+        expect(live(el("div"), "log").tabIndex).toBe(0);
+        expect(live(el("span"), "status").hasAttribute("tabindex")).toBe(false);
+    });
 });
 
 describe("clickable", () => {

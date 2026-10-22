@@ -125,6 +125,17 @@ toast), mark it with `testId(node, "…")` from `src/ui/dom.ts`. The ids are lis
 `e2e/harness/browser.py` looks for, in both directions. Never find an element by class: classes
 belong to the styles and move with them.
 
+### Accessibility checks
+
+`axe.test.ts` runs [axe](https://github.com/dequelabs/axe-core) on every view of the dashboard
+as the page builds it, and the end-to-end suite runs it again in a real browser, where colour
+contrast is judged too; the journeys also walk each view with Tab and fail where focus does not
+show. A serious or critical finding fails either. One that has to stay for now goes in
+`e2e/harness/axe-accepted.json` with its reason.
+
+Colours for text come from the tokens in `src/styles/base.css`: `--af-text-dim` is the dimmest
+text that keeps 4.5:1 on the dashboard's backgrounds, so nothing dimmer is used for words.
+
 **Events**
 
 - Always clean up `addEventListener` on component destroy

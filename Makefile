@@ -397,8 +397,9 @@ test-frontend: ## Run frontend tests (vitest)
 # Run with its own pytest.ini, so it shares no setting with the unit suite. It
 # starts everything it uses, on ports and in a directory of its own, and reads
 # nothing of a developer's `.env` or state.
-e2e-setup: ## One-time: install Playwright and the browser the e2e suite drives
-	@# The extra, not a version repeated here: pyproject pins it.
+e2e-setup: install-frontend ## One-time: install Playwright, the browser the e2e suite drives, and axe
+	@# The extra, not a version repeated here: pyproject pins it. axe comes from
+	@# the frontend's dependencies (install-frontend), the version its tests run.
 	$(PYTHON) -m pip install -e ".[e2e]"
 	$(PYTHON) -m playwright install chromium
 

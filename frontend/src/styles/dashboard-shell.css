@@ -61,7 +61,7 @@
 .af-version {
   font-size: 10px;
   font-weight: 500;
-  color: #64748b;
+  color: var(--af-text-dim);
   letter-spacing: 0.02em;
   align-self: flex-start;
   margin-top: 1px;

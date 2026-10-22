@@ -73,11 +73,13 @@ def test_an_unlisted_package_waits_for_a_yes_and_a_no_starts_nothing(
     asked = _asked(dashboard)
     assert UNLISTED_PACKAGE in asked
     assert "'prober'" in asked
+    dashboard.assert_accessible("a question on a notice")
     # The installer cannot be messaged, and opens while it asks: its thread
     # holds the same question, with the same answers.
     assert dashboard.thread_opens("installer")
     dashboard.open_from_list("installer")
     assert dashboard.options_in_thread() == ["Install", "Refuse"]
+    dashboard.assert_accessible("a question in the thread")
 
     dashboard.answer_notice("installer", "Refuse")
 

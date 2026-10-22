@@ -15,7 +15,7 @@ import { VERSION_KEY } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { buildSignOutButton } from "./signOut";
 import { iconMarkup, type IconName } from "./icons";
-import { button, el, expanded, externalLink, iconButton, live, testId } from "../dom";
+import { button, el, expanded, externalLink, focusables, iconButton, live, testId } from "../dom";
 
 export interface HeaderOpts {
     view: View;
@@ -157,6 +157,9 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
             const r = btn.getBoundingClientRect();
             popover.style.top = `${r.bottom + 6}px`;
             popover.style.right = `${window.innerWidth - r.right}px`;
+            // The popover sits at the end of the page, so Tab from the button
+            // would never reach it: focus goes in, and Escape brings it back.
+            focusables(popover)[0]?.focus();
         } else {
             onClose?.(popover);
         }

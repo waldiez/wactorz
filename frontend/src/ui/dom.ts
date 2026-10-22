@@ -132,11 +132,15 @@ export function dialog<T extends HTMLElement>(node: T, label: string): T {
  *
  * `status` is for a single line that is replaced, such as the connection badge;
  * `log` for a list that grows, such as a conversation. Both are polite: they
- * wait until the reader has finished speaking.
+ * wait until the reader has finished speaking. A log scrolls, so it also takes
+ * focus: otherwise the keyboard cannot scroll one with nothing to focus inside.
  */
 export function live<T extends HTMLElement>(node: T, role: "status" | "log", label = ""): T {
     node.setAttribute("role", role);
     node.setAttribute("aria-live", "polite");
+    if (role === "log") {
+        node.tabIndex = 0;
+    }
     if (label) {
         node.setAttribute("aria-label", label);
     }

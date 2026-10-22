@@ -76,7 +76,9 @@ export function buildHostBar(
 function hostMetric(label: string, kind: "cpu" | "mem", pct: number, text: string): HTMLElement {
     const fill = el("div", `af-host-bar-fill af-host-bar-fill-${kind}`);
     fill.style.width = `${pct.toFixed(1)}%`;
+    // The bar shows what the value beside it says, so it is not read out as well.
     const track = el("div", "af-host-bar-track");
+    track.setAttribute("aria-hidden", "true");
     track.appendChild(fill);
     const metric = el("div", "af-host-metric");
     metric.append(
@@ -104,9 +106,10 @@ interface StatSpec {
     bar: { pct: number; color: string } | null;
 }
 
-/** The spend-limit bar under the Cost card's detail. */
+/** The spend-limit bar under the Cost card's detail, which says the same in words. */
 function costBar({ pct, color }: { pct: number; color: string }): HTMLElement {
     const track = el("div");
+    track.setAttribute("aria-hidden", "true");
     track.style.cssText =
         "margin-top:8px;background:rgba(255,255,255,0.08);border-radius:4px;height:6px;overflow:hidden";
     const fill = el("div");

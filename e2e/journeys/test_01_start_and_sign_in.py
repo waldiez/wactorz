@@ -53,6 +53,25 @@ def test_every_view_draws(dashboard: browser.Dashboard) -> None:
         dashboard.show(view)
 
 
+def test_every_view_passes_axe(dashboard: browser.Dashboard) -> None:
+    # Every view before failing, so one run reports them all.
+    found = {view: dashboard.show(view).accessibility_findings() for view in browser.VIEWS}
+
+    assert not any(found.values()), "\n".join(
+        f"{view}: {line}" for view, lines in found.items() for line in lines
+    )
+
+
+def test_every_view_shows_where_keyboard_focus_is(dashboard: browser.Dashboard) -> None:
+    walked = {view: dashboard.show(view).tab_stops() for view in browser.VIEWS}
+
+    assert all(walked.values()), walked
+    unmarked = [
+        f"{view}: {what}" for view, stops in walked.items() for what, shown in stops if not shown
+    ]
+    assert not unmarked, "focus does not show on:\n" + "\n".join(unmarked)
+
+
 def test_an_agents_history_opens_from_its_card(dashboard: browser.Dashboard) -> None:
     # A fresh server has sampled nothing yet, or a minute at most: either the
     # panel says there is nothing in the window, or it draws what there is.
@@ -61,6 +80,7 @@ def test_an_agents_history_opens_from_its_card(dashboard: browser.Dashboard) -> 
 
     assert dashboard.history_title() == "main"
     assert "not available" not in shown, shown
+    dashboard.assert_accessible("the history panel")
     dashboard.close_history()
 
 

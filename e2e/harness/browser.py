@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from . import waiting
+from . import axe, waiting
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, ConsoleMessage, Locator, Page
@@ -106,6 +106,22 @@ _NODE_ROWS = """
     return rows;
 }
 """
+#: Where keyboard focus is now, and whether it shows: what has it, and the
+#: outline or shadow that marks it. ``None`` when nothing in the page has it.
+_FOCUS = """
+() => {
+    const e = document.activeElement;
+    if (!e || e === document.body) return null;
+    const s = getComputedStyle(e);
+    const name = e.getAttribute("aria-label") || e.innerText || e.getAttribute("placeholder") || "";
+    return {
+        what: `${e.tagName.toLowerCase()} ${JSON.stringify(name.trim().slice(0, 40))}`,
+        shown: (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== "none",
+    };
+}
+"""
+#: How many Tab presses a view is given before its walk is cut short.
+TAB_STOPS_AT_MOST = 80
 #: The names of the items of a list, as assistive technology reads them.
 _ITEM_NAMES = "items => items.map(item => item.getAttribute('aria-label'))"
 CHAT_INPUT = "Chat message"
@@ -591,6 +607,31 @@ class Dashboard:
         ]
 
     # ── What the page complains about ───────────────────────────────────────
+
+    def tab_stops(self) -> list[tuple[str, bool]]:
+        """Walk the page with Tab from the top: each stop, and whether focus shows on it.
+
+        Ends where the walk comes round to its first stop again, or leaves the page.
+        """
+        self.page.evaluate("() => document.activeElement?.blur()")
+        stops: list[tuple[str, bool]] = []
+        for _ in range(TAB_STOPS_AT_MOST):
+            self.page.keyboard.press("Tab")
+            focus = self.page.evaluate(_FOCUS)
+            if focus is None or (stops and focus["what"] == stops[0][0]):
+                break
+            stops.append((focus["what"], focus["shown"]))
+        return stops
+
+    def accessibility_findings(self) -> list[str]:
+        """The serious and critical axe findings on screen now that nobody accepted."""
+        return axe.blocking_findings(self.page)
+
+    def assert_accessible(self, where: str) -> Dashboard:
+        """Fail on any serious or critical axe finding on screen now, saying ``where`` it was."""
+        found = self.accessibility_findings()
+        assert not found, f"axe, on {where}:\n" + "\n".join(found)
+        return self
 
     def note_toasts(self) -> None:
         """Remember any error toast on screen now. Called often: they do not stay."""

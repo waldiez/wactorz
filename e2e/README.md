@@ -5,7 +5,7 @@ strictly: a real broker, the application as a process, a node deployed to anothe
 machine over SSH, and a browser.
 
 ```bash
-make e2e-setup   # once: Playwright and the browser it drives
+make e2e-setup   # once: Playwright, the browser it drives, and the frontend's packages (axe)
 make e2e         # needs Docker
 ```
 
@@ -42,6 +42,21 @@ guard (`harness/guard.py`) fails the journey on:
 
 A journey that provokes one of these on purpose says which, with
 `unexpected.allow(pattern)`, beside the reason.
+
+## Accessibility
+
+A journey checks the page with [axe](https://github.com/dequelabs/axe-core) where
+it shows something new: every view, a conversation, the feed with entries in it,
+the history panel, the question before a delete, a question on a notice and in
+the thread. `dashboard.assert_accessible(where)` fails on a serious or critical
+finding, saying what axe measured (for contrast, the ratio and both colours).
+
+The frontend's unit tests apply the same rule to every view under happy-dom,
+which judges structure but not colour; the browser here judges both.
+
+A finding that has to stay for now goes in `harness/axe-accepted.json`, read by
+both: the rule, part of the element's selector as axe prints it, and the reason.
+Fix rather than list where it is in reach.
 
 ## The journeys
 

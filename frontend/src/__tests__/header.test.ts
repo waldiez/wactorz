@@ -24,6 +24,10 @@ describe("buildHeader", () => {
     beforeEach(() => {
         document.body.innerHTML = "";
     });
+    // Popovers hang document-level listeners; one left open answers the next test's Escape.
+    afterEach(() => {
+        releaseHeaderPopovers();
+    });
 
     it("renders the logo/title, connection badge and the view tabs", () => {
         const header = buildHeader({
@@ -111,6 +115,26 @@ describe("buildHeader", () => {
         expect(document.querySelector("div.open")).toBeNull();
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         expect(document.activeElement).toBe(audioBtn);
+    });
+
+    it("opening a popover moves focus into it, since it sits at the end of the page", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+        document.body.appendChild(header);
+        const resetBtn = header.querySelector<HTMLButtonElement>('[title="Clear stored state"]')!;
+        // The popovers are stubbed above; give this one something to focus.
+        const panel = document.getElementById(resetBtn.getAttribute("aria-controls")!)!;
+        const first = document.createElement("button");
+        panel.append(first, document.createElement("button"));
+
+        resetBtn.click();
+
+        expect(document.activeElement).toBe(first);
     });
 
     it("Escape closes the More sheet and returns focus to the More button", () => {

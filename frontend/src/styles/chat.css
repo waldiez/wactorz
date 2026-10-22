@@ -161,11 +161,10 @@
   padding: 5px 8px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.8);
-  outline: none;
   font-family: inherit;
 }
 .af-chat-sidebar-search input::placeholder {
-  color: rgba(255, 255, 255, 0.28);
+  color: var(--af-text-dim);
 }
 .af-chat-sidebar-search input:focus {
   border-color: rgba(37, 99, 235, 0.5);
@@ -362,7 +361,7 @@
 }
 .af-chat-msg-time {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.28);
+  color: var(--af-text-dim);
   margin-left: auto;
 }
 /* Markdown block elements inside bubbles */

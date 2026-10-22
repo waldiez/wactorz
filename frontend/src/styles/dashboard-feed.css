@@ -15,7 +15,7 @@
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 .af-feed-empty {
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--af-text-dim);
   text-align: center;
   margin-top: 40px;
   font-size: 13px;
@@ -101,7 +101,7 @@
 }
 .af-feed-time {
   flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--af-text-dim);
   font-size: 11px;
   font-family: monospace;
 }
@@ -232,7 +232,7 @@
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--af-text-dim);
 }
 .af-feed-select,
 .af-feed-search {
@@ -270,12 +270,11 @@
   width: 130px;
 }
 .af-feed-search::placeholder {
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--af-text-dim);
 }
 .af-feed-search:focus,
 .af-feed-select:focus {
-  outline: none;
-  border-color: #38bdf8;
+  border-color: var(--af-focus);
   background: rgba(56, 189, 248, 0.08);
 }
 /* A control the current source has no use for: still in place, visibly inert. */

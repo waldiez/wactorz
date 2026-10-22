@@ -230,7 +230,7 @@ const CSS = `
 
 .wz-toast__time {
   font-size: 10.5px;
-  color: rgba(255,255,255,0.28);
+  color: var(--af-text-dim);
   flex-shrink: 0;
   margin-left: auto;
 }

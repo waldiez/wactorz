@@ -364,12 +364,23 @@ export function completedFeedItem(p: { agentName: string }, now = Date.now()): F
     return { type: "spawn", label: "task completed", agentName: p.agentName, timestamp: now };
 }
 
-/** Feed row for a remote node phoning home (agent count pluralised). */
-export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now()): FeedItem {
+/**
+ * Feed row for a remote node phoning home (agent count pluralised).
+ *
+ * A node coming online is news; every report after that is a heartbeat, hidden
+ * with the others unless they are asked for. `cameOnline` is the caller's to
+ * judge (see `NodePresence`).
+ */
+export function nodeHeartbeatFeedItem(
+    p: NodeHeartbeatPayload,
+    cameOnline: boolean,
+    now = Date.now(),
+): FeedItem {
     const n = p.agents.length;
+    const agents = `${n} agent${n !== 1 ? "s" : ""}`;
     return {
-        type: "health",
-        label: `node online · ${n} agent${n !== 1 ? "s" : ""}`,
+        type: cameOnline ? "health" : "heartbeat",
+        label: cameOnline ? `node online · ${agents}` : `heartbeat · ${agents}`,
         agentName: p.node,
         timestamp: now,
     };

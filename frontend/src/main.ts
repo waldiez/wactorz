@@ -64,6 +64,8 @@ import {
     rawFeedItem,
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
+import { NodePresence } from "./agents/nodePresence";
+import { STALE_MS } from "./ui/dashboard/agentState";
 
 // ═══ 1 · Deployment env & service URLs ══════════════════════════════════════
 //
@@ -127,6 +129,8 @@ agentStore.mount();
 const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
 const ws = new WSClient();
+// Online by the overview's measure, so the feed and the node cards agree.
+const nodePresence = new NodePresence(STALE_MS);
 
 // Global drag-and-drop upload overlay. Built after /api/config answers, since
 // only the server knows whether the upload routes are registered — an overlay
@@ -388,7 +392,7 @@ router.on("completed", payload => {
 
 router.on("node-heartbeat", payload => {
     agentStore.updateRemoteNode(payload.node, payload.agents, payload.readings);
-    pushFeed(nodeHeartbeatFeedItem(payload));
+    pushFeed(nodeHeartbeatFeedItem(payload, nodePresence.heard(payload.node)));
 });
 
 router.on("host-stats", stats => {

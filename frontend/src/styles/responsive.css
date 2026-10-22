@@ -105,4 +105,23 @@
     width: 44px;
     height: 44px;
   }
+  /* Feed rows: no room for the text beside the time and the agent, so it takes
+     a line of its own under them; the turn chip and the toggle stay on the
+     first line, at its end. */
+  .af-feed-item {
+    flex-wrap: wrap;
+  }
+  .af-feed-item .af-feed-text {
+    order: 1;
+    flex-basis: 100%;
+    padding-left: 22px;
+  }
+  .af-feed-full,
+  .af-feed-copy {
+    order: 2;
+  }
+  .af-feed-turn,
+  .af-feed-item:not(:has(.af-feed-turn)) .af-feed-toggle {
+    margin-left: auto;
+  }
 }

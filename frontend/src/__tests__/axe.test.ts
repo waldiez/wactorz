@@ -12,6 +12,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import { CardDashboard } from "../ui/CardDashboard";
 import type { AgentInfo } from "../types/agent";
+import type { FeedItem } from "../types/feed";
+import { emit } from "../events";
 import { blockingFindings, isAccepted } from "./axe";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
@@ -32,6 +34,10 @@ describe("the dashboard passes axe", () => {
         localStorage.clear();
         cd = new CardDashboard();
         cd.show(AGENTS);
+        // A reply long enough to open in place, from a turn: a row holding
+        // buttons of its own, which a row that is itself a button cannot.
+        const reply = { type: "chat", label: "Here is the plan:\n1. pair it\n2. wire it", agentName: "main" };
+        emit("af-feed-push", { item: { ...reply, timestamp: 1, turn: "t1" } as FeedItem });
     });
 
     afterEach(() => {
@@ -43,6 +49,7 @@ describe("the dashboard passes axe", () => {
 
         // Something to judge: an empty page passes every rule.
         expect(document.querySelector(`[data-testid="view-${view}"]`)).not.toBeNull();
+        document.querySelector<HTMLButtonElement>(".af-feed-toggle")?.click();
         expect(await blockingFindings(document.body)).toEqual([]);
     });
 });

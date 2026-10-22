@@ -24,7 +24,8 @@ import { SYSTEM_AGENT_NAMES } from "./agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";
 import { timeLabel } from "../../time";
-import { button, clickable, el, expanded, live, option } from "../dom";
+import { uid } from "../../ids";
+import { button, el, expanded, labelled, live, option } from "../dom";
 import { agentPicker, listenForPicks, paintActive, tagRow, turnPicker } from "./feedPicks";
 
 const TYPE_CLASS: Record<string, string> = {
@@ -199,8 +200,47 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
     container.appendChild(row);
 }
 
+/** How long a copy button says what happened before it reads "Copy" again. */
+const COPIED_MS = 1500;
+
+/** Whether a click on `row` ends a drag that selected text in it, rather than asking to open it. */
+function endsASelection(row: HTMLElement): boolean {
+    const selection = window.getSelection();
+    return selection !== null && !selection.isCollapsed && row.contains(selection.anchorNode);
+}
+
 /**
- * Make a row reveal its whole text in place.
+ * A button that copies `text` whole, or null where the page may not use the
+ * clipboard: browsers allow it only to a secure page (HTTPS, or `localhost`).
+ */
+function copyButton(text: string): HTMLButtonElement | null {
+    if (!window.isSecureContext || !navigator.clipboard) {
+        return null;
+    }
+    const btn = labelled(button("af-mini-btn af-feed-copy", "Copy"), "Copy the whole message");
+    let reset: ReturnType<typeof setTimeout> | undefined;
+    const say = (word: string): void => {
+        btn.textContent = word;
+        clearTimeout(reset);
+        reset = setTimeout(() => (btn.textContent = "Copy"), COPIED_MS);
+    };
+    btn.addEventListener("click", () => {
+        navigator.clipboard.writeText(text).then(
+            () => say("Copied"),
+            () => say("Not copied"),
+        );
+    });
+    return btn;
+}
+
+/**
+ * Make a row reveal its whole text in place, with a button to copy it.
+ *
+ * The row has a toggle of its own rather than being a button itself: a row
+ * holds other buttons (its agent and turn chips, the copy button), and a button
+ * inside a button is announced as neither. A click anywhere else on the row
+ * opens or closes it too, except one inside the expanded text or one that ends
+ * a drag selecting it, so the text can be selected.
  *
  * `textContent`, never `innerHTML`. This is where the *entire* untrusted text
  * is rendered — a traceback, an agent's reply — which is exactly what an agent
@@ -212,13 +252,39 @@ function attachExpander(row: HTMLElement, fullText: string, extraClass = ""): vo
     row.classList.add("af-feed-expandable");
 
     const full = el("pre", `af-feed-full ${extraClass}`.trim(), fullText);
+    full.id = uid("af-feed-full");
     full.hidden = true;
-    row.appendChild(full);
+    const copy = copyButton(fullText);
 
-    clickable(expanded(row, false), "", () => {
+    const toggle = expanded(labelled(button("af-feed-toggle", "▸"), "Show the whole message"), false);
+    toggle.setAttribute("aria-controls", full.id);
+    const flip = (): void => {
         full.hidden = !full.hidden;
-        expanded(row, !full.hidden);
+        expanded(toggle, !full.hidden);
+        toggle.textContent = full.hidden ? "▸" : "▾";
+        if (copy) {
+            copy.hidden = full.hidden;
+        }
+    };
+    toggle.addEventListener("click", e => {
+        e.stopPropagation();
+        flip();
     });
+    row.addEventListener("click", e => {
+        const target = e.target as Node;
+        if (full.contains(target) || copy?.contains(target) || endsASelection(row)) {
+            return;
+        }
+        flip();
+    });
+
+    // Last on the line, after the turn chip: the columns before it line up with
+    // rows that do not open, which keep its place empty (see the stylesheet).
+    row.append(toggle, full);
+    if (copy) {
+        copy.hidden = true;
+        row.appendChild(copy);
+    }
 }
 
 /** Append any activity entry, dispatching on its source. */
@@ -386,7 +452,7 @@ export function applyFilters(feed: HTMLElement, filters: FeedFilters): void {
     }
 }
 
-function labelled(text: string, control: HTMLElement): HTMLElement {
+function filterField(text: string, control: HTMLElement): HTMLElement {
     const wrap = el("label", "af-feed-filter");
     wrap.append(el("span", "", text), control);
     return wrap;
@@ -546,9 +612,9 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
 
     const toolbar = el("div", "af-feed-toolbar");
     toolbar.append(
-        labelled("show", source),
-        labelled("level", level),
-        labelled("find", search),
+        filterField("show", source),
+        filterField("level", level),
+        filterField("find", search),
         heartbeats,
         ...logActions(opts),
         active,

@@ -14,7 +14,7 @@
  * back to the only control that dismisses it.
  */
 
-import { button, dialog, el, focusables } from "../dom";
+import { button, dialog, el, trapTab } from "../dom";
 
 /** The overlay, its image and its close button, assembled but not yet wired. */
 function buildOverlay(url: string, alt: string): { overlay: HTMLElement; closeBtn: HTMLButtonElement } {
@@ -54,25 +54,11 @@ export function openLightbox(url: string, alt = ""): void {
         opener?.focus?.();
     };
 
-    const trapTab = (e: KeyboardEvent): void => {
-        const items = focusables(overlay);
-        if (!items.length) {
-            return;
-        }
-        e.preventDefault();
-        const current = items.indexOf(document.activeElement as HTMLElement);
-        const step = e.shiftKey ? -1 : 1;
-        // -1 (focus outside the dialog) lands on the first item going forward
-        // and the last going backward, which is where a trap should put it.
-        const next = (current + step + items.length) % items.length;
-        items[next]!.focus();
-    };
-
     const onKey = (e: KeyboardEvent): void => {
         if (e.key === "Escape") {
             close();
         } else if (e.key === "Tab") {
-            trapTab(e);
+            trapTab(overlay, e);
         }
     };
 

@@ -212,8 +212,38 @@ export function pressed<T extends HTMLElement>(control: T, on: boolean): T {
     return control;
 }
 
+/** What can take focus from the Tab key: a control that is not disabled, a link, a `<details>` summary, or anything given a tab stop. */
+const FOCUSABLE = [
+    "button:not([disabled])",
+    "input:not([disabled])",
+    "select:not([disabled])",
+    "textarea:not([disabled])",
+    "[href]",
+    "summary",
+    "[tabindex]:not([tabindex='-1'])",
+].join(", ");
+
 /** The elements inside `root` that can hold focus, in document order: what a
  *  modal dialog keeps the Tab key among. */
 export function focusables(root: HTMLElement): HTMLElement[] {
-    return [...root.querySelectorAll<HTMLElement>("button, [href], [tabindex]:not([tabindex='-1'])")];
+    return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
+}
+
+/**
+ * Keep Tab, and Shift+Tab, inside `root` while it is a modal dialog: past the
+ * last thing in it to the first, and back. Focus that is outside it goes to the
+ * first going forward, the last going back. Call it from the dialog's keydown
+ * handler on Tab; a dialog with nothing to focus leaves the key alone.
+ */
+export function trapTab(root: HTMLElement, e: KeyboardEvent): void {
+    const items = focusables(root);
+    if (!items.length) {
+        return;
+    }
+    e.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    const step = e.shiftKey ? -1 : 1;
+    const next =
+        current === -1 ? (e.shiftKey ? items.length - 1 : 0) : (current + step + items.length) % items.length;
+    items[next]!.focus();
 }

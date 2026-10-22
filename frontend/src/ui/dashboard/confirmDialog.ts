@@ -19,7 +19,7 @@
  */
 
 import { uid } from "../../ids";
-import { button, dialog, el, focusables, testId } from "../dom";
+import { button, dialog, el, testId, trapTab } from "../dom";
 
 /** What to ask, and what to call the button that agrees to it. */
 export interface ConfirmOptions {
@@ -89,25 +89,11 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
             resolve(answer);
         };
 
-        const trapTab = (e: KeyboardEvent): void => {
-            const items = focusables(overlay);
-            if (!items.length) {
-                return;
-            }
-            e.preventDefault();
-            const current = items.indexOf(document.activeElement as HTMLElement);
-            const step = e.shiftKey ? -1 : 1;
-            // -1 (focus outside the dialog) lands on the first item going forward
-            // and the last going backward, which is where a trap should put it.
-            const next = (current + step + items.length) % items.length;
-            items[next]!.focus();
-        };
-
         const onKey = (e: KeyboardEvent): void => {
             if (e.key === "Escape") {
                 settle(false);
             } else if (e.key === "Tab") {
-                trapTab(e);
+                trapTab(overlay, e);
             }
         };
 

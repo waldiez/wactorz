@@ -20,6 +20,7 @@ import {
     option,
     pressed,
     testId,
+    trapTab,
 } from "../ui/dom";
 
 describe("el", () => {
@@ -218,8 +219,69 @@ describe("focusables", () => {
         row.tabIndex = 0;
         const skipped = el("div");
         skipped.tabIndex = -1;
-        root.append(first, el("span"), link, skipped, row);
+        const field = el("input");
+        const summary = el("summary");
+        root.append(first, el("span"), link, skipped, row, field, summary);
 
-        expect(focusables(root)).toEqual([first, link, row]);
+        expect(focusables(root)).toEqual([first, link, row, field, summary]);
+    });
+
+    it("skips a disabled control, which cannot take focus", () => {
+        const root = el("div");
+        const off = button();
+        off.disabled = true;
+        const field = el("textarea");
+        field.disabled = true;
+        root.append(off, field);
+
+        expect(focusables(root)).toEqual([]);
+    });
+});
+
+describe("trapTab", () => {
+    function dialogWith(count: number): { root: HTMLElement; items: HTMLButtonElement[] } {
+        const root = el("div");
+        const items = Array.from({ length: count }, () => button());
+        root.append(...items);
+        document.body.appendChild(root);
+        return { root, items };
+    }
+
+    function tab(root: HTMLElement, shiftKey = false): KeyboardEvent {
+        const e = new KeyboardEvent("keydown", { key: "Tab", shiftKey, cancelable: true });
+        trapTab(root, e);
+        return e;
+    }
+
+    it("goes from the last to the first, and back with Shift", () => {
+        const { root, items } = dialogWith(3);
+        items[2]!.focus();
+
+        expect(tab(root).defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(items[0]);
+        tab(root, true);
+        expect(document.activeElement).toBe(items[2]);
+        root.remove();
+    });
+
+    it("brings focus from outside in: to the first going forward, the last going back", () => {
+        const { root, items } = dialogWith(2);
+        const outside = document.body.appendChild(button());
+        outside.focus();
+
+        tab(root);
+        expect(document.activeElement).toBe(items[0]);
+        outside.focus();
+        tab(root, true);
+        expect(document.activeElement).toBe(items[1]);
+        root.remove();
+        outside.remove();
+    });
+
+    it("leaves the key alone in a dialog with nothing to focus", () => {
+        const { root } = dialogWith(0);
+
+        expect(tab(root).defaultPrevented).toBe(false);
+        root.remove();
     });
 });

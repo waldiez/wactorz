@@ -50,6 +50,9 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 - [ ] Instantiated in the matching numbered section of `main.ts` (see its header map)
 - [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
 - [ ] What a person acts on or reads has a role and a name (see [Finding elements](#finding-elements))
+- [ ] A new view needs nothing for its address: `src/router.ts` gives every view `#/<key>`, an
+      extension's included. A view with levels of its own (`#/models/hvac/versions/7`) reads them
+      from `Route.path` in `ui/dashboard/viewRoutes.ts`, and reports where it is with `af-view-changed`
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)

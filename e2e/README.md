@@ -73,6 +73,8 @@ Fix rather than list where it is in reach.
 | 09 | The server restarts: its agents, the node's agents, the conversations and the open tab all carry on. |
 | 10 | Agents are deleted one by one, then everything is wiped: what is left is what a fresh install runs, and the node, still deployed and running nothing. |
 | 11 | Main's model checks the node's disk by a named operation and is refused a command of its own; `/nodes run` runs one; an agent needing a package nobody allowed waits for the operator's answer on a notice, and the installer's thread opens while it asks. |
+| 12 | Code the model writes runs on main until a node is set for it; then the agents that can move there do, the chat says which stayed and why, and new ones start there. |
+| 13 | The address names the open view: a refresh returns to it, Back steps through the views visited, a link opens the conversation it names, and an address with no view opens the last one. |
 
 ## Order
 

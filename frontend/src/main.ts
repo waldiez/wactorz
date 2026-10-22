@@ -65,6 +65,7 @@ import {
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
 import { NodePresence } from "./agents/nodePresence";
+import { startRouter } from "./router";
 import { STALE_MS } from "./ui/dashboard/agentState";
 
 // ═══ 1 · Deployment env & service URLs ══════════════════════════════════════
@@ -124,6 +125,8 @@ window.addEventListener("error", e => {
 });
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
+// Before the dashboard mounts: the first view it opens sets the address.
+const stopRouter = startRouter();
 const agentStore = new AgentStore();
 agentStore.mount();
 const router = new ServerEventRouter();
@@ -566,6 +569,7 @@ function teardown(): void {
     window.clearInterval(_liveActorsTimer);
     ws.disconnect();
     agentStore.dispose();
+    stopRouter();
     // Detaches the window drag listeners it put up; null when uploads are off.
     _dropZone?.destroy();
     _dropZone = null;

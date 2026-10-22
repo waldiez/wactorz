@@ -23,6 +23,7 @@ import {
     setHaNavUrl,
     releaseHeaderPopovers,
     releaseBottomNav,
+    renderConnBadge,
 } from "./dashboard/header";
 import { setSignOutVisible } from "./dashboard/signOut";
 import { NODE_EVICT_MS, stateLabel, sortAgents } from "./dashboard/agentState";
@@ -40,6 +41,8 @@ import { MetricsController } from "./dashboard/metrics";
 import { confirmDialog } from "./dashboard/confirmDialog";
 import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
+import { initialRoute } from "../router";
+import { ViewRoutes } from "./dashboard/viewRoutes";
 
 export { NODE_EVICT_MS };
 
@@ -80,6 +83,9 @@ export class CardDashboard {
     private _wipeAll: ((e: Event) => void) | null = null;
     private _agentsSettled: ((e: Event) => void) | null = null;
     private _clearFeed: ((e: Event) => void) | null = null;
+    private _evRoute: EventListener | null = null;
+    /** Opening what the address names, and saying where the dashboard is. */
+    private _routes: ViewRoutes;
 
     /** HA base URL (seeded from /api/config) — the Devices nav button links to it. */
     private get haUrl(): string | null {
@@ -101,6 +107,13 @@ export class CardDashboard {
             getView: () => this.view,
             renderStats: () => this._overview.renderStats(),
             renderView: () => this._renderView(),
+        });
+        this._routes = new ViewRoutes({
+            view: () => this.view,
+            setView: v => this._setView(v),
+            render: () => this._renderView(),
+            chatTarget: () => this._chat.chatTarget,
+            setChatTarget: name => this._chat.setTarget(name),
         });
         this._overview = new OverviewView({
             root: this.root,
@@ -144,7 +157,7 @@ export class CardDashboard {
         agents.forEach(a => this.agents.set(a.id, a));
         this.root.classList.add("cd-visible");
         this._wireEvents();
-        this._renderView();
+        this._routes.open(initialRoute());
         this.tickTimer = setInterval(() => {
             if (!document.hidden) {
                 this._heartbeats.refresh();
@@ -366,6 +379,7 @@ export class CardDashboard {
         if (this.root.classList.contains("cd-visible")) {
             this._rebuildNav();
         }
+        this._routes.registered(key);
     }
 
     /** Seed runtime config from /api/config and point the Devices nav link at it. */
@@ -384,9 +398,10 @@ export class CardDashboard {
         this._activity.wire();
         this._evConn = listen("af-connection-status", detail => {
             this.connState = detail.status;
-            this._renderConnBadge();
+            renderConnBadge(this.root, this.connState);
             this._renderHealth();
         });
+        this._evRoute = listen("af-route", route => this._routes.open(route));
     }
 
     private _wireFeedEvents(): void {
@@ -421,6 +436,7 @@ export class CardDashboard {
             ["af-wipe-all", this._wipeAll],
             ["af-agents-settled", this._agentsSettled],
             ["af-clear-feed", this._clearFeed],
+            ["af-route", this._evRoute],
         ];
         pairs.forEach(([name, fn]) => {
             if (fn) {
@@ -428,7 +444,7 @@ export class CardDashboard {
             }
         });
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
-        this._agentsSettled = null;
+        this._agentsSettled = this._evRoute = null;
     }
 
     private _renderView(): void {
@@ -507,21 +523,9 @@ export class CardDashboard {
             this._activity.release();
         }
         this.view = v;
+        this._routes.moved();
         this._renderView();
-    }
-
-    private _renderConnBadge(): void {
-        const badge = this.root.querySelector<HTMLElement>(".af-conn-badge");
-        if (!badge) {
-            return;
-        }
-        badge.className = `af-conn-badge af-conn-${this.connState}`;
-        badge.textContent =
-            this.connState === "live"
-                ? "● live"
-                : this.connState === "connecting"
-                  ? "○ Connecting…"
-                  : "◎ Disconnected…";
+        emit("af-view-changed", this._routes.current());
     }
 
     private _renderHealth(): void {
@@ -586,7 +590,7 @@ export class CardDashboard {
                 extraViews: this._extraViews,
             });
             oldHeader.replaceWith(newHeader);
-            this._renderConnBadge();
+            renderConnBadge(this.root, this.connState);
             this._renderHealth();
         }
         if (oldBottomNav) {

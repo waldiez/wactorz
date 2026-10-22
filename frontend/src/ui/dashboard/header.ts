@@ -217,12 +217,28 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
     const title = el("span", "af-title", "Wactorz");
     // Read out when it changes, so losing the server is heard and not only seen.
     const connBadge = testId(
-        live(el("span", `af-conn-badge af-conn-${connState}`, "○ Connecting…"), "status"),
+        live(el("span", `af-conn-badge af-conn-${connState}`, CONN_TEXT[connState]), "status"),
         "connection",
     );
 
     left.append(icon, title, buildVersion(), connBadge);
     return left;
+}
+
+/** What the connection badge says in each state. */
+const CONN_TEXT: Record<ConnState, string> = {
+    live: "● live",
+    connecting: "○ Connecting…",
+    disconnected: "◎ Disconnected…",
+};
+
+/** Show `state` on the connection badge under `root`, if the header is there. */
+export function renderConnBadge(root: ParentNode, state: ConnState): void {
+    const badge = root.querySelector<HTMLElement>(".af-conn-badge");
+    if (badge) {
+        badge.className = `af-conn-badge af-conn-${state}`;
+        badge.textContent = CONN_TEXT[state];
+    }
 }
 
 /** A square icon-only header button, labelled for anyone not seeing the icon. */

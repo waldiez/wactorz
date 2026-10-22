@@ -180,6 +180,8 @@ class Dashboard:
         self.page.goto(self.base_url, wait_until="domcontentloaded")
         self.submit_key(key)
         self._wait_until_drawn()
+        # A first visit opens the overview; its cards say the agents have loaded.
+        self.page.get_by_test_id("agent-card").first.wait_for(state="visible")
         return self
 
     def submit_key(self, key: str) -> Dashboard:
@@ -197,9 +199,32 @@ class Dashboard:
 
     def _wait_until_drawn(self) -> None:
         # The page builds its own DOM, so the document finishing loading says
-        # nothing about there being anything on screen.
+        # nothing about there being anything on screen. Whichever view it opens:
+        # the address, or the view last open, decides that.
         self._nav_button("overview").wait_for(state="visible")
-        self.page.get_by_test_id("agent-card").first.wait_for(state="visible")
+        self.page.locator("[data-testid^='view-']").first.wait_for(state="visible")
+
+    def open_address(self, hash_: str) -> Dashboard:
+        """Load the dashboard at ``hash_`` (``#/feed``), as a link or a typed address does."""
+        self.page.goto(f"{self.base_url.rstrip('/')}/{hash_}", wait_until="domcontentloaded")
+        self._wait_until_drawn()
+        return self
+
+    def back(self) -> Dashboard:
+        """Press the browser's Back button."""
+        self.page.go_back(wait_until="commit")
+        return self
+
+    @property
+    def view(self) -> str:
+        """The view on screen, by its key."""
+        mounted = self.page.locator("[data-testid^='view-']").first
+        return (mounted.get_attribute("data-testid") or "").removeprefix("view-")
+
+    @property
+    def address(self) -> str:
+        """The hash of the page's address: where a refresh returns to."""
+        return str(self.page.evaluate("() => location.hash"))
 
     @property
     def at_sign_in(self) -> bool:

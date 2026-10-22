@@ -2,6 +2,7 @@
     "$schema": "https://typedoc.org/schema.json",
     "entryPoints": ["src"],
     "entryPointStrategy": "expand",
+    "exclude": ["src/__tests__/**"],
     "out": "../site/api/js",
     "name": "Wactorz JS",
     "readme": "none",

@@ -314,8 +314,15 @@ lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs
 # no fixed release exists there; every other Python, the images included, locks
 # 13. Remove them when Python 3.10 is dropped or Pillow ships a fix for it.
 AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
-	GHSA-q45j-58j2-45rg GHSA-462x-pgg6-55fp GHSA-8g5g-8vmr-9782 GHSA-c6hw-5grf-ff96 \
-	GHSA-p4wg-p73j-c528 GHSA-pchr-8j38-3x4p
+	GHSA-q45j-58j2-45rg GHSA-462x-pgg6-55fp GHSA-8g5g-8vmr-9782 \
+	GHSA-c6hw-5grf-ff96 GHSA-p4wg-p73j-c528 GHSA-pchr-8j38-3x4p \
+	GHSA-rfgq-q3w2-pmv2 GHSA-w889-685w-c8fh GHSA-xgh8-jp6q-p5x8 \
+	GHSA-xvh5-g6gv-559v GHSA-27h8-gf7j-v5hc GHSA-f2g6-542v-9j58 \
+	GHSA-fc9g-5qg7-mf45 GHSA-j4m9-6w36-pw47 GHSA-jg86-v3jv-hrpm \
+	GHSA-74r2-7ff9-mjj2 GHSA-4558-3h8r-v8xp GHSA-gg2r-wvfm-q9rx \
+	GHSA-cp9v-662q-vvx9 GHSA-332p-7hrc-92wf GHSA-4rr5-89j8-mwwm \
+	GHSA-5xm2-6676-qcp9 GHSA-22hg-r758-rrw9 GHSA-254f-3936-288h \
+	GHSA-7mwm-ghpf-9vrm
 
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)

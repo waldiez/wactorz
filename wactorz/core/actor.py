@@ -31,7 +31,15 @@ from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_chann
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
-from .questions import QUESTIONS_KEY, Question, answered, book_of, questions_in
+from .questions import (
+    QUESTIONS_KEY,
+    Question,
+    answered,
+    book_frame,
+    book_of,
+    questions_in,
+    questions_topic,
+)
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
@@ -586,9 +594,12 @@ class Actor(ABC):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
         # A question asked before a restart is still open: listen for its
-        # answer, which goes to `on_operator_answer` since nothing awaits it.
+        # answer, which goes to `on_operator_answer` since nothing awaits it,
+        # and say again what the book holds, for a reader that missed it.
         if self.open_questions():
             self._hear_answers()
+        if self.questions():
+            await self._publish_questions()
         # Outside whatever turn started this actor: each message brings its own.
         self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
         self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
@@ -1919,7 +1930,7 @@ class Actor(ABC):
             user=str(user).strip(),
             asked_at=time.time(),
         )
-        self._write_question(question)
+        await self._write_question(question)
         try:
             return await self.wait_for_answer(question_id, timeout=timeout)
         except asyncio.TimeoutError:
@@ -1932,7 +1943,7 @@ class Actor(ABC):
             options=options,
             id=question_id,
         )
-        self._write_question(
+        await self._write_question(
             Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
         )
         return await self.wait_for_answer(question_id, timeout=timeout)
@@ -1996,11 +2007,24 @@ class Actor(ABC):
             question.answer_channel,
         )
 
-    def _write_question(self, question: Question) -> None:
-        """Put ``question`` in the book, replacing its earlier record."""
+    async def _write_question(self, question: Question) -> None:
+        """Put ``question`` in the book, replacing its earlier record, and say so."""
         book = self.questions()
         book[question.id] = question
         self.persist(QUESTIONS_KEY, book_of(book))
+        await self._publish_questions()
+
+    async def _publish_questions(self) -> None:
+        """Publish the book, retained, for whoever shows a person what is waiting.
+
+        QoS 1: a lost frame leaves a question asked on no screen.
+        """
+        await self._mqtt_publish(
+            questions_topic(self.actor_id),
+            book_frame(self.name, self.questions()),
+            retain=True,
+            qos=1,
+        )
 
     def _hear_answers(self) -> None:
         """Listen on this actor's answer topic, once."""
@@ -2023,8 +2047,8 @@ class Actor(ABC):
                 "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
             )
             return
-        settled = answered(question, answer.option, answer.index, answer.channel)
-        self._write_question(settled)
+        settled = answered(question, answer.option, answer.index, answer.channel, answer.note)
+        await self._write_question(settled)
         waiting = self._answer_waiters.pop(answer.id, None)
         if waiting is not None and not waiting[0].done():
             waiting[0].set_result(answer.option)

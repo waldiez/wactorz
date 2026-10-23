@@ -327,6 +327,10 @@ class ArtifactConflictError(ArtifactError):
         return cls(f"{name} has no shadow version to promote")
 
     @classmethod
+    def nothing_to_roll_back(cls, name: str) -> "ArtifactConflictError":
+        return cls(f"{name}'s active version has no earlier one to go back to")
+
+    @classmethod
     def in_use(cls, name: str, version: int, which: str) -> "ArtifactConflictError":
         return cls(f"{name}:{version} is the {which} version; move the pointer first")
 
@@ -693,20 +697,37 @@ class ArtifactStore:
             raise ArtifactError.names_the_pointer(reference, which, name)
         with self._locked():
             artifacts, pointers = self._read_all()
-            target = _resolve_in(artifacts, pointers, name, selector, reference)
-            standing = pointers.get(name, {})
-            current = standing.get(which)
-            if current is not None and current["version"] == target.version:
-                raise ArtifactConflictError.already(target.reference, which)
-            other = "shadow" if which == "active" else "active"
-            if standing.get(other, {}).get("version") == target.version:
-                if which == "shadow":
-                    raise ArtifactConflictError.shadow_is_active(target.reference)
-                standing.pop(other, None)
-            standing[which] = _pointer_entry(target, current, by, reason)
-            pointers[name] = standing
+            moved = _move_in(artifacts, pointers, which, name, selector, reference, by, reason)
             self._write_all(artifacts, pointers)
-        return _pointer(name, which, standing[which])
+        return moved
+
+    def rollback(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
+        """Move ``name``'s ``active`` back to the version it named before its last move.
+
+        One step back is all the store keeps: a pointer records the version it
+        left, not the one before that. Done as one change under the lock, so a
+        move made meanwhile is either stepped back from or seen first. The
+        move follows `move`'s rules, so stepping back onto the shadow version
+        promotes it. Raises `ArtifactConflictError` when ``active`` is unset or
+        has nowhere to go back to.
+        """
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            artifacts, pointers = self._read_all()
+            active = pointers.get(name, {}).get("active")
+            if active is None:
+                raise ArtifactConflictError.unset(name, "active")
+            previous = active.get("previous")
+            if previous is None:
+                raise ArtifactConflictError.nothing_to_roll_back(name)
+            reference = f"{name}:{previous}"
+            moved = _move_in(
+                artifacts, pointers, "active", name, int(previous), reference, by, reason
+            )
+            self._write_all(artifacts, pointers)
+        return moved
 
     def clear(self, which: str, name: str) -> Pointer:
         """Unset ``name``'s ``which`` pointer; what it was. Raises `ArtifactError` when it was unset.
@@ -880,6 +901,32 @@ def _pointer(name: str, which: str, entry: Mapping[str, Any]) -> Pointer:
 
 def _pointers_of(name: str, pointers: Mapping[str, dict[str, Any]]) -> dict[str, Pointer]:
     return {which: _pointer(name, which, entry) for which, entry in pointers.get(name, {}).items()}
+
+
+def _move_in(
+    artifacts: Mapping[str, list[dict[str, Any]]],
+    pointers: dict[str, dict[str, Any]],
+    which: str,
+    name: str,
+    selector: Selector,
+    reference: str,
+    by: str,
+    reason: str | None,
+) -> Pointer:
+    """`ArtifactStore.move`, over an index already read and held: changes ``pointers``."""
+    target = _resolve_in(artifacts, pointers, name, selector, reference)
+    standing = pointers.get(name, {})
+    current = standing.get(which)
+    if current is not None and current["version"] == target.version:
+        raise ArtifactConflictError.already(target.reference, which)
+    other = "shadow" if which == "active" else "active"
+    if standing.get(other, {}).get("version") == target.version:
+        if which == "shadow":
+            raise ArtifactConflictError.shadow_is_active(target.reference)
+        standing.pop(other, None)
+    standing[which] = _pointer_entry(target, current, by, reason)
+    pointers[name] = standing
+    return _pointer(name, which, standing[which])
 
 
 def _pointer_entry(

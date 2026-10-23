@@ -19,9 +19,11 @@ from ..config import CONFIG, MAX_REQUEST_BYTES
 from ..core.paths import ensure_state_dir
 from ..monitoring import http_metrics
 from . import (
+    answers,
     api_actors,
     api_log_capture,
     api_logs,
+    api_models,
     api_reset,
     api_system,
     api_uploads,
@@ -34,6 +36,7 @@ from . import (
     mqtt,
     origins,
     probes,
+    questions,
     runtime,
     sessions,
     static_site,
@@ -198,6 +201,17 @@ def build_app() -> web.Application:
     app.router.add_get("/api/feed", api_system.feed_handler)
     app.router.add_get("/feed", api_system.feed_handler)
     app.router.add_post("/api/reset", api_reset.reset_handler)
+    # `/api/` only, as every route added since `/api/logs`: the bare pairs above
+    # are kept for the clients that called them before the prefix.
+    app.router.add_get("/api/models", api_models.models_handler)
+    app.router.add_get("/api/models/{name}", api_models.model_handler)
+    app.router.add_post("/api/models/{name}/active", api_models.set_active_handler)
+    app.router.add_post("/api/models/{name}/shadow", api_models.set_shadow_handler)
+    app.router.add_delete("/api/models/{name}/shadow", api_models.clear_shadow_handler)
+    app.router.add_post("/api/models/{name}/promote", api_models.promote_handler)
+    app.router.add_post("/api/models/{name}/rollback", api_models.rollback_handler)
+    app.router.add_get("/api/questions", questions.questions_handler)
+    app.router.add_post("/api/questions/{agent_id}/{question_id}/answer", answers.answer_handler)
 
     # Extensions (wactorz/ext/): additive features register their own routes
     # and startup/teardown hooks here. Must run BEFORE the docs/static

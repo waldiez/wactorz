@@ -205,6 +205,8 @@ class Answer:
 
     ``option`` is the text picked and ``index`` its place among the options,
     from zero; ``channel`` and ``user`` say where and by whom it was picked.
+    ``note`` is what the person added in their own words, where the channel
+    lets them: empty otherwise.
     """
 
     id: str
@@ -214,6 +216,7 @@ class Answer:
     channel: str
     user: str = ""
     timestamp: float = 0.0
+    note: str = ""
 
     @property
     def topic(self) -> str:
@@ -230,6 +233,7 @@ class Answer:
             "user": self.user,
             "from": "user",
             "timestamp": self.timestamp or time.time(),
+            **({"note": self.note} if self.note else {}),
         }
 
     @classmethod
@@ -253,7 +257,17 @@ class Answer:
             channel=str(payload.get("channel") or "").strip().lower(),
             user=str(payload.get("user") or "").strip(),
             timestamp=timestamp,
+            note=note_text(payload.get("note")),
         )
+
+
+#: The longest note an answer carries. A note is a sentence or two beside a pick.
+MAX_NOTE_CHARS = 500
+
+
+def note_text(raw: Any) -> str:
+    """``raw`` as an answer's note: trimmed and cut to `MAX_NOTE_CHARS`, empty for anything not text."""
+    return raw.strip()[:MAX_NOTE_CHARS] if isinstance(raw, str) else ""
 
 
 def numbered(text: str, options: Sequence[str]) -> str:

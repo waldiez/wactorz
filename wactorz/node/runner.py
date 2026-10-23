@@ -69,6 +69,7 @@ from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
+from ..core.topics import RETAINED_AGENT_LEAVES
 from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
@@ -99,20 +100,6 @@ SHUTDOWN_TIMEOUT_S = 5.0
 #: main can tell a node running the package from one still running the old
 #: single-file runner, which said ``runner``.
 NODE_RUNTIME = "node"
-
-#: The retained topics an agent leaves behind, cleared when it is deleted.
-AGENT_RETAINED_TOPICS = (
-    "status",
-    "heartbeat",
-    "metrics",
-    "logs",
-    "spawned",
-    "manifest",
-    "errors",
-    "detections",
-    "results",
-    "completed",
-)
 
 
 class NotHostableError(TypeError):
@@ -693,7 +680,7 @@ class NodeRunner:
         topic. The runner does it because it has the connection open and knows
         the actor id, so the purge works even when main is unreachable.
         """
-        for leaf in AGENT_RETAINED_TOPICS:
+        for leaf in RETAINED_AGENT_LEAVES:
             try:
                 await self.publish(f"agents/{actor_id}/{leaf}", b"", retain=True)
             except Exception as e:

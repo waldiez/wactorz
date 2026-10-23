@@ -13,7 +13,9 @@ from typing import Any
 
 from ..agents.llm.cost import get_global_alltime_cost
 from ..core import outbound
+from ..core.questions import QUESTIONS_LEAF
 from . import cost, runtime
+from . import questions as question_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -236,12 +238,19 @@ def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[s
     # status.
     if metric == "manifest" and not payload_str.strip():
         runtime.state["agents"].pop(agent_id, None)
+        question_ledger.forget(agent_id)
         runtime.mark_deleted(agent_id)
         logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
         return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
 
     if metric == "status" and isinstance(data, dict) and runtime.is_deleted(agent_id):
         _readmit_if_respawned(agent_id, data)
+
+    # Deleting an agent clears its retained book, so a cleared one is heard
+    # even for an agent already marked deleted: the mark expires, and a book
+    # kept past it would bring the agent's questions back.
+    if metric == QUESTIONS_LEAF and not payload_str.strip():
+        question_ledger.forget(agent_id)
 
     # If the agent was just deleted, update_agent() refuses to recreate
     # the entry — so any direct state["agents"][agent_id] access in a
@@ -428,8 +437,13 @@ def _on_answer(agent_id: str, data: Any) -> None:
             "index": answer.index,
             "channel": answer.channel,
             "timestamp": answer.timestamp or time.time(),
+            **({"note": answer.note} if answer.note else {}),
         }
     )
+
+
+def _on_questions(agent_id: str, data: Any) -> None:
+    question_ledger.record(agent_id, data)
 
 
 def _on_completed(agent_id: str, data: Any) -> None:
@@ -472,6 +486,7 @@ _AGENT_HANDLERS: dict[str, Callable[[str, Any], dict[str, Any] | None]] = {
     "spawned": _on_spawned,
     "chat": _on_chat,
     outbound.ANSWER_LEAF: _on_answer,
+    QUESTIONS_LEAF: _on_questions,
     "completed": _on_completed,
     "alert": _on_alert,
 }

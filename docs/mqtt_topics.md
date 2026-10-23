@@ -354,7 +354,28 @@ A message that offers the person a choice, or goes to a chat channel, carries mo
 }
 ```
 
-`id` is the message's; `index` is the option's place among those offered, from zero.
+`id` is the message's; `index` is the option's place among those offered, from zero. A `note`, when the person added one in their own words (`POST /api/questions/{agent_id}/{question_id}/answer` takes one), comes beside the pick; a frame without one is as before.
+
+---
+
+### `agents/{id}/questions`
+**Published by:** The agent that asked
+**Retained:** yes
+**Trigger:** When the agent starts, if it has asked anything, and whenever it asks a question or one is answered
+**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back. Cleared when the agent is deleted.
+
+```json
+{
+  "agent": "hvac-watch",
+  "questions": [
+    {"id": "3f2a…", "text": "Did something change at 14:02?",
+     "options": ["maintenance", "real problem"], "channel": "telegram", "user": "123456789",
+     "asked_at": 1760000000.0, "answer": "maintenance", "answer_index": 0,
+     "answer_channel": "telegram", "answered_at": 1760000600.0,
+     "answer_note": "valve replaced at 14:02", "fallen_back": false}
+  ]
+}
+```
 
 ---
 
@@ -724,6 +745,7 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `agents/{name}/data/{key}` | Dynamic / remote agents | World-state helper |
 | `agents/{id}/chat` | Every agent | On chat output |
 | `agents/{id}/answer` | A chat channel, or the dashboard server | The person picks one of a message's options |
+| `agents/{id}/questions` | The agent that asked | Retained: its question book; at start and on each question or answer |
 | `agents/{id}/spawn` | Discoverable agents | On startup (self-announce) |
 | `system/health` | Monitor agent | Every 15s |
 | `system/host` | Monitor agent | Every 15s |

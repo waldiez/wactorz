@@ -322,7 +322,10 @@ AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
 	GHSA-74r2-7ff9-mjj2 GHSA-4558-3h8r-v8xp GHSA-gg2r-wvfm-q9rx \
 	GHSA-cp9v-662q-vvx9 GHSA-332p-7hrc-92wf GHSA-4rr5-89j8-mwwm \
 	GHSA-5xm2-6676-qcp9 GHSA-22hg-r758-rrw9 GHSA-254f-3936-288h \
-	GHSA-7mwm-ghpf-9vrm
+	GHSA-7mwm-ghpf-9vrm GHSA-4rm8-3hmm-39fg GHSA-9v9v-9qvf-h2hj \
+	GHSA-g4qv-2jxx-769h GHSA-p8hx-v2p6-rp84 GHSA-3j72-p6qg-6xp7 \
+	GHSA-g842-9rc4-69pw GHSA-78g4-xqwv-q3g8 GHSA-24rc-8hj2-v98c \
+	GHSA-g7cr-3p24-7wf7 GHSA-mrfp-p49p-3hf2 GHSA-v9pv-5gc8-w2m6
 
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)

@@ -1,6 +1,7 @@
 """Strict recipe installation keeps the generic and security contracts intact."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,13 +19,14 @@ def test_strict_installation_is_only_declared_by_the_robot_recipe() -> None:
         "reachy-mini"
     }
     assert not catalog["anomaly-detector"].get("require_install_success", False)
+    assert catalog["reachy-mini"]["minimum_python"] == [3, 11]
 
 
 async def test_python310_refuses_robot_before_any_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     catalog = CatalogAgent(persistence_dir=str(tmp_path))
-    monkeypatch.setattr(catalog_agent.sys, "version_info", (3, 10, 0))
+    monkeypatch.setattr(catalog_agent, "sys", SimpleNamespace(version_info=(3, 10, 0)))
     result = await catalog._action_spawn("reachy-mini", {})
     assert not result["ok"]
     assert "requires Python 3.11+" in result["message"]
@@ -83,6 +85,7 @@ async def test_catalogue_failure_policies_are_independent(
 ) -> None:
     catalog = CatalogAgent(persistence_dir=str(tmp_path))
     # Registry persistence is covered separately; this test isolates spawning.
+    monkeypatch.setattr(catalog_agent, "sys", SimpleNamespace(version_info=(3, 11, 0)))
     monkeypatch.setattr(catalog_agent, "find_main_actor", lambda _registry: _Main(tmp_path))
     monkeypatch.setattr(catalog, "_mqtt_publish", _ignore_publish)
     monkeypatch.setattr(catalog, "notify_user", _ignore_publish)

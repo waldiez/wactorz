@@ -17,6 +17,7 @@ this process had already loaded cannot work until a restart.
 import asyncio
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -115,7 +116,10 @@ class _Broker:
 
 
 @pytest.fixture(name="catalog")
-def catalog_fixture(tmp_path: Path) -> CatalogAgent:
+def catalog_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CatalogAgent:
+    # Installer/actor fakes exercise policy on a supported robot runtime. The
+    # real Python floor is covered independently in test_reachy_core_integration.
+    monkeypatch.setattr(catalog_agent, "sys", SimpleNamespace(version_info=(3, 11, 0)))
     catalog = CatalogAgent(persistence_dir=str(tmp_path))
     catalog._mqtt_client = _Broker()
     return catalog

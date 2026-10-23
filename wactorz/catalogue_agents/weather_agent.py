@@ -577,9 +577,19 @@ def _is_weather_query(text: str) -> bool:
     return bool(_WEATHER_VOCAB.search(text) or _TEMPORAL_VOCAB.search(text))
 
 
+def local_today() -> date:
+    """Today's date where the server is: what "today" and "tomorrow" mean to the person asking.
+
+    UTC would be wrong for most people. The limit this leaves: forecast rows are
+    dated in the location's own timezone, so for a place far enough east or west
+    the today/tomorrow labels can be a day off.
+    """
+    return datetime.now().astimezone().date()
+
+
 def parse_query(raw: str, today: date | None = None) -> dict[str, Any]:
     """Deterministic natural-language → intent payload. Pure / testable."""
-    today = today or date.today()
+    today = today or local_today()
     text = (raw or "").strip()
     if not text:
         return {"action": "current"}
@@ -848,7 +858,7 @@ class WeatherAgent(Actor):
                     days=max(1, min(_MAX_FORECAST_DAYS, int(payload.get("days") or 3))),
                 )
         elif action == "history":
-            date_str = payload.get("date") or (date.today() - timedelta(days=1)).isoformat()
+            date_str = payload.get("date") or (local_today() - timedelta(days=1)).isoformat()
             res = await self._history(location, date_str, units)
         else:
             return {
@@ -988,7 +998,7 @@ class WeatherAgent(Actor):
             }
         lat, lon, label = geo
 
-        today = date.today()
+        today = local_today()
         if date_to:
             horizon = (datetime.strptime(date_to, "%Y-%m-%d").date() - today).days + 1  # noqa: DTZ007  # a bare date, and .date() is taken at once
             fdays = max(1, min(_MAX_FORECAST_DAYS, horizon))
@@ -1026,10 +1036,10 @@ class WeatherAgent(Actor):
             }
         lat, lon, label = geo
         if date_str.lower() == "yesterday":
-            date_str = (date.today() - timedelta(days=1)).isoformat()
+            date_str = (local_today() - timedelta(days=1)).isoformat()
 
         target = datetime.strptime(date_str, "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
-        delta = (date.today() - target).days
+        delta = (local_today() - target).days
         daily = "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum"
         # The archive API lags ~5 days; for recent days the forecast API's
         # past_days window is the reliable source.
@@ -1125,7 +1135,7 @@ class WeatherAgent(Actor):
 
         if kind == "forecast":
             rows = result["forecast"]
-            today = date.today()
+            today = local_today()
             if len(rows) == 1:
                 r = rows[0]
                 d = datetime.strptime(r["date"], "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once

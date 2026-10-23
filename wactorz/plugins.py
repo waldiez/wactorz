@@ -186,6 +186,22 @@ def _first_line(text: str | None) -> str:
     return (text or "").strip().split("\n")[0].strip()
 
 
+class NotAnAgentError(TypeError):
+    """A plugin target that is neither a declared function nor an Actor subclass."""
+
+    def __init__(self, named: Any) -> None:
+        super().__init__(
+            f"{named!r} is neither a function declared with @wactorz.agent nor an Actor subclass"
+        )
+
+
+class NotATargetError(ValueError):
+    """A plugin target not written as package.module:attr."""
+
+    def __init__(self, target: str) -> None:
+        super().__init__(f"{target!r} is not of the form package.module:attr")
+
+
 def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
     """The plugin for a decorated function or an Actor subclass.
 
@@ -224,17 +240,14 @@ def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
             subscribes=_topics(getattr(obj, "SUBSCRIBES", ())),
             publishes=_topics(getattr(obj, "PUBLISHES", ())),
         )
-    raise TypeError(
-        f"{target or obj!r} is neither a function declared with @wactorz.agent "
-        "nor an Actor subclass"
-    )
+    raise NotAnAgentError(target or obj)
 
 
 def resolve_target(target: str) -> Any:
     """The object ``package.module:attr`` names. Raises what the import raises."""
     module_name, sep, attr = target.strip().partition(":")
     if not module_name or not sep or not attr:
-        raise ValueError(f"{target!r} is not of the form package.module:attr")
+        raise NotATargetError(target)
     obj: Any = importlib.import_module(module_name)
     for part in attr.split("."):
         obj = getattr(obj, part)

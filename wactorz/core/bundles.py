@@ -56,6 +56,77 @@ BUNDLES_DIRNAME = "..bundles"
 class BundleError(Exception):
     """A library agent's code cannot be sent, or what arrived cannot be used."""
 
+    # ── Packing, on main ──────────────────────────────────────────────────
+
+    @classmethod
+    def no_module(cls, target: Any) -> "BundleError":
+        return cls(f"{target!r} names no module")
+
+    @classmethod
+    def not_importable(cls, module_name: str, exc: Exception) -> "BundleError":
+        return cls(f"its module {module_name} cannot be imported here: {exc}")
+
+    @classmethod
+    def no_files(cls, module_name: str, root: Path) -> "BundleError":
+        return cls(f"no Python files were found for {module_name} in {root}")
+
+    @classmethod
+    def too_large(cls, folder: Path, size: int) -> "BundleError":
+        return cls(
+            f"its folder {folder} holds {size} bytes of Python, over "
+            f"the {BUNDLE_MAX_BYTES} a bundle may hold"
+        )
+
+    @classmethod
+    def not_from_a_file(cls, module_name: str) -> "BundleError":
+        return cls(f"{module_name} is not read from a file, so it cannot be sent")
+
+    @classmethod
+    def imports_outside(cls, named: str) -> "BundleError":
+        return cls(
+            f"it imports code from outside its folder: {named}. An agent's own code has to "
+            "live in its folder to go with it. Move that code into the folder, publish it as "
+            "a package and list it in requires, or install it on the node and name the agent "
+            "in WACTORZ_AGENTS there"
+        )
+
+    @classmethod
+    def does_not_parse(cls, relative: str, exc: SyntaxError) -> "BundleError":
+        return cls(f"{relative} does not parse: {exc}")
+
+    # ── Checking what arrived, on a node ──────────────────────────────────
+
+    @classmethod
+    def not_a_bundle(cls) -> "BundleError":
+        return cls("its code is not a bundle")
+
+    @classmethod
+    def empty(cls) -> "BundleError":
+        return cls("its bundle holds no files")
+
+    @classmethod
+    def not_sources(cls) -> "BundleError":
+        return cls("its bundle holds something other than source files")
+
+    @classmethod
+    def bad_path(cls, relative: str) -> "BundleError":
+        return cls(f"its bundle names {relative!r}, which is not a file it may hold")
+
+    @classmethod
+    def hash_mismatch(cls) -> "BundleError":
+        return cls("its bundle does not match the hash the spawn names")
+
+    @classmethod
+    def not_from_spawn(cls, target: str) -> "BundleError":
+        return cls(f"{target} was not loaded from the code its spawn carries")
+
+    @classmethod
+    def name_taken(cls, name: str, where: str) -> "BundleError":
+        return cls(
+            f"this node already has a module named {name}, from {where}; give the agent's "
+            "module a name of its own"
+        )
+
 
 # ── Main: packing an agent's folder ───────────────────────────────────────────
 
@@ -68,21 +139,18 @@ def bundle_for(target: str) -> dict[str, Any]:
     """
     module_name = target.partition(":")[0].strip()
     if not module_name:
-        raise BundleError(f"{target!r} names no module")
+        raise BundleError.no_module(target)
     try:
         module = sys.modules.get(module_name) or importlib.import_module(module_name)
     except ImportError as exc:
-        raise BundleError(f"its module {module_name} cannot be imported here: {exc}") from exc
+        raise BundleError.not_importable(module_name, exc) from exc
     root, top = _folder_of(module, module_name)
     files = dict(_sources(root, top))
     if not files:
-        raise BundleError(f"no Python files were found for {module_name} in {root}")
+        raise BundleError.no_files(module_name, root)
     size = sum(len(text.encode("utf-8")) for text in files.values())
     if size > BUNDLE_MAX_BYTES:
-        raise BundleError(
-            f"its folder {root / top if top else root} holds {size} bytes of Python, over "
-            f"the {BUNDLE_MAX_BYTES} a bundle may hold"
-        )
+        raise BundleError.too_large(root / top if top else root, size)
     _check_imports(files, root)
     return {"sha256": digest(files), "files": files}
 
@@ -98,7 +166,7 @@ def _folder_of(module: ModuleType, module_name: str) -> tuple[Path, str]:
     top = sys.modules.get(top_name) if top_name != module_name else module
     file = getattr(top, "__file__", None)
     if not file:
-        raise BundleError(f"{module_name} is not read from a file, so it cannot be sent")
+        raise BundleError.not_from_a_file(module_name)
     path = Path(file).resolve()
     if hasattr(top, "__path__"):
         # A package: its __init__ is in its own directory.
@@ -147,12 +215,7 @@ def _check_imports(files: Mapping[str, str], root: Path) -> None:
                 outside[name] = where
     if outside:
         named = "; ".join(f"{name} (from {where})" for name, where in sorted(outside.items()))
-        raise BundleError(
-            f"it imports code from outside its folder: {named}. An agent's own code has to "
-            "live in its folder to go with it. Move that code into the folder, publish it as "
-            "a package and list it in requires, or install it on the node and name the agent "
-            "in WACTORZ_AGENTS there"
-        )
+        raise BundleError.imports_outside(named)
 
 
 def local_names(files: Mapping[str, str]) -> set[str]:
@@ -169,7 +232,7 @@ def _imported(source: str, relative: str) -> Iterator[str]:
     try:
         tree = ast.parse(source, filename=relative)
     except SyntaxError as exc:
-        raise BundleError(f"{relative} does not parse: {exc}") from exc
+        raise BundleError.does_not_parse(relative, exc) from exc
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -228,18 +291,18 @@ def checked(bundle: Any) -> dict[str, str]:
     the SHA-256 it names.
     """
     if not isinstance(bundle, dict):
-        raise BundleError("its code is not a bundle")
+        raise BundleError.not_a_bundle()
     files = bundle.get("files")
     if not isinstance(files, dict) or not files:
-        raise BundleError("its bundle holds no files")
+        raise BundleError.empty()
     for relative, source in files.items():
         if not isinstance(relative, str) or not isinstance(source, str):
-            raise BundleError("its bundle holds something other than source files")
+            raise BundleError.not_sources()
         path = PurePosixPath(relative)
         if path.is_absolute() or ".." in path.parts or "\\" in relative or path.suffix != ".py":
-            raise BundleError(f"its bundle names {relative!r}, which is not a file it may hold")
+            raise BundleError.bad_path(relative)
     if digest(files) != bundle.get("sha256"):
-        raise BundleError("its bundle does not match the hash the spawn names")
+        raise BundleError.hash_mismatch()
     return dict(files)
 
 
@@ -293,10 +356,7 @@ def prepare_import(directory: Path, bundles_dir: Path, in_use: set[Path]) -> Non
                 del sys.modules[loaded]
                 continue
             where = "another agent's code" if owner is not None else "a package installed here"
-            raise BundleError(
-                f"this node already has a module named {name}, from {where}; give the agent's "
-                "module a name of its own"
-            )
+            raise BundleError.name_taken(name, where)
     kept = [p for p in sys.path if not _stale_entry(p, bundles_dir, in_use | {directory})]
     sys.path[:] = [str(directory), *(p for p in kept if p != str(directory))]
     importlib.invalidate_caches()

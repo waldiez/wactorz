@@ -31,6 +31,31 @@ from typing import Any
 from .artifacts import ArtifactError, ArtifactStore, pinned_in
 
 
+class ModelError(ArtifactError):
+    """A model an agent names that cannot be loaded here, and why."""
+
+    @classmethod
+    def runs_code(cls, entry: Mapping[str, Any], fmt: str) -> "ModelError":
+        return cls(
+            f"{entry.get('name')}:{entry.get('version')} is {fmt}, which runs code when it "
+            "loads: load it with allow_code=True only if you would run its maker's code"
+        )
+
+    @classmethod
+    def no_loader(cls, fmt: str) -> "ModelError":
+        return cls(
+            f"there is no loader for {fmt}: open artifact_path() with the library that reads it"
+        )
+
+    @classmethod
+    def needs(cls, library: str) -> "ModelError":
+        return cls(f"loading it needs {library}: pip install {library}")
+
+    @classmethod
+    def cannot_start(cls, agent: str, exc: ArtifactError) -> "ModelError":
+        return cls(f"{agent} cannot start without its models: {exc}")
+
+
 def resolve_in_store(wanted: Mapping[str, Any], state_dir: str | Path) -> dict[str, dict[str, Any]]:
     """Each artifact ``wanted`` names, pinned in main's store, with the path it is read at.
 
@@ -54,16 +79,11 @@ def load(entry: Mapping[str, Any], *, allow_code: bool = False) -> Any:
     path = Path(str(entry["path"]))
     if fmt in _RUNS_CODE:
         if not allow_code:
-            raise ArtifactError(
-                f"{entry.get('name')}:{entry.get('version')} is {fmt}, which runs code when it "
-                "loads: load it with allow_code=True only if you would run its maker's code"
-            )
+            raise ModelError.runs_code(entry, fmt)
         return _RUNS_CODE[fmt](path)
     loader = _LOADERS.get(fmt)
     if loader is None:
-        raise ArtifactError(
-            f"there is no loader for {fmt}: open artifact_path() with the library that reads it"
-        )
+        raise ModelError.no_loader(fmt)
     return loader(path)
 
 
@@ -71,7 +91,7 @@ def _numpy() -> Any:
     try:
         import numpy  # optional: `pip install 'wactorz[ml]'`
     except ImportError as exc:
-        raise ArtifactError("loading it needs numpy: pip install numpy") from exc
+        raise ModelError.needs("numpy") from exc
     return numpy
 
 
@@ -90,7 +110,7 @@ def _safetensors(path: Path) -> dict[str, Any]:
             load_file,
         )
     except ImportError as exc:
-        raise ArtifactError("loading it needs safetensors: pip install safetensors") from exc
+        raise ModelError.needs("safetensors") from exc
     return load_file(str(path))
 
 
@@ -98,7 +118,7 @@ def _torch() -> Any:
     try:
         import torch  # pyright: ignore[reportMissingImports]  # optional: `pip install 'wactorz[ml]'`
     except ImportError as exc:
-        raise ArtifactError("loading it needs torch: pip install torch") from exc
+        raise ModelError.needs("torch") from exc
     return torch
 
 
@@ -110,7 +130,7 @@ def _onnx(path: Path) -> Any:
     try:
         import onnxruntime  # pyright: ignore[reportMissingImports]  # optional: `pip install onnxruntime`
     except ImportError as exc:
-        raise ArtifactError("loading it needs onnxruntime: pip install onnxruntime") from exc
+        raise ModelError.needs("onnxruntime") from exc
     return onnxruntime.InferenceSession(str(path))
 
 
@@ -126,7 +146,7 @@ def _joblib(path: Path) -> Any:
     try:
         import joblib  # pyright: ignore[reportMissingImports]  # optional: `pip install joblib`
     except ImportError as exc:
-        raise ArtifactError("loading it needs joblib: pip install joblib") from exc
+        raise ModelError.needs("joblib") from exc
     return joblib.load(path)
 
 

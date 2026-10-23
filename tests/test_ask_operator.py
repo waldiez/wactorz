@@ -25,7 +25,7 @@ import pytest
 from tests.waiting import PATIENCE_S, until
 from wactorz.agents.dynamic import DynamicAgent
 from wactorz.agents.function_agent import agent, spec_of
-from wactorz.core.actor import Actor
+from wactorz.core.actor import Actor, NoAnswerError
 from wactorz.core.outbound import Answer, answer_topic
 from wactorz.core.questions import (
     ANSWERED_KEPT,
@@ -431,3 +431,11 @@ def test_the_answer_vocabulary_is_what_the_actor_reads() -> None:
     answer = Answer(id="q1", agent_id="a", option="x", index=0, channel="telegram", timestamp=5.0)
     assert answer.topic == answer_topic("a")
     assert Answer.from_payload("a", answer.to_payload()) == answer
+
+
+def test_a_question_waited_on_without_a_timeout_is_described_without_one() -> None:
+    """The message for an unanswered question names the wait only when there was one."""
+    assert str(NoAnswerError.to_question("asker", "Install it?", 2.5)).endswith("within 2.5s")
+    assert str(NoAnswerError.to_question("asker", "Install it?", None)) == (
+        "[asker] no answer to 'Install it?'"
+    )

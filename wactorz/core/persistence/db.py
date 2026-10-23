@@ -127,6 +127,13 @@ def _insert_sql(table: str, columns: tuple[str, ...]) -> str:
     )
 
 
+class ClosedError(RuntimeError):
+    """The database was used after it was closed."""
+
+    def __init__(self) -> None:
+        super().__init__("WactorzDB connection is closed")
+
+
 class WactorzDB:
     """SQLite connection manager. One instance per process, created at startup.
 
@@ -218,7 +225,7 @@ class WactorzDB:
         is serialised rather than each statement on its own.
         """
         if self._conn is None:
-            raise RuntimeError("WactorzDB connection is closed")
+            raise ClosedError()
         return self._conn
 
     @contextmanager

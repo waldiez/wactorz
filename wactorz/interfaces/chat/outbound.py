@@ -44,6 +44,38 @@ CHAT_FRAMES = "agents/+/chat"
 RECONNECT_SECONDS = 5.0
 
 
+class ChannelNotRunningError(RuntimeError):
+    """A message handed to a channel before its bot, or webhook, is up."""
+
+    @classmethod
+    def discord(cls) -> "ChannelNotRunningError":
+        return cls("the Discord bot is not running")
+
+    @classmethod
+    def telegram(cls) -> "ChannelNotRunningError":
+        return cls("the Telegram bot is not running")
+
+    @classmethod
+    def whatsapp(cls) -> "ChannelNotRunningError":
+        return cls("the WhatsApp webhook is not running")
+
+
+class NotAUserError(ValueError):
+    """A ``user`` that is not how the channel names a person."""
+
+    @classmethod
+    def discord(cls, user: Any) -> "NotAUserError":
+        return cls(f"a Discord user is a numeric id, not {user!r}")
+
+    @classmethod
+    def telegram(cls, user: Any) -> "NotAUserError":
+        return cls(f"a Telegram user is a numeric id, not {user!r}")
+
+    @classmethod
+    def whatsapp(cls) -> "NotAUserError":
+        return cls("a WhatsApp user is a phone number")
+
+
 class Sender(Protocol):
     """What a chat channel offers the outbox: one way to reach one person.
 

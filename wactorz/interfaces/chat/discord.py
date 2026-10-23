@@ -6,7 +6,13 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.outbound import numbered
 from ...orchestration import SOCIAL
-from .outbound import Outbox, PendingChoices, outbound
+from .outbound import (
+    ChannelNotRunningError,
+    NotAUserError,
+    Outbox,
+    PendingChoices,
+    outbound,
+)
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
@@ -68,11 +74,11 @@ class DiscordInterface:
         """
         client = self._client
         if client is None:
-            raise RuntimeError("the Discord bot is not running")
+            raise ChannelNotRunningError.discord()
         try:
             user_id = int(user)
         except (TypeError, ValueError):
-            raise ValueError(f"a Discord user is a numeric id, not {user!r}") from None
+            raise NotAUserError.discord(user) from None
         message = outbound("discord", str(user_id), text, options, message_id, agent_id)
         recipient = client.get_user(user_id) or await client.fetch_user(user_id)
         body = numbered(message.text, message.options)

@@ -136,6 +136,47 @@ _UNAVAILABLE = {
 }
 
 
+class MainUnavailableError(LookupError):
+    """Main is not there to take a turn."""
+
+    @classmethod
+    def not_running(cls) -> "MainUnavailableError":
+        return cls(f"{MAIN_ACTOR_NAME} is not running")
+
+    @classmethod
+    def because(cls, reason: str) -> "MainUnavailableError":
+        return cls(f"{MAIN_ACTOR_NAME} {reason}")
+
+
+class OrchestratorError(StartupError):
+    """The orchestrator named in `ENV_VAR` could not be loaded or built, or is not an orchestrator."""
+
+    @classmethod
+    def not_built(cls, what: str, exc: Exception) -> "OrchestratorError":
+        return cls(f"orchestrator {what} could not be built: {exc}")
+
+    @classmethod
+    def built_wrong(cls, what: str, built: Any) -> "OrchestratorError":
+        return cls(
+            f"orchestrator {what} built {type(built).__name__}, which is not an Orchestrator "
+            "(handle_turn, handle_turn_stream and commands)"
+        )
+
+    @classmethod
+    def not_one(cls, what: str, obj: Any) -> "OrchestratorError":
+        return cls(
+            f"orchestrator {what} is {type(obj).__name__}, which is neither an Orchestrator "
+            "nor something that builds one"
+        )
+
+    @classmethod
+    def not_loaded(cls, target: str, exc: Exception) -> "OrchestratorError":
+        return cls(
+            f"{ENV_VAR} names {target!r}, which could not be loaded: {exc}. The module must "
+            "be importable from where wactorz starts; set PYTHONPATH or install the package."
+        )
+
+
 class MainOrchestrator:
     """Main, the model-driven orchestrator, behind the seam.
 
@@ -153,7 +194,7 @@ class MainOrchestrator:
     def _main(self) -> "MainActor":
         actor = self._registry.find_by_name(MAIN_ACTOR_NAME)
         if actor is None:
-            raise LookupError(f"{MAIN_ACTOR_NAME} is not running")
+            raise MainUnavailableError.not_running()
         # The entry points below reach into main directly rather than through
         # its mailbox, so a state that ends the mailbox is checked here, or a
         # failed main would go on answering until its replacement registers.
@@ -161,7 +202,7 @@ class MainOrchestrator:
         state = getattr(getattr(actor, "state", None), "value", "")
         reason = _UNAVAILABLE.get(str(state))
         if reason is not None:
-            raise LookupError(f"{MAIN_ACTOR_NAME} {reason}")
+            raise MainUnavailableError.because(reason)
         # Whatever is registered under main's name is main: the name is reserved
         # for it, and the three entry points used here are what define it.
         return cast("MainActor", actor)
@@ -356,17 +397,11 @@ def as_orchestrator(obj: Any, registry: "ActorRegistry", *, named: str = "") -> 
         try:
             built = obj(registry)
         except Exception as exc:
-            raise StartupError(f"orchestrator {what} could not be built: {exc}") from exc
+            raise OrchestratorError.not_built(what, exc) from exc
         if isinstance(built, Orchestrator):
             return built
-        raise StartupError(
-            f"orchestrator {what} built {type(built).__name__}, which is not an Orchestrator "
-            "(handle_turn, handle_turn_stream and commands)"
-        )
-    raise StartupError(
-        f"orchestrator {what} is {type(obj).__name__}, which is neither an Orchestrator "
-        "nor something that builds one"
-    )
+        raise OrchestratorError.built_wrong(what, built)
+    raise OrchestratorError.not_one(what, obj)
 
 
 def resolve_orchestrator(target: str, registry: "ActorRegistry") -> Orchestrator:
@@ -379,10 +414,7 @@ def resolve_orchestrator(target: str, registry: "ActorRegistry") -> Orchestrator
     try:
         obj = resolve_target(target)
     except Exception as exc:
-        raise StartupError(
-            f"{ENV_VAR} names {target!r}, which could not be loaded: {exc}. The module must "
-            "be importable from where wactorz starts; set PYTHONPATH or install the package."
-        ) from exc
+        raise OrchestratorError.not_loaded(target, exc) from exc
     return as_orchestrator(obj, registry, named=repr(target))
 
 

@@ -69,6 +69,61 @@ ACTION_TYPES = ("publish", "task", "webhook", "ask_operator")
 ANSWERS_TOPIC = "answers/{rule}"
 
 
+class RuleError(ValueError):
+    """A rule that cannot be run as written, and why.
+
+    A `ValueError`, which is what a spawner reports as rejected input.
+    """
+
+    @classmethod
+    def unknown_operator(cls, op: str) -> RuleError:
+        return cls(f"unknown condition operator {op!r}")
+
+    @classmethod
+    def unknown_action(cls, kind: str) -> RuleError:
+        return cls(f"unknown action type {kind!r}; one of {', '.join(ACTION_TYPES)}")
+
+    @classmethod
+    def condition_without_field(cls) -> RuleError:
+        return cls("a condition needs a 'field'")
+
+    @classmethod
+    def question_without_text(cls) -> RuleError:
+        return cls("an ask_operator action needs the 'text' to ask")
+
+    @classmethod
+    def question_without_options(cls) -> RuleError:
+        return cls("an ask_operator action needs 'options' to pick from")
+
+    @classmethod
+    def publish_without_topic(cls) -> RuleError:
+        return cls("a publish action needs a 'topic'")
+
+    @classmethod
+    def task_without_agent(cls) -> RuleError:
+        return cls("a task action needs an 'agent'")
+
+    @classmethod
+    def webhook_without_url(cls) -> RuleError:
+        return cls("a webhook action needs an http(s) 'url'")
+
+    @classmethod
+    def no_trigger(cls) -> RuleError:
+        return cls("a rule needs at least one trigger topic")
+
+    @classmethod
+    def no_action(cls) -> RuleError:
+        return cls("a rule needs at least one action")
+
+    @classmethod
+    def bad_question(cls, exc: ValueError) -> RuleError:
+        return cls(f"an ask_operator action: {exc}")
+
+    @classmethod
+    def negative_timeout(cls) -> RuleError:
+        return cls("an ask_operator action's 'timeout' is seconds, zero to wait")
+
+
 def field_value(payload: Any, path: str) -> tuple[bool, Any]:
     """The value at a dotted ``path`` into ``payload``, and whether it was there."""
     value = payload
@@ -95,9 +150,9 @@ class RuleCondition:
         op = str(raw.get("op", raw.get("operator", "eq")))
         op = _ALIASES.get(op, op)
         if op not in _OPERATORS and op not in _PRESENCE:
-            raise ValueError(f"unknown condition operator {op!r}")
+            raise RuleError.unknown_operator(op)
         if "field" not in raw:
-            raise ValueError("a condition needs a 'field'")
+            raise RuleError.condition_without_field()
         return cls(field=str(raw["field"]), op=op, value=raw.get("value"))
 
     def to_dict(self) -> dict[str, Any]:
@@ -143,22 +198,22 @@ class RuleAction:
     def from_dict(cls, raw: dict[str, Any]) -> RuleAction:
         kind = str(raw.get("type", "")).strip()
         if kind not in ACTION_TYPES:
-            raise ValueError(f"unknown action type {kind!r}; one of {', '.join(ACTION_TYPES)}")
+            raise RuleError.unknown_action(kind)
         options = tuple(str(o) for o in (raw.get("options") or ()))
         channel = str(raw.get("channel", ""))
         timeout = float(raw.get("timeout", 0.0) or 0.0)
         if kind == "ask_operator":
             if not str(raw.get("text", "")).strip():
-                raise ValueError("an ask_operator action needs the 'text' to ask")
+                raise RuleError.question_without_text()
             try:
                 options = check_options(options)
                 channel = check_channel(channel)
             except ValueError as exc:
-                raise ValueError(f"an ask_operator action: {exc}") from None
+                raise RuleError.bad_question(exc) from None
             if not options:
-                raise ValueError("an ask_operator action needs 'options' to pick from")
+                raise RuleError.question_without_options()
             if timeout < 0:
-                raise ValueError("an ask_operator action's 'timeout' is seconds, zero to wait")
+                raise RuleError.negative_timeout()
         action = cls(
             type=kind,
             topic=str(raw.get("topic", "")),
@@ -174,11 +229,11 @@ class RuleAction:
             timeout=timeout,
         )
         if kind == "publish" and not action.topic:
-            raise ValueError("a publish action needs a 'topic'")
+            raise RuleError.publish_without_topic()
         if kind == "task" and not action.agent:
-            raise ValueError("a task action needs an 'agent'")
+            raise RuleError.task_without_agent()
         if kind == "webhook" and not action.url.startswith(("http://", "https://")):
-            raise ValueError("a webhook action needs an http(s) 'url'")
+            raise RuleError.webhook_without_url()
         return action
 
     def to_dict(self) -> dict[str, Any]:
@@ -273,10 +328,10 @@ class RuleConfig:
             triggers = (triggers,)
         triggers = tuple(str(t) for t in triggers if str(t).strip())
         if not triggers:
-            raise ValueError("a rule needs at least one trigger topic")
+            raise RuleError.no_trigger()
         actions = tuple(RuleAction.from_dict(a) for a in raw.get("actions") or ())
         if not actions:
-            raise ValueError("a rule needs at least one action")
+            raise RuleError.no_action()
         conditions = tuple(RuleCondition.from_dict(c) for c in raw.get("conditions") or ())
         return cls(
             triggers=triggers,

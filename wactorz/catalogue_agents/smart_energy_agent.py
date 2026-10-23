@@ -133,6 +133,13 @@ class PlugProtectedError(Exception):
     it is an exception that aborts the turn-off path entirely.
     """
 
+    @classmethod
+    def refused(cls, plug: dict, prot: Any) -> "PlugProtectedError":
+        return cls(
+            f"Refusing to turn off plug '{plug.get('name')}' — protection={prot}. "
+            f"Only '{AUTO_OFF}' plugs may be powered down by this agent."
+        )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HOME ASSISTANT ACCESS
@@ -156,11 +163,18 @@ async def _ha_get_states() -> dict[Any, Any]:
         return {}
 
 
+class HANotConfiguredError(RuntimeError):
+    """Home Assistant's address or token is missing, so no plug can be switched."""
+
+    def __init__(self) -> None:
+        super().__init__("HA not configured (HA_URL/HA_TOKEN missing)")
+
+
 async def _ha_turn_off(entity_id: str) -> None:
     """Issue switch.turn_off for an entity. Caller MUST have passed the guard."""
     url, token = _ha_creds()
     if not url or not token:
-        raise RuntimeError("HA not configured (HA_URL/HA_TOKEN missing)")
+        raise HANotConfiguredError()
     domain = entity_id.split(".", 1)[0] if "." in entity_id else "switch"
     async with HAWebSocketClient(normalize_ha_ws_url(url), token) as ha:
         await ha.call_service(domain, "turn_off", entity_id)
@@ -190,10 +204,7 @@ def _assert_can_turn_off(plug: dict[str, Any]) -> None:
     """
     prot = plug.get("protection", LOCKED)
     if prot != AUTO_OFF:
-        raise PlugProtectedError(
-            f"Refusing to turn off plug '{plug.get('name')}' — protection={prot}. "
-            f"Only '{AUTO_OFF}' plugs may be powered down by this agent."
-        )
+        raise PlugProtectedError.refused(plug, prot)
 
 
 async def _safe_turn_off(agent, plug: dict[str, Any], reason: str) -> bool:

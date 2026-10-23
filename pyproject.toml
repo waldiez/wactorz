@@ -294,9 +294,8 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
-    "TRY300",  # a try guards the call that can fail; the success return goes in its else
-    "TRY301",  # a raise inside a try that catches it: control flow by exception
-    "TRY400",  # logger.error in an except drops the traceback; log after the handler
+    "TRY",     # tryceratops — exception style; see the note below the ignores
+    "T20",     # flake8-print — output goes through logging, except where it is the product
     "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
 ]
 ignore = [
@@ -315,8 +314,12 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, prints) stay advisory via
-# `make lint-py` until each is triaged and gated. Pathlib moved out once the tree
+# Exceptions: an exception class says its own message, each reason a
+# classmethod or a class of its own, so the words for one failure are written
+# once and every place that gives it can be found by name (TRY003). A try guards
+# only the call that can fail (TRY300), never raises to its own handler (TRY301),
+# and an error logged in an except keeps its traceback (TRY400).
+# Complexity stays advisory via `make lint-py` until it is triaged and gated. Pathlib moved out once the tree
 # reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
@@ -334,17 +337,22 @@ ignore = [
 # strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
 # a path a test asserts about rather than writes to, and `exec` is how the
 # catalogue programs get parsed. None of it reaches an installed wheel. A test
-# raises inside a `try` to produce the exception, or the rollback, it examines.
-"tests/*" = ["B", "E402", "D", "S", "TRY301"]
+# raises inside a `try` to produce the exception, or the rollback, it examines,
+# and a fake fails with whatever message the test then looks for.
+"tests/*" = ["B", "E402", "D", "S", "TRY003", "TRY301"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
-# `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
-"scripts/*" = ["S603", "S607", "S110"]
+# `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag, and what each
+# prints is what it was run to say.
+"scripts/*" = ["S603", "S607", "S110", "T201"]
+# An example prints what it shows: the score, the model it trained.
+"examples/*" = ["T201"]
 # The end-to-end suite is test code that drives real processes. `assert` is the
 # mechanism, as it is under tests/; every subprocess is a literal argv naming
 # `docker` or this interpreter; and every URL it opens is the backend it
-# started or the Home Assistant instance `HA_URL` names.
-"e2e/*" = ["S101", "S310", "S603", "S607"]
+# started or the Home Assistant instance `HA_URL` names. A failed check is an
+# `AssertionError` saying what was seen, as an `assert` would.
+"e2e/*" = ["S101", "S310", "S603", "S607", "TRY003"]
 # A node runs agent code it is sent, installs what that code imports, and
 # re-execs itself when main asks it to restart — so the pip subprocess and the
 # `execv` are the feature rather than an oversight. How far either should be
@@ -359,31 +367,9 @@ ignore = [
 "wactorz/evalharness.py" = ["T201"]                  # prints the results table
 "wactorz/interfaces/chat/cli.py" = ["T201"]          # a terminal chat UI
 "wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow
-"wactorz/core/integrations/google_mcp.py" = ["T201", "PTH105"] # the OAuth URL the user must open
+"wactorz/core/integrations/google_mcp.py" = ["T201"] # the OAuth URL the user must open
 "wactorz/monitoring/log_setup.py" = ["T201"]         # stderr, because file logging just failed
 "wactorz/node/local_setup.py" = ["T201"]             # a command run once, by hand, as root
-# Atomic writes, written at the os level deliberately: the replace is ordered
-# against an `os.fsync` here, and against a 0600 `os.open` there, so the whole
-# sequence reads in one vocabulary. `Path.replace` is the same syscall.
-"wactorz/core/atomic_io.py" = ["PTH105"]
-"wactorz/web/sessions.py" = ["PTH105"]
-# Cost accounting reads rows this app persisted over its whole history, in
-# whatever shape the version that wrote them used. Every read there skips a row
-# it cannot parse and carries on with the rest, because a headline total that
-# omits one agent is worth more than a dashboard that will not render — so the
-# swallow is the design of these two modules rather than an oversight in them.
-"wactorz/web/cost.py" = ["S110"]
-"wactorz/agents/llm/cost.py" = ["S110"]
-# The weather agent's "today" is the server's local date on purpose: it is what
-# "tomorrow" means to the person asking. A timezone argument would not make it
-# more correct — UTC is simply wrong for most users. The known limit it leaves:
-# forecast rows are dated in the location's own timezone, so for a place far
-# enough east or west the today/tomorrow labels can be a day off.
-"wactorz/catalogue_agents/weather_agent.py" = ["DTZ011"]
-# A schedule that is not a dict is rejected user input from a spawn, and the
-# spawner catches ValueError to report it as such; a TypeError would surface as
-# a spawn-failure traceback instead.
-"wactorz/agents/scheduled_agent.py" = ["TRY004"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257

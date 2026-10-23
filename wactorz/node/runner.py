@@ -115,6 +115,13 @@ AGENT_RETAINED_TOPICS = (
 )
 
 
+class NotHostableError(TypeError):
+    """A plugin whose target built something other than an agent."""
+
+    def __init__(self, target: str) -> None:
+        super().__init__(f"{target} did not build an agent this node can host")
+
+
 class NodeRunner:
     """Connects to the broker, listens for control messages, manages agents."""
 
@@ -470,7 +477,7 @@ class NodeRunner:
         module = sys.modules.get(target.partition(":")[0])
         file = getattr(module, "__file__", None)
         if not file or not Path(file).resolve().is_relative_to(directory):
-            raise bundles.BundleError(f"{target} was not loaded from the code its spawn carries")
+            raise bundles.BundleError.not_from_spawn(target)
         bundles.trim(self._bundles_dir, in_use | {directory})
         return plugins.plugin_from(obj, target), directory
 
@@ -484,7 +491,7 @@ class NodeRunner:
             mixin=NodeHosted,
         )
         if not isinstance(actor, NodeHosted):
-            raise TypeError(f"{plugin.target} did not build an agent this node can host")
+            raise NotHostableError(plugin.target)
         actor.host_on(self, config, self.state_dir)
         readable = self.readable_artifacts(config)
         if readable:

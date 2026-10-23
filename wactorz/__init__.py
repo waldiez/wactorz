@@ -111,6 +111,13 @@ def system() -> ActorSystem | None:
     return _system()
 
 
+class NoSystemError(RuntimeError):
+    """A call that needs a running system, made with none running."""
+
+    def __init__(self) -> None:
+        super().__init__("wactorz.ask: no system is running; start one with run() or serve()")
+
+
 async def ask(target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S) -> Any:
     """Send the running agent called ``target`` a task and wait for its reply.
 
@@ -128,7 +135,7 @@ async def ask(target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT
     """
     running = system()
     if running is None:
-        raise RuntimeError("wactorz.ask: no system is running; start one with run() or serve()")
+        raise NoSystemError()
     return await running.registry.ask(target, payload, timeout=timeout)
 
 

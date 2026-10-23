@@ -741,7 +741,7 @@ class DynamicAgent(Actor):
                 if attempt >= self._MAX_SETUP_RETRIES:
                     break  # exhausted retries
 
-                if isinstance(e, ModuleNotFoundError):
+                if self._trusted and isinstance(e, ModuleNotFoundError):
                     # A package that is not installed is not a bug in the code,
                     # and the model cannot install it. Asked anyway, it rewrites
                     # working code around the import, and a rewrite that happens

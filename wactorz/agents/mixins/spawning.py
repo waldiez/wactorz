@@ -32,8 +32,8 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 
 import asyncio
 import hashlib
-import importlib
 import logging
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -43,10 +43,11 @@ from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
-from ...core.pip import PIP_TIMEOUT_S
+from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements
 from ...core.state_codec import decode_state
 from ...core.topics import topic_name_error
 from ...plugins import for_target
+from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
 from ..rule_agent import RuleAgent, RuleConfig
 
@@ -527,11 +528,17 @@ class SpawnMixin(_Host):
         the operator: the config came from the spawn registry, whose packages
         were cleared when the agent was first placed.
         """
+        minimum = config.get("minimum_python", [])
+        if tuple(sys.version_info[:2]) < tuple(minimum):
+            logger.error("[%s] %s requires Python %s", self.name, name, minimum)
+            return None
         packages = config.get("install", [])
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split() if p.strip()]
 
-        needed = self._packages_needing_install(packages) if packages else []
+        needed = (
+            await asyncio.to_thread(self._packages_needing_install, packages) if packages else []
+        )
 
         if not needed:
             return await self._do_spawn_dynamic(config, name, code)
@@ -539,9 +546,12 @@ class SpawnMixin(_Host):
         if blocking_install:
             # Pipeline path: the next step may depend on this agent being live.
             logger.info("[%s] Installing %s for '%s' (blocking)…", self.name, needed, name)
-            refusal = await self._install_packages(needed, agent_name=name, restoring=restoring)
-            if refusal:
-                logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
+            strict = config.get("require_install_success") is True
+            outcome = await self._install_packages(
+                needed, agent_name=name, restoring=restoring, require_install_success=strict
+            )
+            if outcome.refused or (strict and not outcome.ok):
+                await self._report_install_problem(config, name, outcome)
                 return None
             return await self._do_spawn_dynamic(config, name, code)
 
@@ -584,8 +594,12 @@ class SpawnMixin(_Host):
                         "timestamp": time.time(),
                     },
                 )
-            refusal = await self._install_packages(packages, agent_name=name, restoring=restoring)
-            if refusal:
+            strict = config.get("require_install_success") is True
+            outcome = await self._install_packages(
+                packages, agent_name=name, restoring=restoring, require_install_success=strict
+            )
+            if outcome.refused:
+                refusal = outcome.problem(name)
                 logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
                 if registered:
                     # The entry was saved when the placeholder was returned, and
@@ -607,6 +621,11 @@ class SpawnMixin(_Host):
                 # An install can outlast the stop meant to cancel it. Spawning
                 # now would register an agent into a system that has shut down.
                 logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
+                return
+            if strict and not outcome.ok:
+                # Spawning now starts the agent against packages that are
+                # missing or that this process cannot load until it restarts.
+                await self._report_install_problem(config, name, outcome)
                 return
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
@@ -651,6 +670,7 @@ class SpawnMixin(_Host):
             persistence_dir=str(self._persistence_dir.parent),
             trusted=bool(config.get("trusted", False)),
             artifacts=artifacts,
+            task_timeout_s=config.get("task_timeout_s"),
         )
 
         if actor is not None and (config.get("publishes") or config.get("subscribes")):
@@ -677,92 +697,77 @@ class SpawnMixin(_Host):
 
     @staticmethod
     def _packages_needing_install(packages: list[str]) -> list[str]:
-        """Subset of ``packages`` not already importable in this process. The
-        import name often differs from the pip name (opencv-python → cv2), so
-        this is a heuristic; re-installing an present package is a cheap no-op.
-        """
-        needed = []
-        for pkg in packages:
-            import_name = pkg.replace("-", "_").split("[")[0]
-            try:
-                importlib.import_module(import_name)
-            except ImportError:
-                needed.append(pkg)
-        return needed
+        """Requirements absent from installed metadata, including version pins."""
+        return missing_requirements(packages)
 
     async def _install_packages(
-        self, packages: list[str], agent_name: str = "?", *, restoring: bool = False
-    ) -> str | None:
-        """Install packages by delegating to the 'installer' agent and blocking
-        until it replies, or until the operator's answer and every pip run have
-        had their time. No-op when nothing is needed or the registry or the
-        installer is unavailable.
+        self,
+        packages: list[str],
+        agent_name: str = "?",
+        *,
+        restoring: bool = False,
+        require_install_success: bool = False,
+    ) -> InstallOutcome:
+        """Ask the installer under its approval rules and report its complete outcome.
 
-        Returns why the agent must not be spawned: a package the operator did
-        not allow. Anything else that goes wrong is logged and the agent is
-        spawned, to report the import it lacks itself. ``restoring`` installs
-        without asking: see `_spawn_dynamic_agent`.
+        Generic spawns retain best-effort installation. A recipe opting into
+        ``require_install_success`` waits for the longer native-package limit
+        and refuses to start against a failed or stale environment.
         """
         if not packages or not self._registry:
-            return None
-
-        needed = self._packages_needing_install(packages)
+            return InstallOutcome()
+        needed = await asyncio.to_thread(self._packages_needing_install, packages)
         if not needed:
-            logger.info(
-                "[%s] All packages for '%s' already available: %s", self.name, agent_name, packages
-            )
-            return None
-
-        installer = self._registry.find_by_name("installer")
-        if not installer:
+            return InstallOutcome()
+        if not self._registry.find_by_name("installer"):
             logger.warning(
-                "[%s] installer agent not found — cannot install %s for '%s'. Agent may crash on import.",
+                "[%s] installer agent not found — cannot install %s for '%s'.",
                 self.name,
                 needed,
                 agent_name,
             )
-            return None
-
-        logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-        action = "install_restored" if restoring else "install"
-        request = {"action": action, "packages": needed, "agent": agent_name}
+            return InstallOutcome(unavailable=True)
+        request = {
+            "action": "install_restored" if restoring else "install",
+            "packages": needed,
+            "agent": agent_name,
+            "for_agent": agent_name,
+            "notify": require_install_success,
+            "require_install_success": require_install_success,
+        }
+        answer = 0 if restoring else APPROVAL_TIMEOUT_S
+        wait = answer + (
+            install_wait_s(len(needed))
+            if require_install_success
+            else PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
+        )
         try:
-            # A restore asks nothing, so it waits for pip alone.
-            answer = 0 if restoring else APPROVAL_TIMEOUT_S
-            wait = answer + PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
             result = await ask_through(self, "installer", request, timeout=wait)
         except asyncio.TimeoutError:
-            logger.warning(
-                "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
-                self.name,
-                needed,
-                agent_name,
-            )
-            return None
+            logger.warning("[%s] Install timed out for %s ('%s')", self.name, needed, agent_name)
+            return InstallOutcome(timed_out=True)
         except ReplyError as exc:
-            if exc.reply.get("refused"):
-                return str(exc.reply["error"])
-            logger.warning(
-                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
-            )
-            return None
+            logger.warning("[%s] Install failed: %s", self.name, exc)
+            return outcome_from_result(exc.reply)
         except RuntimeError as exc:
-            # A failed install, or an installer not taking messages: either way
-            # the agent is spawned and says so itself if the import fails.
-            logger.warning(
-                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
-            )
-            return None
-        reported = result.get("message", result) if isinstance(result, dict) else result
-        logger.info("[%s] Install result for '%s': %s", self.name, agent_name, reported)
-        if isinstance(result, dict) and result.get("failed"):
-            logger.warning(
-                "[%s] Failed to install: %s — '%s' may not work correctly",
-                self.name,
-                result["failed"],
-                agent_name,
-            )
-        return None
+            logger.warning("[%s] Install failed: %s", self.name, exc)
+            return InstallOutcome(busy=True)
+        outcome = outcome_from_result(result)
+        if outcome.failed:
+            logger.warning("[%s] Failed to install: %s", self.name, list(outcome.failed))
+        return outcome
+
+    async def _report_install_problem(
+        self, config: dict, name: str, outcome: InstallOutcome
+    ) -> None:
+        """Report a strict spawn's failure, saving a restart only after a successful install."""
+        problem = outcome.problem(name)
+        logger.warning("[%s] %s", self.name, problem)
+        if outcome.restart_required and not (outcome.failed or outcome.refused or outcome.error):
+            self._register_spawn(config)
+        notify = getattr(self, "notify_user", None)
+        if notify is not None:
+            await notify(problem)
 
     # ── Migrated state ─────────────────────────────────────────────────────
 

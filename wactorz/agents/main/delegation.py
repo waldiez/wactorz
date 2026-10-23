@@ -112,7 +112,12 @@ def _readable(result: Any) -> str:
     answered in an unexpected shape still answered.
     """
     if isinstance(result, dict):
-        return str(result.get("result") or result.get("response") or result)
+        # The dashboard reads the same fields in the same order (`reply_text` in
+        # web/chat.py), so an agent reads alike whichever way it was asked.
+        for field in ("result", "response", "reply", "text", "message", "content"):
+            value = result.get(field)
+            if value:
+                return str(value)
     return str(result)
 
 
@@ -198,17 +203,16 @@ class DelegationManager:
             self.host._result_futures.pop(topic, None)
 
     async def delegate_task(
-        self, target_name: str, task: str, timeout: float = 60.0
+        self, target_name: str, task: Any, timeout: float = 60.0
     ) -> dict | None:
-        """Send a task to a named agent and wait for its result.
-
-        Routing priority:
-          1. Local registry — fast in-process mailbox path
-          2. Remote node   — MQTT request/reply via agents/by-name/{name}/task
-          3. Returns None if the agent is unknown in both
-        """
+        """Send text or a structured task through the same validated delegation routes."""
+        if isinstance(task, dict):
+            payload = dict(task)
+            payload.setdefault("text", json.dumps(task))
+            return await self._delegate(target_name, payload, payload, timeout)
+        text = str(task)
         return await self._delegate(
-            target_name, {"text": task}, {"text": task, "payload": task}, timeout
+            target_name, {"text": text}, {"text": text, "payload": text}, timeout
         )
 
     async def delegate_payload(
@@ -324,7 +328,7 @@ class DelegationManager:
                 # it is sent as one rather than as task text.
                 result = await self.delegate_to_installer(payload, timeout=300.0)
             else:
-                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+                result = await self.delegate_task(agent_name, payload, timeout=300.0)
         except Exception as e:
             return f"[{agent_name} error: {e}]"
         # Formatting the reply is outside the guard on purpose: only the

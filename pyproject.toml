@@ -69,6 +69,19 @@ cron      = ["croniter>=2.0.0"]
 flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
+# The Reachy Mini catalogue agent's packages, the same list its recipe installs
+# on first spawn. Installed up front they resolve together with Wactorz's own,
+# so that spawn has nothing to install and needs no restart. Out of `all`: on
+# Linux the robot SDK compiles part of itself and needs system GStreamer.
+reachy    = [
+    "reachy-mini==1.12.0; python_version >= '3.11'",
+    "numpy; python_version >= '3.11'",
+    "edge-tts; python_version >= '3.11'",
+    "pillow>=13; python_version >= '3.11'",
+    "webrtcvad-wheels; python_version >= '3.11'",
+    "deepgram-sdk>=3,<4; python_version >= '3.11'",
+]
+
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported
 # through `wactorz.core.integrations.langchain`.
 langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
@@ -179,6 +192,25 @@ exclude-newer = "7 days"
 # memory-safety flaws (GHSA-8g5g-8vmr-9782 and others). An entry can go once the
 # release it admits is older than the window.
 exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", pip = "2026-10-21T00:00:00Z", pillow = "2026-10-21T00:00:00Z" }
+
+# These plugin releases publish only cp313t/cp314t Windows wheels. Universal
+# resolution otherwise selects them for ordinary CPython and macOS as well.
+# Keep the SDK's supported ranges; allow subsequent compatible releases.
+constraint-dependencies = [
+    "gstreamer-plugins!=1.28.8",
+    "gstreamer-plugins-gpl!=1.28.8",
+    "gstreamer-plugins-gpl-restricted!=1.28.8",
+    "gstreamer-plugins-libs!=1.28.8",
+    "gstreamer-plugins-restricted!=1.28.8",
+]
+
+# PyGObject's metadata build requires native Cairo and introspection libraries.
+# Use its published runtime requirements so resolving the opt-in Reachy extra
+# does not require those system libraries on development or CI hosts.
+[[tool.uv.dependency-metadata]]
+name = "pygobject"
+version = "3.46.0"
+requires-dist = ["pycairo>=1.16.0"]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

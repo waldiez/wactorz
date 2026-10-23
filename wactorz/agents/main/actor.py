@@ -67,6 +67,7 @@ _INTERFACE_ACTION_RE = re.compile(
     r"<interface_action>\s*(\{.*?\})\s*</interface_action>",
     re.IGNORECASE | re.DOTALL,
 )
+_DELEGATE_BLOCK_RE = re.compile(r"<delegate>(.*?)</delegate>", re.IGNORECASE | re.DOTALL)
 
 
 def _normalize_agent_name(name: str) -> str:
@@ -98,6 +99,49 @@ def _strip_live_context(message: str) -> str:
         return message
     # Skip past the marker and any whitespace following it
     return message[idx + len(end_marker) :].lstrip("\n").lstrip()
+
+
+def _response_delegates_to(response: str, agent_name: str) -> bool:
+    """Return whether model output asks a named agent to execute something."""
+    wanted = _normalize_agent_name(agent_name)
+    for match in _DELEGATE_BLOCK_RE.finditer(str(response or "")):
+        try:
+            payload = json.loads(match.group(1).strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        named = str(payload.get("agent") or payload.get("name") or "")
+        if _normalize_agent_name(named) == wanted:
+            return True
+    return any(
+        _normalize_agent_name(match.group(1)) == wanted
+        for match in re.finditer(r"@([\w][\w-]*)", str(response or ""))
+    )
+
+
+def _strip_delegate_blocks(history: list[dict[str, Any]]) -> bool:
+    """Take executable blocks out of stored assistant turns; return whether any were.
+
+    Executable blocks are transport syntax, not conversation. One left in
+    stored history reads to the model as an example to follow, and it replays a
+    completed or failed action on later, unrelated turns. Keep the surrounding
+    conversation without inferring whether the delegated action succeeded.
+    """
+    changed = False
+    for item in history:
+        if item.get("role") != "assistant":
+            continue
+        content = str(item.get("content") or "")
+        clean = _DELEGATE_BLOCK_RE.sub("", content)
+        # Cancellation can leave an opening transport tag without its close.
+        clean = re.sub(r"<delegate\b[^>]*>.*$", "", clean, flags=re.DOTALL | re.IGNORECASE)
+        clean = re.sub(r"@([\w][\w-]*)\s+(?=\{)", r"[Agent \1] ", clean)
+        clean = re.sub(r"(^|\n|[.!?:]\s+)@([\w][\w-]*)[ \t]+", r"\1[Agent \2] ", clean)
+        if clean != content:
+            item["content"] = clean.strip() or "[Delegated task]"
+            changed = True
+    return changed
 
 
 #: Openings that mean the planner, whatever the intent classifier would say.
@@ -259,15 +303,26 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if raw_reply == clean_reply:
             return
         for item in reversed(self._conversation_history):
-            if item.get("role") == "assistant" and item.get("content") == raw_reply:
-                item["content"] = clean_reply
+            if item.get("role") == "assistant" and item.get("content") in (
+                raw_reply,
+                self._assistant_history_content(raw_reply),
+            ):
+                item["content"] = self._assistant_history_content(clean_reply)
                 self.persist("conversation_history", self._conversation_history)
                 return
+
+    def _assistant_history_content(self, response: str) -> str:
+        """Keep delegation transport syntax out of every durable reply path."""
+        history = [{"role": "assistant", "content": response}]
+        _strip_delegate_blocks(history)
+        return history[0]["content"]
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
         await super().on_start()
+        if _strip_delegate_blocks(self._conversation_history):
+            self.persist("conversation_history", self._conversation_history)
         await self._restore_spawned_agents()
         # Listen for remote node heartbeats so we know what's online
         self._tasks.append(asyncio.create_task(self._node_heartbeat_listener()))
@@ -431,7 +486,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 if not isinstance(item, dict):
                     continue
                 transcript = str(item.get("transcript") or "").strip()
-                response = str(item.get("response") or "").strip()
+                response = self._assistant_history_content(str(item.get("response") or "")).strip()
                 if transcript or response:
                     history.append({"transcript": transcript[:1000], "response": response[:2000]})
         source_value = str(payload.get("_interface_source") or "")
@@ -530,11 +585,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """
         if not user_message or assistant_response is None:
             return
+        assistant_response = self._assistant_history_content(str(assistant_response))
         try:
             self.metrics.messages_processed += 1
             self._conversation_history.append({"role": "user", "content": user_message})
             self._conversation_history.append(
-                {"role": "assistant", "content": str(assistant_response)}
+                {
+                    "role": "assistant",
+                    "content": self._assistant_history_content(str(assistant_response)),
+                }
             )
             # Same summarization + persistence path that LLMAgent.chat() uses
             await self._maybe_summarize()
@@ -561,7 +620,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     def _log_delivered_turn(self, text: str, reply: str, *, ts_user: float) -> None:
         """Store what the user typed and what they were sent, unless already stored."""
-        super()._log_chat_turn(text, reply, ts_user=ts_user, ts_reply=time.time())
+        super()._log_chat_turn(
+            text, self._assistant_history_content(reply), ts_user=ts_user, ts_reply=time.time()
+        )
 
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         """Queue a system notice for the next chat reply, keeping the newest.
@@ -733,6 +794,23 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # text and replace it with the user's original. The assistant turn after
         # it remains unchanged.
         self._restore_unprefixed_turn(prefixed_text, text)
+        raw_llm_response = response
+
+        # A voice transcript classified as OTHER is not authority for the LLM
+        # to resurrect a Home Assistant command from history. Correct device
+        # commands take the ACTUATE/HA branches above; anything reaching here
+        # must be repeated instead of being executed from stale context.
+        if self._current_interface_is_voice() and _response_delegates_to(
+            response, "home-assistant-agent"
+        ):
+            safe_reply = "I may have misheard that. Please repeat the device command."
+            logger.warning(
+                "[%s] Blocked Home Assistant delegation from an OTHER voice turn: %r",
+                self.name,
+                text[:80],
+            )
+            self._replace_latest_interface_reply(response, safe_reply)
+            return note_prefix + safe_reply
 
         # If the LLM wrote agent code but forgot the <spawn> wrapper, remind it once
         has_spawn = "<spawn>" in response
@@ -761,6 +839,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Execute any looser @agent-name delegation patterns the LLM produced
         clean = await self._execute_llm_delegations(clean)
+        self._replace_latest_interface_reply(raw_llm_response, clean)
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
@@ -1006,6 +1085,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # whatever is appended to it below.
         sent = ["".join(shown_chunks)]
 
+        if self._current_interface_is_voice() and _response_delegates_to(
+            full_response, "home-assistant-agent"
+        ):
+            safe_reply = "I may have misheard that. Please repeat the device command."
+            logger.warning(
+                "[%s] Blocked Home Assistant delegation from an OTHER streaming voice turn: %r",
+                self.name,
+                text[:80],
+            )
+            self._replace_latest_interface_reply(full_response, safe_reply)
+            yield "\n" + safe_reply
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
+
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
 
@@ -1032,6 +1125,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 sent.append(extra)
                 yield extra
         full_response = delegated
+        self._replace_latest_interface_reply("".join(full_chunks), full_response)
 
         system_msg = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(
             full_response
@@ -1415,7 +1509,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return await self.delegation.delegate_to_installer(payload, timeout)
 
     async def delegate_task(
-        self, target_name: str, task: str, timeout: float = 60.0
+        self, target_name: str, task: Any, timeout: float = 60.0
     ) -> dict[str, Any] | None:
         return await self.delegation.delegate_task(target_name, task, timeout)
 

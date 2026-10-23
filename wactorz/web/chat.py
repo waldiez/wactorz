@@ -233,6 +233,18 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 MAIN_COMMANDS = frozenset({"/deploy", "/migrate"})
 
 
+def answered_past_the_server(word: str) -> bool:
+    """Whether ``word``, a command's first word, is answered by more than this server.
+
+    By the orchestrator that claims it, or, with none installed, by main. The
+    server's own listings answer only where neither would.
+    """
+    orchestrator = runtime.orchestrator
+    if orchestrator is not None:
+        return word in orchestrator.commands()
+    return find_main_actor(runtime.registry) is not None
+
+
 async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) -> bool:
     """Dispatch a slash command. Returns True if recognised.
 
@@ -252,7 +264,11 @@ async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) 
         await reply_fn("[System: Plan cache cleared.]")
         return True
 
-    if cmd == "/agents":
+    if cmd == "/agents" and not answered_past_the_server(cmd):
+        # Main answers every /agents command: the list with its descriptions,
+        # a capability filter, and the verbs (stop, delete, restart), and an
+        # orchestrator that claims /agents answers it its own way. Where
+        # neither would, the running agents are listed here.
         if runtime.registry is None:
             await reply_fn("[agents] Registry not available.")
             return True

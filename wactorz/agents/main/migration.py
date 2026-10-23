@@ -452,6 +452,21 @@ class Migration:
                     agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
                 )
 
+    def moving_to(self, agent_name: str) -> str:
+        """The node a move under way is starting ``agent_name`` on, or "" for none.
+
+        The spawn registry names the target only once it confirms, and the
+        agent speaks from there before that: its manifest and its first replies.
+        """
+        return next(
+            (
+                str(p.get("target_node") or "")
+                for p in self.pending_spawns.values()
+                if p.get("agent_name") == agent_name
+            ),
+            "",
+        )
+
     def _placed(self, agent_name: str) -> bool:
         """Whether a handed-back agent is running here, or waiting on a target to confirm it.
 
@@ -1141,7 +1156,11 @@ class Migration:
                 f"'{current_node or 'local'}'.",
             }
 
-        mismatch = None if is_target_local else self.host._node_version_mismatch(target_node)
+        mismatch = None
+        if not is_target_local:
+            mismatch = self.host._node_version_mismatch(target_node)
+            unheard = self.host._node_refuses_tasks(target_node)
+            mismatch = mismatch or (f"{unheard}." if unheard else None)
         if mismatch:
             # Same footing as an offline target: nothing has moved yet, so the
             # agent simply stays where it is.

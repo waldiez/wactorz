@@ -61,7 +61,8 @@ def stored_fixture(store: ArtifactStore, tmp_path: Path) -> dict[str, Any]:
     """``imu-detector:1``, an npz of the arrays the scorer reads, pinned."""
     path = tmp_path / "imu.npz"
     np.savez(path, mean=np.array([0.0, 0.0, 9.81]), inverse_covariance=np.eye(3))
-    return pinned(store.add(path, "imu-detector"))
+    # As a spawn naming ``imu-detector`` pins it: a bare name follows ``active``.
+    return {**pinned(store.add(path, "imu-detector")), "follows": "active"}
 
 
 @pytest.fixture(name="runner")
@@ -105,7 +106,8 @@ class TestMainSendingOne:
         await main.spawn(config)
 
         _, sent, _ = main.published_to("/spawn")
-        assert sent["artifacts"] == {"model": stored}
+        # Pinned to the version it named, so it follows no pointer.
+        assert sent["artifacts"] == {"model": {k: v for k, v in stored.items() if k != "follows"}}
 
     async def test_one_naming_no_models_sends_none(
         self, main: SpawningMain, targets: dict[str, str]

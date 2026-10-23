@@ -552,7 +552,8 @@ async def on_reading(payload):
                                     state_dict → torch tensors, raw → bytes
 Where STORED MODELS lists a model's arrays ("arrays mean[3], inverse_covariance[3x3]"), the code reads
 it by exactly those names and shapes; a key it does not list is not there.
-"model-name" alone means the newest version; "model-name:3" a given one. Name ONLY models listed under
+"model-name" alone means the version marked active, or the newest when none is marked (STORED MODELS
+says which is active); "model-name:3" a given one; "model-name:latest" the newest regardless. Name ONLY models listed under
 STORED MODELS — never invent one: an agent naming a model that is not stored does not start. The same
 spawn works with "node": the node fetches the model before the agent starts. If no stored model fits
 what the user asks for, say so and suggest adding one with `wactorz-artifacts add <file> <name>`.

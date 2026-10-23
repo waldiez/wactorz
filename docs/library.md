@@ -557,6 +557,12 @@ they arrive, and yields the whole answer once when there is nothing to stream;
 (`/help`), so a surface can say "unknown command" for the rest instead of
 handing it over.
 
+An orchestrator may also have a `command_forms()` method, returning a list of
+`wactorz.orchestration.Form(usage, summary)`: each way to type one of its
+commands, as `Form("/report <day>", "the readings for one day")`. The
+dashboard's chat box offers them as a person types `/`. Without it the
+dashboard offers each command by its name alone.
+
 **The channel.** Every call says where the message came from: `"dashboard"`,
 `"cli"` and `"rest"` are the operator's own surfaces; `"social"` is Discord,
 Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,

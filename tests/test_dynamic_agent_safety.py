@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent
-from wactorz.agents.dynamic.safety import imports_a_repair_adds
+from wactorz.agents.dynamic.safety import MAX_DEPTH, _parse, imports_a_repair_adds
 
 BLOCKED = [
     ("os.system('ls')", "os.system"),
@@ -144,13 +144,39 @@ class TestNamesAreReadThroughTheSpelling:
     def test_code_too_deep_to_parse_is_refused_rather_than_raised(
         self, agent: DynamicAgent
     ) -> None:
-        """The parser gives up on deep enough code; the check must still answer."""
+        """The parser gives up on deep enough code; the check must still answer.
+
+        On a small stack, as a thread on Windows has, this depth once took the
+        process down inside the parser, before any Python-level guard fired.
+        """
         code = "x = a" + ".b" * 100_000
 
         verdict = agent._validate_code_safety(code)
 
         assert verdict is not None
         assert "too deeply" in verdict
+
+    def test_code_deeper_than_the_limit_is_refused_even_where_it_parses(
+        self, agent: DynamicAgent
+    ) -> None:
+        """What parses here would still face the compiler on the ordinary stack."""
+        code = "x = a" + ".b" * (MAX_DEPTH + 50)
+
+        verdict = agent._validate_code_safety(code)
+
+        assert verdict is not None and "too deeply" in verdict
+
+    def test_ordinary_nesting_is_well_within_the_limit(self, agent: DynamicAgent) -> None:
+        nested = "".join(f"{'    ' * level}if x[{level}]:\n" for level in range(30))
+        code = nested + "    " * 30 + "y = a.b.c.d(e.f, g[h][i])\n"
+
+        assert agent._validate_code_safety(code) is None
+
+    def test_a_syntax_error_still_comes_back_from_the_parse(self, agent: DynamicAgent) -> None:
+        """Parsed on its own thread, the error must still be the caller's to see."""
+        assert agent._validate_code_safety("def broken(:\n  pass") is None
+        with pytest.raises(SyntaxError):
+            _parse("def broken(:\n  pass")
 
 
 class TestKnownGaps:
@@ -394,6 +420,7 @@ class TestWhatARepairMayImport:
             ("import socket, json\n", ["socket"]),
             ("from urllib import request\n", ["urllib"]),
             ("import importlib.util\n", ["importlib"]),
+            ("import asyncio\n", ["asyncio"]),
         ],
     )
     def test_a_module_the_original_did_not_have_is_named(

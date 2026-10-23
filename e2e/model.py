@@ -29,6 +29,14 @@ async def handle_task(agent, payload):
     return {"result": "counted " + str(agent.state["seen"])}
 """
 
+#: An agent that reads the history without awaiting it, which only main answers:
+#: on a node the call must be awaited.
+READS_HISTORY_BARE = """
+async def handle_task(agent, payload):
+    rows = agent.query_ts(hours=1)
+    return {"result": "rows " + str(len(rows))}
+"""
+
 #: An agent that ends itself a few seconds after it starts, as a planner or a
 #: one-off actuator does once its work is done.
 FINISHER = """
@@ -177,6 +185,32 @@ SCRIPT = {
         description="Needs a package the node has and the list does not",
         capabilities=["sampling"],
         install=[ON_THE_NODE_ALREADY],
+        code=COUNTER,
+    ),
+    # Written while model code still runs on main, and moved once it does not.
+    "start a tallier here": _starts(
+        "Starting it.",
+        name="tallier",
+        type="dynamic",
+        description="Counts the messages it is sent",
+        capabilities=["tallying"],
+        code=COUNTER,
+    ),
+    "start a trend reader here": _starts(
+        "Starting it.",
+        name="trend-reader",
+        type="dynamic",
+        description="Reads the last hour of readings",
+        capabilities=["trends"],
+        code=READS_HISTORY_BARE,
+    ),
+    # Naming no node, after model code is sent to one.
+    "start a second tallier": _starts(
+        "Starting it.",
+        name="tallier-two",
+        type="dynamic",
+        description="Counts the messages it is sent",
+        capabilities=["tallying"],
         code=COUNTER,
     ),
     "start a finisher on the node": _starts(

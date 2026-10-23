@@ -35,6 +35,7 @@ import hashlib
 import importlib
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from ...core.actor import Actor, ActorState, ReplyError, ask_through
@@ -86,6 +87,24 @@ def _readable_here(config: dict) -> tuple[dict[str, dict], str | None]:
         return {}, str(exc)
 
 
+def agent_type(config: dict) -> str:
+    """The kind of agent ``config`` describes, read the same way wherever it is spawned.
+
+    Its ``type``, lowercased, or ``dynamic`` when it names none -- except that a
+    dynamic config with a system prompt and no code is an LLM agent: a model
+    often leaves ``type`` out when it writes one, and with no code there is no
+    other agent it could be.
+    """
+    kind = str(config.get("type") or "dynamic").strip().lower()
+    if (
+        kind == "dynamic"
+        and not str(config.get("code") or "").strip()
+        and str(config.get("system_prompt") or "").strip()
+    ):
+        return "llm"
+    return kind
+
+
 class SpawnPlaceholder:
     """Returned when an agent is being installed+spawned in the background.
 
@@ -98,6 +117,39 @@ class SpawnPlaceholder:
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<SpawnPlaceholder {self.name!r}>"
+
+
+@dataclass(frozen=True)
+class PlacedOnNode:
+    """A spawn sent to a node: there is no actor here to return, only where it went.
+
+    ``running`` is whether main has heard from the node. One that has not is
+    sent the agent all the same: its desired state is kept on the broker, and
+    the node starts the agent when it starts.
+    """
+
+    name: str
+    node: str
+    running: bool
+
+
+@dataclass(frozen=True)
+class KeptHere:
+    """A spawn not sent, because an agent of its name already runs here.
+
+    ``node`` is where the spawn would have gone; ``replace`` moves it there.
+    """
+
+    name: str
+    node: str
+
+
+@dataclass(frozen=True)
+class NotSpawned:
+    """A spawn refused before anything started, and why, as the turn reports it."""
+
+    name: str
+    reason: str
 
 
 if TYPE_CHECKING:
@@ -213,24 +265,21 @@ class SpawnMixin(_Host):
             # the same models. A copy: the caller's dict may be written elsewhere.
             config = {**config, "artifacts": pinned}
 
-        agent_type = config.get("type", "dynamic")
+        kind = agent_type(config)
         code = config.get("code", "").strip()
-        system_prompt = config.get("system_prompt", "").strip()
 
         # ── Route to the right agent class ─────────────────────────────────
-        if agent_type == "native":
+        if kind == "native":
             actor = await self._spawn_native_agent(config, name)
-        elif agent_type == "ha_actuator":
+        elif kind == "ha_actuator":
             actor = await self._spawn_ha_actuator(config, name)
-        elif agent_type == "scheduled":
+        elif kind == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
-        elif agent_type == "rule":
+        elif kind == "rule":
             actor = await self._spawn_rule_agent(config, name)
-        elif agent_type == "module":
+        elif kind == "module":
             actor = await self._spawn_module_agent(config, name)
-        elif agent_type == "llm" or (not code and system_prompt):
-            # Implicit-llm route: a config with a system prompt but no code is
-            # an LLM agent even if 'type' was left at the "dynamic" default.
+        elif kind == "llm":
             actor = await self._spawn_llm_agent(config, name)
         elif code:
             actor = await self._spawn_dynamic_agent(

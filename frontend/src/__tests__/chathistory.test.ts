@@ -157,6 +157,30 @@ describe("fetchChatHistory", () => {
         expect(firstOut).toMatchObject({ id: "hist-main-0", from: "main", to: "user", content: "hello" });
     });
 
+    it("shows a stored reply without its action blocks, and the user's words as typed", async () => {
+        globalThis.fetch = vi.fn(async (url: string) => {
+            if (url.includes("/api/chats")) {
+                return {
+                    ok: true,
+                    json: async () => [
+                        {
+                            id: 2,
+                            ts: 2,
+                            role: "assistant",
+                            content: 'Starting it.\n<spawn>{"name": "a"}</spawn>',
+                        },
+                        { id: 1, ts: 1, role: "user", content: "what is <spawn>x</spawn>?" },
+                    ],
+                };
+            }
+            return { ok: false };
+        }) as unknown as typeof fetch;
+
+        const out = await fetchChatHistory("main");
+
+        expect(out?.map(m => m.content)).toEqual(["what is <spawn>x</spawn>?", "Starting it.\n"]);
+    });
+
     it("strips the [SYSTEM] deletion note and its paired ack from kv_store history", async () => {
         globalThis.fetch = vi.fn(async (url: string) => {
             if (url.includes("/api/chats")) {

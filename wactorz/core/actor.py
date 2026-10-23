@@ -27,11 +27,19 @@ from . import models
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
-from .outbound import DASHBOARD, Answer, answer_topic, check_channel, check_options
+from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
-from .questions import QUESTIONS_KEY, Question, answered, book_of, questions_in
+from .questions import (
+    QUESTIONS_KEY,
+    Question,
+    answered,
+    book_frame,
+    book_of,
+    questions_in,
+    questions_topic,
+)
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
@@ -309,6 +317,68 @@ class ReplyError(RuntimeError):
         self.reply = reply
 
 
+class AskError(RuntimeError):
+    """An ask that could not be sent."""
+
+    @classmethod
+    def no_registry(cls, asker: str, target: str) -> AskError:
+        return cls(f"[{asker}] cannot ask {target!r}: no registry attached")
+
+    @classmethod
+    def mailbox_full(cls, target: str) -> AskError:
+        return cls(f"{target!r} is not taking messages: its mailbox is full")
+
+
+class NotFoundError(LookupError):
+    """An agent, or a question, that is not there to be asked or waited on."""
+
+    @classmethod
+    def agent(cls, target: str) -> NotFoundError:
+        return cls(f"no agent named {target!r} is running")
+
+    @classmethod
+    def question(cls, asker: str, question_id: str) -> NotFoundError:
+        return cls(f"[{asker}] no question with id {question_id!r}")
+
+
+class NoAnswerError(asyncio.TimeoutError):
+    """The time to wait for an answer passed.
+
+    An `asyncio.TimeoutError`, which is what callers catch: on Python 3.10 that
+    is not the builtin `TimeoutError`.
+    """
+
+    @classmethod
+    def from_agent(cls, target: str, timeout: float) -> NoAnswerError:
+        return cls(f"{target!r} did not answer within {timeout:g}s")
+
+    @classmethod
+    def to_question(cls, asker: str, text: str, timeout: float | None) -> NoAnswerError:
+        waited = "" if timeout is None else f" within {timeout:g}s"
+        return cls(f"[{asker}] no answer to {text[:60]!r}{waited}")
+
+
+class UnnamedModelError(KeyError):
+    """A model key the agent's ``models`` does not declare."""
+
+    def __init__(self, key: str, agent: str, named: str) -> None:
+        super().__init__(f"no model {key!r} for {agent} (it names: {named})")
+
+
+class NotBytesError(TypeError):
+    """A key read with `Actor.recall_bytes` that holds something persist_bytes did not write."""
+
+    def __init__(self, key: str, value: Any) -> None:
+        super().__init__(f"{key!r} holds a {type(value).__name__}, not what persist_bytes writes")
+
+
+class NotCallableError(TypeError):
+    """A subscription given something that cannot be called with a payload."""
+
+    def __init__(self, topic: str, callback: Any) -> None:
+        super().__init__(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
+
+
 class AskHost(Protocol):
     """What :func:`ask_through` needs of the actor asking: the actor surface
     every mixin host already declares.
@@ -332,10 +402,10 @@ async def ask_through(
     :meth:`Actor.ask` for the contract.
     """
     if host._registry is None:
-        raise RuntimeError(f"[{host.name}] cannot ask {target!r}: no registry attached")
+        raise AskError.no_registry(host.name, target)
     actor = host._registry.find_by_name(target)
     if actor is None:
-        raise LookupError(f"no agent named {target!r} is running")
+        raise NotFoundError.agent(target)
     task_id = f"ask_{uuid.uuid4().hex[:12]}"
     future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
     host._result_futures[task_id] = future
@@ -346,11 +416,11 @@ async def ask_through(
             ask_payload(payload, task_id=task_id, reply_to=host.actor_id),
         )
         if taken is False:
-            raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+            raise AskError.mailbox_full(target)
         try:
             reply = await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(f"{target!r} did not answer within {timeout:g}s") from None
+            raise NoAnswerError.from_agent(target, timeout) from None
     finally:
         host._result_futures.pop(task_id, None)
     return reply_value(reply, task_id=task_id, target=target)
@@ -476,6 +546,11 @@ class Actor(ABC):
         #: `_resolve_pending_result` as the RESULT is received, ahead of the
         #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
+        #: The manifest this actor last published, as it published it (see
+        #: `_send_manifest`). Main reads its own agents' manifests from here
+        #: rather than from the broker, where any node may publish one under
+        #: their names.
+        self._published_manifest: dict[str, Any] | None = None
         #: Who waits for the person's answer to a question, by question id:
         #: one future per question, and how many waiters share it.
         self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
@@ -519,9 +594,12 @@ class Actor(ABC):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
         # A question asked before a restart is still open: listen for its
-        # answer, which goes to `on_operator_answer` since nothing awaits it.
+        # answer, which goes to `on_operator_answer` since nothing awaits it,
+        # and say again what the book holds, for a reader that missed it.
         if self.open_questions():
             self._hear_answers()
+        if self.questions():
+            await self._publish_questions()
         # Outside whatever turn started this actor: each message brings its own.
         self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
         self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
@@ -1417,7 +1495,7 @@ class Actor(ABC):
                 models.resolve_in_store, declared, resolve_state_dir()
             )
         except ArtifactError as exc:
-            raise ArtifactError(f"{self.name} cannot start without its models: {exc}") from exc
+            raise models.ModelError.cannot_start(self.name, exc) from exc
 
     @property
     def artifacts(self) -> dict[str, dict[str, Any]]:
@@ -1455,7 +1533,7 @@ class Actor(ABC):
         entry = self._artifacts.get(key)
         if entry is None:
             named = ", ".join(sorted(self._artifacts)) or "none"
-            raise KeyError(f"no model {key!r} for {self.name} (it names: {named})")
+            raise UnnamedModelError(key, self.name, named)
         return entry
 
     # ─── State versions ───────────────────────────────────────────────────────
@@ -1630,7 +1708,7 @@ class Actor(ABC):
         if text is None:
             return None
         if not isinstance(text, str):
-            raise TypeError(f"{key!r} holds a {type(text).__name__}, not what persist_bytes writes")
+            raise NotBytesError(key, text)
         return base64.b64decode(text, validate=True)
 
     # ─── Subscriptions ────────────────────────────────────────────────────────
@@ -1664,7 +1742,7 @@ class Actor(ABC):
         failures in a row, which is the supervisor's cue to restart it.
         """
         if not callable(callback):
-            raise TypeError(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
+            raise NotCallableError(topic, callback)
         if self._sub_hub is None:
             self._sub_hub = self._make_hub()
         task = self._sub_hub.bind(topic, _as_coroutine_callback(callback), concurrency=concurrency)
@@ -1841,7 +1919,7 @@ class Actor(ABC):
         channels cannot show.
         """
         if not options:
-            raise ValueError("ask_operator needs options for the person to pick from")
+            raise OptionsError.none()
         self._hear_answers()
         question_id = await self.notify_user(text, options=options, channel=channel, user=user)
         question = Question(
@@ -1852,7 +1930,7 @@ class Actor(ABC):
             user=str(user).strip(),
             asked_at=time.time(),
         )
-        self._write_question(question)
+        await self._write_question(question)
         try:
             return await self.wait_for_answer(question_id, timeout=timeout)
         except asyncio.TimeoutError:
@@ -1865,7 +1943,7 @@ class Actor(ABC):
             options=options,
             id=question_id,
         )
-        self._write_question(
+        await self._write_question(
             Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
         )
         return await self.wait_for_answer(question_id, timeout=timeout)
@@ -1879,7 +1957,7 @@ class Actor(ABC):
         """
         question = self.questions().get(question_id)
         if question is None:
-            raise LookupError(f"[{self.name}] no question with id {question_id!r}")
+            raise NotFoundError.question(self.name, question_id)
         if question.answer is not None:
             return question.answer
         self._hear_answers()
@@ -1894,9 +1972,7 @@ class Actor(ABC):
             # later answer, or another waiter, still needs.
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(
-                f"[{self.name}] no answer to {question.text[:60]!r} within {timeout:g}s"
-            ) from None
+            raise NoAnswerError.to_question(self.name, question.text, timeout) from None
         finally:
             # The last waiter to leave takes the future with it, so a pick that
             # comes later finds nobody waiting and goes to `on_operator_answer`.
@@ -1931,11 +2007,24 @@ class Actor(ABC):
             question.answer_channel,
         )
 
-    def _write_question(self, question: Question) -> None:
-        """Put ``question`` in the book, replacing its earlier record."""
+    async def _write_question(self, question: Question) -> None:
+        """Put ``question`` in the book, replacing its earlier record, and say so."""
         book = self.questions()
         book[question.id] = question
         self.persist(QUESTIONS_KEY, book_of(book))
+        await self._publish_questions()
+
+    async def _publish_questions(self) -> None:
+        """Publish the book, retained, for whoever shows a person what is waiting.
+
+        QoS 1: a lost frame leaves a question asked on no screen.
+        """
+        await self._mqtt_publish(
+            questions_topic(self.actor_id),
+            book_frame(self.name, self.questions()),
+            retain=True,
+            qos=1,
+        )
 
     def _hear_answers(self) -> None:
         """Listen on this actor's answer topic, once."""
@@ -1958,8 +2047,8 @@ class Actor(ABC):
                 "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
             )
             return
-        settled = answered(question, answer.option, answer.index, answer.channel)
-        self._write_question(settled)
+        settled = answered(question, answer.option, answer.index, answer.channel, answer.note)
+        await self._write_question(settled)
         waiting = self._answer_waiters.pop(answer.id, None)
         if waiting is not None and not waiting[0].done():
             waiting[0].set_result(answer.option)
@@ -2013,6 +2102,15 @@ class Actor(ABC):
             "output_schema": output_schema or {},
             "timestamp": time.time(),
         }
+        await self._send_manifest(manifest)
+
+    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+        """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
+
+        Every manifest goes out through here, so the copy main trusts for its
+        own agents is always the one last sent.
+        """
+        self._published_manifest = manifest
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:

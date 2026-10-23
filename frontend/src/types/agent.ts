@@ -206,11 +206,6 @@ export interface AnswerPayload {
     timestampMs: number;
 }
 
-/** Custom DOM event payload for agent selection. */
-export interface AgentSelectedEvent {
-    agent: AgentInfo;
-}
-
 /** Host-level system stats from the backend. */
 export interface HostStats {
     cpu?: number;

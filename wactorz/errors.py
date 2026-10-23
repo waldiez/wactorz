@@ -15,3 +15,10 @@ class StartupError(RuntimeError):
     says what to change. The command turns it into exit status 1; a host
     program catches it like any other exception.
     """
+
+
+class NoSystemError(RuntimeError):
+    """A call that needs a running system, made with none running."""
+
+    def __init__(self) -> None:
+        super().__init__("wactorz.ask: no system is running; start one with run() or serve()")

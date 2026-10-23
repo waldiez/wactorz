@@ -20,6 +20,7 @@ from ...config import (
 )
 from ...core.actor import Actor, Message, MessageType
 from ...core.node_signing import node_control_properties
+from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
 from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
@@ -29,6 +30,7 @@ from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
 from .artifact_service import ArtifactService
+from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
@@ -40,6 +42,7 @@ from .manifests import ManifestRegistry
 from .memory import MemoryMixin
 from .migration import Migration
 from .nodes import NodeManager
+from .placement import PlacedOnNode, Placement
 from .planning import PlanningMixin, starts_with_bypass
 from .routing import RoutingMixin
 from .spawns import SpawnService
@@ -164,8 +167,18 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.artifact_service = ArtifactService(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
+        self.placement = Placement(self)
         self.delegation = DelegationManager(self)
         self.lifecycle = LifecycleService(self)
+
+    async def dashboard_answer(self, answer: Answer) -> None:
+        """A press on the dashboard for a question main asked, handed over in this process.
+
+        Main's questions are permissions -- whether code the model wrote may run
+        here -- so their answers are taken from the web server, never from the
+        broker (see :class:`~wactorz.core.outbound.TakesDashboardAnswers`).
+        """
+        await self.placement.dashboard_answer(answer)
 
     def _current_interface_source(self) -> str:
         """Return the task-local interface excluded from delegation this turn."""
@@ -277,6 +290,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
         # Send nodes the models their agents name, when they ask for them
         self._tasks.append(asyncio.create_task(self.artifact_service.listener()))
+        # Say on models/<name>/active and /shadow where each model's pointers stand
+        self._tasks.append(asyncio.create_task(self.artifact_service.pointer_watcher()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
@@ -318,6 +333,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def agent_withdrew(self, actor_id: str, name: str = "") -> bool:
         """An agent took its manifest back; whether that stands. Owned by `self.lifecycle`."""
         return await self.lifecycle.agent_withdrew(actor_id, name)
+
+    def node_reported(self, node: str) -> None:
+        """A node's heartbeat arrived: the first from the model-code node moves the model's agents.
+
+        In the background, as a move takes a round trip to the node and back,
+        and the heartbeat listener must not wait for it.
+        """
+        if self.placement.claim_rehoming(node):
+            self._tasks.append(asyncio.create_task(self.placement.rehome(node)))
 
     async def settle_withdrawals(self, node: str, running: set[str]) -> None:
         """Decide the withdrawals held for ``node``. Owned by `self.lifecycle`."""
@@ -550,6 +574,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         excess = len(self._pending_notifications) - self.MAX_PENDING_NOTIFICATIONS
         if excess > 0:
             del self._pending_notifications[:excess]
+
+    def _withdraw_notifications(self, about: str) -> None:
+        """Drop the queued notices about ``about`` that are no longer true.
+
+        A notice says what it is about in its ``about`` field. It waits for the
+        next chat reply, and what it said may have stopped being so meanwhile.
+        """
+        self._pending_notifications[:] = [
+            n for n in self._pending_notifications if n.get("about") != about
+        ]
 
     def _drain_notifications(self) -> str:
         """Pop queued monitor notifications as a formatted prefix string."""
@@ -945,13 +979,23 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Same as the non-streaming path — see _prefix_with_live_context for why.
         prefixed_text = self._prefix_with_live_context(text)
 
-        # Stream the LLM response chunk by chunk
+        # Stream the LLM response chunk by chunk. The action blocks in it run
+        # below, once the reply is whole, so the user is sent the text around them.
         full_chunks = []
+        shown_chunks = []
+        blocks = ActionBlockFilter()
         async for chunk in self.chat_stream(prefixed_text, attachments):
             if isinstance(chunk, dict):
                 break  # usage dict — discard, already tracked inside chat_stream
             full_chunks.append(chunk)
-            yield chunk
+            shown = blocks.feed(chunk)
+            if shown:
+                shown_chunks.append(shown)
+                yield shown
+        rest = blocks.flush()
+        if rest:
+            shown_chunks.append(rest)
+            yield rest
 
         # Replace the prefixed user message in history with the clean original
         # so future turns aren't polluted with stale prefixes.
@@ -960,7 +1004,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         full_response = "".join(full_chunks)
         # Everything the user is sent, for the chat log: the stream above, then
         # whatever is appended to it below.
-        sent = [full_response]
+        sent = ["".join(shown_chunks)]
 
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
@@ -969,8 +1013,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         _, deleted, missing = await self._process_delete_commands(full_response)
 
         # Execute structured <delegate>{...}</delegate> blocks first (preferred
-        # form). The raw block was already streamed to the user above, so append
-        # each result as an additional chunk — same approach as @mention results.
+        # form). The stream above left the block out, so append each result as
+        # an additional chunk — same approach as @mention results.
         full_response, _delegate_results = await self._process_delegate_commands(full_response)
         for _r in _delegate_results:
             extra = "\n" + _r
@@ -1073,7 +1117,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
-    ) -> Actor | SpawnPlaceholder | None:
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         return await self.spawns._spawn_from_config(config, save, from_registry=from_registry)
 
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -1081,8 +1125,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
-    ) -> None:
-        await self.spawns._spawn_remote(config, node, save, restoring=restoring)
+    ) -> bool:
+        return await self.spawns._spawn_remote(config, node, save, restoring=restoring)
 
     def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
         """Sign whatever main addresses to a node's control topics.
@@ -1165,6 +1209,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _node_version_mismatch(self, node_name: str) -> str | None:
         """Why ``node_name`` cannot take an agent from this server, or None."""
         return self.nodes.version_mismatch(node_name)
+
+    def _node_refuses_tasks(self, node_name: str) -> str | None:
+        """Why main would hear nothing an agent on ``node_name`` says, or None."""
+        return self.nodes.refuses_tasks(node_name)
 
     def _online_node_names(self) -> list[str]:
         """Names of all nodes currently considered online."""

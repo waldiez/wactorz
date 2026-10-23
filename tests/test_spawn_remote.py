@@ -144,7 +144,7 @@ class TestWhatGoesOverTheWireVersusWhatIsSaved:
 
         await main.spawn(llm_agent())
 
-        assert main.saved == [llm_agent()]
+        assert main.saved == [{**llm_agent(), "node": "rpi"}]
 
     async def test_the_callers_config_is_left_alone(self) -> None:
         # The same dict is handed to several writers, so synthesis copies.
@@ -397,6 +397,15 @@ class TestSynthesizingTheBridge:
     def test_an_llm_config_without_code_gets_some(self) -> None:
         assert self._inject(llm_agent())["code"]
 
+    def test_a_prompt_without_a_type_gets_code_and_is_named_llm(self) -> None:
+        config = {"name": "helper", "system_prompt": "Be brief."}
+
+        injected = self._inject(config)
+
+        assert injected["code"]
+        assert injected["type"] == "llm", "so a move home takes the bridge code out again"
+        assert "type" not in config, "the caller's dict is left alone"
+
     def test_a_config_that_brought_its_own_code_is_untouched(self) -> None:
         config = llm_agent(code="print(1)")
 
@@ -467,7 +476,7 @@ class TestWhatANodeCanRun:
             {"name": "flic", "type": "native"},
             {"name": "lights", "type": "ha_actuator"},
             {"name": "nightly", "type": "scheduled"},
-            {"name": "helper", "system_prompt": "Be brief."},
+            {"name": "empty"},
         ],
     )
     async def test_one_with_no_program_is_not_sent(self, config: dict[str, Any]) -> None:
@@ -486,6 +495,8 @@ class TestWhatANodeCanRun:
         [
             {"name": "collector", "code": "async def process(agent):\n    pass\n"},
             llm_agent(),
+            # A prompt and no code: an LLM agent, which main writes the code for.
+            {"name": "helper", "system_prompt": "Be brief."},
         ],
     )
     async def test_generated_code_and_an_llm_agent_are(self, config: dict[str, Any]) -> None:

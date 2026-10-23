@@ -20,6 +20,9 @@ TARGET = "imu_anomaly.agent:detect"
         {"name": "collector", "type": "dynamic", "code": "x = 1"},
         {"name": "helper", "type": "llm", "system_prompt": "Be brief."},
         {"name": "helper", "type": "LLM"},
+        # A prompt and no code is an LLM agent, whatever spawns it.
+        {"name": "helper", "system_prompt": "Be brief."},
+        {"name": "helper", "type": "dynamic", "system_prompt": "Be brief."},
     ],
 )
 def test_code_or_an_llm_agent_can_run(config: dict) -> None:
@@ -35,10 +38,9 @@ def test_a_built_in_kind_cannot_and_says_which(agent_type: str) -> None:
 
 
 def test_a_config_with_no_program_cannot() -> None:
-    # A system prompt alone runs as an LLM agent on main, but only an explicit
-    # `type: llm` gets the code a node needs.
-    assert why_a_node_cannot_run({"name": "helper", "system_prompt": "Be brief."})
+    assert why_a_node_cannot_run({"name": "empty"})
     assert why_a_node_cannot_run({"name": "empty", "code": "   "})
+    assert why_a_node_cannot_run({"name": "empty", "system_prompt": "   "})
 
 
 class TestAModuleAgent:

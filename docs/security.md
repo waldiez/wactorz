@@ -148,8 +148,17 @@ the broker. Anything that can publish to it can drive Wactorz.
   the default, a node refuses a command not signed for it; with `warn` it acts on
   it and main says so in chat, to find out what sends unsigned commands before
   refusing them. A node deployed before signing holds no key and checks nothing
-  until it is deployed again, and a node takes the mode at its next `/deploy`. Commands are what is signed: an
-  agent's own messages, and what an agent reads from the broker, are not.
+  until it is deployed again, and a node takes the mode at its next `/deploy`.
+- **Main takes a node's word only from that node.** A node signs everything it
+  publishes with the same key, and main checks it against the node it expects:
+  an agent's task reply, manifest and data samples count only signed by the node
+  main's own records place the agent on, and a node's heartbeat only signed by
+  that node. So code on one node, the sandbox included, cannot answer for
+  another node's agent or describe one to the planner. An unsigned message
+  follows `WACTORZ_NODE_SIGNING`; under `enforce` a node deployed before this
+  stays up but is sent no tasks until it is deployed again. A signature names
+  the machine, not the agent on it, and an agent's status, logs and what agents
+  read from each other on the broker are still not checked.
 - **Main's LLM answers only the nodes it deployed.** An agent on a node asks main's
   LLM over the broker (`main/llm_request`), and main answers with its own budget and
   an account the broker lets write anywhere. So a request names its node and is
@@ -157,6 +166,29 @@ the broker. Anything that can publish to it can drive Wactorz.
   `nodes/<name>/reply/...` topics: a request naming any other reply topic gets
   nothing at all. An unsigned request follows `WACTORZ_NODE_SIGNING` like a command:
   `enforce` answers it with an error, `warn` answers it and main says so in chat.
+  Reads of main's stored history (`main/history_request`, behind `agent.query_ts` and
+  its kind on a node) are admitted the same way, and run only the queries the agent
+  API offers, never SQL a request supplies. A node main deployed may read all of
+  that history: sensor readings, detections and Home Assistant state changes.
+  Each node gets so many model calls and history pages a minute
+  (`WACTORZ_BRIDGE_CALLS_PER_MINUTE`, 60, and
+  `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE`, 600) and only a few running at once;
+  past either, a request is refused at once with a reply saying why, and the
+  first refusal for a node is said on the dashboard. So one node's agent in a loop
+  neither spends main's budget as fast as the provider answers nor holds up the
+  other nodes' requests. A spending cap over all calls is `LLM_COST_LIMIT_USD`.
+- **An operator's answer is not authenticated.** The pick an agent receives from
+  `ask_operator` or `notify_user` arrives on its `agents/<id>/answer` topic, where
+  any node, and anything else holding broker access, can publish one. It says what
+  someone answered, never that you did: do not make it the approval for anything
+  you would not let the agent do unasked. Packages are the exception: they are
+  approved through the dashboard itself, never the broker.
+- **Main's deploy credentials open every node.** The SSH key or password a
+  `DEPLOY_<NODE>_*` block names gives a shell on that node, as the user it names,
+  so whoever holds main's environment holds every node, as with its broker account.
+  A node deployed as root, or as a user with passwordless sudo, hands over root
+  with it. Deploy nodes as a user without sudo: see "Run as a service" in
+  `remote-nodes.md`.
 
 ---
 
@@ -198,8 +230,9 @@ the broker. Anything that can publish to it can drive Wactorz.
    broker has the accounts. Deploy every node again, then rotate the account they
    shared. Where another system shares that broker, name its account in
    `WACTORZ_BROKER_ACCOUNTS`.
-5. Deploy every edge node again after upgrading, so it holds a signing key and
-   refuses unsigned commands (`WACTORZ_NODE_SIGNING=enforce`, the default).
+5. Deploy every edge node again after upgrading, so it holds a signing key,
+   refuses unsigned commands and signs what it publishes
+   (`WACTORZ_NODE_SIGNING=enforce`, the default).
    Publish the broker's `8883` where nodes can reach it first, so the deploy puts
    them on TLS, and check the deploy log says so.
 6. Give Wactorz only the credentials the agents you run actually need.
@@ -207,6 +240,8 @@ the broker. Anything that can publish to it can drive Wactorz.
    the node keys are derived from, and the key of the CA nodes trust the broker by.
 8. Treat the ability to spawn agents as equivalent to shell access, and hand it
    out on that basis.
+9. Deploy each edge node as a user without sudo, with lingering enabled, so the
+   deploy key main holds is not root on the node.
 
 ---
 

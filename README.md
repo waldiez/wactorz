@@ -385,6 +385,7 @@ Contributions of any kind are welcome. See [CONTRIBUTING.md](https://github.com/
 | What | How |
 |---|---|
 | Found a bug | [Open an issue](https://github.com/waldiez/wactorz/issues/new?template=bug_report.yml) |
+| Found an accessibility barrier | [Tell us](https://github.com/waldiez/wactorz/issues/new?template=accessibility.yml); [ACCESSIBILITY.md](https://github.com/waldiez/wactorz/blob/main/ACCESSIBILITY.md) says what we aim for and what we know falls short |
 | Have an idea | [Start a discussion](https://github.com/waldiez/wactorz/discussions) |
 | Want to code | Fork, branch, and open a PR against `dev` (`main` is releases only) |
 | Docs, tests, UI | Same drill, open a PR |

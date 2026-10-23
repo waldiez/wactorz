@@ -24,6 +24,10 @@ describe("buildHeader", () => {
     beforeEach(() => {
         document.body.innerHTML = "";
     });
+    // Popovers hang document-level listeners; one left open answers the next test's Escape.
+    afterEach(() => {
+        releaseHeaderPopovers();
+    });
 
     it("renders the logo/title, connection badge and the view tabs", () => {
         const header = buildHeader({
@@ -44,7 +48,7 @@ describe("buildHeader", () => {
     it("marks the current view active (class + aria-current)", () => {
         const header = buildHeader({
             view: "feed",
-            connState: "demo",
+            connState: "disconnected",
             onSetView: vi.fn(),
             haUrl: null,
             extraViews: [],
@@ -78,8 +82,12 @@ describe("buildHeader", () => {
         });
         document.body.appendChild(header);
         const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
-        expect(audioBtn.getAttribute("aria-haspopup")).toBe("true");
-        expect(audioBtn.getAttribute("aria-controls")).toBeTruthy();
+        // A disclosure, not a menu: no popup role is promised, and the panel it
+        // controls is a group named after it.
+        expect(audioBtn.hasAttribute("aria-haspopup")).toBe(false);
+        const panel = document.getElementById(audioBtn.getAttribute("aria-controls")!)!;
+        expect(panel.getAttribute("role")).toBe("group");
+        expect(panel.getAttribute("aria-label")).toBe("Audio settings");
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         audioBtn.click(); // open: toggles `.open` and positions the popover
         expect(document.querySelector("div.open")).not.toBeNull();
@@ -107,6 +115,26 @@ describe("buildHeader", () => {
         expect(document.querySelector("div.open")).toBeNull();
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         expect(document.activeElement).toBe(audioBtn);
+    });
+
+    it("opening a popover moves focus into it, since it sits at the end of the page", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+        document.body.appendChild(header);
+        const resetBtn = header.querySelector<HTMLButtonElement>('[title="Clear stored state"]')!;
+        // The popovers are stubbed above; give this one something to focus.
+        const panel = document.getElementById(resetBtn.getAttribute("aria-controls")!)!;
+        const first = document.createElement("button");
+        panel.append(first, document.createElement("button"));
+
+        resetBtn.click();
+
+        expect(document.activeElement).toBe(first);
     });
 
     it("Escape closes the More sheet and returns focus to the More button", () => {

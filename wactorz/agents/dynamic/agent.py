@@ -108,6 +108,22 @@ class DynamicAgent(Actor):
     The LLM writes setup/process/handle_task functions; this class runs them.
     """
 
+    #: Whether the stored history (`agent.query_ts` and the rest) is read from
+    #: main over the broker rather than from this process's database: true only
+    #: where the agent is hosted away from main, which overrides the two
+    #: methods below.
+    reads_history_from_main = False
+
+    async def read_history(
+        self, query: str, filters: dict[str, Any], *, hours: float, limit: int
+    ) -> list[dict[str, Any]] | None:
+        """Rows of main's history, read over the broker. See `reads_history_from_main`."""
+        raise NotImplementedError("this host reads the history from its own database")
+
+    async def read_history_stats(self) -> dict[str, Any] | None:
+        """Row counts of main's history, read over the broker. See `reads_history_from_main`."""
+        raise NotImplementedError("this host reads the history from its own database")
+
     def __init__(
         self,
         code: str,  # LLM-generated Python source
@@ -162,6 +178,9 @@ class DynamicAgent(Actor):
         # take.
         self._process_fix_rounds: int = 0
         self._process_fix_errors: list[str] = []
+        #: Why earlier repairs in those rounds were refused, so the next prompt
+        #: says so rather than leaving the model to try the same import again.
+        self._process_fix_refusals: list[str] = []
 
         # What recent calls took, for the percentiles in the metrics frame.
         self._task_seconds = agent_metrics.RecentDurations()
@@ -594,8 +613,9 @@ class DynamicAgent(Actor):
             return f"{type(e).__name__}: {e}"
         return None  # success
 
-    async def _repair_refused(self, fixed: str) -> bool:
-        """Whether ``fixed`` reaches for a module the agent's own program never had.
+    async def _repair_refused(self, fixed: str) -> str | None:
+        """Why ``fixed`` is refused -- it reaches for a module the agent's own
+        program never had -- or None if it is not.
 
         Said in the log and on the agent's log topic. A refused repair is a
         failed one: it spends its round, and the agent falls to the Supervisor
@@ -603,7 +623,7 @@ class DynamicAgent(Actor):
         """
         added = imports_a_repair_adds(self._original_code, fixed)
         if not added:
-            return False
+            return None
         reason = (
             f"Repair refused: it imports {', '.join(added)}, which this agent's program "
             "never did. A repair may fix the program, not give it new capabilities."
@@ -613,7 +633,7 @@ class DynamicAgent(Actor):
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": reason, "timestamp": time.time()},
         )
-        return True
+        return reason
 
     def _running_a_repair(self, fixed: str) -> None:
         """Take ``fixed`` as this agent's program; from now on it is the model's code."""
@@ -797,6 +817,7 @@ class DynamicAgent(Actor):
         error_msg: str,
         traceback_str: str,
         previous_errors: list[str] | None = None,
+        refusals: list[str] | None = None,
     ) -> str | None:
         """Ask the LLM to fix a runtime error in agent code (setup/process).
 
@@ -804,6 +825,9 @@ class DynamicAgent(Actor):
         explicit guidance about the agent API (sync vs async methods).
         `previous_errors` are what earlier repairs of this same code still
         failed with, so the model does not hand back the fix that did not take.
+        `refusals` say why earlier repairs were not run at all. They are this
+        process's own words, naming modules, so they are said outside the block
+        that holds the failing run's text.
         """
         if self._llm_provider is None:
             return None
@@ -815,6 +839,12 @@ class DynamicAgent(Actor):
             listed = "\n".join(f"  - {err[:_ERROR_CHARS]}" for err in previous_errors)
             failure += f"\n\nEarlier repairs of this code each failed again with:\n{listed}"
             history = "This code has already been repaired automatically. Make a different, more thorough fix this time.\n\n"
+        if refusals:
+            listed = "\n".join(f"  - {reason}" for reason in refusals)
+            history += (
+                f"Earlier repairs of this code were not run:\n{listed}\n"
+                "Fix it with the modules the code already imports.\n\n"
+            )
         prompt = (
             "The following Python code raised a RUNTIME ERROR when executed.\n\n"
             f"{purpose}"
@@ -946,9 +976,17 @@ class DynamicAgent(Actor):
         )
         error_msg = str(error) if phase == "process()" else f"{error} (raised in the {phase})"
         fixed = await self._fix_runtime_with_llm(
-            self._code, error_msg, tb, previous_errors=self._process_fix_errors
+            self._code,
+            error_msg,
+            tb,
+            previous_errors=self._process_fix_errors,
+            refusals=self._process_fix_refusals,
         )
-        if fixed is None or await self._repair_refused(fixed):
+        if fixed is None:
+            return False
+        refused = await self._repair_refused(fixed)
+        if refused:
+            self._process_fix_refusals.append(refused)
             return False
         compile_err = await self._replace_program(fixed)
         if compile_err is not None:
@@ -1369,6 +1407,7 @@ class DynamicAgent(Actor):
             self._error_phase = ""
         self._process_fix_rounds = 0
         self._process_fix_errors = []
+        self._process_fix_refusals = []
 
     def _persist_fixed_code(self, fixed_code: str) -> Any:
         """Write the LLM-fixed code back to:

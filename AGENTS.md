@@ -91,6 +91,12 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
   plus an advisory pass that reports but never blocks. The commit hook (prek) and CI both enforce
   the gated rules, so a push that skips them fails rather than merging.
+- **An exception says its own message.** Give the class a classmethod per reason
+  (`ArtifactError.missing(path)`), or a class of its own with the message in `__init__`, and
+  raise that; never `raise ValueError(f"...")` with the words at the raise. Keep the base the
+  callers catch (`ValueError` for rejected input, `asyncio.TimeoutError` for a wait that ran out).
+  Ruff's TRY family enforces it; tests and `e2e/` are exempt, since a fake fails with whatever
+  message the test then looks for.
 - basedpyright (basic mode) is gated too, over `wactorz`, `tests` and `scripts` alike. In a test,
   a fake declares the attributes tests set on it, and where one stands in for a real object it
   says so on that line: `cast()`, or `# pyright: ignore[rule]` naming the rule — never a bare

@@ -21,8 +21,11 @@ from aiomqtt import MqttError
 
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
+from ..agents.main.commands import registry as main_command_registry
+from ..agents.main.commands.dispatch import Form
 from ..core.actor import ActorState, Message, MessageType
-from ..core.mqtt import mqtt_client
+from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
+from ..core.node_publications import admit
 from ..core.task_text import reply_text, task_payload
 from ..core.turns import acting_as, turn_scope
 from ..monitoring import chat_metrics
@@ -82,17 +85,32 @@ NO_MAIN_FOR_NODES = (
 
 
 def remote_node_for(name: str) -> str | None:
-    """The node running ``name``, or None if no node recently said it has it."""
+    """The node running ``name``, or None if no node recently said it has it.
+
+    A node's heartbeat is what says so. Just after main starts no node has
+    reported yet, though the nodes kept running, so for that long the spawn
+    registry answers instead: an agent it places on a node main has not heard
+    from since starting is taken to be there. Once the node reports, or the
+    window passes, only the heartbeat counts -- a node that never comes back is
+    then said to have nothing, rather than every message to it waiting out the
+    reply timeout.
+    """
     # Main itself, not the orchestrator: the node table is main's.
     main_actor = find_main_actor(runtime.registry)
     if not main_actor:
         return None
-    for node_name, nd in main_actor._known_nodes.items():
-        if time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS and name in nd.get(
-            "agents", []
+    known = main_actor._known_nodes
+    for node_name, nd in known.items():
+        if (
+            time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS
+            and name in nd.get("agents", [])
+            and main_actor.nodes.speaks_for(node_name, name)
         ):
             return node_name
-    return None
+    if time.time() - main_actor.metrics.start_time >= NODE_FRESH_SECONDS:
+        return None
+    placed = str(main_actor._get_spawn_registry().get(name, {}).get("node") or "").strip()
+    return placed if placed and placed not in known else None
 
 
 def routable(name: str) -> bool:
@@ -216,6 +234,48 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 #: The slash commands only main answers, whichever orchestrator is installed.
 MAIN_COMMANDS = frozenset({"/deploy", "/migrate"})
 
+#: The commands this server answers itself, before any orchestrator: the plan
+#: cache is main's, and the two listings stand in where nothing else answers.
+SERVER_FORMS = {
+    "/agents": Form("/agents", "list the agents running here"),
+    "/nodes": Form("/nodes", "this process is the one node"),
+}
+
+
+def answered_past_the_server(word: str) -> bool:
+    """Whether ``word``, a command's first word, is answered by more than this server.
+
+    By the orchestrator that claims it, or, with none installed, by main. The
+    server's own listings answer only where neither would.
+    """
+    orchestrator = runtime.orchestrator
+    if orchestrator is not None:
+        return word in orchestrator.commands()
+    return find_main_actor(runtime.registry) is not None
+
+
+def server_forms() -> list[Form]:
+    """The commands typed on the dashboard that this server answers, or hands to main itself.
+
+    What `handle_slash` takes before the orchestrator sees anything, so a list
+    of what the chat answers is complete with an orchestrator that does not
+    claim them.
+    """
+    forms: list[Form] = []
+    if not answered_past_the_server("/agents"):
+        forms.append(SERVER_FORMS["/agents"])
+    if find_main_actor(runtime.registry) is None:
+        forms.append(SERVER_FORMS["/nodes"])
+        return forms
+    handed_to_main = MAIN_COMMANDS | {"/clear-plans"}
+    forms += [
+        form
+        for described in main_command_registry
+        for form in described.forms
+        if command_word(form.usage) in handed_to_main
+    ]
+    return forms
+
 
 async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) -> bool:
     """Dispatch a slash command. Returns True if recognised.
@@ -236,7 +296,11 @@ async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) 
         await reply_fn("[System: Plan cache cleared.]")
         return True
 
-    if cmd == "/agents":
+    if cmd == "/agents" and not answered_past_the_server(cmd):
+        # Main answers every /agents command: the list with its descriptions,
+        # a capability filter, and the verbs (stop, delete, restart), and an
+        # orchestrator that claims /agents answers it its own way. Where
+        # neither would, the running agents are listed here.
         if runtime.registry is None:
             await reply_fn("[agents] Registry not available.")
             return True
@@ -465,6 +529,12 @@ async def _route_chat(
         if main_actor:
             remote_node = destination.remote_node
 
+            refusal = main_actor.nodes.refuses_tasks(remote_node) if remote_node else None
+            if refusal:
+                await reply_fn(f"[error] @{target_name} was not asked: {refusal}.")
+                await _end_fn()
+                return
+
             if remote_node:
                 if blocks:
                     # The files are on this disk; a remote node cannot read them,
@@ -480,8 +550,7 @@ async def _route_chat(
                 }
                 try:
                     async with mqtt_client(
-                        main_actor._mqtt_broker,
-                        main_actor._mqtt_port,
+                        main_actor._mqtt_broker, main_actor._mqtt_port, **v5_kwargs()
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
@@ -496,6 +565,16 @@ async def _route_chat(
 
                             async def _get_reply():
                                 async for msg in client.messages:
+                                    # Any node can answer here: only the one
+                                    # the task went to is listened to.
+                                    if not admit(
+                                        remote_node,
+                                        reply_topic,
+                                        bytes(msg.payload or b""),
+                                        user_properties(msg),
+                                        "a task reply",
+                                    ):
+                                        continue
                                     try:
                                         data = json.loads(msg.payload.decode())
                                         text_out = reply_text(data)

@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
 import { toast } from "../ui/ToastManager";
+import type { FeedItem } from "../types/feed";
 
 // Registries the mocked transport + router populate as main.ts wires them up.
 const mockRouter: Record<string, (...a: any[]) => void> = {};
@@ -215,8 +216,8 @@ describe("main.ts bootstrap", () => {
         wsHandler("mqttStatus")(true); // both up → live: prunes + seeds
         wsHandler("mqttStatus")(true); // unchanged → recompute early-returns
         wsHandler("connected")(); // unchanged → seeded guard holds
-        wsHandler("mqttStatus")(false); // broker down → demo
-        wsHandler("disconnected")(); // /ws down → stays demo
+        wsHandler("mqttStatus")(false); // broker down → disconnected
+        wsHandler("disconnected")(); // /ws down → stays disconnected
         expect(true).toBe(true);
     });
 
@@ -231,6 +232,21 @@ describe("main.ts bootstrap", () => {
         routerHandler("host-stats")({ cpu: 1, memUsedMb: 2, memTotalMb: 3 }); // has stats
         routerHandler("host-stats")({}); // nothing → skip
         expect(true).toBe(true);
+    });
+
+    it("puts a node coming online on the feed, and its next report with the heartbeats", () => {
+        const pushed: FeedItem[] = [];
+        const record = (e: Event) => pushed.push((e as CustomEvent<{ item: FeedItem }>).detail.item);
+        document.addEventListener("af-feed-push", record);
+
+        routerHandler("node-heartbeat")({ node: "a-new-node", agents: ["flic"] });
+        routerHandler("node-heartbeat")({ node: "a-new-node", agents: ["flic"] });
+        document.removeEventListener("af-feed-push", record);
+
+        expect(pushed.map(i => [i.type, i.label])).toEqual([
+            ["health", "node online · 1 agent"],
+            ["heartbeat", "heartbeat · 1 agent"],
+        ]);
     });
 
     it("routes HA raw events through the feed (and ignores non-HA topics)", () => {

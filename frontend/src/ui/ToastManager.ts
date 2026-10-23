@@ -10,8 +10,7 @@
  * stack in the bottom-right corner and auto-dismiss after a configurable delay.
  */
 
-import { escapeHtml } from "./escapeHtml";
-import { button, el } from "./dom";
+import { button, el, testId } from "./dom";
 
 export type ToastType = "chat" | "spawn" | "alert-error" | "alert-warning" | "welcome" | "system";
 
@@ -231,7 +230,7 @@ const CSS = `
 
 .wz-toast__time {
   font-size: 10.5px;
-  color: rgba(255,255,255,0.28);
+  color: var(--af-text-dim);
   flex-shrink: 0;
   margin-left: auto;
 }
@@ -301,6 +300,58 @@ function timeLabel(): string {
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+/** A toast's contents. The title and message come from agents, so they are set
+ *  as text; the theme's colours and label are the dashboard's own. */
+function toastParts(opts: ToastOptions, theme: ThemeEntry): HTMLElement[] {
+    const strip = el("div", "wz-toast__strip");
+    strip.style.background = theme.strip;
+
+    // The initials repeat the title beside them, so they are not read twice.
+    const avatar = el("div", "wz-toast__avatar", initials(opts.title));
+    avatar.style.background = theme.avatar;
+    avatar.setAttribute("aria-hidden", "true");
+
+    const content = el("div", "wz-toast__content");
+    content.append(
+        toastHeader(opts, theme),
+        testId(el("div", "wz-toast__message", opts.message), "toast-message"),
+    );
+    const body = el("div", "wz-toast__body");
+    body.append(avatar, content);
+
+    const parts: HTMLElement[] = [strip, body];
+    if (opts.actions?.length) {
+        parts.push(el("div", "wz-toast__actions"));
+    }
+    parts.push(toastProgress(theme));
+    return parts;
+}
+
+/** Who the toast is from, what kind it is, and when. */
+function toastHeader(opts: ToastOptions, theme: ThemeEntry): HTMLElement {
+    const badge = testId(el("span", "wz-toast__badge", theme.label), "toast-kind");
+    badge.style.color = theme.badge;
+    badge.style.background = theme.badgeBg;
+
+    const header = el("div", "wz-toast__header");
+    header.append(
+        testId(el("span", "wz-toast__name", opts.title), "toast-title"),
+        badge,
+        el("span", "wz-toast__time", timeLabel()),
+    );
+    return header;
+}
+
+/** The bar that runs down until the toast goes. Seen, not read out: it says nothing words do not. */
+function toastProgress(theme: ThemeEntry): HTMLElement {
+    const bar = el("div", "wz-toast__progress-bar");
+    bar.style.background = theme.progress;
+    const progress = el("div", "wz-toast__progress");
+    progress.setAttribute("aria-hidden", "true");
+    progress.appendChild(bar);
+    return progress;
+}
+
 export class ToastManager {
     private container!: HTMLElement;
     private active: HTMLElement[] = [];
@@ -349,24 +400,13 @@ export class ToastManager {
             toastEl.dataset["key"] = opts.key;
         }
 
-        toastEl.innerHTML = `
-      <div class="wz-toast__strip" style="background:${theme.strip}"></div>
-      <div class="wz-toast__body">
-        <div class="wz-toast__avatar" style="background:${theme.avatar}">${escapeHtml(initials(opts.title))}</div>
-        <div class="wz-toast__content">
-          <div class="wz-toast__header">
-            <span class="wz-toast__name">${escapeHtml(opts.title)}</span>
-            <span class="wz-toast__badge" style="color:${theme.badge};background:${theme.badgeBg}">${theme.label}</span>
-            <span class="wz-toast__time">${timeLabel()}</span>
-          </div>
-          <div class="wz-toast__message">${escapeHtml(opts.message)}</div>
-        </div>
-      </div>
-      ${opts.actions?.length ? `<div class="wz-toast__actions"></div>` : ""}
-      <div class="wz-toast__progress">
-        <div class="wz-toast__progress-bar" style="background:${theme.progress}"></div>
-      </div>
-    `;
+        testId(toastEl, "toast").append(...toastParts(opts, theme));
+        if (opts.actions?.length) {
+            // A question with answers to press: grouped under who is asking, so
+            // its buttons are not read out as stray "Yes" and "No".
+            toastEl.setAttribute("role", "group");
+            toastEl.setAttribute("aria-label", opts.title);
+        }
 
         // Action buttons
         if (opts.actions?.length) {

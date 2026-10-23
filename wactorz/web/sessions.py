@@ -137,7 +137,7 @@ class SessionStore:
                 json.dump(self._tokens, handle)
             # Replaced rather than written in place, so a crash mid-write leaves
             # the previous file whole instead of a truncated one nobody can read.
-            os.replace(tmp, self._path)
+            tmp.replace(self._path)
         except OSError as exc:
             logger.warning("[auth] could not persist sessions: %s", exc)
             tmp.unlink(missing_ok=True)

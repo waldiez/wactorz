@@ -15,8 +15,21 @@ from operator import attrgetter
 from .assemble import PromptFragment, Slot, Template, render
 from .fragments import DEFAULT_FRAGMENTS
 
+#: How to place an agent on a node, shown after the NODES list in both of the
+#: planner's prompts. Inserted as a value, never formatted, so braces are single.
+NODE_PLACEMENT_RULES = """WHERE AN AGENT RUNS: a spawn_config may name one of the NODES above as "node": "<name>".
+- Name a node when the request names one, or when the agent needs that machine itself: a
+  camera or other device on it, or its own CPU, memory, disk or temperature. With no "node",
+  a dynamic agent goes where the NODES line says a dynamic agent naming no node goes, or to main.
+- An agent reads the machine it runs on with psutil, installed on every node and on main:
+  psutil.cpu_percent(interval=None), psutil.virtual_memory().percent,
+  psutil.disk_usage('/').percent, psutil.sensors_temperatures(). A machine's own readings
+  need no topic and no sensor entity. Call cpu_percent with interval=None, once
+  per poll: with an interval it blocks the agent while it measures.
+- Name only a node listed under NODES, and never one marked CANNOT TAKE AGENTS or offline."""
+
 #: Asks for a plan as a JSON array of steps, one agent per step.
-#: Fields: workers_desc, topic_schema_ctx, task.
+#: Fields: workers_desc, topic_schema_ctx, nodes_ctx, task.
 DECOMPOSE_TEMPLATE: Template = (
     """You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
@@ -24,6 +37,7 @@ Break the task into steps. Each step is handled by one agent.
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
 {topic_schema_ctx}
+{nodes_ctx}
 DELEGATING TO EXISTING AGENTS — strongly preferred over raw MQTT:
 - When an existing agent has its own LLM/NL planner (look for phrases like
   "internal LLM planner", "PREFERRED interface", or "send_to" in its description),
@@ -101,6 +115,10 @@ OUTPUT RULES:
   Main will combine results using its LLM. Never assign synthesis to a domain agent.
 - Only create new agents when TRULY necessary — prefer existing agents.
 - If one agent can handle everything, output a single-step plan.
+- Never spawn an agent whose only job is to ask the user something or to report that
+  something is missing. If the task cannot be done -- a source only the user can name, a
+  node that cannot take agents -- output one step for "main" whose task is to tell the user
+  what is missing and what they can do.
 - Keep it minimal — avoid unnecessary steps.
 - IMPORTANT: For any step that combines, summarizes, synthesizes or compares results
   from other steps, ALWAYS use "agent": "main" — never a domain agent.
@@ -254,6 +272,7 @@ TYPE 3 — "dynamic"
     "install": ["<pip-package>", ...]       — packages to install before running
     "poll_interval": <seconds>              — how often process(agent) runs
     "artifacts": {"<key>": "<model>"}       — models from STORED MODELS below, read by that key
+    "node": "<node name>"                   — the machine it runs on: see NODES below
     "code": "<full python source as single string with \\n for newlines>"
   MODELS: when the request names a trained model, or a model in STORED MODELS fits it, name it
     in "artifacts" and read it with agent.load_model("<key>") — never re-implement its maths.
@@ -352,6 +371,10 @@ TYPE 3 — "dynamic"
     Slot("rules_head"),
     """- Multiple rules in one request → output ALL agents for ALL rules
 - Each agent does exactly ONE job — keep it minimal
+- Never plan an agent whose only job is to ask the user something or to report that
+  something is missing. When the request cannot be built -- a data source only the user can
+  name, a node that cannot take agents -- output exactly
+  [{"_feasibility_error": "<what is missing, and what the user can do about it>"}]
 - Replace <slug> consistently across paired agents with a short descriptive kebab-case id
 """,
     Slot("rules_state_bridge"),

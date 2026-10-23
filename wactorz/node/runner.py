@@ -59,6 +59,7 @@ from ..core.mqtt import (
     mqtt_client,
     reconnect_wait,
     session_kwargs,
+    user_properties,
 )
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
@@ -68,6 +69,7 @@ from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
+from ..core.topics import RETAINED_AGENT_LEAVES
 from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
@@ -80,7 +82,6 @@ from .signing import (
     ControlGuard,
     message_bytes,
     server_mismatch,
-    user_properties,
 )
 from .state import JsonState, agent_state, flush_states, state_path
 
@@ -100,19 +101,12 @@ SHUTDOWN_TIMEOUT_S = 5.0
 #: single-file runner, which said ``runner``.
 NODE_RUNTIME = "node"
 
-#: The retained topics an agent leaves behind, cleared when it is deleted.
-AGENT_RETAINED_TOPICS = (
-    "status",
-    "heartbeat",
-    "metrics",
-    "logs",
-    "spawned",
-    "manifest",
-    "errors",
-    "detections",
-    "results",
-    "completed",
-)
+
+class NotHostableError(TypeError):
+    """A plugin whose target built something other than an agent."""
+
+    def __init__(self, target: str) -> None:
+        super().__init__(f"{target} did not build an agent this node can host")
 
 
 class NodeRunner:
@@ -179,6 +173,7 @@ class NodeRunner:
             os.environ.get("WACTORZ_NODE_SIGNING", ""),
             self.state_dir,
         )
+        self.publisher.signer = self._control.publication_signer()
 
     @staticmethod
     def _resolve_state_dir(state_dir: str | None) -> Path:
@@ -469,7 +464,7 @@ class NodeRunner:
         module = sys.modules.get(target.partition(":")[0])
         file = getattr(module, "__file__", None)
         if not file or not Path(file).resolve().is_relative_to(directory):
-            raise bundles.BundleError(f"{target} was not loaded from the code its spawn carries")
+            raise bundles.BundleError.not_from_spawn(target)
         bundles.trim(self._bundles_dir, in_use | {directory})
         return plugins.plugin_from(obj, target), directory
 
@@ -483,7 +478,7 @@ class NodeRunner:
             mixin=NodeHosted,
         )
         if not isinstance(actor, NodeHosted):
-            raise TypeError(f"{plugin.target} did not build an agent this node can host")
+            raise NotHostableError(plugin.target)
         actor.host_on(self, config, self.state_dir)
         readable = self.readable_artifacts(config)
         if readable:
@@ -685,7 +680,7 @@ class NodeRunner:
         topic. The runner does it because it has the connection open and knows
         the actor id, so the purge works even when main is unreachable.
         """
-        for leaf in AGENT_RETAINED_TOPICS:
+        for leaf in RETAINED_AGENT_LEAVES:
             try:
                 await self.publish(f"agents/{actor_id}/{leaf}", b"", retain=True)
             except Exception as e:
@@ -793,8 +788,15 @@ class NodeRunner:
         )
 
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
-        """Publish a heartbeat for the runner process itself, so the node appears."""
+        """Publish a heartbeat for the runner process itself, so the node appears.
+
+        A heartbeat that cannot be built or sent is retried on the next
+        interval, and the reason is logged once per distinct failure: a node
+        that never appears on the dashboard is otherwise a silence with
+        nothing to read.
+        """
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.node.{self.node_name}"))
+        last_error: str | None = None
         while self._running:
             try:
                 agent_names = list(self.agents)
@@ -825,10 +827,15 @@ class NodeRunner:
                         "slow_retry": self.supervisor.slow_retrying(),
                     },
                 )
+                last_error = None
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as exc:
+                text = f"{type(exc).__name__}: {exc}"
+                if text != last_error:
+                    logger.warning("[%s] heartbeat not sent: %s", self.node_name, text)
+                    last_error = text
                 await asyncio.sleep(interval)
 
     # ── Control plane ─────────────────────────────────────────────────────────

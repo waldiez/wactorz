@@ -5,6 +5,13 @@ An agent announces what it publishes and subscribes to as a retained message on
 contract directly. For one on another machine it is the only channel: main
 learns a remote agent's real topics and schemas here or not at all.
 
+What a manifest says reaches the planner, which writes agents that act with
+main's credentials, and any node may publish under any agent's id. So a manifest
+counts only from where the agent is: one for main's own agent is read from the
+agent itself, never the broker's copy, and one for an agent on a node must be
+signed by the node main places it on (see `voices`). The same holds for the data
+samples recorded for a remote agent.
+
 Three tables move together, which is why they live in one place: what each agent
 declared, which agents publish a given topic, and the TopicBus the planner wires
 from. A deletion has to reach all three, or the agent keeps being offered as a
@@ -16,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...core.mqtt import (
@@ -24,7 +32,10 @@ from ...core.mqtt import (
     install_id,
     mqtt_client,
     session_kwargs,
+    user_properties,
 )
+from ...core.node_publications import admit
+from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
     from .hosts import ManifestHost
@@ -57,6 +68,19 @@ def _decoded_json(payload: bytes | None) -> Any | None:
         return json.loads(payload.decode())
     except Exception:
         return None
+
+
+def _claimed_node(known_nodes: dict[str, dict[str, Any]], name: str, data: dict[str, Any]) -> str:
+    """The node an agent main placed nowhere is on: the one it names, or whose heartbeat lists it."""
+    named = str(data.get("node") or "").strip()
+    if named:
+        return named
+    return next((node for node, info in known_nodes.items() if name in info.get("agents", [])), "")
+
+
+def _as_sent(manifest: dict[str, Any]) -> dict[str, Any]:
+    """``manifest`` as a subscriber would read it back: through JSON, as it is published."""
+    return json.loads(json.dumps(manifest, default=str))
 
 
 class ManifestRegistry:
@@ -96,7 +120,9 @@ class ManifestRegistry:
                     logger.info("[main] Subscribed to agent manifests.")
                     last_error = None
                     async for message in client.messages:
-                        await self.receive_manifest(str(message.topic), message.payload)
+                        await self.receive_manifest(
+                            str(message.topic), message.payload, user_properties(message)
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -117,12 +143,20 @@ class ManifestRegistry:
                     )
                 await asyncio.sleep(RECONNECT_DELAY_S)
 
-    async def receive_manifest(self, topic: str, payload: bytes | None) -> None:
+    async def receive_manifest(
+        self, topic: str, payload: bytes | None, properties: Mapping[str, str] | None = None
+    ) -> None:
         """Take one manifest message, or a tombstone.
 
         An empty retained payload is how a deleted agent announces itself. It
         has to clear every table, or the agent keeps appearing — reported as not
-        running, and never going away.
+        running, and never going away. Whether a withdrawal stands is the
+        lifecycle's call, made from where the agent runs, so it is not checked
+        here.
+
+        ``properties`` are the user properties the message arrived with; None
+        for one that did not come off the broker, which has no signature to
+        check. See :meth:`_trusted`.
         """
         if not payload:
             await self._forget_agent(self._actor_id_from(topic))
@@ -133,7 +167,56 @@ class ManifestRegistry:
             return
         if not isinstance(data, dict):
             return
-        self._accept_manifest(data)
+        trusted = self._trusted(topic, payload, data, properties)
+        if trusted is not None:
+            self._accept_manifest(trusted)
+
+    def _trusted(
+        self,
+        topic: str,
+        payload: bytes,
+        data: dict[str, Any],
+        properties: Mapping[str, str] | None,
+    ) -> dict[str, Any] | None:
+        """The manifest to record for ``data``, or None when it is not the agent's word.
+
+        For main's own agent, what it published itself, whatever arrived: the
+        copy on the broker may be anyone's. For an agent on a node, ``data`` as
+        long as the node main places it on signed it -- or, for one main placed
+        nowhere, the node it names or whose heartbeat lists it, while no other
+        node's manifest for it is held.
+        """
+        host = self.host
+        name = str(data.get("name") or "")
+        if host is None or not name:
+            return data
+        local = host._registry.find_by_name(name) if host._registry is not None else None
+        if local is not None:
+            own = getattr(local, "_published_manifest", None)
+            return _as_sent(own) if isinstance(own, dict) else None
+        if properties is None:
+            return data
+        placed = placed_node(host, name)
+        node = placed or _claimed_node(host._known_nodes, name, data)
+        if not speaks_for(host, node, name):
+            logger.warning(
+                "[main] Ignoring a manifest for %r from %r: main does not place it there",
+                name,
+                node or "an unknown node",
+            )
+            return None
+        held = None if placed else self.manifests.get(name)
+        if held is not None and held.get("node") not in (None, node):
+            logger.warning(
+                "[main] Ignoring a manifest for %r from %r: node %r already speaks for it",
+                name,
+                node,
+                held.get("node"),
+            )
+            return None
+        if not admit(node, topic, payload, properties, "an agent manifest"):
+            return None
+        return {**data, "node": node}
 
     @staticmethod
     def _actor_id_from(topic: str) -> str:
@@ -316,9 +399,33 @@ class ManifestRegistry:
         if not isinstance(payload, dict):
             return None
         agent_name = self._producer_of(topic)
-        if not agent_name:
+        if not agent_name or not self._from_producer(agent_name, topic, message):
             return None
         return agent_name, topic, payload
+
+    def _from_producer(self, agent_name: str, topic: str, message: Any) -> bool:
+        """Whether a sample may be recorded for ``agent_name``: signed by its node, if it has one.
+
+        A sample for main's own agent is taken as it comes: main's agents do not
+        sign, so there is nothing to tell their messages from another's by.
+        """
+        host = self.host
+        if host is None:
+            return True
+        if host._registry is not None and host._registry.find_by_name(agent_name):
+            return True
+        contract_node = placed_node(host, agent_name) or _claimed_node(
+            host._known_nodes, agent_name, {}
+        )
+        if not speaks_for(host, contract_node, agent_name):
+            return False
+        return admit(
+            contract_node,
+            topic,
+            bytes(message.payload or b""),
+            user_properties(message),
+            "a data sample",
+        )
 
     async def _remote_observed_samples_listener(self) -> None:
         """Record what remote agents actually publish, as they publish it.

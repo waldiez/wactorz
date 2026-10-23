@@ -17,11 +17,12 @@ Dashboard  ◄──MQTT──  agents/{id}/heartbeat  ◄──┘  heartbeats 
 
 Agents on a node appear in the central dashboard alongside local ones. The only visual difference is a `node` field in their heartbeat payload showing which machine they run on.
 
-Four things differ on a node, and nothing else does:
+These differ on a node, and nothing else does:
 
 - **Publishing** goes through a bounded in-memory queue rather than the server's SQLite-backed outbox. A node has no outbox, so the queue is sized for a long outage and every dropped message is counted.
 - **Agent state** is JSON under `~/wactorz/state/` rather than a pickle, so it survives the node and main running different Python versions — and so a migration can ship it over MQTT.
-- **The LLM** stays on main. `agent.llm.chat(...)` works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node.
+- **The LLM** stays on main. `agent.llm.chat(...)` works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node. Main answers each node up to `WACTORZ_BRIDGE_CALLS_PER_MINUTE` calls a minute (60), and history pages up to `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE` (600); past that, a call comes back as an `[LLM error: ...]` text saying why, and a history read fails and says so in the node's log.
+- **The history** stays on main too. `await agent.query_ts(...)`, `query_detections`, `query_ha_states` and `ts_stats` read main's database over the broker (`main/history_request`), signed like an LLM request, a page at a time. On a node they must be awaited. Any node main deployed may read all of main's recorded history: sensor readings, detections and Home Assistant state changes.
 - **Tasks** arrive on an MQTT topic rather than in a mailbox, and the reply goes back the same way.
 
 > Earlier releases deployed a single self-contained `remote_runner.py` instead, which carried its own copy of the agent contract. A node deployed that way keeps working — main reads its heartbeat as `runtime: runner` — and redeploying it installs the package. Agent state files carry over untouched.
@@ -105,6 +106,24 @@ WantedBy=multi-user.target
 A user unit is the same minus `User=`, with `WantedBy=default.target`, and lives
 at `~/.config/systemd/user/wactorz-node.service`.
 
+**Deploy as a user without sudo.** Main keeps the deploy key for every node it
+deploys, so whoever holds main's environment has a shell on each one as the deploy
+user: as root, when that user is root or has passwordless sudo. A user unit needs
+neither. On the node, as root, enable lingering for the user once, and remove the
+system unit an earlier deploy may have installed, which a user without sudo cannot:
+
+```bash
+sudo loginctl enable-linger pi
+sudo systemctl disable --now wactorz-node
+sudo rm -f /etc/systemd/system/wactorz-node.service
+```
+
+Then take away the user's passwordless sudo, if it has one, and `/deploy` the
+node again: it installs a user unit. What needs root on the node is then yours to do there: system packages,
+such as `python3-venv`, and a `/nodes run` that starts with `sudo`. A node on main's
+own machine (see below) is set up differently: its user may restart its own unit
+and nothing else.
+
 Four details worth knowing if you write one by hand:
 
 - **`Restart=on-failure`, not `always`.** `/nodes shutdown` exits cleanly on
@@ -159,7 +178,15 @@ From the main Wactorz chat, add a `"node"` field to any spawn request. The plann
 ```
 "deploy a temperature sensor agent to rpi-livingroom"
 "spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds"
+"alert me when the CPU of rpi-livingroom stays above 80%"
 ```
+
+The planner is told which nodes there are, what each machine is and what it runs.
+An agent that needs a machine itself -- a camera on it, or its own CPU, memory, disk
+or temperature -- goes on that node, and reads the machine with `psutil`, which every
+node has: no MQTT topic or Home Assistant entity has to publish those readings. A
+node that cannot take an agent now, being offline or deployed before nodes signed
+what they publish, is listed as such, and a plan that needs it says so instead.
 
 #### Manual spawn via chat
 
@@ -194,7 +221,7 @@ The `"install"` list is usually written by the model, and a plausible guess at a
 
 - A package on the list of packages installed without asking goes through at once. That list holds what the catalogue and the examples install, the packages the installer knows by their import names (`cv2` → `opencv-python`), those named in `WACTORZ_PIP_ALLOW` on main, and those you have allowed since.
 - A package already installed where the agent runs is not asked about on main, since nothing is installed. A node installs whatever the spawn lists, so there every package not on the list is asked about.
-- Anything else is asked about on the dashboard: a notice that stays until you answer names the agent and the packages, with **Install** and **Refuse**. The same question is in the installer's thread in Chat, which opens while it asks, so a notice you dismissed is not lost. **Install** allows them from then on, and lets through any other spawn waiting for the same packages. **Refuse**, or no answer within two minutes, means the agent is not sent, and the dashboard says why; a question nobody answered closes as "No answer in time", and asking for the agent again asks again.
+- Anything else is asked about on the dashboard: a notice that stays until you answer names the agent and the packages, with **Install** and **Refuse**. The same question is in the installer's thread in Chat, which opens while it asks, so a notice you dismissed is not lost. **Install** allows them from then on, and lets through any other spawn waiting for the same packages. **Refuse**, or no answer within two minutes, means the agent is not sent, and the dashboard says why; a question nobody answered closes as "No answer in time". For ten minutes after either, a request for the same package is refused without asking (main's log says when it was refused), so a model retrying the spawn does not put the question to you again; `/packages allow` lifts that at once.
 - `/packages` shows the list, `/packages allow <name> …` adds to it and `/packages forget <name> …` takes off what you added. Forgetting applies to agents placed from then on: an agent already saved keeps the packages it was placed with, and is reinstalled with them when it is restored, so that a restart never waits on you. Delete the agent to be rid of them. Typing `/deploy-pkg` in the terminal allows the packages it names.
 
 Only the dashboard's own button counts: the installer is handed the press by the web server in the same process and does not listen for answers on the broker, where any agent could publish one. The same applies to an agent spawned on main, and to a move to a node with `/migrate`, which clears the list before the agent stops. An agent put back where it already ran — restored at start, or after a move that failed — is not asked about again: its packages were cleared when it was first placed.
@@ -310,9 +337,9 @@ refused. A node may:
 - publish and read its own `nodes/<name>/...`;
 - publish and read the agent traffic every host shares, `agents/#` — except
   `agents/+/commands`, which stops agents on the server;
-- write, and not read, `main/llm_request` and `main/reply/#`: it asks main's
-  model and answers main's tasks, without seeing what another node asks or
-  answers;
+- write, and not read, `main/llm_request`, `main/history_request` and
+  `main/reply/#`: it asks main's model, reads main's history and answers main's
+  tasks, without seeing what another node asks or answers;
 - publish and read the data topics agents use by convention — `custom/#`,
   `sensors/#`, `home/#`, `schedule/#` — and read
   `homeassistant/state_changes/#`.
@@ -322,8 +349,11 @@ direction, so it can neither drive, impersonate nor watch another node;
 `system/`; and whatever else shares the broker, such as `zigbee2mqtt/` or Home
 Assistant's discovery topics.
 
-`agents/#` being open means a node can publish under any agent's topics, and
-a message there does not say who sent it. Main therefore does not take an
+`agents/#` being open means a node can publish under any agent's topics. What
+main takes from there as an agent's word -- the reply to a task, its manifest,
+the data samples it records for the planner -- it takes only signed by the node
+it places that agent on (see "What a node publishes is signed" below). Main
+does not take an
 agent's withdrawal, the empty manifest that says it is gone, from that alone:
 one for an agent still running on main is ignored, and one for an agent on a
 node waits for that node's next heartbeat, which only the node can publish,
@@ -332,7 +362,7 @@ gone quiet counts too: the withdrawal waits until it speaks again, or until
 main gives up on it after its grace period, which removes its agents anyway.
 Only for a node main does not know at all, such as one that was down when main
 started, is a withdrawal taken at once. What else a node can publish under
-another agent's topics, such as its manifest or status, is taken as given.
+another agent's topics, such as its status or logs, is taken as given.
 
 That includes tasks. A task on `agents/by-name/<name>/task` reaches the agent of
 that name on whichever node runs it, and any node may publish one, so an agent
@@ -434,6 +464,35 @@ it up with the rest of the state directory. To rotate the keys, delete it and de
 every node again: until a node is redeployed, it reports or refuses what the new
 secret signs.
 
+#### What a node publishes is signed
+
+The other direction uses the same key. A node signs everything it publishes, and
+main checks the signature against the node it expects to hear from: for a node's
+heartbeat and reports, the node whose topic it is; for an agent's task reply,
+manifest or data samples, the node main's own records place the agent on, never
+the one a heartbeat claims. An agent on main is spoken for by no node: main reads
+its manifest from the agent itself. An agent main has no record of, one a node
+started by itself, belongs to the node that first speaks for it.
+
+So code running on one node, the sandbox included, can speak only for that node's
+agents. It cannot answer a task sent to another node's agent before that agent
+does, since main waits for the reply its own node signed. And it cannot describe
+another agent to the planner. A signature names the machine, not the agent on it:
+an agent can sign as any other agent on its own node.
+
+A message main cannot check follows `WACTORZ_NODE_SIGNING`, as a command does:
+
+- `enforce` (the default) refuses it. A node deployed before nodes signed what they
+  publish still counts as up, so its agents are not removed, but main believes
+  nothing else its heartbeats say, sends it no tasks, refuses to spawn or move an
+  agent there, and says in chat that it needs `/deploy <node>`. The dashboard
+  shows the node's agents as main knows them. After upgrading main, deploy every
+  node again.
+- `warn` takes it, and says so in chat and the log.
+
+Each heartbeat is taken once, so one captured and delivered again does not make a
+node that has gone away look up.
+
 ### Encrypted connections (TLS)
 
 A node's broker connection carries its account's password and the code of every
@@ -499,6 +558,101 @@ Learned keys live in `<WACTORZ_STATE_DIR>/known_hosts`, or wherever `DEPLOY_KNOW
 ```bash
 ssh-keyscan 192.168.1.52 >> "$DEPLOY_KNOWN_HOSTS"   # after verifying the fingerprint
 ```
+
+### A node on main's own machine
+
+Main holds every credential the deployment has: the model's API key, Home
+Assistant's token, the SSH keys for your nodes, the key that signs commands to
+them. Code a model writes, possibly from an email or a web page it read, is
+safer run somewhere that holds none of them. A node holds none of them. A node
+on main's own machine, under a user of its own, gives that code a place to run
+without a second machine.
+
+On Linux with systemd, set it up once, as root, from the directory main runs in:
+
+```bash
+sudo .venv/bin/wactorz-node setup-local
+```
+
+It makes a system user, `wactorz-node`, with its home in `/var/lib/wactorz-node`.
+It makes an SSH key in main's state directory and lets that user accept it from
+this machine only. It lets that user restart its own unit and run nothing else
+as root. It installs the unit, and it prints the lines to add to main's `.env`:
+
+```bash
+DEPLOY_TARGETS=sandbox          # with your other nodes, if you have any
+DEPLOY_SANDBOX_HOST=127.0.0.1
+DEPLOY_SANDBOX_USER=wactorz-node
+DEPLOY_SANDBOX_KEY=/path/to/state/sandbox_node_ed25519
+```
+
+Restart main, then `/deploy sandbox`. The node is called `sandbox` because
+`local` and `main` already mean main itself: `/migrate <agent> local` moves an
+agent to main, and the dashboard lists main's agents under `local`. No node can
+be deployed under either name. From there it is a node like any other:
+`/deploy sandbox` again upgrades it, and the packages its agents install reach it
+the way they reach every node. SSH has to be running on the machine, and
+`AllowUsers` in `sshd_config`, if you use it, has to include `wactorz-node`.
+
+The unit is sandboxed, which the units on other nodes are not: only
+`~/wactorz/state` is writable, the venv it runs from is read-only, the homes
+and main's `.env` and state directory are hidden, and it has no devices, no
+capabilities and no way to gain privilege. A deploy restarts this unit and
+never rewrites it, so the sandbox can be changed only by running
+`setup-local` again. An agent that needs a camera or GPIO belongs on a node
+with the device.
+
+The node's user must not be able to read main's secrets. Inside the unit they
+are hidden, but a package install runs outside it, as that user. So setup
+stops while main's `.env` or state directory is readable by `wactorz-node`.
+Run it again with `--fix-permissions` to make them readable by main's user
+alone. `--main-user`, `--env-file` and `--state-dir` name main's user and
+files, where `sudo` and the current directory do not.
+
+The node's log is in the system journal, which its user cannot read, so a
+deploy that fails cannot bring back the log's last lines. Read them with
+`journalctl -u wactorz-node`.
+
+In the compose stack the node is a container instead: see
+[the sandbox node](deployment.md#the-sandbox-node). It needs no `DEPLOY_TARGETS`
+entry, since nothing reaches it over SSH: it gets a broker account, as the node
+`WACTORZ_MODEL_CODE_NODE` names does.
+
+#### Sending model-written code there
+
+Once there is a node named `sandbox` — a deploy target, or a node main hears
+from — a `<spawn>` whose code the model wrote, naming no node, runs there
+rather than in main's process. The chat says so: "Spawned 'scraper' on node
+'sandbox'". `WACTORZ_MODEL_CODE_NODE` names another node instead, and `main`
+keeps the code on main.
+
+The model's agents already running on main move to the sandbox the first time
+it reports after a start, as `/migrate` would move them, state and all, and the
+chat lists them. One stays on main, named in the chat with the reason, when it
+reads the history without `await` (`agent.query_ts(...)` rather than
+`await agent.query_ts(...)`), which only main answers that way, or when its move
+is refused. The agents move one after another, each as `/migrate` would move
+it, so with many it takes a while. A move clears the agent's packages as
+`/migrate` does: an agent with a package not on the list asks you about it on
+the dashboard, and one whose question goes unanswered stays on main, which the
+chat says. An
+agent that runs main's own classes is not moved: an LLM agent, a rule, a
+schedule, a catalogue or library agent. Nor is an agent restored from main's
+records, or one you move with `/migrate`. The agents the planner spawns for a
+plan go the same way: one sent to the node is waited for until the node reports
+it running, and the plan's steps reach it through main.
+
+A spawn the model wrote that names `main` is asking for main's credentials, and
+`WACTORZ_MODEL_CODE_ON_MAIN` decides what happens to it. With `ask`, the default,
+the dashboard asks you, with **Run on main** and **Refuse**, and only the
+dashboard's button counts, never an answer on the broker. Refused, or not
+answered within two minutes, it is not spawned, and for ten minutes the same
+spawn is refused without asking again. `allow` lets it run on main without
+asking, and `never` refuses it.
+
+If the node named is neither one of `DEPLOY_TARGETS` nor a node main has
+heard from, such a spawn is refused, never quietly run on main. If it is, but the node is not running, the agent is
+sent all the same and starts when the node does; the chat says so.
 
 ---
 

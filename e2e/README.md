@@ -5,7 +5,7 @@ strictly: a real broker, the application as a process, a node deployed to anothe
 machine over SSH, and a browser.
 
 ```bash
-make e2e-setup   # once: Playwright and the browser it drives
+make e2e-setup   # once: Playwright, the browser it drives, and the frontend's packages (axe)
 make e2e         # needs Docker
 ```
 
@@ -43,6 +43,21 @@ guard (`harness/guard.py`) fails the journey on:
 A journey that provokes one of these on purpose says which, with
 `unexpected.allow(pattern)`, beside the reason.
 
+## Accessibility
+
+A journey checks the page with [axe](https://github.com/dequelabs/axe-core) where
+it shows something new: every view, a conversation, the feed with entries in it,
+the history panel, the question before a delete, a question on a notice and in
+the thread. `dashboard.assert_accessible(where)` fails on a serious or critical
+finding, saying what axe measured (for contrast, the ratio and both colours).
+
+The frontend's unit tests apply the same rule to every view under happy-dom,
+which judges structure but not colour; the browser here judges both.
+
+A finding that has to stay for now goes in `harness/axe-accepted.json`, read by
+both: the rule, part of the element's selector as axe prints it, and the reason.
+Fix rather than list where it is in reach.
+
 ## The journeys
 
 | | |
@@ -58,6 +73,8 @@ A journey that provokes one of these on purpose says which, with
 | 09 | The server restarts: its agents, the node's agents, the conversations and the open tab all carry on. |
 | 10 | Agents are deleted one by one, then everything is wiped: what is left is what a fresh install runs, and the node, still deployed and running nothing. |
 | 11 | Main's model checks the node's disk by a named operation and is refused a command of its own; `/nodes run` runs one; an agent needing a package nobody allowed waits for the operator's answer on a notice, and the installer's thread opens while it asks. |
+| 12 | Code the model writes runs on main until a node is set for it; then the agents that can move there do, the chat says which stayed and why, and new ones start there. |
+| 13 | The address names the open view: a refresh returns to it, Back steps through the views visited, a link opens the conversation it names, and an address with no view opens the last one. |
 
 ## Order
 

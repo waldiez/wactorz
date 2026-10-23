@@ -29,6 +29,11 @@ RUN pip3 install --no-cache-dir \
 RUN addgroup -S -g 1000 wactorz \
     && adduser -S -D -H -u 1000 -G wactorz -h /data/state/home -s /sbin/nologin wactorz
 
+# The user the sandbox node runs as, when sandbox_node is on: code the model
+# writes runs there, and none of the add-on's data is open to it.
+RUN addgroup -S -g 1001 wactorz-sandbox \
+    && adduser -S -D -H -u 1001 -G wactorz-sandbox -h /data/sandbox/home -s /sbin/nologin wactorz-sandbox
+
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

@@ -29,13 +29,13 @@ import {
     voiceThreadTarget,
 } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
-import { safeStorage } from "../../safeStorage";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
 import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, listen } from "../../events";
+import { rememberConversation, rememberedConversation } from "./viewRoutes";
 
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
@@ -48,9 +48,6 @@ export interface ChatHost {
     /** Agents sorted with main pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
 }
-
-/** Where the picked agent is remembered between visits. */
-const CHAT_TARGET_KEY = "wactorz-chat-target";
 
 export class DashboardChat {
     /**
@@ -135,7 +132,8 @@ export class DashboardChat {
     }
 
     /**
-     * Mark the target as the user's own: remembered, and no longer movable.
+     * Mark the target as the user's own: remembered, no longer movable, and,
+     * with the chat open, in the address.
      *
      * The two ways in are picking an agent and sending to one. Not the third:
      * an agent going away moves the conversation by assigning the field
@@ -145,7 +143,7 @@ export class DashboardChat {
     private _claimTarget(name: string): void {
         this._targetSettled = true;
         if (name) {
-            safeStorage.set(CHAT_TARGET_KEY, name);
+            rememberConversation(name, this.host.getView());
         }
     }
 
@@ -467,7 +465,7 @@ export class DashboardChat {
      */
     resolveDefaultTarget(): void {
         const agents = [...this.host.agents.values()];
-        const remembered = safeStorage.get(CHAT_TARGET_KEY);
+        const remembered = rememberedConversation();
         if (!this.chatTarget) {
             this.chatTarget = preferredChatTarget(agents, remembered);
             return;

@@ -24,6 +24,8 @@ if TYPE_CHECKING:
     from ..prompts.assemble import PromptFragment
     from .artifact_service import ArtifactService
     from .migration import Migration
+    from .nodes import NodeManager
+    from .placement import Placement
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -41,15 +43,34 @@ class ListenerHost(Protocol):
     _mqtt_port: int
 
 
-class ManifestHost(ListenerHost, Protocol):
-    """The manifest registry needs a connection, and somewhere to report a loss.
+class VoiceHost(Protocol):
+    """What deciding who may speak for an agent reads: main's own records of where agents are."""
 
-    It owns its own tables and answers from them, so this stays at one method.
-    A withdrawn manifest is the wire's way of saying an agent is gone, and the
-    registry is the only thing listening — but removing an agent belongs to the
-    lifecycle, not to a table of capabilities, so it hands the name over rather
-    than growing the reach to act on it.
+    _registry: Any
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    @property
+    def migration(self) -> Migration:
+        """Where a move under way is taking an agent, before the registry says so."""
+        ...
+
+
+class ManifestHost(ListenerHost, VoiceHost, Protocol):
+    """The manifest registry needs a connection, somewhere to report a loss, and where agents are.
+
+    It owns its own tables and answers from them. A withdrawn manifest is the
+    wire's way of saying an agent is gone, and the registry is the only thing
+    listening — but removing an agent belongs to the lifecycle, not to a table
+    of capabilities, so it hands the name over rather than growing the reach to
+    act on it. Where agents are is read so a manifest is taken only from the
+    node main places its agent on.
     """
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """The heartbeat table: which node lists an agent main placed nowhere."""
+        ...
 
     async def agent_withdrew(self, actor_id: str, name: str = ...) -> bool: ...
 
@@ -72,6 +93,8 @@ class SpawnHost(Protocol):
     _result_futures: dict[str, Any]
     #: Pins the artifacts a config names before it goes to a node.
     artifact_service: ArtifactService
+    #: Decides where a spawn the model wrote runs.
+    placement: Placement
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:
@@ -85,6 +108,8 @@ class SpawnHost(Protocol):
 
     def _node_version_mismatch(self, node_name: str) -> str | None: ...
 
+    def _node_refuses_tasks(self, node_name: str) -> str | None: ...
+
     def _node_targets(self, node_name: str) -> list[str]:
         """The library agents a node says it can build, by import path."""
         ...
@@ -92,6 +117,8 @@ class SpawnHost(Protocol):
     def _node_takes_bundles(self, node_name: str) -> bool:
         """Whether a node builds a library agent from code sent with its spawn."""
         ...
+
+    async def _stop_for_replace(self, existing: Any, name: str) -> None: ...
 
     def recall(self, key: str) -> Any: ...
 
@@ -134,6 +161,8 @@ class DelegationHost(Protocol):
     _result_futures: dict[str, Any]
     _mqtt_broker: str
     _mqtt_port: int
+    #: Which node a task for an agent goes to, and whether it can answer.
+    nodes: NodeManager
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
@@ -176,6 +205,8 @@ class NodeHost(ManifestHost, Protocol):
 
     def _queue_notification(self, notice: dict[str, Any]) -> None: ...
 
+    def _withdraw_notifications(self, about: str) -> None: ...
+
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
     ) -> None: ...
@@ -187,6 +218,8 @@ class NodeHost(ManifestHost, Protocol):
     ) -> None: ...
 
     async def settle_withdrawals(self, node: str, running: set[str]) -> None: ...
+
+    def node_reported(self, node: str) -> None: ...
 
 
 class LifecycleHost(Protocol):
@@ -254,8 +287,10 @@ class ArtifactHost(ListenerHost, Protocol):
 
     It reads where agents are placed -- the registry and the migrations in
     flight -- to decide what a node may have, and publishes; it changes nothing.
+    ``actor_id`` is for the feed, where a pointer's move is one line of main's.
     """
 
+    actor_id: str
     migration: Migration
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
@@ -312,6 +347,8 @@ class MigrationHost(NodeHost, Protocol):
 
     def _node_version_mismatch(self, node_name: str) -> str | None: ...
 
+    def _node_refuses_tasks(self, node_name: str) -> str | None: ...
+
     def _online_node_names(self) -> list[str]: ...
 
     # The migrations in flight are written down, so a restart does not drop the
@@ -330,7 +367,7 @@ class MigrationHost(NodeHost, Protocol):
 
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
-    ) -> None: ...
+    ) -> bool: ...
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = ..., *, from_registry: bool = ...

@@ -33,6 +33,7 @@ from ...core.packages import (
 )
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -74,12 +75,12 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
     """
     if (config.get("code") or "").strip():
         return None
-    agent_type = (config.get("type") or "dynamic").strip().lower()
-    if agent_type == "llm":
+    kind = agent_type(config)
+    if kind == "llm":
         return None
-    if agent_type == "dynamic":
+    if kind == "dynamic":
         return "it has no program to send there"
-    if agent_type == MODULE_TYPE:
+    if kind == MODULE_TYPE:
         target = str(config.get("target") or "").strip()
         if target and (target in node_targets or isinstance(config.get("bundle"), dict)):
             return None
@@ -90,10 +91,22 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
             f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
         )
     return (
-        f"it is a {agent_type} agent, built into this server, and a node runs only an "
+        f"it is a {kind} agent, built into this server, and a node runs only an "
         f"agent whose program goes with it: generated code, an LLM agent, or a library "
         f"agent from a package installed there"
     )
+
+
+def catalogue_may_stand_in(config: dict[str, Any]) -> bool:
+    """Whether the catalogue's agent of the same name may run in place of ``config``.
+
+    The catalogue stands in for code the model wrote, so a recipe it maintains
+    is not rewritten, unreviewed, every time it is asked for; and for a native
+    agent, which only the catalogue builds. A spawn of any other kind -- an LLM,
+    rule, scheduled, Home Assistant or module agent -- describes a different
+    agent that happens to share the name, and runs as asked.
+    """
+    return agent_type(config) in ("dynamic", "native")
 
 
 def with_models_of(config: dict[str, Any]) -> dict[str, Any]:
@@ -544,20 +557,41 @@ class SpawnService:
         """Whether this config describes something that could actually start.
 
         A dynamic agent with no code is a model that stopped mid-sentence, not
-        an agent. An LLM agent without a prompt gets a default, because one that
-        answers generically is more use than one that never arrives.
+        an agent; one with a prompt and no code is an LLM agent (see
+        :func:`agent_type`). An LLM agent without a prompt gets a default,
+        because one that answers generically is more use than one that never
+        arrives.
         """
-        agent_type = config.get("type", "dynamic")
-        if agent_type == "dynamic" and not (config.get("code", "") or "").strip():
+        kind = agent_type(config)
+        if kind == "dynamic" and not (config.get("code", "") or "").strip():
             logger.error("[%s] Dynamic agent has no code: %s", self.host.name, config.get("name"))
             return False
-        if agent_type == "llm" and not (config.get("system_prompt", "") or "").strip():
+        if kind == "llm" and not (config.get("system_prompt", "") or "").strip():
             logger.warning(
                 "[%s] LLM agent has no system_prompt, using default: %s",
                 self.host.name,
                 config.get("name"),
             )
         return True
+
+    async def _kept_here(self, asked: dict[str, Any], placed: dict[str, Any]) -> KeptHere | None:
+        """The agent of that name already running here, when placement moved its spawn off main.
+
+        A spawn sent to a node while an agent of the same name runs here would
+        leave two answering to one name. Without ``replace`` the one here stays,
+        as a spawn of a running name always has; with it, the one here is stopped
+        and the spawn goes on to the node.
+        """
+        if placed.get("node") == asked.get("node") or self.host._registry is None:
+            return None
+        existing = self.host._registry.find_by_name(str(placed.get("name", "")))
+        if existing is None:
+            return None
+        if not placed.get("replace"):
+            return KeptHere(existing.name, str(placed["node"]))
+        await self.host._stop_for_replace(existing, existing.name)
+        self._remove_from_spawn_registry(existing.name)
+        return None
 
     async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
         """Run every `<spawn>` block the model wrote, and strip them from the reply."""
@@ -567,14 +601,25 @@ class SpawnService:
         for match in re.findall(pattern, response, re.DOTALL):
             try:
                 config = _parse_spawn_config(match.strip())
-                if not config.get("replace"):
+                if not config.get("replace") and catalogue_may_stand_in(config):
                     substitute = await self._catalogue_substitute(config.get("name", ""))
                     if substitute is not None:
                         spawned.append(substitute)
                         continue
                 if not self._is_runnable(config):
                     continue
-                actor = await self._spawn_from_config(config, save=True)
+                placed = await self.host.placement.place(config)
+                if isinstance(placed, NotSpawned):
+                    logger.warning(
+                        "[%s] Not spawning %r: %s", self.host.name, placed.name, placed.reason
+                    )
+                    spawned.append(placed)
+                    continue
+                kept = await self._kept_here(config, placed)
+                if kept is not None:
+                    spawned.append(kept)
+                    continue
+                actor = await self._spawn_from_config(placed, save=True)
                 if actor:
                     spawned.append(actor)
             except Exception:
@@ -586,7 +631,7 @@ class SpawnService:
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
-    ) -> Actor | SpawnPlaceholder | None:
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         """Spawn one agent from a config dict.
 
         Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
@@ -599,7 +644,11 @@ class SpawnService:
         """
         node = config.get("node", "").strip()
         if node:
-            return await self._spawn_remote(config, node, save, restoring=from_registry)
+            if not await self._spawn_remote(config, node, save, restoring=from_registry):
+                return None
+            return PlacedOnNode(
+                str(config.get("name", "remote-agent")), node, node in self.host._known_nodes
+            )
         return await self.host._spawn_local_from_config(
             config, register=save, from_registry=from_registry
         )
@@ -621,7 +670,7 @@ class SpawnService:
             return config
         if (config.get("code") or "").strip():
             return config
-        if (config.get("type") or "").strip().lower() != "llm":
+        if agent_type(config) != "llm":
             return config
 
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
@@ -633,6 +682,9 @@ class SpawnService:
 
         out = dict(config)
         out["code"] = bridge
+        # Named, so the config still reads as an LLM agent now it carries code:
+        # a move home takes the bridge code out again by this.
+        out["type"] = "llm"
         # description and capabilities are commonly already set by the LLM
         # at spawn time; fill in sensible defaults if not so list_capabilities
         # still works on the remote side.
@@ -820,10 +872,40 @@ class SpawnService:
             },
         )
 
+    async def _node_cannot_take(self, config: dict[str, Any], node: str, restoring: bool) -> bool:
+        """Whether ``node`` itself rules the agent out, said where the user looks if so."""
+        mismatch = self.host._node_version_mismatch(node)
+        if mismatch:
+            # Before the install, the spawn and the desired state: a node on
+            # other code must not be handed an agent it may not be able to run,
+            # and must not be told to keep running it after a reboot.
+            logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
+            await self.host._mqtt_publish(
+                f"agents/{self.host.actor_id}/logs",
+                {
+                    "type": "error",
+                    "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
+                    "child_name": config.get("name"),
+                    "node": node,
+                    "timestamp": time.time(),
+                },
+            )
+            return True
+        unheard = None if restoring else self.host._node_refuses_tasks(node)
+        if unheard:
+            # Sent anyway, the agent would run while main ignored everything it
+            # said, and whoever spawned it would wait for it to appear until
+            # they gave up. Restoring is let through: the node's retained
+            # desired state already names the agent, and it is heard from once
+            # the node is deployed again.
+            await self._refuse_remote_spawn(config, node, f"{unheard}.")
+            return True
+        return False
+
     async def _spawn_remote(
         self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
-    ) -> None:
-        """Publish a spawn command to a node, which runs the agent there.
+    ) -> bool:
+        """Publish a spawn command to a node, which runs the agent there; False if refused.
 
         A remote agent appears in the dashboard like a local one, because both
         talk to the same broker.
@@ -847,7 +929,7 @@ class SpawnService:
                 node,
                 problem,
             )
-            return
+            return False
         # The node's targets are asked for only when they decide: a host that
         # cannot say -- a test's stand-in -- places code and LLM agents as before.
         targets: Collection[str] = ()
@@ -858,32 +940,17 @@ class SpawnService:
             )
             if problem:
                 await self._refuse_remote_spawn(config, node, f"{problem}.")
-                return
+                return False
         unrunnable = why_a_node_cannot_run(config, targets)
         if unrunnable:
             await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
-            return
-        mismatch = self.host._node_version_mismatch(node)
-        if mismatch:
-            # Before the install, the spawn and the desired state: a node on
-            # other code must not be handed an agent it may not be able to run,
-            # and must not be told to keep running it after a reboot.
-            logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
-            await self.host._mqtt_publish(
-                f"agents/{self.host.actor_id}/logs",
-                {
-                    "type": "error",
-                    "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
-                    "child_name": config.get("name"),
-                    "node": node,
-                    "timestamp": time.time(),
-                },
-            )
-            return
+            return False
+        if await self._node_cannot_take(config, node, restoring):
+            return False
         config, problem = await self.pinned_for(config, node)
         if problem:
             await self._refuse_remote_spawn(config, node, f"{problem}.")
-            return
+            return False
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 
@@ -893,7 +960,7 @@ class SpawnService:
 
         logger.info("[%s] Spawning %r on remote node %r", self.host.name, name, node)
         if packages and not await self._packages_placed(config, node, packages, restoring):
-            return
+            return False
 
         # Not retained, and that is the whole point. A retained spawn is handed
         # to the node again on every reconnect, so an agent withdrawn after this
@@ -924,4 +991,7 @@ class SpawnService:
         )
 
         if save:
-            self._save_to_spawn_registry(config)
+            # Under the node it went to, whatever the config said: the entry is
+            # what main checks the node's word about this agent against.
+            self._save_to_spawn_registry({**config, "node": node})
+        return True

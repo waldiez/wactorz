@@ -54,7 +54,7 @@ import re
 import socket
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 logger = logging.getLogger("manual-agent")
@@ -85,6 +85,30 @@ _SEARCH_ENGINE_DOMAINS = {
     "microsofttranslator.com",
     "bingapis.com",
 }
+
+
+def _on_site(url: str, sites: Iterable[str]) -> bool:
+    """Whether ``url``'s host is one of ``sites`` or a subdomain of one.
+
+    Compares the parsed host, never the text: ``manualslib.com`` in a query
+    string or in ``manualslib.com.attacker.example`` does not make a URL
+    ManualsLib's.
+    """
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").rstrip(".")
+    except ValueError:
+        return False
+    return any(host == site or host.endswith("." + site) for site in sites)
+
+
+def _manualslib_viewer(url: str) -> bool:
+    """Whether ``url`` is a ManualsLib viewer page, whose PDF sits at ``/download.pdf``."""
+    return (
+        _on_site(url, ("manualslib.com",))
+        and urllib.parse.urlsplit(url).path.startswith("/manual/")
+        and not url.lower().endswith(".pdf")
+    )
+
 
 _STOPWORDS = {
     "how",
@@ -914,18 +938,16 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
 
         # Direct anchor URLs
         for u in re.findall(r'href="(https?://[^"]+)"', html):
-            if any(d in u for d in _SEARCH_ENGINE_DOMAINS):
+            if _on_site(u, _SEARCH_ENGINE_DOMAINS):
                 continue
-            if u.lower().endswith(".pdf") or "manualslib.com" in u:
+            if u.lower().endswith(".pdf") or _on_site(u, ("manualslib.com",)):
                 page_urls.append(u)
 
         # DDG redirect wrapper /l/?uddg=<urlencoded>
         for m in re.finditer(r'/l/\?(?:kh=[^&]*&)?uddg=([^"&]+)', html):
             try:
                 decoded = urllib.parse.unquote(m.group(1))
-                if decoded.startswith("http") and not any(
-                    d in decoded for d in _SEARCH_ENGINE_DOMAINS
-                ):
+                if decoded.startswith("http") and not _on_site(decoded, _SEARCH_ENGINE_DOMAINS):
                     page_urls.append(decoded)
             except Exception:  # noqa: S112  # one malformed result link is skipped
                 continue
@@ -933,7 +955,7 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
         cleaned: list = []
         for u in page_urls:
             # Rewrite ManualsLib viewer pages → direct PDF download
-            if "manualslib.com/manual/" in u and not u.endswith(".pdf"):
+            if _manualslib_viewer(u):
                 u = u.split("?")[0].rstrip("/")
                 u = u[:-5] + "/download.pdf" if u.endswith(".html") else u + "/download.pdf"
             cleaned.append(u)
@@ -1034,16 +1056,16 @@ def _rank_manual_urls(results, get_url_fn: Callable[[str], str]) -> list[str]:
         u_lower = u.lower()
 
         # Skip search-engine self-links
-        if any(d in u for d in _SEARCH_ENGINE_DOMAINS):
+        if _on_site(u, _SEARCH_ENGINE_DOMAINS):
             continue
 
         if u_lower.endswith(".pdf"):
             t1.append(u)
             continue
 
-        if any(t in u for t in TRUSTED_SITES):
+        if _on_site(u, TRUSTED_SITES):
             # ManualsLib viewer pages → append /download.pdf
-            if "manualslib.com" in u and not u_lower.endswith(".pdf"):
+            if _on_site(u, ("manualslib.com",)):
                 t2.append(u.rstrip("/") + "/download.pdf")
             else:
                 t2.append(u)

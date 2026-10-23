@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.outbound import Answer
 from ...orchestration import SOCIAL
-from .outbound import Outbox, outbound
+from .outbound import ChannelNotRunningError, NotAUserError, Outbox, outbound
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
@@ -87,11 +87,11 @@ class TelegramInterface:
         """
         bot = self._bot
         if bot is None:
-            raise RuntimeError("the Telegram bot is not running")
+            raise ChannelNotRunningError.telegram()
         try:
             chat_id = int(user)
         except (TypeError, ValueError):
-            raise ValueError(f"a Telegram user is a numeric id, not {user!r}") from None
+            raise NotAUserError.telegram(user) from None
         message = outbound("telegram", str(chat_id), text, options, message_id, agent_id)
         markup = None
         if message.options:

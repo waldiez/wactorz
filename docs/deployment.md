@@ -69,6 +69,7 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | `python` | prometheus | `wactorz-prometheus:9090` | `127.0.0.1:9090` |
 | `python` | alertmanager | `alertmanager:9093` | `127.0.0.1:9093` |
 | `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
+| `sandbox` | wactorz-sandbox | — | none: it dials the broker |
 
 Every port except the broker's TLS one is published to this host only. Reach the
 dashboard and the API from elsewhere through a TLS proxy; `HA_EXTERNAL_BIND=0.0.0.0`
@@ -88,6 +89,27 @@ has none.
 docker compose --profile python up -d
 # Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)
 ```
+
+### The sandbox node
+
+Code the model writes runs in a container of its own, holding none of main's
+credentials: `wactorz-sandbox` starts with the app, under the `python`, `full`
+and `sandbox` profiles, and main sends the model's code there once it reports.
+`WACTORZ_MODEL_CODE_NODE=main` in `.env` keeps the code on main instead, and
+leaves the sandbox container idle.
+
+`sandbox-env`, a one-shot, writes the node what `/deploy` writes any node: its
+name, the broker, its signing key and broker account, and the CA with TLS. It
+writes them into a volume that only `wactorz-sandbox` mounts. It runs again on
+every `docker compose up`, so after the broker's CA or the node's account
+changes, `docker compose --profile python --profile sandbox up -d` hands the
+node the new ones. The sandbox
+container mounts neither `.env` nor `./state`, and its network has the broker on
+it and nothing else, so main's API and Home Assistant are out of its reach. The
+packages its agents install go into its own volume. It is limited by
+`WACTORZ_SANDBOX_MEM_LIMIT` (default `2g`) and `WACTORZ_SANDBOX_PIDS_LIMIT`
+(`1024`). See [a node on main's own machine](remote-nodes.md#a-node-on-mains-own-machine)
+for what goes there and what stays on main.
 
 ### Health probes
 
@@ -150,6 +172,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_DOCUMENT_DIRS` | your Documents folder | The folders an agent that converts files (the doc-to-pptx agent) may read from and write to, separated like `PATH`. Anything under `WACTORZ_STATE_DIR` stays out of reach whatever is named here. See [Doc → PPTX agent](catalogue-doc-to-pptx.md) |
 | `WACTORZ_PIP_ALLOW` | — | Packages an agent may have installed without the operator being asked, separated by commas or spaces, in addition to the built-in list. Anything else is asked about on the dashboard first; `/packages` shows the whole list. See [the packages an agent installs](remote-nodes.md#the-packages-an-agent-installs) |
 | `WACTORZ_PIP_INDEX_URL` | — | The package index every install uses, such as a private mirror. Unset, pip uses PyPI |
+| `WACTORZ_MODEL_CODE_NODE` | `sandbox` if there is one | The node code the model writes runs on when its spawn names none. Unset, it is the node named `sandbox` whenever one exists (see [a node on main's own machine](remote-nodes.md#a-node-on-mains-own-machine)), and main otherwise. `main` keeps such code on main |
+| `WACTORZ_MODEL_CODE_ON_MAIN` | `ask` | While the model's code goes to a node, what happens to a spawn the model wrote that names main: `ask` on the dashboard, `allow`, or `never` |
 | `WACTORZ_AGENTS` | — | Agents this deployment brings, as `package.module:attr` targets (an `Actor` subclass or a function declared with `@wactorz.agent`), comma separated. Supervised at startup beside the built-ins; see [Bringing your own agents](agents.md#bringing-your-own-agents) |
 | `WACTORZ_PIPELINES` | — | Pipelines this deployment brings, as `package.module:attr` targets of what `wactorz.pipeline()` returned, comma separated; their steps, schedule and rules are supervised at startup |
 | `WACTORZ_HA_AGENTS` | `auto` | Whether the Home Assistant agents start: `auto` starts them when `HA_URL` and `HA_TOKEN` are set, `on` and `off` decide outright |
@@ -161,6 +185,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
 | `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
 | `WACTORZ_RETENTION_METRICS_DAYS` | `7` | Days the per-minute metrics history of every agent and node is kept (`/api/history/...`); `0` keeps it for ever. A metrics reset clears it |
+| `WACTORZ_BRIDGE_CALLS_PER_MINUTE` | `60` | Model calls main answers for one node's agents a minute, after a burst of as many; past it a call is refused at once with an error saying why, and the dashboard says so the first time. Read on main; `0` sets no limit |
+| `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE` | `600` | Pages of main's history (`query_ts` and the like on a node) main answers for one node a minute, after a burst of as many; past it a read fails, saying why. Read on main; `0` sets no limit |
 | `WACTORZ_MIGRATION_MAX_STATE_BYTES` | `8388608` | Largest agent state a `/migrate` ships, as JSON; a larger one is refused before the agent stops, and `--force` does not override it. Set on main, which sends it to the node it asks; `0` sets no limit |
 | `WACTORZ_MIGRATION_MAX_BLOB_BYTES` | `67108864` | Largest total of an agent's blobs (models, arrays, bytes) a `/migrate` carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; `0` sets no limit |
 | `WACTORZ_ARTIFACT_MAX_BYTES` | `268435456` | Largest artifact (a model kept with `wactorz-artifacts`) main sends a node and a node accepts. A spawn naming a larger one is refused before it is sent. Read on main and on each node; `0` sets no limit |
@@ -215,13 +241,19 @@ wactorz-artifacts show imu-detector:latest                   # one version, as J
 wactorz-artifacts remove imu-detector:1                      # one version
 wactorz-artifacts remove imu-detector --every-version
 wactorz-artifacts verify                                     # stored files still match their hashes
+wactorz-artifacts activate imu-detector:3 --reason "auc 0.95"  # the version agents serve
+wactorz-artifacts shadow imu-detector:4                      # one on trial beside it
+wactorz-artifacts promote imu-detector                       # the shadow becomes active
+wactorz-artifacts clear shadow imu-detector                  # unset a pointer
 ```
 
-- **A name and a version name one file.** Each `add` of a name is its next version. A reference is `NAME` or `NAME:latest` for the newest, or `NAME:3` for the third; each resolves to the file's SHA-256, so what a machine fetches can be checked against it. The same bytes, under any names, are kept once.
+- **A name and a version name one file.** Each `add` of a name is its next version. A reference is `NAME:3` for the third version, `NAME:latest` for the newest, `NAME:active` or `NAME:shadow` for the version a pointer names, or `NAME` alone for the active version, which is the newest until one is marked active; each resolves to the file's SHA-256, so what a machine fetches can be checked against it. The same bytes, under any names, are kept once.
+- **Two pointers say which version is served and which is on trial.** `activate NAME:V` marks the version agents get when they name the model without a version; a new version stored after that changes nothing until it is activated, and going back is activating the earlier one again. `shadow NAME:V` marks one to run beside it, on the same input, acted on by nobody; `promote NAME` makes the shadow active and clears `shadow`. A move records who made it and `--reason` why, and `list` and `show` say where the pointers stand. Pointing `shadow` at the active version is refused, as is moving a pointer to where it is; a version a pointer names cannot be removed until the pointer is moved; `remove NAME --every-version` takes the pointers with the name. An agent that named the model, or `NAME:active`, follows the pointer: restarted after a move, it is pinned to where `active` stands then; one that named a version, or `latest`, keeps what it ran. `docs/design/model-pointers.md` records the decision, and the rest of the model loop builds on it.
+- **Every machine hears a move.** Main publishes where each pointer stands, retained, on `models/NAME/active` and `models/NAME/shadow`: the pointer as the store keeps it, or an empty payload when it is unset. Everything is published when main starts, and a move made beside it by `wactorz-artifacts` reaches the broker at main's next look at the index, a few seconds later; one made in chat is published at once. Each move found is a line on the activity feed. The topics are main's to publish: a pointer is moved through the store or through main, never by writing there.
 - **The format comes from the file's ending**: `.onnx`, `.safetensors`, `.npz`, `.npy`, `.gguf`, `.tflite`, `.skops`. `--format` names it where the ending does not say, as for a `.pt`, which may hold a `state_dict` or a whole module; `raw` keeps bytes as they are. A directory is kept as one archive of it, written the same way on every machine, so the same directory has the same hash wherever it is added; a link inside it is refused.
 - **Formats that run code when they load are refused** unless `--allow-code` is given: a pickle (`.pkl`), a joblib file and a whole torch module (`--format torch`). One stored anyway is marked as running code.
 - **Where:** `<state>/..artifacts/`, beside the rest of the state, in what `wactorz-state export` writes. `--state-dir` names another state directory. Adding and removing work while the server runs.
-- **In chat.** `/artifacts` lists what is kept, and `/artifacts <name>` every version of one. Main's model is given the same list on each turn, and so is the planner when a request becomes a pipeline, so asking for an agent that uses a model ("flag IMU readings far from normal with the imu-detector model") gets one that names it.
+- **In chat.** `/artifacts` lists what is kept, and `/artifacts <name>` every version of one. `/artifacts activate <name:version> [reason]`, `/artifacts shadow <name:version> [reason]`, `/artifacts promote <name> [reason]` and `/artifacts clear active|shadow <name>` move the pointers as the command does, recorded as made from chat; a social channel may list but not move. Main's model is given the same list on each turn, with the active and shadow version of each model, and so is the planner when a request becomes a pipeline, so asking for an agent that uses a model ("flag IMU readings far from normal with the imu-detector model") gets one that names it, and the one being served. Main's model has no way to move a pointer: serving a model is the operator's decision, or a deployed program's.
 - **Which store.** Every `wactorz-artifacts` command says which store it used, and `add` warns when it had to make a new state directory: the default is `./state` in the folder it runs from, which is Wactorz's own only when run from where Wactorz runs. Pass `--state-dir`, or set `WACTORZ_STATE_DIR` for both.
 - **In an agent.** A generated or catalogue agent names artifacts in its spawn config, `"artifacts": {"model": "imu-detector:3"}`, and its program opens one with `agent.artifact_path("model")`: the file, or for a directory the directory it unpacks to, once, in `<state>/..unpacked-artifacts/` (left out of an export, and unpacked again when needed). A spawn on main that names an artifact that is not stored is refused.
 - **On a node.** Main pins each artifact to the version and the bytes it means when the spawn goes out — `imu-detector` alone means the newest then — and keeps that pinned form, so the agent restarted or moved later runs the same model. The node keeps what it fetches in `<state>/..artifact-cache/` across restarts, asks main only for what it lacks, and starts the agent once every file is there and matches its SHA-256; one that does not arrive leaves the agent unstarted, and a migration is put back where it was. Main sends a node only the artifacts an agent placed on it names. A spawn naming an artifact that is not stored, or one over `WACTORZ_ARTIFACT_MAX_BYTES`, is refused before anything is sent.

@@ -20,7 +20,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from .config import CONFIG
+from .config import CONFIG, MODEL_CODE_NODE, RESERVED_NODE_NAMES
 from .core import broker_accounts, broker_tls
 from .core.mqtt_tls import SYSTEM_TRUST, client_context, generated_ca_path, tls_enabled
 
@@ -89,7 +89,11 @@ def _write_node_accounts() -> None:
 
 
 def account_nodes() -> list[str]:
-    """The deploy targets that can have a broker account, having named those that cannot.
+    """The nodes that can have a broker account, having named those that cannot.
+
+    The deploy targets, and the node model-written code is sent to
+    (``WACTORZ_MODEL_CODE_NODE``), which in the compose stack is a container
+    rather than a machine reached over SSH.
 
     A node's name is its account's name, and a broker does not take every name:
     one with a space in it, say. That node is left out and said so, rather than
@@ -97,12 +101,15 @@ def account_nodes() -> list[str]:
     refuses the one that has none, with the same reason.
     """
     usable = []
-    for target in CONFIG.deploy_targets:
-        problem = broker_accounts.name_error(target.name)
+    for name in [*(target.name for target in CONFIG.deploy_targets), MODEL_CODE_NODE]:
+        # `main` as the model-code node means "keep the code on main": no node.
+        if not name or name in usable or name.lower() in RESERVED_NODE_NAMES:
+            continue
+        problem = broker_accounts.name_error(name)
         if problem:
             logger.warning("[mqtt-accounts] %s Until then it has no broker account.", problem)
         else:
-            usable.append(target.name)
+            usable.append(name)
     return usable
 
 

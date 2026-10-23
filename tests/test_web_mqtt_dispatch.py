@@ -21,6 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.web import mqtt, runtime
 
 
@@ -35,8 +37,13 @@ class _Db:
 
 
 class _Registry:
+    """A registry with no main in it."""
+
     def all_actors(self) -> list[Any]:
         return []
+
+    def find_by_name(self, _name: str) -> Any:
+        return None
 
 
 @pytest.fixture(name="sent")
@@ -89,6 +96,80 @@ class TestWhatReachesTheBrowser:
 
         relayed = [f for f in sent if f.get("type") == "server_event"]
         assert relayed[0]["payload"] == "not json at all"
+
+
+class _WithMain:
+    """A registry holding main, whose node table the dashboard shows nodes from."""
+
+    def __init__(self) -> None:
+        self.main = MainActor.__new__(MainActor)
+        self.main.nodes = NodeManager()
+
+    def find_by_name(self, name: str) -> Any:
+        return self.main if name == "main" else None
+
+    def all_actors(self) -> list[Any]:
+        return [self.main]
+
+
+def _node_frames(frames: list[dict[str, Any]]) -> list[Any]:
+    return [
+        f["payload"]
+        for f in frames
+        if f.get("type") == "server_event" and f.get("topic") == "nodes/rpi/heartbeat"
+    ]
+
+
+class TestANodesHeartbeat:
+    """Shown as main took it: anything on the broker can publish one."""
+
+    async def test_without_main_it_is_shown_as_it_came(self, sent: list[dict[str, Any]]) -> None:
+        await mqtt.handle_message("nodes/rpi/heartbeat", json.dumps({"agents": ["camera"]}))
+
+        assert _node_frames(sent) == [{"agents": ["camera"]}]
+
+    async def test_with_main_the_broker_s_copy_is_not_shown(
+        self, sent: list[dict[str, Any]]
+    ) -> None:
+        runtime.registry = _WithMain()
+
+        await mqtt.handle_message("nodes/rpi/heartbeat", json.dumps({"agents": ["camera"]}))
+
+        assert _node_frames(sent) == []
+
+    async def test_with_main_what_main_took_is_shown(self, sent: list[dict[str, Any]]) -> None:
+        registry = _WithMain()
+        runtime.registry = registry
+        await mqtt.handle_message("nodes/rpi/heartbeat", "{}")
+
+        await registry.main.nodes.receive_heartbeat("rpi", {"agents": ["camera"]})
+
+        assert _node_frames(sent) == [{"agents": ["camera"]}]
+
+    async def test_an_unsigned_one_shows_the_agents_main_knows_not_those_it_claims(
+        self, sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.nodes.NODE_SIGNING", "enforce")
+        registry = _WithMain()
+        runtime.registry = registry
+        await mqtt.handle_message("nodes/rpi/heartbeat", "{}")
+
+        await registry.main.nodes.receive_heartbeat(
+            "rpi", {"agents": ["camera", "helper"]}, signed=False
+        )
+
+        assert _node_frames(sent) == [{"agents": []}]
+
+    async def test_main_is_watched_once_however_many_arrive(
+        self, sent: list[dict[str, Any]]
+    ) -> None:
+        registry = _WithMain()
+        runtime.registry = registry
+
+        for _ in range(3):
+            await mqtt.handle_message("nodes/rpi/heartbeat", "{}")
+
+        assert len(registry.main.nodes.watchers) == 1
 
 
 class TestAResetSilencesStateUpdates:

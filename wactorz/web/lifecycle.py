@@ -14,6 +14,7 @@ from typing import Any
 
 from ..agents.lookup import find_main_actor
 from ..core.node_signing import signed_publish_kwargs
+from ..core.topics import RETAINED_AGENT_LEAVES
 from . import events, runtime
 
 logger = logging.getLogger(__name__)
@@ -134,18 +135,7 @@ async def purge_agent_retained(agent_id: str) -> None:
     """
     if not runtime.mqtt_client_ref:
         return
-    for metric in (
-        "status",
-        "heartbeat",
-        "metrics",
-        "logs",
-        "spawned",
-        "manifest",
-        "errors",
-        "detections",
-        "results",
-        "completed",
-    ):
+    for metric in RETAINED_AGENT_LEAVES:
         topic = f"agents/{agent_id}/{metric}"
         try:
             # QoS 1: a lost purge leaves a stale retained message behind, and a

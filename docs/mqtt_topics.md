@@ -354,7 +354,28 @@ A message that offers the person a choice, or goes to a chat channel, carries mo
 }
 ```
 
-`id` is the message's; `index` is the option's place among those offered, from zero.
+`id` is the message's; `index` is the option's place among those offered, from zero. A `note`, when the person added one in their own words (`POST /api/questions/{agent_id}/{question_id}/answer` takes one), comes beside the pick; a frame without one is as before.
+
+---
+
+### `agents/{id}/questions`
+**Published by:** The agent that asked
+**Retained:** yes
+**Trigger:** When the agent starts, if it has asked anything, and whenever it asks a question or one is answered
+**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back. Cleared when the agent is deleted.
+
+```json
+{
+  "agent": "hvac-watch",
+  "questions": [
+    {"id": "3f2a…", "text": "Did something change at 14:02?",
+     "options": ["maintenance", "real problem"], "channel": "telegram", "user": "123456789",
+     "asked_at": 1760000000.0, "answer": "maintenance", "answer_index": 0,
+     "answer_channel": "telegram", "answered_at": 1760000600.0,
+     "answer_note": "valve replaced at 14:02", "fallen_back": false}
+  ]
+}
+```
 
 ---
 
@@ -399,18 +420,61 @@ over every other field, written canonically (sorted keys, compact separators);
 see `sign_request` in `core/node_signing.py`. Main answers only when
 `_reply_topic` is `nodes/<node>/reply/<hex id>` for the `node` the request names,
 and refuses an unsigned or wrongly signed request under
-`WACTORZ_NODE_SIGNING=enforce` with an error reply.
+`WACTORZ_NODE_SIGNING=enforce` with an error reply. Past
+`WACTORZ_BRIDGE_CALLS_PER_MINUTE` calls a minute from one node, or with as many
+of that node's calls waiting as main lets wait, the reply is
+`{"text": "[LLM error: ...]"}` saying why, sent at once.
+
+---
+
+### `main/history_request`
+**Published by:** Agents running on a node (`wactorz-node`)
+**Subscribed by:** MainActor's LLM bridge (`agents/main/llm_bridge.py`, answered by `agents/main/history.py`)
+**Purpose:** `agent.query_ts`, `query_detections`, `query_ha_states` and `ts_stats` on a node, read from main's database.
+
+```json
+{
+  "query":        "ts",
+  "filters":      {"entity_id": "sensor.kitchen", "field": "temp"},
+  "hours":        24,
+  "since":        1760000000.0,
+  "offset":       0,
+  "limit":        100000,
+  "agent":        "collector",
+  "node":         "rpi-kitchen",
+  "_reply_topic": "nodes/rpi-kitchen/reply/{id}",
+  "_sig":         "{hex HMAC-SHA256}"
+}
+```
+
+`query` is `ts`, `detections`, `ha_states` or `stats`. Each takes only its own
+filters: `topic`, `entity_id` and `field`; `agent`, `class_name` and
+`min_confidence`; `entity_id` and `domain`. Signed and admitted exactly as a
+`main/llm_request`. `since` and `offset` are absent on the first page; after
+that the node sends back the `since` main answered with and the `next` offset,
+until `next` is null. Each page counts against
+`WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE` for the node; past it, the reply is an
+`error` saying why.
 
 ---
 
 ### `nodes/{node}/reply/{id}`
 **Published by:** MainActor's LLM bridge
-**Trigger:** Reply to a `main/llm_request`
+**Trigger:** Reply to a `main/llm_request` or a `main/history_request`
 **Purpose:** Per-request reply channel for one node (random id, one-shot).
 
 ```json
 { "text": "..." }
 ```
+
+A history read is answered with one page, the rows that fit in one message:
+
+```json
+{ "rows": [{"ts": 1760000000.0, "value": 21.5}], "since": 1760000000.0, "next": 812 }
+```
+
+`skipped` counts rows too large for any page. A read main refuses is
+answered with `{"error": "..."}`, and `stats` with `{"stats": {...}}`.
 
 ---
 
@@ -564,6 +628,27 @@ agent can read current state without a request/response round-trip.
 
 ---
 
+### `models/{name}/active` and `models/{name}/shadow`
+**Published by:** Main actor
+**Retained:** yes
+**Trigger:** At start, for every model kept with `wactorz-artifacts`; then whenever a pointer moves, whether in chat or by the command beside the server, which main notices within a few seconds.
+**Purpose:** Where a model's two pointers stand: `active` is the version agents serve, `shadow` one on trial beside it. A spawn that names the model without a version is pinned to `active`. The payload is the pointer as the store keeps it; an unset pointer is an empty retained payload, so a subscriber that comes up late sees the same as one that was there. Read-only for everyone but main: a pointer is moved through the store (`wactorz-artifacts activate|shadow|promote|clear`, `/artifacts` in chat, or `ArtifactStore` from an installed package), never by publishing here.
+
+```json
+{
+  "name":     "imu-detector",
+  "pointer":  "active",
+  "version":  3,
+  "sha256":   "…",
+  "previous": 2,
+  "moved_at": 1760000000.0,
+  "by":       "cli",
+  "reason":   "auc 0.95 on imu-2026"
+}
+```
+
+---
+
 ### Node control and status topics
 **Published by:** Main actor and remote runner
 **Purpose:** Remote node lifecycle, reconciliation, and task routing.
@@ -660,6 +745,7 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `agents/{name}/data/{key}` | Dynamic / remote agents | World-state helper |
 | `agents/{id}/chat` | Every agent | On chat output |
 | `agents/{id}/answer` | A chat channel, or the dashboard server | The person picks one of a message's options |
+| `agents/{id}/questions` | The agent that asked | Retained: its question book; at start and on each question or answer |
 | `agents/{id}/spawn` | Discoverable agents | On startup (self-announce) |
 | `system/health` | Monitor agent | Every 15s |
 | `system/host` | Monitor agent | Every 15s |
@@ -684,9 +770,12 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/blob/{sha256}` | Main actor | An agent's blob, in chunks, as main places it, or an artifact the node asked for |
 | `nodes/{node}/blob_return/{sha256}` | Remote runner | An agent's blob, in chunks, as the node hands it back |
 | `nodes/{node}/artifact_request` | Remote runner | The artifacts an agent spawned here names that the node does not hold |
+| `models/{name}/active` | Main actor | Retained: the version of a model agents serve, or empty when none is marked; at start and on each move |
+| `models/{name}/shadow` | Main actor | Retained: the version of a model on trial beside the active one, or empty; at start and on each move |
 | `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |
+| `main/history_request` | Remote agents | Read main's stored history, a page at a time |
 | `main/reply/{actor_id}/{uuid}` | Main / RPC responders | Ephemeral reply channel |
 | `home/state/{domain}/{entity_id}` | SharedStateHub | HA state mirror (retained) |
 | `home/presence/{zone}` | SharedStateHub | Occupancy per zone (retained) |

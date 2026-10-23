@@ -14,7 +14,7 @@ import { iconMarkup } from "./icons";
 import { MAIN_AGENT } from "../../agents/naming";
 import { openLightbox } from "./lightbox";
 import { timeLabel } from "../../time";
-import { button, el, externalLink } from "../dom";
+import { button, clickable, el, externalLink, pressed, testId } from "../dom";
 import { emit } from "../../events";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
@@ -48,35 +48,14 @@ function buildImageThumb(url: string, name: string): HTMLImageElement {
     img.src = url;
     img.alt = name;
     img.loading = "lazy";
-    // Expose it as a button rather than a bare clickable image no AT/keyboard user can reach.
-    img.setAttribute("role", "button");
-    img.tabIndex = 0;
-    img.setAttribute("aria-label", `Open preview: ${name}`);
-    const open = (): void => openLightbox(url, name);
-    img.addEventListener("click", open);
-    img.addEventListener("keydown", e => {
-        if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            open();
-        }
-    });
-    return img;
+    // Exposed as a button rather than a bare clickable image no AT/keyboard user can reach.
+    return clickable(img, `Open preview: ${name}`, () => openLightbox(url, name));
 }
 
 /** Let an inline image be opened full size, by pointer or keyboard. */
 function makeZoomable(img: HTMLImageElement): void {
     const name = img.alt || "image";
-    img.setAttribute("role", "button");
-    img.tabIndex = 0;
-    img.setAttribute("aria-label", `Open preview: ${name}`);
-    const open = (): void => openLightbox(img.src, name);
-    img.addEventListener("click", open);
-    img.addEventListener("keydown", e => {
-        if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            open();
-        }
-    });
+    clickable(img, `Open preview: ${name}`, () => openLightbox(img.src, name));
 }
 
 /** Render agent markdown with its inline images wired to the lightbox.
@@ -131,12 +110,12 @@ export function buildOptions(msg: ChatMessage): HTMLElement {
     const wrap = el("div", "af-chat-options");
     const answered = msg.answer !== undefined;
     (msg.options ?? []).forEach((option, index) => {
-        const btn = button("af-chat-option", option);
+        const btn = testId(button("af-chat-option", option), "chat-option");
         if (answered) {
             btn.disabled = true;
             if (option === msg.answer) {
                 btn.classList.add("af-chat-option-picked");
-                btn.setAttribute("aria-pressed", "true");
+                pressed(btn, true);
             }
         } else {
             btn.addEventListener("click", () => {
@@ -155,7 +134,7 @@ export function buildOptions(msg: ChatMessage): HTMLElement {
 /** The bubble body: agent replies render Markdown; user messages stay plain so
  *  stray *asterisks* / backticks they type are never reformatted. */
 function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
-    const bubble = el("div", "af-chat-msg-bubble");
+    const bubble = testId(el("div", "af-chat-msg-bubble"), "message-body");
     if (isUser) {
         bubble.textContent = msg.content;
     } else if (msg.content) {
@@ -170,14 +149,18 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
     return bubble;
 }
 
+/** The test id of a message row, by whose message it is. */
+const MESSAGE_ROW = { user: "user-message", agent: "agent-message" } as const;
+
 /** Build a detached chat message row (user vs agent styling, optional time). */
 export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
     const isUser = msg.from === "user";
     const surfaceLabel = msg.source === "voice" ? msg.surfaceLabel?.trim() || msg.surface?.trim() || "" : "";
 
-    const row = el("div", `af-chat-msg af-chat-msg-${isUser ? "user" : "agent"}`);
+    const side = isUser ? "user" : "agent";
+    const row = testId(el("div", `af-chat-msg af-chat-msg-${side}`), MESSAGE_ROW[side]);
 
-    const from = el("div", "af-chat-msg-from");
+    const from = testId(el("div", "af-chat-msg-from"), "message-from");
     if (isUser) {
         const via = surfaceLabel ? ` · via ${surfaceLabel}` : "";
         from.textContent = `you${via} · ${timeLabel(msg.timestampMs)}`;

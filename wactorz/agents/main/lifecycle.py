@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import derive_actor_id
+from ...core.topics import RETAINED_AGENT_LEAVES
 
 if TYPE_CHECKING:
     from .hosts import LifecycleHost
@@ -56,20 +57,6 @@ PROTECTED_AGENTS = frozenset(
         "code-agent",
         "catalog",
     }
-)
-
-#: The per-agent topics whose retained payloads are cleared on delete.
-RETAINED_AGENT_TOPICS = (
-    "status",
-    "heartbeat",
-    "metrics",
-    "logs",
-    "spawned",
-    "manifest",
-    "errors",
-    "detections",
-    "results",
-    "completed",
 )
 
 
@@ -260,7 +247,7 @@ class LifecycleService:
         """
         if not actor_id:
             return
-        for metric in RETAINED_AGENT_TOPICS:
+        for metric in RETAINED_AGENT_LEAVES:
             try:
                 await self.host._mqtt_publish(f"agents/{actor_id}/{metric}", b"", retain=True)
             except Exception as e:

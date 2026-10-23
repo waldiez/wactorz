@@ -15,6 +15,7 @@ import type { Attachment, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import type { ConnState } from "./ui/dashboard/types";
 import type { TTSVoice } from "./ext/tts/types";
+import type { Route } from "./router";
 
 /** Detail payload for each application event, keyed by event name. `void` = no detail. */
 export interface AppEventMap {
@@ -44,6 +45,10 @@ export interface AppEventMap {
      *  entries: they arrive off the socket and are validated where they are
      *  turned into rows, not here. */
     "af-app-log": { entries: unknown[] };
+    /** The address changed (Back, a link, a typed hash): open what it names. */
+    "af-route": Route;
+    /** The dashboard opened a view, or another conversation in the chat: the address follows. */
+    "af-view-changed": Route;
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;

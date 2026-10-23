@@ -12,7 +12,7 @@
  * draw — an agent that never spent anything, a node with no temperature
  * sensor — is left out rather than drawn empty.
  */
-import { button, el } from "../dom";
+import { button, dialog, el, pressed, testId, trapTab } from "../dom";
 import { fetchHistory, type HistoryRow } from "./history";
 import {
     buildLineChart,
@@ -239,32 +239,6 @@ export function buildSampleTable(rows: readonly HistoryRow[], fields: readonly s
 const AGENT_FIELDS = ["messages_processed", "errors", "message_p95_s", "memory_mb", "cost_usd"];
 const NODE_FIELDS = ["cpu_pct", "mem_free_mb", "load_1m", "disk_free_mb", "temp_c", "throttled"];
 
-/** What can take focus inside the panel, in order. */
-const FOCUSABLE = "button:not([disabled]), summary, [tabindex='0']";
-
-/**
- * Keep Tab inside ``container`` while a dialog is open: from the last thing
- * that takes focus back to the first, and Shift+Tab the other way. Focus that
- * has wandered outside is brought back to the first.
- */
-export function keepFocusWithin(container: HTMLElement, e: KeyboardEvent): void {
-    const items = [...container.querySelectorAll<HTMLElement>(FOCUSABLE)];
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (!first || !last) {
-        return;
-    }
-    const active = document.activeElement;
-    const inside = active instanceof Node && container.contains(active);
-    if (!inside || (e.shiftKey && active === first)) {
-        e.preventDefault();
-        (e.shiftKey ? last : first).focus();
-    } else if (!e.shiftKey && active === last) {
-        e.preventDefault();
-        first.focus();
-    }
-}
-
 /** Reads a history; replaced in tests. */
 export type HistoryReader = typeof fetchHistory;
 
@@ -282,7 +256,7 @@ export class TrendPanel {
         if (e.key === "Escape") {
             this.close();
         } else if (e.key === "Tab" && this._overlay) {
-            keepFocusWithin(this._overlay, e);
+            trapTab(this._overlay, e);
         }
     };
 
@@ -336,11 +310,11 @@ export class TrendPanel {
                 this.close();
             }
         });
-        const panel = el("div", "af-trend-panel");
-        panel.setAttribute("role", "dialog");
-        panel.setAttribute("aria-modal", "true");
-        panel.setAttribute("aria-label", `History of ${this._name}`);
-        const body = el("div", "af-trend-body");
+        const panel = testId(
+            dialog(el("div", "af-trend-panel"), `History of ${this._name}`),
+            "history-panel",
+        );
+        const body = testId(el("div", "af-trend-body"), "history-body");
         body.appendChild(el("div", "af-chart-empty", "Loading…"));
         panel.append(this._buildHead(), this._buildWindows(), body);
         overlay.appendChild(panel);
@@ -367,12 +341,12 @@ export class TrendPanel {
         for (const [hours, label] of WINDOWS) {
             const b = button("af-mini-btn af-trend-window", label);
             b.dataset["hours"] = String(hours);
-            b.setAttribute("aria-pressed", String(hours === this._hours));
+            pressed(b, hours === this._hours);
             b.addEventListener("click", () => {
                 this._hours = hours;
                 windows
                     .querySelectorAll<HTMLButtonElement>(".af-trend-window")
-                    .forEach(w => w.setAttribute("aria-pressed", String(w === b)));
+                    .forEach(w => pressed(w, w === b));
                 void this._load();
             });
             windows.appendChild(b);

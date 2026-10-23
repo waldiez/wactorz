@@ -76,7 +76,7 @@ def encode(value: Any) -> Any:
             "seconds": value.seconds,
             "microseconds": value.microseconds,
         }
-    raise TypeError(f"a {type(value).__name__} has no JSON form")
+    raise NoJsonFormError.of(value)
 
 
 def json_form(value: Any) -> Any:
@@ -95,6 +95,18 @@ def json_form(value: Any) -> Any:
 
 class NotJson(Exception):
     """A value that cannot be written as JSON, even marked."""
+
+
+class NoJsonFormError(TypeError):
+    """A value, or a marked value read back, whose type the codec has no JSON form for."""
+
+    @classmethod
+    def of(cls, value: Any) -> "NoJsonFormError":
+        return cls(f"a {type(value).__name__} has no JSON form")
+
+    @classmethod
+    def items_not_a_list(cls, mark: Any) -> "NoJsonFormError":
+        return cls(f"the items of a {mark} are not a list")
 
 
 def decode(value: Any) -> Any:
@@ -148,7 +160,7 @@ def _in_order(items: Iterable[Any]) -> list[Any]:
 def _items(value: Mapping[str, Any]) -> list[Any]:
     items = value["items"]
     if not isinstance(items, list):
-        raise TypeError(f"the items of a {value[VALUE_MARK]} are not a list")
+        raise NoJsonFormError.items_not_a_list(value[VALUE_MARK])
     return [decode(item) for item in items]
 
 

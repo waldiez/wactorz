@@ -17,11 +17,21 @@ in another process.
 The warnings and the ``process()`` anti-patterns stay a pattern scan over the
 text. They are advice about code that hangs or deserves a second look, and
 never refuse anything.
+
+**The parse itself is guarded.** CPython's parser and AST builder recurse once
+per level of nesting and stop themselves with a `RecursionError` when the code
+is too deep, but only if the C stack lasts that long. A thread on Windows gets
+a megabyte, which deeply nested code uses up first, and a C stack overflow
+takes the whole process down, every actor in it. So the code is parsed on a
+thread given room enough to reach the guard, and whatever parses is measured:
+deeper than `MAX_DEPTH`, it is refused here, so the compile that would follow
+on the ordinary stack never sees it.
 """
 
 import ast
 import logging
 import re
+import threading
 from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
@@ -145,11 +155,12 @@ PROCESS_ANTIPATTERNS: list[tuple[str, str]] = [
 #: Modules a repair may import though the program it repairs did not: standard
 #: modules that only compute. A missing ``import json`` is among the commonest
 #: crashes a repair fixes, and none of these reaches a process, a socket or a
-#: file the program could not reach already.
+#: file the program could not reach already. ``asyncio`` is not one of them: it
+#: starts processes and opens connections (``create_subprocess_exec``,
+#: ``open_connection``) without ``subprocess`` or ``socket`` being imported.
 REPAIR_MAY_IMPORT = frozenset(
     {
         "abc",
-        "asyncio",
         "bisect",
         "collections",
         "copy",
@@ -204,8 +215,8 @@ def imports_a_repair_adds(original: str, repaired: str) -> list[str]:
 
 def _imported(code: str) -> set[str] | None:
     try:
-        tree = ast.parse(code)
-    except (SyntaxError, ValueError, RecursionError):
+        tree = _parse(code)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return None
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -383,14 +394,81 @@ def _refusals(tree: ast.AST, aliases: dict[str, str]) -> Iterator[str]:
 def _refusal(code: str) -> str | None:
     """The first reason `code` is refused for, or None."""
     try:
-        tree = ast.parse(code)
-        return next(_refusals(tree, _import_aliases(tree)), None)
+        tree = _parse(code)
     except (SyntaxError, ValueError):
         # compile() is handed this same text next and fails on it the same
         # way, so nothing runs; its error is the one worth sending back.
         return None
+    except (RecursionError, MemoryError):
+        return TOO_DEEP
+    if _depth(tree) > MAX_DEPTH:
+        return TOO_DEEP
+    try:
+        return next(_refusals(tree, _import_aliases(tree)), None)
     except RecursionError:
-        return "code nested too deeply to check"
+        return TOO_DEEP
+
+
+#: How deep a program's syntax tree may nest before it is refused unread. Real
+#: code, generated or not, nests a few dozen levels at most; this is the depth
+#: the tokenizer itself allows for brackets, and well within what the compiler
+#: handles on the smallest stack a thread is given.
+MAX_DEPTH = 200
+
+TOO_DEEP = "code nested too deeply to check"
+
+#: The stack the parse runs on: enough for the parser to reach its own
+#: recursion guard rather than the end of the stack, on every platform.
+_PARSE_STACK_BYTES = 64 * 1024 * 1024
+
+
+def parse_program(code: str) -> ast.AST:
+    """An agent's program parsed, deep nesting refused rather than crashing the process.
+
+    For anything outside this module that reads a program's structure; see `_parse`.
+    """
+    return _parse(code)
+
+
+def _parse(code: str) -> ast.AST:
+    """``ast.parse(code)``, run where a too-deep program is an error and not a crash.
+
+    Raises whatever the parse raised. Where a thread cannot be given the
+    stack, the parse runs in place, as it always did.
+    """
+    outcome: list[ast.AST | BaseException] = []
+
+    def run() -> None:
+        try:
+            outcome.append(ast.parse(code))
+        except BaseException as exc:  # handed back to the caller to raise
+            outcome.append(exc)
+
+    try:
+        previous = threading.stack_size(_PARSE_STACK_BYTES)
+    except (ValueError, RuntimeError):
+        return ast.parse(code)
+    try:
+        worker = threading.Thread(target=run, name="parse-generated-code")
+        worker.start()
+    finally:
+        threading.stack_size(previous)
+    worker.join()
+    result = outcome[0]
+    if isinstance(result, BaseException):
+        raise result
+    return result
+
+
+def _depth(tree: ast.AST) -> int:
+    """How deeply ``tree`` nests, counted without recursing."""
+    deepest = 0
+    pending: list[tuple[ast.AST, int]] = [(tree, 1)]
+    while pending:
+        node, depth = pending.pop()
+        deepest = max(deepest, depth)
+        pending.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
+    return deepest
 
 
 def validate_code_safety(code: str, log_name: str) -> str | None:

@@ -15,7 +15,8 @@ from ...config import (
     deploy_target_help,
     deploy_target_names,
 )
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
+from ...core.node_publications import admit
 from ...core.state_snapshot import FORCE_FLAG
 from ...core.turns import acting_as, begin_turn
 from ...orchestration import CLI
@@ -135,27 +136,31 @@ class CLIInterface:
         """Route a message to a remote agent via MQTT and wait for reply."""
         main = self.agent
 
-        # Find which node hosts this agent
-        remote_node = None
-        for node_name, nd in main._known_nodes.items():
-            if agent_name in nd.get("agents", []):
-                remote_node = node_name
-                break
-
+        remote_node = main.nodes.node_for(agent_name)
         if not remote_node:
             known = [a for nd in main._known_nodes.values() for a in nd.get("agents", [])]
             if known:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
             return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
+        refusal = main.nodes.refuses_tasks(remote_node)
+        if refusal:
+            return f"[error] {agent_name} was not asked: {refusal}"
 
         reply_topic = f"main/reply/{main.actor_id}/{uuid.uuid4().hex[:8]}"
         result_holder = []
 
         async def _listen_for_reply() -> None:
             try:
-                async with mqtt_client(main._mqtt_broker, main._mqtt_port) as client:
+                async with mqtt_client(main._mqtt_broker, main._mqtt_port, **v5_kwargs()) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
+                        # Any node can answer here: only the one the task went
+                        # to is listened to.
+                        raw = bytes(msg.payload or b"")
+                        if not admit(
+                            remote_node, reply_topic, raw, user_properties(msg), "a task reply"
+                        ):
+                            continue
                         try:
                             result_holder.append(json.loads(msg.payload.decode()))
                         except Exception:

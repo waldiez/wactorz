@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -88,6 +89,9 @@ class TestNumberedChoices:
             ("2", 1),
             (" 2.", 1),
             ("(1)", 0),
+            ("( 2 )", 1),
+            ("\t 1) \n", 0),
+            ("1 2", None),
             ("no", 1),
             ("YES", 0),
             ("3", None),
@@ -98,6 +102,17 @@ class TestNumberedChoices:
     )
     def test_a_reply_picks_by_number_or_by_words(self, reply: str, index: int | None) -> None:
         assert pick_option(reply, ["yes", "no"]) == index
+
+    def test_a_long_run_of_spaces_is_read_at_once(self) -> None:
+        # A pattern with repeats side by side takes seconds over this many; the
+        # bound is far above what a linear match needs, even on a loaded runner.
+        reply = "\t" * 40_000 + "x"
+
+        started = time.perf_counter()
+        picked = pick_option(reply, ["yes", "no"])
+
+        assert picked is None
+        assert time.perf_counter() - started < 1.0
 
     def test_nothing_to_pick_from(self) -> None:
         assert pick_option("1", []) is None

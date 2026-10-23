@@ -25,7 +25,7 @@ import pytest
 from tests.waiting import PATIENCE_S, until
 from wactorz.agents.dynamic import DynamicAgent
 from wactorz.agents.function_agent import agent, spec_of
-from wactorz.core.actor import Actor
+from wactorz.core.actor import Actor, NoAnswerError
 from wactorz.core.outbound import Answer, answer_topic
 from wactorz.core.questions import (
     ANSWERED_KEPT,
@@ -34,6 +34,8 @@ from wactorz.core.questions import (
     answered,
     book_of,
     questions_in,
+    questions_in_frame,
+    questions_topic,
 )
 
 
@@ -48,11 +50,15 @@ class Wired:
     def __init__(self, actor: Actor, monkeypatch: pytest.MonkeyPatch) -> None:
         self.actor = actor
         self.frames: list[tuple[str, dict[str, Any]]] = []
+        #: What was published retained, by topic: the last frame each one holds.
+        self.retained: dict[str, Any] = {}
         self.subscribed: list[str] = []
         self._callbacks: dict[str, Any] = {}
 
         async def _publish(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
             self.frames.append((topic, payload))
+            if retain:
+                self.retained[topic] = payload
 
         def _subscribe(topic: str, callback: Any, *, concurrency: int = 1) -> None:
             self.subscribed.append(topic)
@@ -64,6 +70,11 @@ class Wired:
     @property
     def chat_frames(self) -> list[dict[str, Any]]:
         return [p for t, p in self.frames if t.endswith("/chat")]
+
+    @property
+    def book(self) -> list[Question]:
+        """The questions in the book the actor last published, retained."""
+        return questions_in_frame(self.retained.get(questions_topic(self.actor.actor_id)))
 
     async def answer(
         self, option: str, index: int = 0, channel: str = "telegram", **over: Any
@@ -313,6 +324,76 @@ class TestAcrossARestart:
         assert wired.subscribed == []
 
 
+class TestTheNote:
+    async def test_a_note_given_with_the_pick_is_kept_with_the_answer(self, wired: Wired) -> None:
+        asking = asyncio.create_task(wired.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await wired.settle()
+
+        await wired.answer("yes", note="valve swapped at 14:02")
+        await asking
+
+        (question,) = wired.actor.questions().values()
+        assert question.answer_note == "valve swapped at 14:02"
+        (published,) = wired.book
+        assert published.answer_note == "valve swapped at 14:02"
+
+
+class TestThePublishedBook:
+    """The book, retained on the agent's questions topic, for whoever shows what is waiting."""
+
+    async def test_asking_and_answering_each_publish_the_book(self, wired: Wired) -> None:
+        asking = asyncio.create_task(
+            wired.actor.ask_operator("Changed?", options=["yes", "no"], channel="telegram")
+        )
+        await wired.settle()
+        (asked,) = wired.book
+        assert (asked.text, asked.options, asked.channel, asked.open) == (
+            "Changed?",
+            ("yes", "no"),
+            "telegram",
+            True,
+        )
+        frame = wired.retained[questions_topic(wired.actor.actor_id)]
+        assert frame["agent"] == "hvac-watch"
+
+        await wired.answer("no", index=1)
+        await asking
+
+        (settled,) = wired.book
+        assert (settled.id, settled.answer, settled.answer_channel) == (asked.id, "no", "telegram")
+
+    async def test_a_restarted_agent_says_again_what_its_book_holds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = spec_of(hvac_watch)
+        assert spec is not None
+        before = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        asking = asyncio.create_task(before.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await before.settle()
+        question_id = before.chat_frames[-1]["id"]
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+
+        # A reader that was down when it was asked: the new instance says it again.
+        after = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        try:
+            await after.actor.start()
+        finally:
+            await after.actor.stop()
+
+        (republished,) = after.book
+        assert (republished.id, republished.open) == (question_id, True)
+
+    async def test_an_agent_that_never_asked_publishes_no_book(self, wired: Wired) -> None:
+        try:
+            await wired.actor.start()
+        finally:
+            await wired.actor.stop()
+
+        assert questions_topic(wired.actor.actor_id) not in wired.retained
+
+
 class TestTheBook:
     def test_answered_questions_beyond_the_kept_number_go_oldest_first(self) -> None:
         questions = [
@@ -431,3 +512,11 @@ def test_the_answer_vocabulary_is_what_the_actor_reads() -> None:
     answer = Answer(id="q1", agent_id="a", option="x", index=0, channel="telegram", timestamp=5.0)
     assert answer.topic == answer_topic("a")
     assert Answer.from_payload("a", answer.to_payload()) == answer
+
+
+def test_a_question_waited_on_without_a_timeout_is_described_without_one() -> None:
+    """The message for an unanswered question names the wait only when there was one."""
+    assert str(NoAnswerError.to_question("asker", "Install it?", 2.5)).endswith("within 2.5s")
+    assert str(NoAnswerError.to_question("asker", "Install it?", None)) == (
+        "[asker] no answer to 'Install it?'"
+    )

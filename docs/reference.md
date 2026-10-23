@@ -768,6 +768,10 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/webhook <service> <url>` | Store a notification webhook URL |
 | `/topics` | List known MQTT topics and their publishing agents |
 | `/artifacts [name]` | List the models kept on main with `wactorz-artifacts`, or every version of one. Main's model is told the same list, so an agent it writes names a model that is there |
+| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve: what a spawn naming the model without a version gets. Activating an earlier version is the rollback |
+| `/artifacts shadow <name:version> [reason]` | Mark a version to try beside the active one; refused for the active version itself |
+| `/artifacts promote <name> [reason]` | Make the shadow version active and clear `shadow` |
+| `/artifacts clear active\|shadow <name>` | Unset a pointer; with `active` unset the bare name means the newest version again |
 | `/cost` | Show per-agent token usage and cost breakdown |
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |

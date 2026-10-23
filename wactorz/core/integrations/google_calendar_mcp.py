@@ -133,7 +133,7 @@ class GoogleCalendarMcpClient(GoogleMcpClient):
     async def _rest_delete_event(self, arguments: dict) -> str:
         event_id = arguments.get("eventId") or arguments.get("event_id")
         if not event_id:
-            raise GoogleRestError("Missing event id")
+            raise GoogleRestError.missing_id("event")
         calendar_id = arguments.get("calendarId") or arguments.get("calendar_id") or "primary"
         status, data = await self._rest_request(
             "DELETE",

@@ -118,13 +118,20 @@ def _read_pdf_text(path):
     return "\n\n".join(pages)
 
 
+class UndecodableError(ValueError):
+    """A text file in none of the encodings tried."""
+
+    def __init__(self, path: Any) -> None:
+        super().__init__(f"Cannot decode file: {path}")
+
+
 def _read_txt(path: str) -> str:
     for enc in ("utf-8", "latin-1"):
         try:
             return Path(path).read_text(encoding=enc)
         except UnicodeDecodeError:
             continue
-    raise ValueError(f"Cannot decode file: {path}")
+    raise UndecodableError(path)
 
 
 def _is_pdf(path: str) -> bool:

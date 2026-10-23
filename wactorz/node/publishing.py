@@ -23,9 +23,15 @@ import paho.mqtt.client as paho_mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
 from ..config import CONFIG
-from ..core.mqtt import SERVER_SESSION_EXPIRY_SECONDS, client_id, session_kwargs
+from ..core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    publish_properties,
+    session_kwargs,
+)
 from ..core.mqtt_publisher import MQTTPublisher
 from ..core.mqtt_tls import client_context, tls_enabled
+from ..core.node_publications import PublicationSigner
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +123,9 @@ class NodePublisher:
         #: broker that goes away mid-send costs a retry rather than the message.
         self._inflight: QueueItem | None = None
         self._running = False
+        #: Signs each message as it goes out, so main can tell this node said it.
+        #: None for a node that holds no key, whose messages go out unsigned.
+        self.signer: PublicationSigner | None = None
 
     @property
     def queue(self) -> asyncio.Queue[QueueItem] | None:
@@ -140,14 +149,14 @@ class NodePublisher:
         The signature takes ``qos`` and ``user_properties`` so this can stand in
         for an aiomqtt client on :attr:`Actor._mqtt_client`. Both are accepted
         and neither is used. What a node may drop is a property of the topic
-        rather than of the caller, so the QoS is decided below; and the only
-        user properties this system sends are the signatures main puts on node
-        control messages, which a node receives and never sends.
+        rather than of the caller, so the QoS is decided below; and the user
+        properties a node sends are its signature, which :meth:`publish_one_queued`
+        adds to every message whoever queued it.
         """
         if self._queue is None:
             return
         if user_properties:
-            logger.debug("[runner] Dropping user properties on %s — a node signs nothing", topic)
+            logger.debug("[runner] Dropping user properties on %s — a node sends its own", topic)
         encoded = payload if isinstance(payload, (bytes, bytearray)) else None
         if encoded is None:
             encoded = (payload if isinstance(payload, str) else json.dumps(payload)).encode()
@@ -298,8 +307,13 @@ class NodePublisher:
         # stamps a node as last seen *now* on receipt -- so a node that died
         # hours ago would read online for the whole freshness window, which is
         # exactly what gates migrating an agent onto it.
+        # Signed here, as it is handed over, rather than when queued: the stamp's
+        # count then says the order the broker was given messages in.
+        extra: dict[str, Any] = {}
+        if self.signer is not None:
+            extra["properties"] = publish_properties(self.signer.properties(topic, payload))
         try:
-            client.publish(topic, payload, qos=1 if critical else 0, retain=retain)
+            client.publish(topic, payload, qos=1 if critical else 0, retain=retain, **extra)
         except ValueError:
             # The client refuses this message itself -- an impossible topic or a
             # payload past the protocol's size. Reconnecting would not change

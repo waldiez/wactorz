@@ -43,7 +43,50 @@ MAX_OPTION_CHARS = 60
 ANSWER_LEAF = "answer"
 
 #: A reply that is a number, with whatever punctuation a person adds to one.
-_NUMBER = re.compile(r"^\s*\(?\s*(\d{1,2})\s*[).:]?\s*$")
+#: Matched in full against the reply with its ends stripped, so no two
+#: repeats sit side by side: a pattern where they did took time in the square
+#: of a long run of spaces, which anyone on a chat channel can send.
+_NUMBER = re.compile(r"\(?\s*(\d{1,2})\s*[).:]?")
+
+
+class OptionsError(ValueError):
+    """Options a message cannot offer, and why."""
+
+    @classmethod
+    def none(cls) -> OptionsError:
+        return cls("ask_operator needs options for the person to pick from")
+
+    @classmethod
+    def not_a_string(cls, option: Any) -> OptionsError:
+        return cls(f"an option must be a string, not {type(option).__name__}")
+
+    @classmethod
+    def empty(cls) -> OptionsError:
+        return cls("an option cannot be empty")
+
+    @classmethod
+    def too_long(cls, text: str) -> OptionsError:
+        return cls(
+            f"option {text[:20]!r}… is longer than {MAX_OPTION_CHARS} characters; "
+            "put the sentence in the message and keep the option to a few words"
+        )
+
+    @classmethod
+    def twice(cls, text: str) -> OptionsError:
+        return cls(f"option {text!r} is offered twice")
+
+    @classmethod
+    def too_many(cls, count: int) -> OptionsError:
+        return cls(f"{count} options is more than the {MAX_OPTIONS} a message may offer")
+
+
+class UnknownChannelError(ValueError):
+    """A chat channel no interface is called."""
+
+    def __init__(self, channel: str) -> None:
+        super().__init__(
+            f"no chat channel called {channel!r}; one of {', '.join(sorted(CHANNELS))}"
+        )
 
 
 def check_options(options: Iterable[Any]) -> tuple[str, ...]:
@@ -56,22 +99,17 @@ def check_options(options: Iterable[Any]) -> tuple[str, ...]:
     cleaned: list[str] = []
     for option in options:
         if not isinstance(option, str):
-            raise ValueError(f"an option must be a string, not {type(option).__name__}")
+            raise OptionsError.not_a_string(option)
         text = option.strip()
         if not text:
-            raise ValueError("an option cannot be empty")
+            raise OptionsError.empty()
         if len(text) > MAX_OPTION_CHARS:
-            raise ValueError(
-                f"option {text[:20]!r}… is longer than {MAX_OPTION_CHARS} characters; "
-                "put the sentence in the message and keep the option to a few words"
-            )
+            raise OptionsError.too_long(text)
         if text.casefold() in {c.casefold() for c in cleaned}:
-            raise ValueError(f"option {text!r} is offered twice")
+            raise OptionsError.twice(text)
         cleaned.append(text)
     if len(cleaned) > MAX_OPTIONS:
-        raise ValueError(
-            f"{len(cleaned)} options is more than the {MAX_OPTIONS} a message may offer"
-        )
+        raise OptionsError.too_many(len(cleaned))
     return tuple(cleaned)
 
 
@@ -79,9 +117,7 @@ def check_channel(channel: str) -> str:
     """``channel`` lower-cased, or ``ValueError`` naming the channels there are."""
     name = (channel or DASHBOARD).strip().lower()
     if name not in CHANNELS:
-        raise ValueError(
-            f"no chat channel called {channel!r}; one of {', '.join(sorted(CHANNELS))}"
-        )
+        raise UnknownChannelError(channel)
     return name
 
 
@@ -169,6 +205,8 @@ class Answer:
 
     ``option`` is the text picked and ``index`` its place among the options,
     from zero; ``channel`` and ``user`` say where and by whom it was picked.
+    ``note`` is what the person added in their own words, where the channel
+    lets them: empty otherwise.
     """
 
     id: str
@@ -178,6 +216,7 @@ class Answer:
     channel: str
     user: str = ""
     timestamp: float = 0.0
+    note: str = ""
 
     @property
     def topic(self) -> str:
@@ -194,6 +233,7 @@ class Answer:
             "user": self.user,
             "from": "user",
             "timestamp": self.timestamp or time.time(),
+            **({"note": self.note} if self.note else {}),
         }
 
     @classmethod
@@ -217,7 +257,17 @@ class Answer:
             channel=str(payload.get("channel") or "").strip().lower(),
             user=str(payload.get("user") or "").strip(),
             timestamp=timestamp,
+            note=note_text(payload.get("note")),
         )
+
+
+#: The longest note an answer carries. A note is a sentence or two beside a pick.
+MAX_NOTE_CHARS = 500
+
+
+def note_text(raw: Any) -> str:
+    """``raw`` as an answer's note: trimmed and cut to `MAX_NOTE_CHARS`, empty for anything not text."""
+    return raw.strip()[:MAX_NOTE_CHARS] if isinstance(raw, str) else ""
 
 
 def numbered(text: str, options: Sequence[str]) -> str:
@@ -243,7 +293,7 @@ def pick_option(reply: str, options: Sequence[str]) -> int | None:
     """
     if not options:
         return None
-    match = _NUMBER.match(reply or "")
+    match = _NUMBER.fullmatch((reply or "").strip())
     if match:
         n = int(match.group(1))
         return n - 1 if 1 <= n <= len(options) else None

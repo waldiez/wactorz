@@ -34,6 +34,16 @@ jobs:
       - name: Install the browser
         run: python -m playwright install --with-deps chromium
 
+      # axe, which the journeys run on the page, comes from the frontend's
+      # dependencies: the version its unit tests run.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: frontend/package.json
+
+      - name: Install axe
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
       - name: Journeys
         run: make e2e
 
@@ -41,7 +51,7 @@ jobs:
       # node's logs, and a trace of the page that replays every step.
       - name: Upload what a failed run kept
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-run
           path: e2e/out

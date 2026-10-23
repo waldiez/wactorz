@@ -364,15 +364,29 @@ describe("live MQTT event feed builders", () => {
     });
 
     it("nodeHeartbeatFeedItem pluralises the agent count", () => {
-        expect(nodeHeartbeatFeedItem({ node: "n", agents: ["x"] } as NodeHeartbeatPayload, 1).label).toBe(
-            "node online · 1 agent",
-        );
-        expect(
-            nodeHeartbeatFeedItem({ node: "n", agents: ["x", "y"] } as NodeHeartbeatPayload, 1).label,
-        ).toBe("node online · 2 agents");
-        expect(nodeHeartbeatFeedItem({ node: "n", agents: [] } as NodeHeartbeatPayload, 1).label).toBe(
-            "node online · 0 agents",
-        );
+        const label = (agents: string[]) =>
+            nodeHeartbeatFeedItem({ node: "n", agents } as NodeHeartbeatPayload, true, 1).label;
+
+        expect(label(["x"])).toBe("node online · 1 agent");
+        expect(label(["x", "y"])).toBe("node online · 2 agents");
+        expect(label([])).toBe("node online · 0 agents");
+    });
+
+    it("nodeHeartbeatFeedItem makes a node coming online news, and every report after a heartbeat", () => {
+        const payload = { node: "rpi", agents: ["flic"] } as NodeHeartbeatPayload;
+
+        expect(nodeHeartbeatFeedItem(payload, true, 1)).toEqual({
+            type: "health",
+            label: "node online · 1 agent",
+            agentName: "rpi",
+            timestamp: 1,
+        });
+        expect(nodeHeartbeatFeedItem(payload, false, 2)).toEqual({
+            type: "heartbeat",
+            label: "heartbeat · 1 agent",
+            agentName: "rpi",
+            timestamp: 2,
+        });
     });
 });
 

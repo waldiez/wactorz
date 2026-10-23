@@ -44,8 +44,8 @@ def ensure_lifetime_loaded() -> None:
                     lifetime_cost[k] = float(v)
                 except (TypeError, ValueError):
                     pass
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[cost] the lifetime ledger could not be read: %s", exc)
     lifetime_loaded = True
 
 
@@ -76,8 +76,8 @@ def record_lifetime_cost(agent_id: str, cost_usd) -> None:
     if runtime.db is not None:
         try:
             runtime.db.kv_set("_system", LIFETIME_LEDGER_KEY, lifetime_cost)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[cost] the lifetime ledger could not be saved: %s", exc)
 
 
 def lifetime_cost_total() -> float:
@@ -122,8 +122,8 @@ def historical_cost_usd(live_names: set) -> float:
                 entry = json.loads(row[0])
                 if entry.get("name") not in live_names:
                     total += entry.get("cost_usd", 0.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[cost] a deleted agent's cost row was skipped: %s", exc)
     except Exception:
         return 0.0
     else:
@@ -144,8 +144,8 @@ def historical_messages(live_names: set) -> int:
                 try:
                     entry = json.loads(value)
                     total += entry.get("count", 0)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[cost] a deleted agent's call-count row was skipped: %s", exc)
     except Exception:
         return 0
     else:
@@ -163,8 +163,8 @@ def _final_cost_from_db(name: str):
         ).fetchone()
         if row:
             return json.loads(row[0]).get("cost_usd")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[cost] the final cost of %r could not be read: %s", name, exc)
     return None
 
 

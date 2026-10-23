@@ -22,6 +22,13 @@ DEFAULT_OUTPUT_TOPIC = "homeassistant/map/entities_with_location"
 DEFAULT_MQTT_MAX_PAYLOAD_BYTES = 4 * 1024
 
 
+class PayloadTooSmallError(ValueError):
+    """A payload limit too small to hold even an empty chunk's metadata."""
+
+    def __init__(self) -> None:
+        super().__init__("Configured max payload size is too small for chunk metadata.")
+
+
 class MapUpdateDispatcher:
     """Small delivery abstraction so the final destination can change later."""
 
@@ -83,7 +90,7 @@ class MapUpdateDispatcher:
             }
             max_data_chars = self._max_payload_bytes - self._payload_size(base_chunk)
             if max_data_chars <= 0:
-                raise ValueError("Configured max payload size is too small for chunk metadata.")
+                raise PayloadTooSmallError()
 
             chunk_count = max(1, (len(encoded_payload) + max_data_chars - 1) // max_data_chars)
             required_digits = len(str(chunk_count - 1))

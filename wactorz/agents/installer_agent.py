@@ -23,18 +23,18 @@ import asyncssh
 from .._version import __version__
 from ..config import (
     CONFIG,
-    NODE_SIGNING,
     DeployTarget,
     deploy_env_prefix,
     deploy_name_error,
     deploy_target,
     deploy_target_for_host,
+    reserved_node_name_error,
 )
-from ..core import broker_accounts
 from ..core.actor import Actor, Message, MessageType
 from ..core.installed_wheel import installed_from_a_direct_reference, wheel_of_installed
 from ..core.mqtt import client_id, install_id, mqtt_client
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
+from ..core.node_env import node_account, node_env_text
 from ..core.node_operations import (
     COMMAND_TIMEOUT_S,
     OPERATION_TIMEOUT_S,
@@ -42,7 +42,6 @@ from ..core.node_operations import (
     OperationRefused,
     command_for,
 )
-from ..core.node_signing import next_sequence, node_key
 from ..core.outbound import Answer
 from ..core.packages import (
     APPROVAL_TIMEOUT_S,
@@ -55,6 +54,7 @@ from ..core.packages import (
 )
 from ..core.paths import resolve_state_dir
 from ..core.pip import PIP_TIMEOUT_S, index_args, is_installable_name
+from ..core.refusals import REFUSED, UNANSWERED, RecentRefusals
 from . import node_service
 from .lookup import find_main_actor
 
@@ -160,13 +160,6 @@ FIRST_HEARTBEAT_TIMEOUT_S = 45
 
 _TLS_MODE_ON = frozenset({"on", "1", "true", "yes"})
 _TLS_MODE_OFF = frozenset({"off", "0", "false", "no"})
-
-
-class UnusableNodeAccountError(ValueError):
-    """A node's name cannot be the broker account it would be deployed with."""
-
-    def __init__(self, problem: str) -> None:
-        super().__init__(problem)
 
 
 class UnknownTlsModeError(ValueError):
@@ -304,6 +297,53 @@ class _Asking:
     settled: "asyncio.Future[bool]"
 
 
+class DeployRefusedError(PermissionError):
+    """A deploy that would connect somewhere, or with something, it was not configured for."""
+
+    @classmethod
+    def host_mismatch(cls, target: DeployTarget, requested: str) -> "DeployRefusedError":
+        return cls(
+            f"Refusing to connect: deploy target '{target.name}' is configured "
+            f"as {target.host}, but the task asked for {requested}. Credentials "
+            "are bound to the configured host."
+        )
+
+    @classmethod
+    def unresolvable(cls, target: DeployTarget, mdns: str) -> "DeployRefusedError":
+        return cls(
+            f"Deploy target '{target.name}' has no host configured and "
+            f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
+        )
+
+    @classmethod
+    def unknown_host_key(cls, host: str, port: int, path: Path) -> "DeployRefusedError":
+        return cls(
+            f"Host key for {host}:{port} is not in {path} and "
+            "DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
+            f"`ssh-keyscan -p {port} {host} >> {path}` after verifying it."
+        )
+
+    @classmethod
+    def no_host_key(cls, host: str, port: int) -> "DeployRefusedError":
+        return cls(f"{host}:{port} offered no SSH host key.")
+
+    @classmethod
+    def no_target(cls, requested: str) -> "DeployRefusedError":
+        return cls(
+            f"No deploy target configured for '{requested}'. "
+            "SSH credentials come from the environment (DEPLOY_TARGETS plus a "
+            "DEPLOY_<NODE>_* block), not from the task payload."
+        )
+
+    @classmethod
+    def no_credentials(cls, target: DeployTarget) -> "DeployRefusedError":
+        return cls(
+            f"Deploy target '{target.name}' has no credentials. Set "
+            f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
+            f"{deploy_env_prefix(target.name)}_PASSWORD."
+        )
+
+
 class InstallerAgent(Actor):
     """Pre-defined agent that installs Python packages on demand.
     Uses sys.executable so packages are installed into the active venv.
@@ -322,6 +362,9 @@ class InstallerAgent(Actor):
         self._deploy_started_at = 0.0
         #: The questions about packages still waiting for the operator, by id.
         self._asking: dict[str, _Asking] = {}
+        #: Packages the operator refused, or was asked about and did not answer,
+        #: lately: asked for again in that time, they are refused without asking.
+        self._refusals = RecentRefusals()
 
     def _current_task_description(self) -> str:
         return "idle"
@@ -452,6 +495,8 @@ class InstallerAgent(Actor):
         return [str(name) for name in self.recall(ALLOWED_KEY, [])]
 
     def _remember(self, packages: Iterable[str]) -> None:
+        for package in packages:
+            self._refusals.forget(normalized(package))
         names = {normalized(p) for p in packages} | set(self._remembered())
         self.persist(ALLOWED_KEY, sorted(filter(None, names)))
 
@@ -477,6 +522,21 @@ class InstallerAgent(Actor):
         waiting = unlisted(packages, self._allowed())
         if not waiting:
             return []
+        standing = [
+            (package, refusal)
+            for package in waiting
+            if (refusal := self._refusals.standing(normalized(package))) is not None
+        ]
+        if standing:
+            # The spawn needs every one of them, so one refused lately settles it.
+            logger.warning(
+                "[%s] Not asking again about %s for %s: %s",
+                self.name,
+                ", ".join(waiting),
+                wanted_by,
+                "; ".join(f"{package} was {refusal.said()}" for package, refusal in standing),
+            )
+            return waiting
         names = ", ".join(waiting)
         question_id = await self.notify_user(
             f"{wanted_by} needs {names} installed, and "
@@ -497,9 +557,12 @@ class InstallerAgent(Actor):
                 names,
             )
             # Closed, so a press that comes later cannot allow a package for a
-            # spawn already refused. The next request for it asks afresh.
+            # spawn already refused. A request for them soon after is refused
+            # without asking; after that, it asks afresh.
             if self._asking.pop(question_id, None) is not None:
                 await self._close_question(question_id, NO_ANSWER)
+                for package in waiting:
+                    self._refusals.remember(normalized(package), UNANSWERED)
         return unlisted(waiting, self._allowed())
 
     async def _close_question(self, question_id: str, option: str) -> None:
@@ -549,6 +612,9 @@ class InstallerAgent(Actor):
             return
         if not asking.settled.done():
             asking.settled.set_result(answer.option == INSTALL)
+        if answer.option != INSTALL:
+            for package in asking.packages:
+                self._refusals.remember(normalized(package), REFUSED)
         if answer.option == INSTALL:
             self._remember(asking.packages)
             logger.warning(
@@ -787,21 +853,14 @@ class InstallerAgent(Actor):
         """
         if target.host:
             if requested and requested.strip().lower() != target.host.strip().lower():
-                raise PermissionError(
-                    f"Refusing to connect: deploy target '{target.name}' is configured "
-                    f"as {target.host}, but the task asked for {requested}. Credentials "
-                    f"are bound to the configured host."
-                )
+                raise DeployRefusedError.host_mismatch(target, requested)
             return target.host
 
         mdns = f"{target.name}.local"
         try:
             return await asyncio.to_thread(socket.gethostbyname, mdns)
         except OSError as exc:
-            raise PermissionError(
-                f"Deploy target '{target.name}' has no host configured and "
-                f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
-            ) from exc
+            raise DeployRefusedError.unresolvable(target, mdns) from exc
 
     def _known_hosts_path(self) -> Path:
         """Where learned SSH host keys live.
@@ -842,15 +901,11 @@ class InstallerAgent(Actor):
                 return str(path)
 
             if CONFIG.deploy_strict_host_keys:
-                raise PermissionError(
-                    f"Host key for {host}:{port} is not in {path} and "
-                    f"DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
-                    f"`ssh-keyscan -p {port} {host} >> {path}` after verifying it."
-                )
+                raise DeployRefusedError.unknown_host_key(host, port, path)
 
             key = await asyncssh.get_server_host_key(host, port)
             if key is None:
-                raise PermissionError(f"{host}:{port} offered no SSH host key.")
+                raise DeployRefusedError.no_host_key(host, port)
             entry = host if port == 22 else f"[{host}]:{port}"
             line = f"{entry} {key.export_public_key('openssh').decode().strip()}\n"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -919,24 +974,17 @@ class InstallerAgent(Actor):
         node's.
         """
         username, password = self._node_account(target, node_name)
-        lines = [
-            f"WACTORZ_NODE={shlex.quote(node_name)}",
-            f"WACTORZ_BROKER={shlex.quote(broker)}",
-            f"WACTORZ_PORT={shlex.quote(str(port))}",
-            f"WACTORZ_NODE_KEY={shlex.quote(node_key(node_name))}",
-            f"WACTORZ_CONTROL_SINCE={next_sequence()}",
-            f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
-        ]
-        if tls is not None and tls.enabled:
-            lines.append("MQTT_TLS=1")
-            lines.append(f"MQTT_TLS_CA={shlex.quote(tls.ca)}")
-            lines.append(f"MQTT_TLS_CHECK_HOSTNAME={1 if tls.check_hostname else 0}")
+        enabled = tls is not None and tls.enabled
+        body = node_env_text(
+            node_name,
+            broker,
+            port,
+            username=username,
+            password=password,
+            tls_ca=tls.ca if tls is not None and enabled else None,
+            check_hostname=bool(tls is not None and tls.check_hostname),
+        )
         credentials = bool(username or password)
-        if credentials:
-            lines.append(f"MQTT_USERNAME={shlex.quote(username)}")
-            lines.append(f"MQTT_PASSWORD={shlex.quote(password)}")
-
-        body = "\n".join(lines) + "\n"
         remote = f"{home}/wactorz/.env"
         async with sftp.open(remote, "w") as handle:
             await handle.write(body)
@@ -962,22 +1010,11 @@ class InstallerAgent(Actor):
 
     @staticmethod
     def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
-        """The broker account a node presents: one of its own, a derived one, or the server's.
+        """The broker account a node presents; see :func:`wactorz.core.node_env.node_account`.
 
-        A derived account only where the broker has one -- the brokers Wactorz
-        configures, with `WACTORZ_NODE_ACCOUNTS` set -- because an account no broker
-        knows leaves the node authenticating against nothing. Anywhere else the
-        server's own account stays the default, as it has been. A `broker_user` or
-        `broker_password` set for the target wins over both.
+        A `broker_user` or `broker_password` set for the target wins.
         """
-        default_user, default_password = CONFIG.mqtt_username or "", CONFIG.mqtt_password or ""
-        if CONFIG.node_accounts:
-            problem = broker_accounts.name_error(node_name)
-            if problem:
-                raise UnusableNodeAccountError(problem)
-            default_user = node_name
-            default_password = broker_accounts.password(node_name)
-        return target.broker_user or default_user, target.broker_password or default_password
+        return node_account(node_name, target.broker_user, target.broker_password)
 
     async def _decide_node_tls(
         self, conn: Any, sftp: Any, target: DeployTarget, home: str, broker: str, plain_port: int
@@ -1088,18 +1125,10 @@ class InstallerAgent(Actor):
         requested = str(payload.get("host") or "")
         target = self._resolve_ssh_target(payload)
         if target is None:
-            raise PermissionError(
-                f"No deploy target configured for '{requested}'. "
-                f"SSH credentials come from the environment (DEPLOY_TARGETS plus a "
-                f"DEPLOY_<NODE>_* block), not from the task payload."
-            )
+            raise DeployRefusedError.no_target(requested)
         host = await self._resolve_target_host(target, requested)
         if not target.key_path and not target.password:
-            raise PermissionError(
-                f"Deploy target '{target.name}' has no credentials. Set "
-                f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
-                f"{deploy_env_prefix(target.name)}_PASSWORD."
-            )
+            raise DeployRefusedError.no_credentials(target)
 
         kwargs: dict = {
             "host": host,
@@ -1472,7 +1501,7 @@ class InstallerAgent(Actor):
         # Before anything reaches the network: a name that cannot be an MQTT
         # topic level yields a runner the broker refuses on every operation,
         # so it would retry forever while this deploy reported success.
-        name_problem = deploy_name_error(str(node_name))
+        name_problem = deploy_name_error(str(node_name)) or reserved_node_name_error(str(node_name))
         if name_problem:
             self._log_remote(f"Refusing deploy: {name_problem}")
             return {

@@ -224,6 +224,42 @@ class TestSpawningOnANode:
         assert fixture.desired and fixture.desired[0][0] == "rpi"
 
 
+class TestSpawningOnANodeMainWouldNotHearFrom:
+    """Deployed before nodes signed: under enforce, main ignores what it says."""
+
+    async def test_the_spawn_is_refused_and_says_how_to_fix_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.nodes.NODE_SIGNING", "enforce")
+        fixture = _Main({"rpi": {**_node(__version__), "signed": False}})
+
+        sent = await fixture.main.spawns._spawn_remote(
+            {"name": "collector", "code": "print(1)", "node": "rpi"}, "rpi", save=True
+        )
+
+        assert sent is False
+        assert "nodes/rpi/spawn" not in fixture.topics()
+        (entry,) = [payload for topic, payload in fixture.published if topic.endswith("/logs")]
+        assert "/deploy rpi" in entry["message"]
+
+    async def test_an_agent_restored_there_is_still_sent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The node's retained desired state names it already, and it is heard
+        # from once the node is deployed again.
+        monkeypatch.setattr("wactorz.agents.main.nodes.NODE_SIGNING", "enforce")
+        fixture = _Main({"rpi": {**_node(__version__), "signed": False}})
+
+        await fixture.main.spawns._spawn_remote(
+            {"name": "collector", "code": "print(1)", "node": "rpi"},
+            "rpi",
+            save=False,
+            restoring=True,
+        )
+
+        assert "nodes/rpi/spawn" in fixture.topics()
+
+
 # ── Migrating ──────────────────────────────────────────────────────────────────
 
 
@@ -247,6 +283,19 @@ class TestMigratingToANode:
 
         assert result["success"] is False
         assert "0.0.1" in result["message"]
+        assert "/deploy rpi" in result["message"]
+        assert "stays on 'local'" in result["message"]
+        assert not any(t.startswith("nodes/rpi/") for t in fixture.topics())
+
+    async def test_a_target_main_would_not_hear_from_refuses_before_anything_moves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.nodes.NODE_SIGNING", "enforce")
+        fixture = _migrating_main({"rpi": {**_node(__version__), "signed": False}})
+
+        result = await fixture.main.migration.migrate_agent("collector", "rpi")
+
+        assert result["success"] is False
         assert "/deploy rpi" in result["message"]
         assert "stays on 'local'" in result["message"]
         assert not any(t.startswith("nodes/rpi/") for t in fixture.topics())

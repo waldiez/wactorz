@@ -33,6 +33,7 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 import asyncio
 import hashlib
 import logging
+import sys
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -527,6 +528,10 @@ class SpawnMixin(_Host):
         the operator: the config came from the spawn registry, whose packages
         were cleared when the agent was first placed.
         """
+        minimum = config.get("minimum_python", [])
+        if tuple(sys.version_info[:2]) < tuple(minimum):
+            logger.error("[%s] %s requires Python %s", self.name, name, minimum)
+            return None
         packages = config.get("install", [])
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split() if p.strip()]

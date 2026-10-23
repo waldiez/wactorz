@@ -20,6 +20,17 @@ def test_strict_installation_is_only_declared_by_the_robot_recipe() -> None:
     assert not catalog["anomaly-detector"].get("require_install_success", False)
 
 
+async def test_python310_refuses_robot_before_any_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = CatalogAgent(persistence_dir=str(tmp_path))
+    monkeypatch.setattr(catalog_agent.sys, "version_info", (3, 10, 0))
+    result = await catalog._action_spawn("reachy-mini", {})
+    assert not result["ok"]
+    assert "requires Python 3.11+" in result["message"]
+    assert "No packages were installed" in result["message"]
+
+
 @pytest.mark.parametrize("strict", [False, True])
 async def test_strict_installation_cannot_bypass_approval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict: bool

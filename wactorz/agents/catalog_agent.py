@@ -26,6 +26,7 @@ import importlib
 import importlib.util
 import logging
 import pathlib
+import sys
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -49,7 +50,7 @@ BETA_WARNING = (
 
 INSTALL_WAIT_S = 120.0
 
-_REACHY_MINI_SDK_VERSION = "1.8.4"
+_REACHY_MINI_SDK_VERSION = "1.12.0"
 _REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -293,20 +294,29 @@ def get_native_factory(name: str):
 
 
 def current_recipe_config(saved: dict) -> dict:
-    """A saved catalog agent's config, brought up to date with its recipe.
+    """Refresh code only for recipes explicitly supporting saved configuration.
 
-    The spawn registry keeps a whole recipe, code included, as it was on the day
-    the agent was spawned. Restored from that alone, a catalog agent never
-    receives a fix shipped in a later release. Only trusted entries are
-    refreshed, because only the catalog writes those; what the recipe does not
-    define — where the agent runs, state shipped with a migration — is kept.
+    Dependency changes need a fresh catalogue spawn so the installer asks for
+    approval again. A restored config must never authorize new requirements
+    merely because the recipe changed. Instance settings and state stay saved.
     """
     if not saved.get("trusted") or saved.get("type", "dynamic") != "dynamic":
         return saved
     recipe = _build_catalog().get(str(saved.get("name") or ""))
-    if not recipe or recipe.get("type") != "dynamic":
+    if not recipe or recipe.get("type") != "dynamic" or not recipe.get("refresh_on_restore"):
         return saved
-    return {**saved, **recipe, "trusted": True}
+    if saved.get("install", []) != recipe.get("install", []):
+        raise ValueError(
+            f"{saved.get('name')}: catalogue dependencies changed; respawn through "
+            "@catalog so installation is approved before restoring this agent"
+        )
+    return {
+        **recipe,
+        **saved,
+        "code": recipe["code"],
+        "require_install_success": recipe.get("require_install_success", False),
+        "minimum_python": recipe.get("minimum_python", []),
+    }
 
 
 def _build_catalog() -> dict:
@@ -479,7 +489,7 @@ def _build_catalog() -> dict:
             "docs": (
                 "Setup:\n"
                 "0. Run Wactorz on Windows or macOS for everything; on Linux (Python "
-                "3.13 or older, build tools and GStreamer first) movement and speech "
+                "3.11 to 3.13, build tools and GStreamer first) movement and speech "
                 "work. Docker and the Home Assistant add-on are not supported yet.\n"
                 "1. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
@@ -538,7 +548,7 @@ def _build_catalog() -> dict:
                 _REACHY_MINI_REQUIREMENT,
                 "numpy",
                 "edge-tts",
-                "pillow",
+                "pillow>=13",
                 "webrtcvad-wheels",
                 # Default cloud speech recognition for `ask_voice` and
                 # `conversation_start`. Local Whisper remains selectable when
@@ -556,6 +566,8 @@ def _build_catalog() -> dict:
             # gateway's own reply deadline so a reply still arrives.
             "task_timeout_s": 140.0,
             "require_install_success": True,
+            "refresh_on_restore": True,
+            "minimum_python": [3, 11],
             "input_schema": {
                 "cmd": "str  — help|wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
@@ -917,6 +929,14 @@ class CatalogAgent(Actor):
         if not resolved or not recipe:
             available = list(self._catalog.keys())
             return {"ok": False, "message": f"'{name}' not in catalog. Available: {available}"}
+
+        minimum = recipe.get("minimum_python", [])
+        if tuple(sys.version_info[:2]) < tuple(minimum):
+            return {
+                "ok": False,
+                "message": f"'{resolved}' requires Python {'.'.join(map(str, minimum))}+; "
+                "core Wactorz remains supported on Python 3.10. No packages were installed.",
+            }
 
         if not self._registry:
             return {"ok": False, "message": "No registry available — cannot spawn"}

@@ -19,6 +19,8 @@ from wactorz.agents import llm_agent
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
+from wactorz.node import state as node_state
+from wactorz.web import runtime as web_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -94,14 +96,14 @@ _TLS_VARIABLES = (
 def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ignore broker TLS settings from the developer's environment or `.env`.
 
-    Two places read them. `CONFIG` is built from them at import, and the runner --
-    like the catalogue programs, which cannot import `wactorz` on a node -- reads
-    `MQTT_TLS` straight from the environment, where `load_dotenv` put it. A
-    developer trying TLS with `MQTT_TLS=1` in `.env` otherwise turned every runner
-    test that fakes the broker client into a failure about a CA file.
+    `CONFIG` is built from them at import, after `load_dotenv` put a developer's
+    `.env` into the environment. A developer trying TLS with `MQTT_TLS=1` there
+    would otherwise turn every test that fakes the broker client into a failure
+    about a CA file.
 
-    Both are reset: the variables removed, and `CONFIG` put back to plain MQTT on
-    the plain port. Tests that want TLS set it explicitly, and win.
+    Both are reset: the variables removed, so a test that builds its own config
+    or starts a process starts plain, and `CONFIG` put back to plain MQTT on the
+    plain port. Tests that want TLS set it explicitly, and win.
     """
     for variable in (*_TLS_VARIABLES, "MQTT_USERNAME", "MQTT_PASSWORD"):
         monkeypatch.delenv(variable, raising=False)
@@ -247,3 +249,29 @@ def _no_leaked_stores() -> Iterator[None]:
         Stores.db.close()  # don't leak the handle a test left installed
     Stores.db, Stores.pickle = saved
     Stores.memory.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no agent marked deleted and no reset under way.
+
+    The server ignores every heartbeat and event from an agent id it has marked
+    deleted, and everything at all while a factory reset runs. Tests reuse the
+    same few ids, so one left marked by an earlier test makes a later test's
+    heartbeat vanish, and which test fails then depends on the random order.
+    """
+    monkeypatch.setattr(web_runtime, "deleted_agent_ids", [])
+    monkeypatch.setattr(web_runtime, "hard_resetting", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_node_state_writes() -> Iterator[None]:
+    """Write what a test left queued for a node's state files before the next starts.
+
+    A node writes every agent's state file through one writer for the process,
+    a moment after each save. A test that stops a node's agents queues their
+    last save there, and without this it lands during whichever test runs next
+    on that worker: one that counts the writes it makes then counts a stranger's.
+    """
+    yield
+    node_state.flush_states()

@@ -5,11 +5,14 @@ handler that cannot do damage is one whose move can be judged on whether the
 text still matches.
 """
 
+import asyncio
 import time
 from typing import Any
 
 from ...._version import __version__
+from ....core.artifacts import ArtifactError, ArtifactStore, human_size, summary
 from ....core.compatibility import compatible
+from ....core.paths import resolve_state_dir
 from .dispatch import CommandContext, command
 
 #: Every command, as the help text lists them. Kept as data rather than one
@@ -40,6 +43,14 @@ HELP_LINES: tuple[str, ...] = (
     "                             come from the environment, not chat)",
     "  /migrate <agent> <node> [--force] — move an agent to a different node (state preserved)",
     "  /agents restart <name>  — restart an agent (local or remote, state preserved)",
+    "",
+    "**Models**",
+    "  /artifacts              — list the models kept on main (wactorz-artifacts)",
+    "  /artifacts <name>       — every version of one model",
+    "  /artifacts activate <name:version> [reason] — make a version the one agents serve",
+    "  /artifacts shadow <name:version> [reason]   — try a version beside the active one",
+    "  /artifacts promote <name> [reason]          — make the shadow version active",
+    "  /artifacts clear active|shadow <name>       — unset a pointer",
     "",
     "**Pipelines & Plans**",
     "  /plans                  — list pending pipeline proposals (dry-run)",
@@ -92,6 +103,65 @@ def _node_version_label(node: dict[str, Any]) -> str:
     return f"v{reported} ≠ server, redeploy"
 
 
+def _node_resources_label(node: dict[str, Any]) -> str:
+    """What a node row says about how close it is to running out.
+
+    Only what the node reported: a reading it could not take is left out rather
+    than shown as zero. Throttling comes last and loud, since it is what takes
+    a board down.
+    """
+    parts = []
+    if isinstance(node.get("cpu_pct"), (int, float)):
+        parts.append(f"cpu {node['cpu_pct']:.0f}%")
+    if isinstance(node.get("load_1m"), (int, float)):
+        parts.append(f"load {node['load_1m']:.2f}")
+    if isinstance(node.get("mem_free_mb"), (int, float)):
+        parts.append(f"{_megabytes(node['mem_free_mb'])} memory free")
+    if isinstance(node.get("disk_free_mb"), (int, float)):
+        parts.append(f"{_megabytes(node['disk_free_mb'])} disk free")
+    if isinstance(node.get("temp_c"), (int, float)):
+        parts.append(f"{node['temp_c']:.0f}°C")
+    if node.get("throttled"):
+        parts.append("⚠ " + ", ".join(str(f).replace("_", " ") for f in node["throttled"]))
+    return " · ".join(parts)
+
+
+def _node_machine_label(manifest: dict[str, Any] | None) -> str:
+    """What a node row says about the machine itself, from its manifest; "" without one."""
+    if not isinstance(manifest, dict):
+        return ""
+    parts = [
+        str(manifest[key])
+        for key in ("model", "arch", "os_release")
+        if isinstance(manifest.get(key), str) and manifest[key]
+    ]
+    if isinstance(manifest.get("python"), str):
+        parts.append(f"Python {manifest['python']}")
+    if _is_number(manifest.get("cpu_count")):
+        parts.append(f"{manifest['cpu_count']} CPUs")
+    if _is_number(manifest.get("ram_total_mb")):
+        parts.append(f"{_megabytes(manifest['ram_total_mb'])} memory")
+    if manifest.get("container") is True:
+        parts.append("in a container")
+    gpus = manifest.get("gpu")
+    if isinstance(gpus, list):
+        parts.extend(str(g.get("name")) for g in gpus if isinstance(g, dict) and g.get("name"))
+    devices = manifest.get("devices")
+    if isinstance(devices, list) and devices:
+        parts.append(", ".join(str(d) for d in devices))
+    return " · ".join(parts)
+
+
+def _is_number(value: object) -> bool:
+    """Whether a manifest field is a number; a JSON ``true`` is not one."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _megabytes(value: float) -> str:
+    """A size given in MiB, in the unit a person reads it in."""
+    return f"{value / 1024:.1f} GB" if value >= 1024 else f"{value:.0f} MB"
+
+
 @command(
     "/nodes",
     exact=("main.list_nodes", "list_nodes", "/nodes"),
@@ -115,10 +185,17 @@ async def show_nodes(ctx: CommandContext, _argument: str) -> str:
         agents = ", ".join("@" + a for a in nd["agents"]) or "(no agents)"
         age = int(time.time() - nd["last_seen"])
         version = _node_version_label(nd)
+        # Only an online node's readings describe the machine as it is now.
+        resources = _node_resources_label(nd) if nd["online"] else ""
         lines.append(
             f"  {nd['node']:22s} {status}  |  {version}  |  agents: {agents}"
-            f"  |  last heartbeat: {age}s ago"
+            + (f"  |  {resources}" if resources else "")
+            + f"  |  last heartbeat: {age}s ago"
         )
+        # Beneath, what the machine is: true whether or not it is online.
+        machine = _node_machine_label(nd.get("manifest"))
+        if machine:
+            lines.append(f"  {'':22s} {machine}")
 
     footer = ""
     if not nodes:
@@ -152,6 +229,72 @@ async def show_topics(ctx: CommandContext, argument: str) -> str:
         )
         lines.append(f"  {t['topic']:40s} ← {agent_strs}")
     return "\n".join(lines)
+
+
+@command(
+    "/artifacts",
+    exact=("/artifacts",),
+    prefixes=("/artifacts ",),
+    summary="list the models kept on main",
+)
+async def show_artifacts(_ctx: CommandContext, argument: str) -> str:
+    """The models kept on main, or every version of one."""
+    return await stored_models_text(argument)
+
+
+async def stored_models_text(name: str = "") -> str:
+    """The models kept on main, or every version of ``name``, as `/artifacts` shows them."""
+    store = ArtifactStore.in_state_dir(resolve_state_dir())
+    try:
+        if name:
+            return await asyncio.to_thread(_versions_of, store, name)
+        lines = await asyncio.to_thread(summary, store)
+    except ArtifactError as exc:
+        return f"Cannot list models: {exc}"
+    if not lines:
+        return "No models are kept here. Add one with `wactorz-artifacts add <file> <name>`."
+    return "Models kept on main:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def _versions_of(store: ArtifactStore, name: str) -> str:
+    versions = store.versions(name)
+    if not versions:
+        return f"No model named '{name}'. /artifacts lists them."
+    lines = [f"Versions of '{name}':"]
+    for artifact in versions:
+        code = ", runs code when it loads" if artifact.runs_code else ""
+        lines.append(
+            f"  {artifact.reference:28s} {artifact.format:12s} {human_size(artifact.size):>10s}{code}"
+        )
+    return "\n".join(lines)
+
+
+#: Wactorz's own programs. Each runs in a terminal on the machine it acts on,
+#: and nothing in chat can run one. Typed into chat, one is answered by
+#: `terminal_command_reply` before any model sees it: a model asked to run a
+#: command it has no way to run tends to say that it did.
+TERMINAL_COMMANDS = ("wactorz-artifacts", "wactorz-state", "wactorz-reset", "wactorz-node")
+
+
+def terminal_command(text: str) -> str | None:
+    """The Wactorz program ``text`` runs, if it is a terminal command; else None."""
+    words = text.split(maxsplit=1)
+    return words[0] if words and words[0] in TERMINAL_COMMANDS else None
+
+
+async def terminal_command_reply(text: str) -> str | None:
+    """What main says to a terminal command typed into chat, or None for anything else."""
+    program = terminal_command(text)
+    if program is None:
+        return None
+    reply = (
+        f"`{program}` is a command for a terminal on the machine Wactorz runs on, not for chat, "
+        "so nothing was run. Open a terminal there, in the environment Wactorz is installed "
+        f"in, and run it as typed:\n\n    {text.strip()}"
+    )
+    if program == "wactorz-artifacts":
+        reply += "\n\nWhat is kept now:\n" + await stored_models_text()
+    return reply
 
 
 @command(

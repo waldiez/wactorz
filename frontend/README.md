@@ -18,6 +18,8 @@ frontend/
 ├── src/
 │   ├── main.ts            # Bootstrap — wires transports → store + UI
 │   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
+│   ├── router.ts          # The open view in the address hash (#/feed, #/chat/weather); Back between views
+│   ├── ids.ts             # uid() for element and message ids
 │   ├── safeStorage.ts     # localStorage wrapper with fallback-safe reads
 │   ├── types/             # Shared types: agent.ts, feed.ts, ws.ts, global.d.ts (Window augmentation)
 │   ├── time.ts            # toMs() epoch→ms helper
@@ -32,8 +34,10 @@ frontend/
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
 │   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
 │   │                      #   AmbientManager, logger
-│   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard
+│   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard;
+│   │                      #   dom.ts builds elements and their ARIA, testIds.ts lists the test ids
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
+│   ├── vendor/            # Third-party code kept in the tree (hlcWid)
 │   └── __tests__/         # Vitest unit tests (happy-dom)
 │       └── ext/tts/       # Mirror of ext/ structure for extension tests
 ├── public/                # Static assets (icons, sw.js, webmanifest)
@@ -100,13 +104,18 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
 | `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
-| `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
+| `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "disconnected" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
 | `af-send-failed` | IOManager → DashboardChat | `{ content, target }` |
 | `af-reset-chat` | WSClient → DashboardChat | `{ agent: string \| null }` |
 | `af-agents-settled` | WSClient → CardDashboard | `{ reason: "reset" \| "deleted" }` |
 | `af-clear-feed` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
+| `af-answer-option` | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }` |
+| `af-answered` | main.ts → DashboardChat | `{ id, option }` |
+| `af-app-log` | WSClient → appLogFeed | `{ entries }` |
+| `af-route` | router → CardDashboard | `{ view, path }` (the address changed) |
+| `af-view-changed` | CardDashboard / viewRoutes → router | `{ view, path }` (the dashboard moved) |
 | `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |
 | `tts-audio-start` | TTSManager → AmbientManager | _(none)_ |
 | `tts-audio-end` | TTSManager → AmbientManager | _(none)_ |
@@ -221,3 +230,7 @@ assumes: the `uploads.enabled` field of `/api/config` is seeded into
 A build genuinely cannot know the answer here — one bundle is served by
 deployments that differ, and the committed `static/app` goes to all of them. Set
 `WACTORZ_UPLOADS` on the backend; the UI follows it.
+
+Voice input stays off until it is selected in audio settings or the deployment builds
+with `VITE_STT_ENABLED=true`. Auto mode may use a browser vendor's speech service
+when the server has no recognizer; choosing Server avoids that fallback.

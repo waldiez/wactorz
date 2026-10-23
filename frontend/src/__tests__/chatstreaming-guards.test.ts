@@ -108,3 +108,33 @@ describe("reattachRow", () => {
         expect(thread.textContent).toContain("partial");
     });
 });
+
+describe("a reply with action blocks in it", () => {
+    it("shows and keeps only the text around them", () => {
+        const thread = document.createElement("div");
+        const commit = vi.fn();
+        const ui = new ChatStreamUI(makeHost({ thread: () => thread, commit }));
+
+        for (const chunk of ["Starting it.\n<sp", 'awn>{"name": "a"}', "</spawn>\nDone."]) {
+            ui.onChunk({ chunk, from: "main" });
+            expect(thread.textContent).not.toContain("spawn");
+            expect(thread.textContent).not.toContain("{");
+        }
+        ui.onEnd({ text: null, from: "main" });
+
+        expect(commit).toHaveBeenCalledWith(expect.objectContaining({ content: "Starting it.\n\nDone." }));
+        expect(thread.textContent).not.toContain("spawn");
+    });
+
+    it("leaves no message and no empty bubble when it was nothing but blocks", () => {
+        const thread = document.createElement("div");
+        const commit = vi.fn();
+        const ui = new ChatStreamUI(makeHost({ thread: () => thread, commit }));
+
+        ui.onChunk({ chunk: '<delete>{"name": "a"}</delete>\n', from: "main" });
+        ui.onEnd({ text: null, from: "main" });
+
+        expect(commit).not.toHaveBeenCalled();
+        expect(thread.querySelectorAll(".af-chat-msg")).toHaveLength(0);
+    });
+});

@@ -150,13 +150,11 @@ def main() -> None:
     from wactorz.app import app
     from wactorz.errors import StartupError
 
+    refused: StartupError | None = None
     try:
         asyncio.run(app(args))
     except StartupError as exc:
-        # Said once, as the last line, and the status a supervisor reads as
-        # "do not simply restart me": the configuration has to change first.
-        logging.getLogger(__name__).error("[startup] %s", exc)
-        sys.exit(1)
+        refused = exc
     except (KeyboardInterrupt, asyncio.CancelledError):
         # A signal shuts down by cancelling the app task, which unwinds through
         # its own `finally` — the actors are already stopped by the time the
@@ -164,6 +162,12 @@ def main() -> None:
         # and silently, rather than printing a traceback and reporting failure
         # to whatever supervises the process.
         pass
+    if refused is not None:
+        # Said once, as the last line, without a traceback: the message is the
+        # whole report. Then the status a supervisor reads as "do not simply
+        # restart me": the configuration has to change first.
+        logging.getLogger(__name__).error("[startup] %s", refused)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

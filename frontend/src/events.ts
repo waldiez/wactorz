@@ -16,6 +16,7 @@ import type { FeedItem } from "./types/feed";
 import type { ConnState } from "./ui/dashboard/types";
 import type { TTSVoice } from "./ext/tts/types";
 import type { VoiceMode } from "./io/voiceInput";
+import type { Route } from "./router";
 
 /** Detail payload for each application event, keyed by event name. `void` = no detail. */
 export interface AppEventMap {
@@ -29,7 +30,12 @@ export interface AppEventMap {
     "af-stream-chunk": { chunk: string; from: string };
     "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
-    "af-wipe-all": void;
+    /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
+    "af-answer-option": { id: string; agentId: string; option: string; index: number };
+    /** A question was answered, here or on another channel: show the pick, take the buttons off. */
+    "af-answered": { id: string; option: string };
+    /** Everything was wiped; `survivors` are the ids of the agents still running. */
+    "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have
      *  been applied, or a named agent was deleted. Either way "the chat target
      *  is gone" is now a fact rather than a race with agents re-registering.
@@ -42,6 +48,10 @@ export interface AppEventMap {
     "af-app-log": { entries: unknown[] };
     /** The dashboard voice-input choice changed in the audio settings. */
     "af-voice-mode": { mode: VoiceMode };
+    /** The address changed (Back, a link, a typed hash): open what it names. */
+    "af-route": Route;
+    /** The dashboard opened a view, or another conversation in the chat: the address follows. */
+    "af-view-changed": Route;
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;

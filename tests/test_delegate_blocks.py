@@ -94,8 +94,14 @@ class _Main:
                 raise RuntimeError(_MAILBOX_CLOSED)
             return result if result is not None else {"text": "done"}
 
+        async def _ask_installer(payload: dict[str, Any], timeout: float = 300.0) -> Any:
+            self.installer_asks.append(payload)
+            return result if result is not None else {"output": "done"}
+
+        self.installer_asks: list[dict[str, Any]] = []
         setattr(main, "_resolve_or_spawn", _resolve)
         setattr(main.delegation, "delegate_task", _delegate)
+        setattr(main.delegation, "delegate_to_installer", _ask_installer)
         self.actor = main
 
     async def blocks(self, response: str, restricted: bool = False) -> tuple[str, list[str]]:
@@ -499,3 +505,46 @@ class TestStoredHistoryLosesItsBlocks:
 
         assert _strip_delegate_blocks(history) is False
         assert history[1]["content"] == "Just words."
+
+
+class TestAskingTheInstaller:
+    """The model reaches a node by named operation; a command is the operator's to type."""
+
+    async def test_a_command_for_a_node_is_refused_with_the_way_to_run_it(self) -> None:
+        main = _Main(running=("installer",))
+
+        text, _ = await main.blocks(
+            delegate(agent="installer", payload={"action": "node_run", "command": "reboot"})
+        )
+
+        assert main.dispatched == []
+        assert "/nodes run" in text
+
+    async def test_a_mention_cannot_send_one_either(self) -> None:
+        main = _Main(running=("installer",))
+
+        result = await main.run_one("installer", {"action": "node_run", "command": "reboot"})
+
+        assert main.dispatched == []
+        assert "/nodes run" in result
+
+    async def test_a_named_operation_reaches_it_as_the_payload_itself(self) -> None:
+        # The installer reads `action` from the payload it is sent; wrapped as
+        # task text, every request would read as an install of nothing.
+        main = _Main(running=("installer",))
+        payload = {"action": "node_op", "node_name": "rpi", "operation": "disk"}
+
+        text, _ = await main.blocks(delegate(agent="installer", payload=payload))
+
+        assert main.installer_asks == [payload]
+        assert main.dispatched == []
+        assert "output=done" in text
+
+    async def test_its_refusal_is_reported(self) -> None:
+        main = _Main(running=("installer",), result={"error": "no deploy target 'rpi'"})
+
+        result = await main.run_one(
+            "installer", {"action": "node_op", "node_name": "rpi", "operation": "disk"}
+        )
+
+        assert result == "❌ installer failed: no deploy target 'rpi'"

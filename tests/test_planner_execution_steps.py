@@ -289,6 +289,31 @@ class TestDelegation:
         assert result == {"error": "Timeout from news"}
         assert planner._result_futures == {}
 
+    async def test_a_steps_error_reply_is_returned_for_the_caller_to_judge(
+        self, planner: PlannerAgent
+    ) -> None:
+        # The step's failure is part of the plan's result: the caller decides
+        # whether a fallback stands in for it.
+        planner._registry = _Registry("news")  # pyright: ignore[reportAttributeAccessIssue]
+        _answer_with(planner, {"error": "the feed is down"})
+
+        assert await planner._delegate("news", "t") == {"error": "the feed is down"}
+
+    async def test_an_agent_with_no_room_for_the_task_is_an_error_at_once(
+        self, planner: PlannerAgent
+    ) -> None:
+        planner._registry = _Registry("news")  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def _refuse(*_args: Any, **_kwargs: Any) -> bool:
+            return False
+
+        planner.send = _refuse  # pyright: ignore[reportAttributeAccessIssue]
+
+        result = await planner._delegate("news", "t", timeout=600)
+
+        assert result == {"error": "'news' is not taking messages: its mailbox is full"}
+        assert planner._result_futures == {}
+
 
 class TestSynthesize:
     PLAN: list[dict[str, Any]] = [  # noqa: RUF012  # read-only fixture

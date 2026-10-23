@@ -13,7 +13,6 @@ a version number.
 """
 
 import importlib.util
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,8 +23,7 @@ import pytest
 
 def _load_script() -> ModuleType:
     """Import `scripts/sync_versions.py`, which is not an installed module."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(root, "scripts", "sync_versions.py")
+    path = Path(__file__).resolve().parents[1] / "scripts" / "sync_versions.py"
     spec = importlib.util.spec_from_file_location("sync_versions", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -71,9 +69,9 @@ class TestTheArgumentIsChecked:
     """There are no flags to parse, so anything passed is taken as the version."""
 
     def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        root = Path(__file__).resolve().parents[1]
         return subprocess.run(
-            [sys.executable, os.path.join("scripts", "sync_versions.py"), *args],
+            [sys.executable, str(Path("scripts") / "sync_versions.py"), *args],
             cwd=root,
             capture_output=True,
             text=True,

@@ -1,0 +1,60 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  # Weekly, so a new query in a CodeQL release reaches code nobody has touched.
+  # GitHub runs a schedule on the default branch only.
+  schedule:
+    - cron: "41 4 * * 2"
+  workflow_dispatch:
+
+# Advanced setup: this workflow is the configuration, so the repository's
+# code-scanning "default setup" must stay off — GitHub refuses results from one
+# while the other is on. Action pinning and `persist-credentials: false` as in
+# ci.yml.
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Uploading the results is what code scanning reads; nothing else here
+      # writes.
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Nothing is compiled: CodeQL reads all three from source.
+        language: [python, javascript-typescript, actions]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # The default suite. `security-extended` adds only py/log-injection
+          # here, on log lines that already go through the redacting formatter.
+          # static/ holds the built dashboard and the built docs: generated
+          # copies of code scanned at its source, which would report each
+          # finding twice and some in minified form.
+          config: |
+            paths-ignore:
+              - static/**
+
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}

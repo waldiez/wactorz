@@ -591,8 +591,8 @@ dependency, <code>make lock</code> re-resolves <code>uv.lock</code>, and <code>m
 known vulnerabilities. What agents install at runtime, here and on edge nodes,
 always goes through pip.</p>
 <h3 id="adding-a-catalog-recipe">Adding a catalog recipe</h3>
-<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create the recipe file</span>
-<span class="c1">#    Must export AGENT_CODE = r'''...'''</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Create the recipe file: an ordinary module defining setup / process /</span>
+<span class="c1">#    handle_task / cleanup, as any dynamic agent's code does</span>
 touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 
 <span class="c1"># 2. Register it in catalog_agent.py → _build_catalog()</span>

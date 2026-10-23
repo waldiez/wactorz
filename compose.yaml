@@ -68,6 +68,8 @@ services:
       - ./infra/mosquitto/generated:/wactorz-broker:ro
     networks:
       - wactorz-net
+      # The sandbox node's only way to anything.
+      - wactorz-sandbox-net
     environment:
       # Required: the broker no longer accepts anonymous connections, and a
       # generated-per-start secret would orphan every edge node on restart.
@@ -258,6 +260,8 @@ services:
       # both must agree. WACTORZ_NODE_ACCOUNTS=0 in .env keeps every node on the
       # shared account.
       WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
+      # The sandbox node below gets a broker account; `main` gives it none.
+      WACTORZ_MODEL_CODE_NODE: "${WACTORZ_MODEL_CODE_NODE:-sandbox}"
     # Issued as the runtime user -- docker-entrypoint.sh fixes the state directory's
     # ownership and drops privileges, as in the app -- into this container's /tmp.
     # Root then copies the certificate into the folder and hands it to the folder's
@@ -372,6 +376,94 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Sandbox node ─────────────────────────────────────────────────────────────
+  # Where code the model writes runs, holding none of main's credentials (see
+  # docs/remote-nodes.md, "A node on main's own machine"). Runs with the app;
+  # WACTORZ_MODEL_CODE_NODE=main in .env keeps the code on main and leaves it idle.
+  #
+  # One-shot. Writes the sandbox node what /deploy writes any node -- its name,
+  # the broker, its signing key and broker account, and the CA with TLS -- into a
+  # volume only the sandbox mounts. It reads main's settings and state to do so;
+  # the sandbox never does.
+  sandbox-env:
+    profiles: [python, full, sandbox]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
+    image: wactorz-python:latest
+    container_name: wactorz-sandbox-env
+    restart: "no"
+    mem_limit: 256m
+    pids_limit: 128
+    env_file:
+      - .env
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
+    # Root hands the fresh volume to the runtime user, then the entrypoint drops
+    # to it, as in mqtt-certs.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        chown wactorz:wactorz /run/wactorz-sandbox \
+          && exec docker-entrypoint.sh python -m wactorz.node.compose_env --out /run/wactorz-sandbox
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    network_mode: none
+    volumes:
+      - ./state:/app/state
+      - sandbox-env:/run/wactorz-sandbox
+
+  # The sandbox node itself: a node like any other, in a container of its own.
+  # It mounts neither main's state nor .env, and shares a network with the
+  # broker alone, so main's API and Home Assistant are not reachable from it.
+  # Agents' packages install into its own volume.
+  wactorz-sandbox:
+    profiles: [python, full, sandbox]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
+    image: wactorz-python:latest
+    container_name: wactorz-sandbox
+    restart: unless-stopped
+    mem_limit: "${WACTORZ_SANDBOX_MEM_LIMIT:-2g}"
+    pids_limit: ${WACTORZ_SANDBOX_PIDS_LIMIT:-1024}
+    # The settings are read after the entrypoint drops to the runtime user, who
+    # owns them: root here holds no capability to read another user's file.
+    entrypoint: ["docker-entrypoint.sh", "/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -s /run/wactorz-sandbox/.env ]; then
+          echo "[sandbox] Not started: WACTORZ_MODEL_CODE_NODE=main keeps the code on main."
+          exec sleep infinity
+        fi
+        set -a && . /run/wactorz-sandbox/.env && set +a && exec wactorz-node
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    init: true
+    networks:
+      - wactorz-sandbox-net
+    volumes:
+      - sandbox-env:/run/wactorz-sandbox:ro
+      - sandbox-state:/app/state
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      sandbox-env:
+        condition: service_completed_successfully
+
   prometheus:
     profiles: [python]
     image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
@@ -469,7 +561,7 @@ services:
 
   blackbox-exporter:
     profiles: [python]
-    image: prom/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc
+    image: prom/blackbox-exporter:v0.29.0@sha256:9613f2884689b6fad9f1939f6a3b0388c93a022cfaededb19545b329b5c83dea
     cap_drop: [ALL]
     read_only: true
     security_opt: [no-new-privileges:true]
@@ -488,6 +580,8 @@ services:
   # docker compose --profile full up -d
   homeassistant:
     profiles: [full]
+    # `stable`, not a pinned digest, on purpose: this profile is for trying Wactorz
+    # against a current Home Assistant, which is what people will connect it to.
     image: homeassistant/home-assistant:stable
     container_name: wactorz-homeassistant
     restart: unless-stopped
@@ -516,8 +610,11 @@ services:
 
 networks:
   wactorz-net:
+  wactorz-sandbox-net:
 
 volumes:
+  sandbox-env:
+  sandbox-state:
   api-key-data:
   mosquitto-data:
   mosquitto-logs:

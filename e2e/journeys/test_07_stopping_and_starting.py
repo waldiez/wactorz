@@ -7,8 +7,8 @@ def test_the_servers_own_agents_cannot_be_stopped_or_deleted(
     dashboard: browser.Dashboard,
 ) -> None:
     # Stopping main removes the way back, and it cannot be recreated: its card
-    # offers neither.
-    assert dashboard.card_actions("main") == ["Chat"]
+    # offers neither: talking to it, and its history, are all there is.
+    assert dashboard.card_actions("main") == ["Chat", "History"]
 
 
 def test_an_agent_is_stopped_from_its_card(
@@ -24,7 +24,7 @@ def test_an_agent_is_stopped_from_its_card(
         what="greeter staying stopped, with nothing starting it again",
     )
     # Starting it is the way back, and it is offered; talking to it is not.
-    assert dashboard.card_actions("greeter") == ["Start", "Delete"]
+    assert dashboard.card_actions("greeter") == ["History", "Start", "Delete"]
 
 
 def test_it_is_started_again_and_answers(
@@ -47,6 +47,7 @@ def test_deleting_asks_first_and_cancel_keeps_the_agent(
 ) -> None:
     dashboard.press("greeter", "delete")
     asked = dashboard.asked_to_confirm()
+    dashboard.assert_accessible("the question before deleting")
 
     dashboard.cancel()
 

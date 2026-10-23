@@ -76,7 +76,7 @@ export class WSClient {
     private _onDisconnected: ConnectionHandler | null = null;
     private _onMqttStatus: MqttStatusHandler | null = null;
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to demo. */
+    /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to disconnected. */
     private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private _reconnectDelay = 1_000;
     /** Fires the liveness check; null whenever no socket is being watched. */
@@ -350,7 +350,9 @@ export class WSClient {
     private _handleReset(data: Record<string, unknown>): void {
         const scope = asStr(data["scope"]);
         if (scope === "all") {
-            emit("af-wipe-all");
+            const patch = data["state"] as StatePatch | undefined;
+            const survivors = (patch?.agents ?? []).map(a => a.agent_id).filter((id): id is string => !!id);
+            emit("af-wipe-all", { survivors });
             // The reset frame carries the survivors itself — the server rebuilds
             // from the registry before broadcasting — so apply it rather than
             // sitting on an empty list until the next heartbeat.

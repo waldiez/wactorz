@@ -19,7 +19,17 @@ SCHEMA_VERSION = 1
 SCHEMA_SQL = """
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
+    version           INTEGER NOT NULL,
+    framework_version INTEGER DEFAULT 1   -- how far the migrations have brought it
+);
+
+-- Every migration that has succeeded, SQL and state alike. Only successes are
+-- written, which makes it the record of what is done.
+CREATE TABLE IF NOT EXISTS migration_history (
+    version     INTEGER NOT NULL,
+    applied_at  REAL NOT NULL,
+    description TEXT DEFAULT '',
+    duration_ms INTEGER DEFAULT 0
 );
 
 -- Key-value store for structured agent data (replaces most pickle usage)
@@ -117,4 +127,44 @@ CREATE TABLE IF NOT EXISTS chat_log (
 
 CREATE INDEX IF NOT EXISTS idx_chatlog_ts          ON chat_log (ts);
 CREATE INDEX IF NOT EXISTS idx_chatlog_agent_ts    ON chat_log (agent_name, ts);
+
+-- Metrics history — a sample of every agent and node, about once a minute, so
+-- a trend survives a restart and an install without Prometheus has one at all.
+-- Pruned by the retention job (WACTORZ_RETENTION_METRICS_DAYS).
+CREATE TABLE IF NOT EXISTS agent_metrics_history (
+    ts                 REAL NOT NULL,
+    agent              TEXT NOT NULL,
+    node               TEXT DEFAULT '',      -- empty for an agent on main
+    state              TEXT DEFAULT '',
+    memory_mb          REAL,
+    messages_processed INTEGER,
+    errors             INTEGER,
+    tasks_completed    INTEGER,
+    tasks_failed       INTEGER,
+    cost_usd           REAL,
+    queue_wait_p95_s   REAL,
+    message_p95_s      REAL,
+    task_p95_s         REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_history_ts       ON agent_metrics_history (ts);
+CREATE INDEX IF NOT EXISTS idx_agent_history_agent_ts ON agent_metrics_history (agent, ts);
+
+CREATE TABLE IF NOT EXISTS node_metrics_history (
+    ts          REAL NOT NULL,
+    node        TEXT NOT NULL,
+    online      INTEGER NOT NULL,
+    cpu_pct     REAL,
+    mem_used_mb REAL,
+    mem_free_mb REAL,
+    agents      INTEGER,
+    swap_used_mb REAL,
+    load_1m      REAL,
+    disk_free_mb REAL,
+    temp_c       REAL,
+    throttled    TEXT      -- a JSON list of flags, '[]' for none, NULL where not known
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_history_ts      ON node_metrics_history (ts);
+CREATE INDEX IF NOT EXISTS idx_node_history_node_ts ON node_metrics_history (node, ts);
 """

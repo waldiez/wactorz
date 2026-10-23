@@ -20,6 +20,7 @@ import logging
 import time
 from collections.abc import Callable
 
+from ..deferred_write import LARGE_STATE_BYTES
 from .stores import get_db
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,14 @@ _JOBS: dict[str, Callable[[], object]] = {}
 #: shutdown race a thread that holds the connection lock.
 STOP_TIMEOUT_S = 30.0
 
+#: How many of the largest agents the size report names each time.
+REPORTED_AGENTS = 3
+
+#: Agents warned about for what they keep in `kv_store`, while they keep that
+#: much. Once per crossing: the report runs every few minutes, and a size that
+#: is not changing is not news -- but one that shrank and grew back is.
+_warned_kv: set[str] = set()
+
 _task: asyncio.Task | None = None
 _stopping: asyncio.Event | None = None
 
@@ -52,6 +61,34 @@ def _checkpoint_db() -> object:
     if db is None:
         return None
     return db.checkpoint()
+
+
+def _report_kv_sizes() -> object:
+    """Name the agents keeping the most in `kv_store`, and warn about any keeping too much.
+
+    Every write of a key there rewrites its whole value, and nothing prunes the
+    table, so an agent that appends to a remembered list without bound costs
+    more on every save and keeps the database growing. A warning rather than a
+    limit, as for an agent's pickle: what an agent keeps is its author's call.
+    """
+    db = get_db()
+    if db is None:
+        return None
+    sizes = db.kv_sizes()
+    for agent, size in sizes.items():
+        if size < LARGE_STATE_BYTES:
+            _warned_kv.discard(agent)
+        elif agent not in _warned_kv:
+            _warned_kv.add(agent)
+            logger.warning(
+                "[Persistence] '%s' keeps %.1fMB in the database's key-value store, which "
+                "nothing prunes, and every write of a key there rewrites all of its value. "
+                "Keep what it remembers bounded -- a recent slice rather than the whole history.",
+                agent,
+                size / 1_048_576,
+            )
+    largest = list(sizes.items())[:REPORTED_AGENTS]
+    return ", ".join(f"{agent} {size / 1024:.1f}KB" for agent, size in largest) or "empty"
 
 
 async def _run_once() -> None:
@@ -114,6 +151,7 @@ def start() -> None:
     if _task is not None and not _task.done():
         return
     register("wal-checkpoint", _checkpoint_db)
+    register("kv-sizes", _report_kv_sizes)
     _stopping = asyncio.Event()
     _task = asyncio.create_task(_loop(_stopping))
     logger.info("[maintenance] every %.0fs: %s", INTERVAL_S, ", ".join(_JOBS))

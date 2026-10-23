@@ -5,7 +5,7 @@ Scopes
 chat        chat_log rows + conversation_history / history_summary kv entries,
             and the stored attachments too unless one agent was named
 state       per-agent pickle file (state/<name>/state.pkl)
-metrics     cost and message-count kv entries
+metrics     cost and message-count kv entries, and the metrics history
 spawns      the spawn registry main restores agents from
 logs        truncate wactorz.log and monitor.log (safe while running)
 all         everything above, plus the durable memory main keeps in the
@@ -132,8 +132,11 @@ def reset_agent_state(agent_name: str, state_dir: str | None = None) -> None:
 
 
 def reset_metrics(agent_name: str | None = None, db_path: str | None = None) -> None:
-    """Clear cost and message-count kv entries (optionally for one agent)."""
+    """Clear cost and message-count kv entries, and the metrics history (optionally for one agent)."""
     with _db(db_path) as db:
+        # The history is a record of these same counters over time; a reset that
+        # zeroed them and kept their past would show a cliff in every trend.
+        db.clear_metrics_history(agent_name)
         agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
         for agent in agents:
             for key in _METRIC_KV_KEYS:

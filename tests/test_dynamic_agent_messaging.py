@@ -17,16 +17,20 @@ from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
+import aiomqtt
 import pytest
 
 from wactorz.agents.dynamic import messaging
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.core import actor as actor_module
 from wactorz.core import topic_bus
 from wactorz.core.actor import Actor, Message, MessageType
 from wactorz.core.registry import ActorRegistry
 from wactorz.core.topic_bus import TopicBus, TopicContract
+
+from .node_messages import SignedMessage
 
 
 class _Broker:
@@ -46,15 +50,15 @@ class _Worker(Actor):
 
 
 class _Main:
-    """Only what the remote route reads from the orchestrator."""
+    """Only what the remote route reads from main: its node table, with no host behind it."""
 
     def __init__(self, known_nodes: dict[str, dict[str, Any]]) -> None:
-        self._known_nodes = known_nodes
+        self.nodes = NodeManager()
+        self.nodes.known = known_nodes
 
-
-class _Reply:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        return self.nodes.known
 
 
 class _ReplyClient:
@@ -74,13 +78,14 @@ class _ReplyClient:
         self.subscribed.append(topic)
 
     @property
-    def messages(self) -> AsyncIterator[_Reply]:
+    def messages(self) -> AsyncIterator[SignedMessage]:
         return self._stream()
 
-    async def _stream(self) -> AsyncIterator[_Reply]:
+    async def _stream(self) -> AsyncIterator[SignedMessage]:
         if self._reply is None:
             await asyncio.Event().wait()
-        yield _Reply(self._reply or b"")
+        # From node `rpi`, signed on the topic subscribed.
+        yield SignedMessage(self.subscribed[-1], self._reply or b"", node="rpi")
 
 
 @pytest.fixture(name="broker")
@@ -287,6 +292,38 @@ class TestSendToLocal:
         assert msg.payload["_reply_to"] == api.actor_id
         assert api._actor._result_futures == {}
 
+    async def test_an_error_reply_is_returned_not_raised(
+        self, api: AgentAPI, tmp_path: Path
+    ) -> None:
+        # Generated code is written against error dicts, so the agent's
+        # account of its failure comes back as the result.
+        target = _Worker(name="weather", persistence_dir=str(tmp_path))
+        assert api._actor._registry is not None
+        await api._actor._registry.register(target)
+
+        call = asyncio.create_task(api.send_to("weather", {"city": "Atlantis"}))
+        await _until(lambda: not target._mailbox.empty())
+        msg = target._mailbox.get_nowait()
+        api._actor._result_futures[msg.payload["_task_id"]].set_result({"error": "unknown city"})
+
+        assert await _finish(call) == {"error": "unknown city"}
+        assert api._actor._result_futures == {}
+
+    async def test_an_actor_without_a_futures_table_is_given_one(
+        self, api: AgentAPI, tmp_path: Path
+    ) -> None:
+        target = _Worker(name="weather", persistence_dir=str(tmp_path))
+        assert api._actor._registry is not None
+        await api._actor._registry.register(target)
+        del api._actor._result_futures
+
+        call = asyncio.create_task(api.send_to("weather", {"city": "Athens"}))
+        await _until(lambda: not target._mailbox.empty())
+        msg = target._mailbox.get_nowait()
+        api._actor._result_futures[msg.payload["_task_id"]].set_result({"temp": 30})
+
+        assert await _finish(call) == {"temp": 30}
+
     async def test_a_bare_payload_is_wrapped(self, api: AgentAPI, tmp_path: Path) -> None:
         target = _Worker(name="echo", persistence_dir=str(tmp_path))
         assert api._actor._registry is not None
@@ -400,6 +437,24 @@ class TestSendToRemote:
         assert client.subscribed == [task["_reply_topic"]]
         assert task["_reply_topic"].startswith("agents/by-name/probe/reply/")
         assert api._actor._result_futures == {}
+
+    async def test_the_reply_is_read_over_mqtt_5(
+        self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The node's signature travels in user properties, which an MQTT 3.1.1
+        # connection never receives: every reply would read as unsigned.
+        self._on_node(monkeypatch, agents=["camera"])
+        connected: list[dict[str, Any]] = []
+
+        def _connect(_host: str, _port: int, **kwargs: Any) -> _ReplyClient:
+            connected.append(kwargs)
+            return _ReplyClient(b'{"frames": 3}')
+
+        monkeypatch.setattr(messaging, "mqtt_client", _connect)
+
+        await api.send_to("camera", "snap", timeout=5)
+
+        assert connected[0]["protocol"] == aiomqtt.ProtocolVersion.V5
 
     async def test_it_subscribes_to_the_reply_before_it_publishes_the_task(
         self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch

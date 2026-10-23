@@ -1,0 +1,3 @@
+[install]
+# Seven days, as uv.lock (`exclude-newer`) and Dependabot wait.
+minimumReleaseAge = 604800

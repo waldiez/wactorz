@@ -6,13 +6,15 @@ final synthesis is always handed back to main rather than a domain agent.
 
 import asyncio
 import logging
-import uuid
+import time
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import Actor, MessageType
-from ..mixins.spawning import SpawnPlaceholder
+from ...core.actor import Actor, ReplyError, ask_through
+from ..lookup import find_main_actor
+from ..mixins.spawning import NotSpawned, PlacedOnNode, SpawnPlaceholder
 
 if TYPE_CHECKING:
+    from ..main.actor import MainActor
     from .hosts import ExecutionHost
 
     # Typing-only base: it states what the host must provide and is gone
@@ -22,6 +24,14 @@ else:
     _Host = object
 
 logger = logging.getLogger(__name__)
+
+#: How long the planner waits for an agent it sent to a node to be reported
+#: running there. Generous: the node may install the agent's packages first,
+#: and reports only every few seconds.
+NODE_START_S = 120.0
+
+#: How often it looks while it waits.
+NODE_POLL_S = 0.5
 
 
 class ExecutionMixin(_Host):
@@ -46,7 +56,9 @@ class ExecutionMixin(_Host):
             agent_name = spawn_config.get("name") or step.get("agent")
             if not agent_name:
                 continue
-            existing = self._registry.find_by_name(agent_name)
+            existing = self._registry.find_by_name(agent_name) or self._running_on_a_node(
+                agent_name
+            )
 
             if existing:
                 await self._log(f"Agent '{agent_name}' already running — skipping spawn")
@@ -104,14 +116,62 @@ class ExecutionMixin(_Host):
 
         return plan
 
-    async def _spawn_agent(self, config: dict[str, Any]) -> Actor | SpawnPlaceholder | None:
-        """Spawn an agent for a plan step. Delegates to the shared SpawnMixin.
+    async def _spawn_agent(
+        self, config: dict[str, Any]
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
+        """Spawn an agent for a plan step, where main's placement says it runs.
 
-        Uses the BLOCKING install path: a pipeline's next step may depend on
-        this agent being live, so we wait for any package install to finish
-        rather than returning a placeholder.
+        The plan is the model's, so its code goes where main sends code the
+        model writes (see :mod:`wactorz.agents.main.placement`): to the node for
+        it, or here only when that is allowed. One sent to a node is waited for
+        until the node reports it running, since the next step may ask it.
+
+        Here, it uses the BLOCKING install path: a pipeline's next step may
+        depend on this agent being live, so we wait for any package install to
+        finish rather than returning a placeholder.
         """
+        main = find_main_actor(self._registry) if self._registry else None
+        if main is not None:
+            placed = await main.placement.place(config)
+            if isinstance(placed, NotSpawned):
+                await self._not_spawned(placed.name, "refused", placed.reason)
+                return None
+            if str(placed.get("node") or "").strip():
+                sent = await main._spawn_from_config(placed, save=True)
+                if not isinstance(sent, PlacedOnNode):
+                    return None
+                return await self._started_on_node(main, sent)
+            config = placed
         return await self._spawn_local_from_config(config, register=True, blocking_install=True)
+
+    async def _started_on_node(self, main: "MainActor", sent: PlacedOnNode) -> PlacedOnNode | None:
+        """``sent`` once its node reports it running, or None if it does not in time."""
+        deadline = time.monotonic() + NODE_START_S
+        while time.monotonic() < deadline:
+            if main.nodes.running_agent(sent.name) == sent.node:
+                return sent
+            await asyncio.sleep(NODE_POLL_S)
+        await self._not_spawned(
+            sent.name,
+            "not_started_on_node",
+            f"sent to node '{sent.node}', which did not report it running within {NODE_START_S:g}s",
+        )
+        return None
+
+    async def _not_spawned(self, name: str, status: str, reason: str) -> None:
+        """Say why ``name`` was not spawned, in the log and in the plan's results."""
+        await self._log(f"Not spawning '{name}': {reason}")
+        self._spawn_results[name] = {"ok": False, "status": status, "error": reason}
+
+    def _running_on_a_node(self, name: str) -> str:
+        """The node last reported running ``name``, or "" -- which this planner cannot see itself.
+
+        What the node last said, not only a recent heartbeat: a node that has
+        gone quiet still has its agents until main gives up on it, and spawning
+        another meanwhile would leave two of one name when it comes back.
+        """
+        main = find_main_actor(self._registry) if self._registry else None
+        return main.nodes.last_listed_on(name) if main is not None else ""
 
     async def _execute(self, plan: list[dict[str, Any]]) -> dict[str | int, Any]:
         results: dict[str | int, Any] = {}
@@ -242,27 +302,25 @@ class ExecutionMixin(_Host):
     ) -> dict[str, Any] | None:
         if not self._registry:
             return None
-        target = self._registry.find_by_name(agent_name)
-        if not target:
+        try:
+            return await ask_through(self, agent_name, payload, timeout=timeout)
+        except LookupError:
+            # Not in this process; main reaches one on a node.
+            main = find_main_actor(self._registry)
+            if main is not None and main.nodes.running_agent(agent_name):
+                found = await main.delegation.delegate_payload(agent_name, payload, timeout)
+                return found if found is not None else {"error": f"Timeout from {agent_name}"}
             logger.warning("[%s] Agent '%s' not found for delegation", self.name, agent_name)
             return {"error": f"Agent '{agent_name}' not found"}
-
-        task_id = str(uuid.uuid4())[:8]
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
-
-        await self.send(
-            target.actor_id,
-            MessageType.TASK,
-            {**payload, "_task_id": task_id, "_reply_to": self.actor_id},
-        )
-        try:
-            return await asyncio.wait_for(future, timeout=timeout)
+        except ReplyError as exc:
+            # The step's failure is part of the plan's result, not an exception
+            # here: the caller decides whether a fallback stands in for it.
+            return exc.reply
         except asyncio.TimeoutError:
             logger.warning("[%s] Timeout from '%s'", self.name, agent_name)
             return {"error": f"Timeout from {agent_name}"}
-        finally:
-            self._result_futures.pop(task_id, None)
+        except RuntimeError as exc:
+            return {"error": str(exc)}
 
     async def _synthesize(
         self, task: str, plan: list[dict[str, Any]], results: dict[str | int, Any]

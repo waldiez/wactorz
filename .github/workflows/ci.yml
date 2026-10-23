@@ -112,7 +112,7 @@ jobs:
         run: make coverage-py
 
       - name: Upload coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-coverage
           path: |
@@ -227,7 +227,7 @@ jobs:
   lint-ci:
     # The workflows themselves (zizmor) and the shell scripts the images and
     # the add-ons run (shellcheck), through the tool images pinned in
-    # .github/tools/Dockerfile. Online, so zizmor also checks that each pinned
+    # ci/tools/Dockerfile. Online, so zizmor also checks that each pinned
     # sha belongs to its action and that no pinned release has an advisory.
     name: Workflows and shell scripts
     runs-on: ubuntu-latest

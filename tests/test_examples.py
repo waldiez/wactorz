@@ -16,6 +16,8 @@ import pytest
 
 from wactorz.agents.function_agent import spec_of
 from wactorz.agents.llm.providers.fake import FakeProvider
+from wactorz.core.artifacts import ArtifactStore
+from wactorz.core.paths import resolve_state_dir
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
@@ -434,3 +436,182 @@ class TestTheAG2Example:
         assert result is not None
         assert result["text"] == "Version two."
         assert result["turns"] == 4, "write, critique, rewrite, approve"
+
+
+class TestTheImuModel:
+    """`train.py` keeps the model on main; the detector names it and loads it as arrays."""
+
+    @staticmethod
+    def _imported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.ModuleType:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        # Another example's `model` or `agent` may be imported already, under the same name.
+        for name in ("model", "agent"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+        train = importlib.import_module("train")
+        monkeypatch.delitem(sys.modules, "train")
+        monkeypatch.setattr(train, "MODEL_FILE", tmp_path / "imu_model.npz")
+        return train
+
+    def test_training_stores_a_new_version_each_time(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("numpy")
+        train = self._imported(monkeypatch, tmp_path)
+        state = tmp_path / "state"
+
+        first = train.train(state)
+        train.main(["--state-dir", str(state)])
+
+        store = ArtifactStore.in_state_dir(state)
+        assert first.reference == "imu-detector:1"
+        assert [a.version for a in store.versions("imu-detector")] == [1, 2]
+        assert first.format == "npz" and not first.runs_code
+
+    async def test_the_detector_flags_a_jolt_and_not_rest(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("numpy")
+        train = self._imported(monkeypatch, tmp_path)
+        train.train(resolve_state_dir())
+        detect = importlib.import_module("agent").detect
+        spec = spec_of(detect)
+        assert spec is not None and spec.models == {"model": "imu-detector"}
+        me = spec.build(persistence_dir=str(tmp_path / "agents"))
+
+        jolt = await detect({"ax": 9.0, "ay": -7.5, "az": 1.0}, me)
+        rest = await detect({"ax": 0.1, "ay": 0.0, "az": 1.0}, me)
+
+        assert jolt is not None and jolt["score"] > 20
+        assert rest is None
+        assert me.recall("anomalies_total") == 1
+
+    def test_the_scripts_keep_state_beside_them(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called = TestTheImuRunScript._recorded_run(monkeypatch)
+
+        _load("imu_anomaly", "run").main([])
+
+        assert Path(called["state_dir"]) == EXAMPLES / "imu_anomaly" / "state"
+
+
+class TestTheImuRunScript:
+    """`run.py` starts the minimal profile unless asked for the full system."""
+
+    @staticmethod
+    def _recorded_run(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        import wactorz
+
+        called: dict[str, Any] = {}
+
+        def fake_run(**kwargs: Any) -> None:
+            called.update(kwargs)
+
+        monkeypatch.setattr(wactorz, "run", fake_run)
+        return called
+
+    def test_by_default_it_is_the_minimal_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called = self._recorded_run(monkeypatch)
+        _load("imu_anomaly", "run").main([])
+        assert called["minimal"] is True
+        assert called["llm"] is None
+        specs = [spec_of(a) for a in called["agents"]]
+        assert [spec.name for spec in specs if spec is not None] == ["imu-anomaly"]
+
+    def test_with_main_starts_the_full_system_on_the_named_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        called = self._recorded_run(monkeypatch)
+        _load("imu_anomaly", "run").main(["--with-main", "--llm", "fake"])
+        assert called["minimal"] is False
+        assert called["llm"] == "fake"
+
+
+class TestAskingTheImuDetector:
+    """`ask.py` and the FastAPI route ask through `wactorz.ask`; the system is stood in for."""
+
+    @staticmethod
+    def _stand_in(monkeypatch: pytest.MonkeyPatch, answer: Any) -> dict[str, Any]:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        import wactorz
+
+        seen: dict[str, Any] = {"asked": [], "served": None, "stopped": False}
+
+        async def fake_serve(**kwargs: Any) -> None:
+            seen["served"] = kwargs
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                seen["stopped"] = True
+                raise
+
+        async def fake_ask(target: str, payload: Any, *, timeout: float = 60.0) -> Any:
+            seen["asked"].append((target, payload))
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(wactorz, "serve", fake_serve)
+        monkeypatch.setattr(wactorz, "ask", fake_ask)
+        monkeypatch.setattr(asyncio, "sleep", _no_wait(asyncio.sleep))
+        return seen
+
+    async def test_the_script_starts_asks_twice_and_stops(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        seen = self._stand_in(monkeypatch, {"result": None})
+
+        await _load("imu_anomaly", "ask").main()
+
+        assert seen["served"]["minimal"] is True
+        assert [t for t, _ in seen["asked"]] == ["imu-anomaly", "imu-anomaly"]
+        assert seen["stopped"] is True
+        assert "jolt    ->" in capsys.readouterr().out
+
+    async def test_the_route_answers_from_the_agents_reply(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("fastapi")
+        self._stand_in(monkeypatch, {"score": 39.75, "reading": {"ax": 9}})
+        app_module = _load("imu_anomaly", "fastapi_app")
+
+        assert await app_module.detect_now({"ax": 9}) == {
+            "anomaly": True,
+            "score": 39.75,
+            "reading": {"ax": 9},
+        }
+
+    async def test_a_normal_reading_is_no_anomaly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pytest.importorskip("fastapi")
+        self._stand_in(monkeypatch, {"result": None})
+        app_module = _load("imu_anomaly", "fastapi_app")
+
+        assert await app_module.detect_now({"ax": 0.1}) == {"anomaly": False}
+
+    @pytest.mark.parametrize(
+        ("failure", "status"),
+        [
+            (LookupError("no agent named 'imu-anomaly' is running"), 503),
+            (RuntimeError("'imu-anomaly' answered with an error: boom"), 502),
+            (asyncio.TimeoutError("'imu-anomaly' did not answer within 30s"), 504),
+        ],
+        ids=["not running", "failed", "silent"],
+    )
+    async def test_each_failure_is_its_own_status(
+        self, monkeypatch: pytest.MonkeyPatch, failure: Exception, status: int
+    ) -> None:
+        fastapi = pytest.importorskip("fastapi")
+        self._stand_in(monkeypatch, failure)
+        app_module = _load("imu_anomaly", "fastapi_app")
+
+        with pytest.raises(fastapi.HTTPException) as raised:
+            await app_module.detect_now({"ax": 9})
+        assert raised.value.status_code == status
+
+
+def _no_wait(real_sleep: Any) -> Any:
+    """A sleep that yields once: the examples wait for a system that is stood in for."""
+
+    async def _sleep(_delay: float, *args: Any) -> None:
+        await real_sleep(0)
+
+    return _sleep

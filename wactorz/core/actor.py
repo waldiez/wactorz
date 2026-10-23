@@ -5,6 +5,7 @@ Every agent IS an actor. Actors communicate via message passing only.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import functools
 import inspect
@@ -14,20 +15,27 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
+from ..monitoring import actor_metrics
+from ..monitoring.agent_metrics import RecentDurations
+from . import models
+from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .outbound import DASHBOARD, Answer, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .questions import QUESTIONS_KEY, Question, answered, book_of, questions_in
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
+from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -165,6 +173,9 @@ class Message:
     reply_to: str | None = None
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: float = field(default_factory=time.time)
+    #: The chat turn this message is part of, taken from where it was made;
+    #: "" for one that belongs to none. Its recipient works inside that turn.
+    turn_id: str = field(default_factory=current_turn)
 
     @property
     def is_notification(self) -> bool:
@@ -264,6 +275,108 @@ def _as_coroutine_callback(callback: Callable[[Any], Any]) -> Callable[[Any], An
     return functools.partial(run_callable, callback)
 
 
+#: How long an ask waits for its reply when the caller names no limit. The bug
+#: this prevents is an unbounded wait, so the limit is generous: an agent that
+#: calls a model or a device is slow and still healthy.
+DEFAULT_ASK_TIMEOUT_S = 60.0
+
+
+def ask_payload(payload: Any, *, task_id: str, reply_to: str) -> dict[str, Any]:
+    """The TASK payload of an ask: the request, tagged so the reply finds its way back.
+
+    A request that is not a dict travels as ``{"text": ...}``, which is what an
+    agent that reads natural language expects. The two tags are the convention
+    every agent already honours: ``_task_id`` is echoed on the RESULT, and
+    ``_reply_to`` says where the RESULT goes.
+    """
+    body = dict(payload) if isinstance(payload, dict) else {"text": str(payload)}
+    body["_task_id"] = task_id
+    body["_reply_to"] = reply_to
+    return body
+
+
+class ReplyError(RuntimeError):
+    """An agent answered an ask with an error, as the ``error`` of its reply says.
+
+    Raised rather than returned so a caller cannot mistake it for an answer;
+    ``reply`` is the whole payload, for a caller that reports what the agent
+    said rather than that it failed.
+    """
+
+    def __init__(self, target: str, reply: dict[str, Any]) -> None:
+        super().__init__(f"{target!r} answered with an error: {reply['error']}")
+        self.target = target
+        self.reply = reply
+
+
+class AskHost(Protocol):
+    """What :func:`ask_through` needs of the actor asking: the actor surface
+    every mixin host already declares.
+    """
+
+    name: str
+    actor_id: str
+    _registry: Any
+    _result_futures: Any
+
+    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool: ...
+
+
+async def ask_through(
+    host: AskHost, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+) -> Any:
+    """Send the agent called ``target`` a task on ``host``'s behalf and wait for its reply.
+
+    The body of :meth:`Actor.ask`, callable on anything with an actor's surface,
+    so a mixin asks through its host the way the actor itself would. See
+    :meth:`Actor.ask` for the contract.
+    """
+    if host._registry is None:
+        raise RuntimeError(f"[{host.name}] cannot ask {target!r}: no registry attached")
+    actor = host._registry.find_by_name(target)
+    if actor is None:
+        raise LookupError(f"no agent named {target!r} is running")
+    task_id = f"ask_{uuid.uuid4().hex[:12]}"
+    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+    host._result_futures[task_id] = future
+    try:
+        taken = await host.send(
+            actor.actor_id,
+            MessageType.TASK,
+            ask_payload(payload, task_id=task_id, reply_to=host.actor_id),
+        )
+        if taken is False:
+            raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+        try:
+            reply = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"{target!r} did not answer within {timeout:g}s") from None
+    finally:
+        host._result_futures.pop(task_id, None)
+    return reply_value(reply, task_id=task_id, target=target)
+
+
+def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
+    """What an ask returns from the RESULT payload it was answered with.
+
+    The correlation id is stripped, so the caller sees the agent's answer and
+    nothing of the plumbing. A reply whose ``error`` is set is an agent saying
+    it failed -- the shape a decorated function's exception takes, and what
+    the dynamic agents' ``send_to`` returns on failure -- and is raised rather
+    than handed back as a value, so a caller cannot mistake it for an answer.
+    """
+    if not isinstance(reply, dict):
+        return reply
+    if reply.get("error"):
+        raise ReplyError(target, reply)
+    cleaned = {k: v for k, v in reply.items() if k != "_task_id"}
+    # "task" is the older spelling of the id, still echoed by some agents; an
+    # agent that uses the key for its own text keeps it.
+    if cleaned.get("task") == task_id:
+        del cleaned["task"]
+    return cleaned
+
+
 class Actor(ABC):
     """Base Actor class. All agents inherit from this.
     Actors are fully async and communicate only through messages.
@@ -292,6 +405,10 @@ class Actor(ABC):
         #: When the message being handled was taken up, on the monotonic clock;
         #: None between messages.
         self._handling_since: float | None = None
+        #: What recent messages waited and took, for the percentiles in the
+        #: metrics frame. See `wactorz.monitoring.actor_metrics`.
+        self._queue_waits = RecentDurations()
+        self._message_durations = RecentDurations()
         self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
@@ -326,8 +443,10 @@ class Actor(ABC):
         # omitted the argument wrote somewhere nothing else would look.
         # Through `agent_state_dir`, so a name like `..` is refused rather than
         # walking out of the state directory it was given.
+        # Only named here: the directory is made when the actor starts, or when
+        # `state_dir` is first asked for, so an actor can be built without
+        # touching the disk.
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
-        self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
         #: Without a persistence API: the pickled bytes of each value in the
         #: state file that would not unpickle, written back until set again.
@@ -353,9 +472,20 @@ class Actor(ABC):
         # Handlers
         self._handlers: dict[MessageType, Callable] = {}
         #: Correlation id → the future waiting on that request's RESULT.
-        #: Populated by whoever sends a TASK carrying `_task_id`; drained by
-        #: `_resolve_pending_result` before the message reaches a handler.
+        #: Populated by whoever sends a TASK carrying `_task_id`; settled by
+        #: `_resolve_pending_result` as the RESULT is received, ahead of the
+        #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
+        #: The manifest this actor last published, as it published it (see
+        #: `_send_manifest`). Main reads its own agents' manifests from here
+        #: rather than from the broker, where any node may publish one under
+        #: their names.
+        self._published_manifest: dict[str, Any] | None = None
+        #: Who waits for the person's answer to a question, by question id:
+        #: one future per question, and how many waiters share it.
+        self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
+        #: Whether this actor already listens on its own answer topic.
+        self._hearing_answers = False
         self._setup_default_handlers()
 
         # Background tasks
@@ -363,6 +493,12 @@ class Actor(ABC):
         #: Resolved once this run's stop has finished; see stop(). Created by the
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
+        #: The models this actor names, each with the path it is read at here.
+        #: Filled when it starts, from `declared_models`, unless whoever built it
+        #: -- a node, a spawn of generated code -- already did.
+        self._artifacts: dict[str, dict[str, Any]] = {}
+        #: What `load_model` has loaded, by key, so a model is read once.
+        self._loaded_models: dict[str, Any] = {}
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -373,8 +509,10 @@ class Actor(ABC):
         self._stopped = None
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
+        await asyncio.to_thread(self._persistence_dir.mkdir, parents=True, exist_ok=True)
         await self._load_persistent_state()
         await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
+        await self._resolve_models()
         # Restore the message count from a previous run — but only into a fresh
         # instance. The supervisor restarts by building a new actor, whose count
         # is zero; the start command restarts *this* object, whose count is
@@ -385,9 +523,14 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
-        self._tasks.append(asyncio.create_task(self._message_loop()))
-        self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
-        self._tasks.append(asyncio.create_task(self._command_listener()))
+        # A question asked before a restart is still open: listen for its
+        # answer, which goes to `on_operator_answer` since nothing awaits it.
+        if self.open_questions():
+            self._hear_answers()
+        # Outside whatever turn started this actor: each message brings its own.
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._command_listener, self.name)))
         await self._publish_status()
         logger.info("[%s] Actor started.", self.name)
 
@@ -493,6 +636,7 @@ class Actor(ABC):
                 bus.unregister(self.name)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
+        actor_metrics.forget(self.name)
         logger.info("[%s] Actor stopped.", self.name)
         # Deferred to here rather than raised where it arrived: the shield exists
         # so cleanup completes, and stopping half way through would defeat it.
@@ -606,12 +750,16 @@ class Actor(ABC):
                     MessageType.STATUS_RESPONSE,
                     MessageType.STOP,
                 }
-                if msg.type not in _noise:
+                counted = msg.type not in _noise
+                if counted:
                     self.metrics.messages_processed += 1
+                    self._message_waited(msg)
                 self._handling_since = time.monotonic()
                 try:
                     await self._dispatch(msg)
                 finally:
+                    if counted:
+                        self._message_handled(time.monotonic() - self._handling_since)
                     self._handling_since = None
                 self._mailbox.task_done()
 
@@ -623,6 +771,17 @@ class Actor(ABC):
                 self.metrics.errors += 1
                 logger.exception("[%s] Error in message loop", self.name)
 
+    def _message_waited(self, msg: Message) -> None:
+        """Record how long ``msg`` sat in the mailbox, from when it was made."""
+        waited = max(0.0, time.time() - msg.timestamp)
+        self._queue_waits.add(waited)
+        actor_metrics.QUEUE_WAIT.labels(actor_name=self.name).observe(waited)
+
+    def _message_handled(self, seconds: float) -> None:
+        """Record how long the handler took over one message."""
+        self._message_durations.add(seconds)
+        actor_metrics.MESSAGE_DURATION.labels(actor_name=self.name).observe(seconds)
+
     def _resolve_pending_result(self, msg: Message) -> bool:
         """Settle a waiting future from a RESULT's correlation id.
 
@@ -632,9 +791,10 @@ class Actor(ABC):
 
         It belongs here, ahead of every handler, so that any actor can receive a
         reply without opting in — a per-agent implementation makes the ability
-        depend on which agent is receiving. Returns True when the message was a
-        reply someone was waiting for, in which case there is nothing left to
-        dispatch: the caller already has it.
+        depend on which agent is receiving. Called on receipt, before the
+        mailbox, and again at dispatch for a reply handed in by another route.
+        Returns True when the message was a reply someone was waiting for, in
+        which case there is nothing left to dispatch: the caller already has it.
         """
         if msg.type != MessageType.RESULT or not isinstance(msg.payload, dict):
             return False
@@ -648,14 +808,15 @@ class Actor(ABC):
         return True
 
     async def _dispatch(self, msg: Message):
-        """Dispatch message to the appropriate handler."""
-        if self._resolve_pending_result(msg):
-            return
-        handler = self._handlers.get(msg.type)
-        if handler:
-            await handler(msg)
-        else:
-            await self.handle_message(msg)
+        """Dispatch message to the appropriate handler, inside the turn it belongs to."""
+        with working_on(msg.turn_id, self.name):
+            if self._resolve_pending_result(msg):
+                return
+            handler = self._handlers.get(msg.type)
+            if handler:
+                await handler(msg)
+            else:
+                await self.handle_message(msg)
 
     def _setup_default_handlers(self):
         self._handlers = {
@@ -779,6 +940,10 @@ class Actor(ABC):
             metrics["input_tokens"] = self.metrics.llm_input_tokens
             metrics["output_tokens"] = self.metrics.llm_output_tokens
             metrics["llm_calls"] = self.metrics.llm_calls
+        # The recent p50 and p95, once there are any: how a node's actors, which
+        # serve no `/metrics`, report what waiting and handling take.
+        metrics.update(self._queue_waits.summary("queue_wait"))
+        metrics.update(self._message_durations.summary("message"))
         return metrics
 
     LIFECYCLE_COMMANDS = ("start", "stop", "delete")
@@ -879,7 +1044,7 @@ class Actor(ABC):
         # local: avoids core/__init__ import cycle
         from .mqtt import (
             AGENT_SESSION_EXPIRY_SECONDS,
-            client_id,
+            agent_client_id,
             mqtt_client,
             reconnect_wait,
             session_kwargs,
@@ -891,10 +1056,10 @@ class Actor(ABC):
         # connects clean rather than leaving one behind per incarnation.
         durable = has_derived_id(self.name, self.actor_id)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
-        # A `commands` detail, not the bare actor id: SubscriptionHub already
-        # connects as `wactorz-agent-<actor id>`, and two connections sharing an
-        # id kick each other off the broker for ever.
-        identifier = client_id("agent", str(self.actor_id), "commands")
+        # A `commands` purpose: SubscriptionHub already holds this agent's
+        # unqualified id, and two connections sharing an id kick each other off
+        # the broker for ever.
+        identifier = agent_client_id(str(self.actor_id), self._node, "commands")
         # Whether the connection is known to be down, so it is said when it
         # goes and when it comes back, not at every attempt in between.
         down = False
@@ -955,6 +1120,24 @@ class Actor(ABC):
         msg = Message(type=msg_type, sender_id=self.actor_id, payload=payload)
         return await self._registry.deliver(target_id, msg)
 
+    async def ask(
+        self, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+    ) -> Any:
+        """Send the agent called ``target`` a task and wait for its reply.
+
+        The one way for an agent to ask another a question: the request goes
+        as a TASK with a correlation id and this actor as the reply address,
+        and the RESULT that echoes the id settles the wait. Returns what the
+        agent answered, less the plumbing (see :func:`reply_value`).
+
+        Raises ``LookupError`` when no agent of that name is in the registry,
+        ``RuntimeError`` when the target is not taking messages, :class:`ReplyError`
+        (a ``RuntimeError``) when it answers with an error, and
+        ``asyncio.TimeoutError`` after ``timeout`` seconds with no reply.
+        Whatever the outcome, nothing is left waiting.
+        """
+        return await ask_through(self, target, payload, timeout=timeout)
+
     async def broadcast(self, msg_type: MessageType, payload: Any = None):
         """Broadcast to all registered actors."""
         if self._registry:
@@ -980,7 +1163,14 @@ class Actor(ABC):
         bounded: a notification is dropped on the spot, and anything else waits
         ``MAILBOX_WAIT_S`` for room and is then refused. Either way the sender
         is told, and can report that rather than hang.
+
+        A RESULT this actor is waiting for settles its future here, on receipt,
+        and never enters the mailbox. The wait is usually inside a handler, and
+        a handler runs on the message loop: a reply that had to go through the
+        mailbox would wait for the very handler that is waiting for it.
         """
+        if self._resolve_pending_result(msg):
+            return True
         if self.offer(msg):
             return True
         if msg.is_notification:
@@ -1198,6 +1388,7 @@ class Actor(ABC):
         """Write the whole state, for an actor with no persistence API."""
         try:
             data, unpicklable = encode_state(self._persistent_state, self._unreadable_state)
+            self._persistence_dir.mkdir(parents=True, exist_ok=True)
             write_bytes(self._persistence_dir / "state.pkl", data)
         except Exception:
             logger.exception("[%s] Failed to save state", self.name)
@@ -1208,6 +1399,69 @@ class Actor(ABC):
                 self.name,
                 ", ".join(unpicklable),
             )
+
+    # ─── Models ───────────────────────────────────────────────────────────────
+
+    #: The models this agent loads, by the key it reads each under: references
+    #: to artifacts kept with ``wactorz-artifacts``, ``{"model": "imu-detector:3"}``.
+    #: Resolved before `on_start`, which can then read them; an agent whose
+    #: model is not there does not start. See `wactorz.core.models`.
+    MODELS: ClassVar[Mapping[str, Any]] = {}
+
+    def declared_models(self) -> Mapping[str, Any]:
+        """The models this agent names: `MODELS`, unless a subclass says otherwise."""
+        return self.MODELS
+
+    async def _resolve_models(self) -> None:
+        """Find each declared model in main's store, before the agent starts."""
+        declared = self.declared_models()
+        if not declared or self._artifacts:
+            return
+        try:
+            self._artifacts = await asyncio.to_thread(
+                models.resolve_in_store, declared, resolve_state_dir()
+            )
+        except ArtifactError as exc:
+            raise ArtifactError(f"{self.name} cannot start without its models: {exc}") from exc
+
+    @property
+    def artifacts(self) -> dict[str, dict[str, Any]]:
+        """Each model this agent names: its name, version, format, size and path here."""
+        return {key: dict(entry) for key, entry in self._artifacts.items()}
+
+    def artifact_path(self, key: str) -> str:
+        """Where the model this agent names as ``key`` is, on this host.
+
+        A file, or for a directory artifact the directory it unpacks to, for
+        whatever library reads it: ``onnxruntime.InferenceSession(me.artifact_path("model"))``.
+        """
+        return str(self._artifact(key)["path"])
+
+    async def load_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """The model named ``key``, loaded once and kept, off the event loop.
+
+        Reads the formats `wactorz.core.models` has a loader for; open any
+        other through `artifact_path`. ``allow_code`` loads a pickle, a joblib
+        file or a whole torch module, which run code from the file.
+
+        An agent that was built but never started -- a function agent called
+        from a notebook or a test -- finds its declared models here, on the
+        first load, as `start` would have.
+        """
+        if key not in self._loaded_models:
+            await self._resolve_models()
+            entry = self._artifact(key)
+            self._loaded_models[key] = await asyncio.to_thread(
+                models.load, entry, allow_code=allow_code
+            )
+        return self._loaded_models[key]
+
+    def _artifact(self, key: str) -> dict[str, Any]:
+        entry = self._artifacts.get(key)
+        if entry is None:
+            named = ", ".join(sorted(self._artifacts)) or "none"
+            raise KeyError(f"no model {key!r} for {self.name} (it names: {named})")
+        return entry
 
     # ─── State versions ───────────────────────────────────────────────────────
 
@@ -1287,11 +1541,12 @@ class Actor(ABC):
         """This actor's own directory under the state directory, for files it keeps.
 
         Model weights, a checkpoint store, a local experiment log: anything
-        too large or too un-JSON for :meth:`persist`. It exists from
-        construction, survives restarts and is removed with the actor on a
+        too large or too un-JSON for :meth:`persist`. It exists whenever it is
+        asked for, survives restarts and is removed with the actor on a
         delete. What moves with a migration is the persisted state, not these
         files; an agent that must find a file on another machine ships it.
         """
+        self._persistence_dir.mkdir(parents=True, exist_ok=True)
         return self._persistence_dir
 
     def record_llm_cost(
@@ -1361,6 +1616,27 @@ class Actor(ABC):
             result = self._persistence_api.get(key)
             return default if result is None else result
         return self._persistent_state.get(key, default)
+
+    def persist_bytes(self, key: str, data: bytes) -> None:
+        """Persist raw bytes as text, so they go wherever the state goes.
+
+        A migration ships the state as JSON and a node keeps it as JSON, and
+        neither carries ``bytes``: a value that does not encode is left behind.
+        Stored as base64 text, a pickled estimator, a ``state_dict`` or an ONNX
+        file is a string like any other and travels with the agent.
+        :meth:`recall_bytes` turns it back. The whole state must still fit a
+        migration's size limit, so this is for a model, not a dataset.
+        """
+        self.persist(key, base64.b64encode(data).decode("ascii"))
+
+    def recall_bytes(self, key: str) -> bytes | None:
+        """What :meth:`persist_bytes` stored under ``key``, or None when nothing is there."""
+        text = self.recall(key)
+        if text is None:
+            return None
+        if not isinstance(text, str):
+            raise TypeError(f"{key!r} holds a {type(text).__name__}, not what persist_bytes writes")
+        return base64.b64decode(text, validate=True)
 
     # ─── Subscriptions ────────────────────────────────────────────────────────
 
@@ -1452,6 +1728,15 @@ class Actor(ABC):
                 # always knows self.name, so the feed can attribute the row.
                 if isinstance(payload, dict) and (topic.endswith(("/logs", "/spawned"))):
                     payload.setdefault("name", self.name)
+                # The turn travels with a task to another machine, and with what
+                # an agent reports while it works on one, so both can be found
+                # by it there and on the dashboard.
+                turn = current_turn()
+                if turn and isinstance(payload, dict):
+                    if is_task_topic(topic):
+                        payload.setdefault(TURN_KEY, turn)
+                    elif topic.endswith("/logs"):
+                        payload.setdefault("turn", turn)
                 # Empty bytes = clear a retained message (MQTT spec)
                 # Must send raw empty bytes, not JSON-encoded
                 if payload == b"" or (payload is None and retain):
@@ -1477,17 +1762,36 @@ class Actor(ABC):
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
 
-    async def notify_user(self, text: str, **extra):
-        """Push a user-facing chat message to the UI from this actor, OUTSIDE the
-        synchronous request/reply turn.
+    async def notify_user(
+        self,
+        text: str,
+        *,
+        options: Sequence[str] = (),
+        channel: str = DASHBOARD,
+        user: str = "",
+        **extra: Any,
+    ) -> str:
+        """Say ``text`` to a person, outside any turn, and return the message's id.
 
-        The monitor forwards agents/{id}/chat messages to the chat panel as live
-        chat frames, so use this for autonomous notifications the user should see
-        in chat without having just asked for them: a long delegated task
-        finishing after the reply already returned, sensor alerts, scheduled
-        output, reactive automations, etc.
+        The message goes on ``agents/{id}/chat``: the dashboard shows every such
+        frame, and the chat channels deliver the ones addressed to them. Use it
+        for what the person did not just ask for: a long delegated task
+        finishing after the reply already returned, a sensor alert, scheduled
+        output, a reactive automation.
+
+        ``options`` offers the person a choice: Telegram and the dashboard show
+        buttons, Discord and WhatsApp a numbered list. The pick comes back on
+        ``agents/{id}/answer`` naming the id this returns, which the agent reads
+        with ``subscribe``. ``channel`` is where to send it, ``dashboard`` when
+        unsaid; ``user`` is who to reach there, a Telegram or Discord user id or
+        a WhatsApp number, and is not needed for the dashboard. The frame is
+        published whether or not that channel is running: the dashboard shows
+        it either way, and the channel, if it runs, logs what it could not do.
+
+        Raises ``ValueError`` for options or a channel the channels cannot show.
         """
-        payload = {
+        payload: dict[str, Any] = {
+            "id": uuid.uuid4().hex,
             "from": self.name,
             "to": "user",
             "content": str(text),
@@ -1495,11 +1799,177 @@ class Actor(ABC):
         }
         if extra:
             payload.update(extra)
+        checked = check_options(options)
+        if checked:
+            payload["options"] = list(checked)
+        named = check_channel(channel)
+        if named != DASHBOARD or user:
+            payload["channel"] = named
+            payload["user"] = str(user).strip()
         # QoS 1: neither critical-prefixed nor telemetry-suffixed, so the
         # publisher would leave this at 0 -- and a frame emitted while the
         # monitor is reconnecting would simply be gone. The agent said
         # something; the user never sees it.
         await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
+        return payload["id"]
+
+    # ─── Questions to a person ────────────────────────────────────────────────
+
+    async def ask_operator(
+        self,
+        text: str,
+        *,
+        options: Sequence[str],
+        channel: str = DASHBOARD,
+        user: str = "",
+        timeout: float | None = None,
+    ) -> str:
+        """Ask the person ``text``, offer ``options``, and return the one they pick.
+
+        The question goes out as :meth:`notify_user` sends it, on ``channel``
+        to ``user``, and is written into this actor's state until it is
+        answered, so a restart in between loses nothing: the actor listens
+        again when it starts, and the answer reaches
+        :meth:`on_operator_answer`, or :meth:`wait_for_answer` if the agent
+        asks for it by id. The first pick on any channel is the answer; the
+        dashboard shows every question and can answer it whatever channel it
+        went to.
+
+        ``timeout`` is seconds to wait, None to wait for as long as the actor
+        runs. When it passes on a question sent to a chat channel, the
+        question is shown again on the dashboard, saying where it was asked,
+        and waited for once more for the same time; then
+        ``asyncio.TimeoutError`` is raised. The question stays open, and a
+        later pick still reaches :meth:`on_operator_answer`.
+
+        Raises ``ValueError`` for no options, or options or a channel the
+        channels cannot show.
+        """
+        if not options:
+            raise ValueError("ask_operator needs options for the person to pick from")
+        self._hear_answers()
+        question_id = await self.notify_user(text, options=options, channel=channel, user=user)
+        question = Question(
+            id=question_id,
+            text=str(text),
+            options=check_options(options),
+            channel=check_channel(channel),
+            user=str(user).strip(),
+            asked_at=time.time(),
+        )
+        self._write_question(question)
+        try:
+            return await self.wait_for_answer(question_id, timeout=timeout)
+        except asyncio.TimeoutError:
+            if timeout is None or question.channel == DASHBOARD:
+                raise
+        # Nothing came from the chat channel: the same question, the same id,
+        # on the dashboard, where the operator looks when a channel is quiet.
+        await self.notify_user(
+            f"Still waiting for an answer (asked on {question.channel}): {text}",
+            options=options,
+            id=question_id,
+        )
+        self._write_question(
+            Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
+        )
+        return await self.wait_for_answer(question_id, timeout=timeout)
+
+    async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
+        """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.
+
+        Returns at once for a question already answered. ``LookupError`` for a
+        question this actor never asked, ``asyncio.TimeoutError`` when the time
+        passes; the question stays open either way.
+        """
+        question = self.questions().get(question_id)
+        if question is None:
+            raise LookupError(f"[{self.name}] no question with id {question_id!r}")
+        if question.answer is not None:
+            return question.answer
+        self._hear_answers()
+        entry = self._answer_waiters.get(question_id)
+        future = entry[0] if entry is not None and not entry[0].done() else None
+        if future is None:
+            future = asyncio.get_running_loop().create_future()
+            entry = (future, 0)
+        self._answer_waiters[question_id] = (future, entry[1] + 1)  # pyright: ignore[reportOptionalSubscript]
+        try:
+            # Shielded: a waiter that gives up must not cancel the future a
+            # later answer, or another waiter, still needs.
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(
+                f"[{self.name}] no answer to {question.text[:60]!r} within {timeout:g}s"
+            ) from None
+        finally:
+            # The last waiter to leave takes the future with it, so a pick that
+            # comes later finds nobody waiting and goes to `on_operator_answer`.
+            left = self._answer_waiters.get(question_id)
+            if left is not None and left[0] is future:
+                if left[1] <= 1:
+                    self._answer_waiters.pop(question_id, None)
+                else:
+                    self._answer_waiters[question_id] = (future, left[1] - 1)
+
+    def questions(self) -> dict[str, Question]:
+        """Every question this actor has asked and still keeps, by id."""
+        return questions_in(self.recall(QUESTIONS_KEY, {}))
+
+    def open_questions(self) -> list[Question]:
+        """The questions still waiting for an answer, oldest first."""
+        return sorted((q for q in self.questions().values() if q.open), key=lambda q: q.asked_at)
+
+    async def on_operator_answer(self, question: Question, option: str) -> None:
+        """Called with the person's pick when nothing awaits it.
+
+        That is a question asked before a restart, one asked without waiting,
+        or one whose wait timed out. Override it to act on the answer; the
+        default only logs it. An answer :meth:`ask_operator` or
+        :meth:`wait_for_answer` is waiting for goes to them instead.
+        """
+        logger.info(
+            "[%s] %r was answered %r on %s",
+            self.name,
+            question.text[:60],
+            option,
+            question.answer_channel,
+        )
+
+    def _write_question(self, question: Question) -> None:
+        """Put ``question`` in the book, replacing its earlier record."""
+        book = self.questions()
+        book[question.id] = question
+        self.persist(QUESTIONS_KEY, book_of(book))
+
+    def _hear_answers(self) -> None:
+        """Listen on this actor's answer topic, once."""
+        if self._hearing_answers:
+            return
+        self._hearing_answers = True
+        self.subscribe(answer_topic(self.actor_id), self._on_answer_frame)
+
+    async def _on_answer_frame(self, payload: Any) -> None:
+        """One frame on the answer topic: the first pick for an open question settles it."""
+        answer = Answer.from_payload(self.actor_id, payload)
+        if answer is None:
+            return
+        question = self.questions().get(answer.id)
+        if question is None:
+            logger.debug("[%s] an answer to a question not asked here: %s", self.name, answer.id)
+            return
+        if question.answer is not None:
+            logger.debug(
+                "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
+            )
+            return
+        settled = answered(question, answer.option, answer.index, answer.channel)
+        self._write_question(settled)
+        waiting = self._answer_waiters.pop(answer.id, None)
+        if waiting is not None and not waiting[0].done():
+            waiting[0].set_result(answer.option)
+            return
+        await self.on_operator_answer(settled, answer.option)
 
     # ─── Status ───────────────────────────────────────────────────────────────
 
@@ -1548,6 +2018,15 @@ class Actor(ABC):
             "output_schema": output_schema or {},
             "timestamp": time.time(),
         }
+        await self._send_manifest(manifest)
+
+    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+        """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
+
+        Every manifest goes out through here, so the copy main trusts for its
+        own agents is always the one last sent.
+        """
+        self._published_manifest = manifest
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:

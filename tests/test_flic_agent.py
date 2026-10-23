@@ -13,7 +13,6 @@ import builtins
 import contextlib
 import json
 import logging
-import os
 import stat
 import sys
 import types
@@ -557,7 +556,7 @@ class TestKeepingAPairing:
 
         await agent._remember()
 
-        assert stat.S_IMODE(os.stat(agent._buttons_json).st_mode) == 0o600
+        assert stat.S_IMODE(Path(agent._buttons_json).stat().st_mode) == 0o600
 
     async def test_a_key_survives_the_round_trip(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -613,6 +612,8 @@ class TestKeepingAPairing:
         # Refusing to start over a damaged file leaves nothing working at all,
         # and a button can always be paired again.
         agent, _published = make_agent(tmp_path, monkeypatch)
+        # Left by an earlier run, whose start made the directory.
+        agent._buttons_json.parent.mkdir(parents=True, exist_ok=True)
         agent._buttons_json.write_text("{ not json", encoding="utf-8")
 
         assert await agent._restore() == []

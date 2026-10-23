@@ -77,7 +77,6 @@ def test_a_run_too_short_to_judge_says_so() -> None:
         "node_supervised",
         "spawn_registry",
         "pending_replies",
-        "outbox",
     ],
 )
 def test_something_left_behind_by_one_round_is_a_problem(name: str) -> None:
@@ -89,6 +88,15 @@ def test_something_left_behind_by_one_round_is_a_problem(name: str) -> None:
 
     assert problem.startswith(f"{name} was {getattr(CLEAN, name)} before the first round")
     assert "after round 20" in problem
+
+
+def test_a_message_queued_as_a_round_was_sampled_is_not_a_problem() -> None:
+    # A heartbeat can be queued between the outbox being seen empty and the
+    # sample; an outbox that never empties fails the run where it waits instead.
+    samples = _run(50)
+    samples[20] = replace(samples[20], outbox=2)
+
+    assert _problems(samples) == []
 
 
 @pytest.mark.parametrize("name", ["outbox_lost", "mailbox_refused"])

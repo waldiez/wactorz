@@ -7,6 +7,15 @@ control Home Assistant devices.
 > **Beta:** Reachy Mini is an experimental agent. Use it for supervised trials, not
 > unattended production workflows. Keep the robot within reach while testing motion.
 
+## Installation policy
+
+Reachy's recipe opts into `require_install_success: true`: it waits for package
+installation, reports failures, and postpones startup when loaded packages need a
+restart. The policy defaults to off. Other catalogue agents retain Wactorz's
+best-effort startup after a busy or timed-out installer. Package refusals block
+startup under both policies; strict installation never authorizes a package or a
+restore action.
+
 ## Before you start
 
 You need:
@@ -435,7 +444,12 @@ Use the explicit `ask Wactorz` prefix in chat to bypass Reachy's local robot pla
 
 The prefix forwards the remaining text to main with `_via_interface=True`, so it uses
 the same intent routing, agents, tools, and Home Assistant actuator path as normal
-Wactorz chat. The final text is returned to chat and spoken through Reachy's speaker.
+Wactorz chat, slash commands included. Main takes that only from a catalogue agent
+running the catalogue's own program, as this one does: from an agent the model wrote,
+or from this one once it runs a repair of its program, it answers with an error, since
+the turn would let that code type commands as you. `ask Wactorz` needs the agent on
+main: from a node it has no route there, since main does not take tasks from nodes, and
+Reachy answers from its own commands instead. The final text is returned to chat and spoken through Reachy's speaker.
 Without the prefix, Reachy handles its own robot, camera, speech, microphone, and
 Home Assistant commands first; unhandled text can still fall through to main, but
 `ask Wactorz` is the deterministic interface route.

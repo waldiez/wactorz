@@ -206,13 +206,23 @@ code stays Apache-2.0 either way, and the default image has no such component.</
 <span class="nb">cd</span><span class="w"> </span>wactorz
 </code></pre></div>
 
-<h3 id="2-create-three-files-inside-that-folder">2. Create three files inside that folder</h3>
+<h3 id="2-make-two-secrets">2. Make two secrets</h3>
+<p>The server will not start without an API key: it listens on the network inside
+its container, and anything that reaches it could otherwise drive your agents
+and spend your LLM budget. The broker needs a password for the same reason. Run
+this twice and keep both lines it prints — it uses the Wactorz image's own
+Python, so it works the same on Linux, macOS and Windows:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </span>--entrypoint<span class="w"> </span>python<span class="w"> </span>waldiez/wactorz:latest<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import secrets; print(secrets.token_hex(32))"</span>
+</code></pre></div>
+
+<h3 id="3-create-three-files-inside-that-folder">3. Create three files inside that folder</h3>
 <blockquote>
 <p><strong>Windows tip:</strong> open Notepad, paste the content, then <em>Save As</em> — set <em>Save as type</em> to <strong>All Files</strong> and type the filename exactly as shown. This prevents Windows from secretly adding <code>.txt</code> to the end.</p>
 </blockquote>
 <p><strong><code>mosquitto.conf</code></strong></p>
 <div class="highlight"><pre><span></span><code>listener 1883
-allow_anonymous true
+allow_anonymous false
+password_file /mosquitto/data/passwd
 persistence true
 persistence_location /mosquitto/data/
 log_dest stdout
@@ -223,18 +233,31 @@ log_dest stdout
 
 <span class="nt">services</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">mosquitto</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.0</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408</span>
 <span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-mosquitto</span>
 <span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
+<span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">MQTT_USERNAME</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MQTT_USERNAME:-wactorz}</span>
+<span class="w">      </span><span class="nt">MQTT_PASSWORD</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${MQTT_PASSWORD:?set MQTT_PASSWORD in .env}</span>
+<span class="w">    </span><span class="c1"># The password file is written from .env each time the broker starts, into</span>
+<span class="w">    </span><span class="c1"># its own volume, so changing the password is an edit to .env and a restart.</span>
+<span class="w">    </span><span class="nt">command</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/bin/sh</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">-c</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<span class="w">        </span><span class="no">umask 077</span>
+<span class="w">        </span><span class="no">mosquitto_passwd -b -c /mosquitto/data/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"</span>
+<span class="w">        </span><span class="no">chown mosquitto:mosquitto /mosquitto/data/passwd</span>
+<span class="w">        </span><span class="no">exec mosquitto -c /mosquitto/config/mosquitto.conf</span>
 <span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"1883:1883"</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"127.0.0.1:1883:1883"</span>
 <span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mosquitto-data:/mosquitto/data</span>
 <span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-net</span>
 <span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"CMD"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"mosquitto_sub"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-t"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"$$SYS/#"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-C"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"1"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-i"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"hc"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-W"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"3"</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"CMD-SHELL"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"mosquitto_sub</span><span class="nv"> </span><span class="s">-u</span><span class="nv"> </span><span class="s">\"$$MQTT_USERNAME\"</span><span class="nv"> </span><span class="s">-P</span><span class="nv"> </span><span class="s">\"$$MQTT_PASSWORD\"</span><span class="nv"> </span><span class="s">-t</span><span class="nv"> </span><span class="s">'$$SYS/#'</span><span class="nv"> </span><span class="s">-C</span><span class="nv"> </span><span class="s">1</span><span class="nv"> </span><span class="s">-i</span><span class="nv"> </span><span class="s">hc</span><span class="nv"> </span><span class="s">-W</span><span class="nv"> </span><span class="s">3"</span><span class="p p-Indicator">]</span>
 <span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
 <span class="w">      </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
 <span class="w">      </span><span class="nt">retries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
@@ -250,8 +273,8 @@ log_dest stdout
 <span class="w">      </span><span class="nt">MQTT_PORT</span><span class="p">:</span><span class="w"> </span><span class="s">"1883"</span>
 <span class="w">      </span><span class="nt">INTERFACE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rest</span>
 <span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"8000:8000"</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"8888:8888"</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"127.0.0.1:8000:8000"</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"127.0.0.1:8888:8888"</span>
 <span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-net</span>
 <span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
@@ -265,8 +288,16 @@ log_dest stdout
 <span class="w">  </span><span class="nt">mosquitto-data</span><span class="p">:</span>
 </code></pre></div>
 
-<p><strong><code>.env</code></strong> — uncomment the provider you want to use:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># ── Anthropic (Claude) — default ─────────────────────────────────────────────</span>
+<p>The ports are published on this machine only (<code>127.0.0.1</code>). To reach the dashboard
+from another device, remove <code>127.0.0.1:</code> from the two <code>wactorz</code> lines; the API key
+is what then keeps it yours.</p>
+<p><strong><code>.env</code></strong> — the two secrets from step 2, then the provider you want to use:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># ── Access ─────────────────────────────────────────────────────────────────────</span>
+<span class="nv">API_KEY</span><span class="o">=</span>paste-the-first-secret-here
+<span class="nv">MQTT_USERNAME</span><span class="o">=</span>wactorz
+<span class="nv">MQTT_PASSWORD</span><span class="o">=</span>paste-the-second-secret-here
+
+<span class="c1"># ── Anthropic (Claude) — default ─────────────────────────────────────────────</span>
 <span class="nv">LLM_API_KEY</span><span class="o">=</span>sk-ant-...
 <span class="nv">LLM_PROVIDER</span><span class="o">=</span>anthropic
 <span class="nv">LLM_MODEL</span><span class="o">=</span>claude-sonnet-4-6
@@ -282,12 +313,12 @@ log_dest stdout
 <span class="c1"># LLM_MODEL=llama3</span>
 </code></pre></div>
 
-<h3 id="3-start">3. Start</h3>
+<h3 id="4-start">4. Start</h3>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <p>Images are pulled automatically on first run.</p>
-<h3 id="4-open">4. Open</h3>
+<h3 id="5-open">5. Open</h3>
 <table>
 <thead>
 <tr>
@@ -298,17 +329,18 @@ log_dest stdout
 <tbody>
 <tr>
 <td>Monitor UI</td>
-<td><code>http://localhost:8888</code></td>
+<td><code>http://localhost:8888</code> — sign in with the <code>API_KEY</code> from <code>.env</code></td>
 </tr>
 <tr>
 <td>REST API</td>
-<td><code>http://localhost:8000</code></td>
+<td><code>http://localhost:8000</code> — send it as the <code>X-API-Key</code> header</td>
 </tr>
 </tbody>
 </table>
 <p>To stop: <code>docker compose down</code></p>
 <hr />
 <h2 id="option-b-docker-desktop-terminal">Option B — Docker Desktop + Terminal</h2>
+<p>The same setup with <code>docker run</code>, in PowerShell.</p>
 <h3 id="step-1-create-a-project-folder">Step 1 — Create a project folder</h3>
 <p>Use a new folder so the <code>.env</code> and <code>mosquitto.conf</code> paths are easy to copy into Docker commands:</p>
 <div class="highlight"><pre><span></span><code><span class="n">mkdir</span> <span class="n">wactorz</span>
@@ -320,11 +352,19 @@ log_dest stdout
 </code></pre></div>
 
 <h3 id="step-2-edit-env">Step 2 — Edit <code>.env</code></h3>
+<p>Make two secrets — run this twice and keep both lines it prints:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">run</span> <span class="p">-</span><span class="n">-rm</span> <span class="p">-</span><span class="n">-entrypoint</span> <span class="n">python</span> <span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span><span class="p">:</span><span class="n">latest</span> <span class="n">-c</span> <span class="s2">"import secrets; print(secrets.token_hex(32))"</span>
+</code></pre></div>
+
 <div class="highlight"><pre><span></span><code><span class="n">notepad</span> <span class="p">.</span><span class="n">env</span>
 </code></pre></div>
 
-<p>Fill in at minimum your LLM key and provider. Make sure these Docker-specific values are set:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">MQTT_HOST</span><span class="o">=</span>wactorz-mosquitto
+<p>Fill in your LLM key and provider, put the first secret in <code>API_KEY</code> and the second
+in <code>MQTT_PASSWORD</code>, and make sure these Docker-specific values are set:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">API_KEY</span><span class="o">=</span>paste-the-first-secret-here
+<span class="nv">MQTT_HOST</span><span class="o">=</span>wactorz-mosquitto
+<span class="nv">MQTT_USERNAME</span><span class="o">=</span>wactorz
+<span class="nv">MQTT_PASSWORD</span><span class="o">=</span>paste-the-second-secret-here
 <span class="nv">PORT</span><span class="o">=</span><span class="m">8000</span>
 <span class="nv">MONITOR_PORT</span><span class="o">=</span><span class="m">8888</span>
 </code></pre></div>
@@ -335,30 +375,34 @@ log_dest stdout
 <h3 id="step-3-start-mosquitto">Step 3 — Start Mosquitto</h3>
 <div class="highlight"><pre><span></span><code><span class="no">[System.IO.File]</span><span class="p">::</span><span class="n">WriteAllText</span><span class="p">(</span>
   <span class="p">(</span><span class="nb">Join-Path</span> <span class="p">(</span><span class="nb">Get-Location</span><span class="p">)</span> <span class="s2">"mosquitto.conf"</span><span class="p">),</span>
-  <span class="s2">"listener 1883</span><span class="se">`n</span><span class="s2">allow_anonymous true</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">"</span><span class="p">,</span>
+  <span class="s2">"listener 1883</span><span class="se">`n</span><span class="s2">allow_anonymous false</span><span class="se">`n</span><span class="s2">password_file /mosquitto/data/passwd</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">"</span><span class="p">,</span>
   <span class="no">[System.Text.UTF8Encoding]</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="nv">$false</span><span class="p">)</span>
 <span class="p">)</span>
 
 <span class="n">docker</span> <span class="n">network</span> <span class="n">create</span> <span class="n">wactorz-net</span>
+<span class="n">docker</span> <span class="n">volume</span> <span class="n">create</span> <span class="n">wactorz-mosquitto-data</span>
 <span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz-mosquitto</span> <span class="p">`</span>
   <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">"1883:1883"</span> <span class="p">`</span>
-  <span class="n">-v</span> <span class="s2">"${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf"</span> <span class="p">`</span>
-  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">0</span>
+  <span class="n">-p</span> <span class="s2">"127.0.0.1:1883:1883"</span> <span class="p">`</span>
+  <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">"${PWD}\.env"</span> <span class="p">`</span>
+  <span class="n">-v</span> <span class="s2">"${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf:ro"</span> <span class="p">`</span>
+  <span class="n">-v</span> <span class="s2">"wactorz-mosquitto-data:/mosquitto/data"</span> <span class="p">`</span>
+  <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">1</span><span class="p">.</span><span class="n">2-alpine</span><span class="nv">@sha256</span><span class="p">:</span><span class="n">38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408</span> <span class="p">`</span>
+  <span class="p">/</span><span class="n">bin</span><span class="p">/</span><span class="n">sh</span> <span class="n">-c</span> <span class="s1">'umask 077; mosquitto_passwd -b -c /mosquitto/data/passwd "$MQTT_USERNAME" "$MQTT_PASSWORD" &amp;&amp; chown mosquitto:mosquitto /mosquitto/data/passwd &amp;&amp; exec mosquitto -c /mosquitto/config/mosquitto.conf'</span>
 </code></pre></div>
 
 <p>If <code>wactorz-net</code> already exists, the <code>network create</code> line will error — that is OK.</p>
 <h3 id="step-4-start-wactorz">Step 4 — Start Wactorz</h3>
 <div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz</span> <span class="p">`</span>
   <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">"8000:8000"</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">"8888:8888"</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">"127.0.0.1:8000:8000"</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">"127.0.0.1:8888:8888"</span> <span class="p">`</span>
   <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">"${PWD}\.env"</span> <span class="p">`</span>
   <span class="n">-e</span> <span class="n">MQTT_HOST</span><span class="p">=</span><span class="n">wactorz-mosquitto</span> <span class="p">`</span>
   <span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span><span class="p">:</span><span class="n">latest</span>
 </code></pre></div>
 
-<p>Open <code>http://localhost:8888</code>.</p>
+<p>Open <code>http://localhost:8888</code> and sign in with the <code>API_KEY</code> from <code>.env</code>.</p>
   </main>
 </div>
 

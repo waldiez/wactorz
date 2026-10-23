@@ -14,15 +14,18 @@ from aiohttp import web
 from aiohttp.web_request import Request
 from aiohttp.web_response import Response
 
+from ...agents.llm.cost import get_global_cost_info
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
+from ...orchestration import REST
 from ...web import origins, probes
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
     from ...core.actor import Actor
     from ...core.registry import ActorSystem
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -77,15 +80,20 @@ async def _json_object(request: Request) -> dict[str, Any] | None:
 class RESTInterface:
     """Generic REST API interface. Connect any chat platform via webhooks.
     POST /chat with {"message": "..."} → returns {"response": "..."}
+
+    The chat is the orchestrator's. Main is still held for the rest: the actor
+    listing and lifecycle routes read its registry and send through it.
     """
 
     def __init__(
         self,
+        orchestrator: "Orchestrator",
         main_actor: "MainActor",
         port: int = 8000,
         api_key: str | None = None,
         system: "ActorSystem | None" = None,
     ) -> None:
+        self.orchestrator = orchestrator
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
@@ -97,6 +105,8 @@ class RESTInterface:
             publisher_provider=lambda: getattr(self.system, "_mqtt_client", None),
             nodes_provider=self._known_nodes,
             expected_nodes_provider=lambda: [target.name for target in CONFIG.deploy_targets],
+            supervisor_provider=lambda: getattr(self.system, "supervisor", None),
+            spend_provider=get_global_cost_info,
         )
 
     def _known_nodes(self) -> list[dict[str, Any]]:
@@ -184,7 +194,9 @@ class RESTInterface:
                 return web.json_response({"error": parsed}, status=400)
             agent_name, message = parsed
 
-            response = await self.agent.process_user_input(addressed_to(agent_name, message))
+            response = await self.orchestrator.handle_turn(
+                addressed_to(agent_name, message), channel=REST
+            )
             return web.json_response(
                 {
                     "status": "sent",
@@ -300,6 +312,7 @@ class RESTInterface:
             return probes.readiness_response(await probes.readiness(self.system))
 
         async def prometheus_metrics_endpoint(request: Request) -> Response:
+            await self._monitor.refresh()
             return self._monitor.metrics_response()
 
         async def ha_map_latest_endpoint(request: Request) -> Response:

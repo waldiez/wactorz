@@ -75,10 +75,10 @@ describe("the saved choice", () => {
         safeStorage.remove(VOICE_MODE_KEY);
     });
 
-    it("defaults to auto, including when what is stored is not a mode", () => {
-        expect(voiceMode()).toBe("auto");
+    it("defaults to off, including when what is stored is not a mode", () => {
+        expect(voiceMode()).toBe("off");
         safeStorage.set(VOICE_MODE_KEY, "telepathy");
-        expect(voiceMode()).toBe("auto");
+        expect(voiceMode()).toBe("off");
     });
 
     it("is saved and announced", () => {

@@ -15,14 +15,15 @@
 import type {
     AgentInfo,
     AgentState,
-    HeartbeatPayload,
-    SpawnPayload,
     AlertPayload,
-    LogPayload,
-    NodeHeartbeatPayload,
+    AnswerPayload,
     ChatMessage,
+    HeartbeatPayload,
+    LogPayload,
     MetricsPayload,
+    NodeHeartbeatPayload,
     QaFlagPayload,
+    SpawnPayload,
 } from "../types/agent";
 import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
@@ -157,6 +158,10 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         agentName: item.name ?? agentName,
         timestamp: ts,
     }),
+    answer: (item, { agentName, ts }) =>
+        item.option
+            ? { type: "chat", label: `✓ ${item.option}`, agentName, timestamp: ts, role: "user" }
+            : null,
 };
 
 /**
@@ -308,6 +313,17 @@ export function chatFeedItem(msg: ChatMessage): FeedItem {
     };
 }
 
+/** Feed row for a person's answer to a question an agent asked. */
+export function answerFeedItem(answer: AnswerPayload): FeedItem {
+    return {
+        type: "chat",
+        label: `✓ ${answer.option} (${answer.channel})`,
+        agentName: answer.agentId,
+        timestamp: answer.timestampMs,
+        role: "user",
+    };
+}
+
 /** Feed row when an agent reports stopped. */
 export function stoppedFeedItem(p: { agentName: string }, now = Date.now()): FeedItem {
     return { type: "stopped", label: "stopped", agentName: p.agentName, timestamp: now };
@@ -331,7 +347,16 @@ export function logMessage(p: LogPayload): string {
 /** Feed row for a non-empty log entry, or null when there's nothing to show. */
 export function logFeedItem(p: LogPayload, now = Date.now()): FeedItem | null {
     const msg = logMessage(p);
-    return msg ? { type: "chat", label: msg, agentName: p.agentName, timestamp: now } : null;
+    if (!msg) {
+        return null;
+    }
+    return {
+        type: "chat",
+        label: msg,
+        agentName: p.agentName,
+        timestamp: now,
+        ...(p.turn && { turn: p.turn }),
+    };
 }
 
 /** Feed row for a completed task. */
@@ -339,12 +364,23 @@ export function completedFeedItem(p: { agentName: string }, now = Date.now()): F
     return { type: "spawn", label: "task completed", agentName: p.agentName, timestamp: now };
 }
 
-/** Feed row for a remote node phoning home (agent count pluralised). */
-export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now()): FeedItem {
+/**
+ * Feed row for a remote node phoning home (agent count pluralised).
+ *
+ * A node coming online is news; every report after that is a heartbeat, hidden
+ * with the others unless they are asked for. `cameOnline` is the caller's to
+ * judge (see `NodePresence`).
+ */
+export function nodeHeartbeatFeedItem(
+    p: NodeHeartbeatPayload,
+    cameOnline: boolean,
+    now = Date.now(),
+): FeedItem {
     const n = p.agents.length;
+    const agents = `${n} agent${n !== 1 ? "s" : ""}`;
     return {
-        type: "health",
-        label: `node online · ${n} agent${n !== 1 ? "s" : ""}`,
+        type: cameOnline ? "health" : "heartbeat",
+        label: cameOnline ? `node online · ${agents}` : `heartbeat · ${agents}`,
         agentName: p.node,
         timestamp: now,
     };

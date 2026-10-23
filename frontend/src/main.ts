@@ -35,6 +35,7 @@ import { register as registerTTS } from "./ext/tts";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
+import { questionToast } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
@@ -53,6 +54,7 @@ import {
     alertFeedItem,
     alertKind,
     chatFeedItem,
+    answerFeedItem,
     feedSeedItem,
     stoppedFeedItem,
     qaFlagFeedItem,
@@ -62,6 +64,9 @@ import {
     rawFeedItem,
 } from "./agents/mapping";
 import { createDeletionGuard } from "./agents/deletionGuard";
+import { NodePresence } from "./agents/nodePresence";
+import { startRouter } from "./router";
+import { STALE_MS } from "./ui/dashboard/agentState";
 
 // ═══ 1 · Deployment env & service URLs ══════════════════════════════════════
 //
@@ -120,11 +125,15 @@ window.addEventListener("error", e => {
 });
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
+// Before the dashboard mounts: the first view it opens sets the address.
+const stopRouter = startRouter();
 const agentStore = new AgentStore();
 agentStore.mount();
 const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
 const ws = new WSClient();
+// Online by the overview's measure, so the feed and the node cards agree.
+const nodePresence = new NodePresence(STALE_MS);
 
 // Global drag-and-drop upload overlay. Built after /api/config answers, since
 // only the server knows whether the upload routes are registered — an overlay
@@ -291,12 +300,21 @@ router.on("alert", payload => {
 
 router.on("chat", msg => {
     if (msg.from !== "user") {
-        toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
+        toast.show(
+            questionToast(msg) ?? { type: "chat", title: msg.from, message: msg.content.slice(0, 120) },
+        );
     }
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(msg.from, msg.to);
     emit("af-chat-message", { msg });
     pushFeed(chatFeedItem(msg));
+});
+
+// A question answered on any channel: the card closes on every open dashboard.
+router.on("answer", answer => {
+    emit("af-answered", { id: answer.id, option: answer.option });
+    toast.close(answer.id);
+    pushFeed(answerFeedItem(answer));
 });
 
 router.on("status", payload => {
@@ -338,11 +356,11 @@ function recomputeLive(): void {
     }
     _feedLive = live;
     if (!live) {
-        emit("af-connection-status", { status: "demo" });
+        emit("af-connection-status", { status: "disconnected" });
         return;
     }
     emit("af-connection-status", { status: "live" });
-    agentStore.pruneStaleRemoteAgents();
+    agentStore.pruneSilentRemoteAgents();
     if (!seeded) {
         seeded = true;
         // Startup spawn events are published before the browser connects;
@@ -376,8 +394,8 @@ router.on("completed", payload => {
 });
 
 router.on("node-heartbeat", payload => {
-    agentStore.updateRemoteNode(payload.node, payload.agents);
-    pushFeed(nodeHeartbeatFeedItem(payload));
+    agentStore.updateRemoteNode(payload.node, payload.agents, payload.readings);
+    pushFeed(nodeHeartbeatFeedItem(payload, nodePresence.heard(payload.node)));
 });
 
 router.on("host-stats", stats => {
@@ -432,6 +450,19 @@ listen("af-agent-command", detail => {
     ws.sendRaw({ type: "command", command, agent_id: agentId });
 });
 
+// A press on one of a question's buttons: the pick goes to the agent that
+// asked, over the server's broker link, as a tap on Telegram would.
+listen("af-answer-option", detail => {
+    toast.close(detail.id);
+    ws.sendRaw({
+        type: "answer",
+        agent_id: detail.agentId,
+        id: detail.id,
+        option: detail.option,
+        index: detail.index,
+    });
+});
+
 // af-iobar sends: route through ioManager (same as regular io-bar)
 listen("af-send-message", detail => {
     const { content, attachments } = detail;
@@ -440,7 +471,16 @@ listen("af-send-message", detail => {
 });
 
 // wipe all
-listen("af-wipe-all", () => {
+listen("af-wipe-all", ({ survivors }) => {
+    // A wipe deletes: every agent it took away is tombstoned as a deleted one
+    // is, so a heartbeat still on its way cannot put its card back. Cards are
+    // otherwise kept until a delete says so, and a wipe sends none per agent.
+    const kept = new Set(survivors);
+    for (const agent of agentStore.getAgents()) {
+        if (!kept.has(agent.id)) {
+            markDeleted(agent.id);
+        }
+    }
     agentStore.clearAll();
     _logFeedState.maxTs = 0;
 });
@@ -461,7 +501,7 @@ const _liveActorsTimer = window.setInterval(() => {
         return;
     }
     refreshLiveActors();
-    agentStore.pruneStaleRemoteAgents();
+    agentStore.pruneSilentRemoteAgents();
 }, 15000);
 
 // Ahead of the first request this module makes — the feed seed below. A session
@@ -501,7 +541,7 @@ fetch(`${_apiBase}/api/feed`)
 seedServerConfig()
     .then(haChanged => {
         if (haChanged) {
-            emit("af-connection-status", { status: _feedLive ? "live" : "demo" });
+            emit("af-connection-status", { status: _feedLive ? "live" : "disconnected" });
         }
         // Boot TTS after config is seeded — reads availability from safeStorage.
         const available = safeStorage.get("wactorz-tts-available") === "1";
@@ -529,6 +569,7 @@ function teardown(): void {
     window.clearInterval(_liveActorsTimer);
     ws.disconnect();
     agentStore.dispose();
+    stopRouter();
     // Detaches the window drag listeners it put up; null when uploads are off.
     _dropZone?.destroy();
     _dropZone = null;

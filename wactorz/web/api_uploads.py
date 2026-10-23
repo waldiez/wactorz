@@ -53,7 +53,7 @@ async def upload_handler(request: web.Request) -> web.Response:
     head = b""
     too_large = False
     try:
-        with open(staging, "wb") as handle:
+        with staging.open("wb") as handle:
             while True:
                 chunk = await part.read_chunk()
                 if not chunk:

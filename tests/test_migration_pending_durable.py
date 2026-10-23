@@ -72,7 +72,9 @@ class _Main:
         async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
             self.published.append((topic, payload))
 
-        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        async def _spawn_remote(
+            cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+        ) -> None:
             return None
 
         async def _spawn_from_config(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:

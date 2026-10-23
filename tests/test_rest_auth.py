@@ -6,6 +6,7 @@ later is covered without anyone remembering to add a check to it.
 An install with no key configured is unaffected — every route stays open.
 """
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -47,14 +48,31 @@ class _Registry:
         return None
 
 
+class _Orchestrator:
+    """Answers every turn with the same word."""
+
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        return "reply"
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield "reply"
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
+
+
 class _MainActor:
     """The parts of MainActor that RESTInterface reaches for."""
 
     def __init__(self) -> None:
         self._registry = _Registry()
-
-    async def process_user_input(self, message: str) -> str:
-        return "reply"
 
     async def send_command(self, target: str, command: Any) -> None:
         return None
@@ -64,7 +82,7 @@ class _MainActor:
 
 
 def _interface(api_key: str | None) -> RESTInterface:
-    return RESTInterface(_MainActor(), port=0, api_key=api_key)  # pyright: ignore[reportArgumentType]
+    return RESTInterface(_Orchestrator(), _MainActor(), port=0, api_key=api_key)  # pyright: ignore[reportArgumentType]
 
 
 async def _client(app: web.Application) -> TestClient:

@@ -10,6 +10,8 @@ import logging
 import time
 from typing import Any
 
+from ..agents.llm.cost import get_global_alltime_cost
+from ..core import outbound
 from . import cost, runtime
 
 logger = logging.getLogger(__name__)
@@ -97,11 +99,15 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
     # refuses it.
     if "essential" in data:
         ag["essential"] = bool(data["essential"])
-    # Remote agents' heartbeats include "node" — capture it so the dashboard
-    # delete path can route the stop to the right runner. Local agents don't set
-    # this field; absence means "local".
-    if data.get("node"):
-        ag["node"] = data["node"]
+    # Where it runs, so the dashboard places it and routes a stop to the right
+    # runner. Every heartbeat says: a node's name, or "" for this server. Both are
+    # taken, the empty one too -- an agent moved home would otherwise keep the
+    # node it left in every snapshot, and the page would place it there.
+    if "node" in data:
+        if data["node"]:
+            ag["node"] = data["node"]
+        else:
+            ag.pop("node", None)
 
 
 def rebuild_from_registry(registry: Any) -> int:
@@ -144,6 +150,26 @@ def add_log(entry: dict[str, Any]) -> None:
     runtime.state["log_feed"].insert(0, entry)
     if len(runtime.state["log_feed"]) > 100:
         runtime.state["log_feed"].pop()
+
+
+def question_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """What a chat frame says about the choice it offers, for the dashboard.
+
+    Only present when the frame carries them: a plain message stays as it was,
+    and a frame that names a channel says so, so the dashboard can show where
+    the question also went.
+    """
+    fields: dict[str, Any] = {}
+    message_id = data.get("id")
+    if isinstance(message_id, str) and message_id:
+        fields["id"] = message_id
+    options = data.get("options")
+    if isinstance(options, list) and options:
+        fields["options"] = [str(o) for o in options]
+    channel = data.get("channel")
+    if isinstance(channel, str) and channel and channel != outbound.DASHBOARD:
+        fields["channel"] = channel
+    return fields
 
 
 def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
@@ -306,8 +332,10 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
             surface = ""
             surface_label = ""
             brain = ""
+            asked: dict[str, Any] = {}
             if isinstance(data, dict):
                 content = (data.get("content") or data.get("text") or "").strip()
+                asked = question_fields(data)
                 sender = data.get("from") or sender
                 recipient = data.get("to") or recipient
                 source = data.get("source") if isinstance(data.get("source"), str) else ""
@@ -335,6 +363,7 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                         "surface": surface,
                         "surface_label": surface_label,
                         "brain": brain,
+                        **asked,
                     }
                 )
                 return {
@@ -352,9 +381,29 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                         "surface": surface,
                         "surface_label": surface_label,
                         "brain": brain,
+                        **asked,
                     },
                 }
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
+        elif metric == outbound.ANSWER_LEAF:
+            # A person picked one of the options an agent offered, on whichever
+            # channel showed them. The feed records the pick; the raw frame is
+            # relayed so every open dashboard marks the question answered.
+            answer = outbound.Answer.from_payload(agent_id, data)
+            if answer is not None:
+                name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+                add_log(
+                    {
+                        "type": "answer",
+                        "agent_id": agent_id,
+                        "name": name,
+                        "id": answer.id,
+                        "option": answer.option,
+                        "index": answer.index,
+                        "channel": answer.channel,
+                        "timestamp": answer.timestamp or time.time(),
+                    }
+                )
         elif metric == "completed":
             update_agent(agent_id, "last_completed", data)
             name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
@@ -489,8 +538,6 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # headline never drops below money already spent — and so it can never read
     # lower than the "this period" spend shown beside it.
     try:
-        from ..agents.llm_agent import get_global_alltime_cost
-
         alltime_cost = get_global_alltime_cost()
     except Exception:
         alltime_cost = 0.0

@@ -1,7 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.7.1
 
+- Changed: **redeploy your edge nodes.** A node on 0.7.0 keeps working with this version, but most of this release's node changes ship in what the node runs, and a 0.7.0 node does not understand the models, arrays and bytes a migration now carries, so an agent holding any comes up there without them. Run `/deploy <node>` for each.
+- Changed: **0.7.0 cannot read the agent state this version writes.** Each value an agent keeps is now stored on its own, so one that no longer loads after an update costs only that value rather than the agent's whole state. Going back to 0.7.0 afterwards starts each agent's own values afresh; restoring the backup Home Assistant offers to take before the update brings back both.
+- Added: trends on the dashboard. Each agent card draws its messages per minute over the last hour, and its History button opens its messages, errors, waits, state size and spend over the last hour, day or week. Remote nodes are cards that say what the machine is, its devices and how close it is to running out, with their own history. The history is kept in the add-on's database for 7 days.
+- Added: each row of the activity feed shows the chat turn it belongs to and the agent at work, and clicking either shows only its rows.
+- Added: `/metrics` is served on port `8888` once you publish it, behind `api_key`, which a scraper sends as `Authorization: Bearer`.
+- Changed: agent cards no longer show a CPU figure. Every agent runs in the add-on's one process, so it was the add-on's CPU, which the host bar still shows.
+- Fixed: *Wipe everything* no longer shuts your nodes down until their next `/deploy`. Each node deletes its agents and stays connected.
+- Fixed: agent cards no longer disappear and come back. A card stays until its agent is deleted, and its dot turns yellow, then red, when the agent goes quiet.
+- Fixed: `/deploy` and `/migrate` typed in the dashboard answer in one message, with `/deploy`'s progress shown as it goes, and say when an install or move fails.
+- Fixed: a slash command typed in an agent's thread is answered as a command instead of being sent to the agent as text.
+- Fixed: migrations. What an agent writes as it stops goes with it; a rolled-back migration no longer loses the agent; an agent moved home no longer keeps running on its node too, and is started again there if it cannot start here; two copies of one agent no longer knock each other off the broker; and an agent a node cannot run, such as `flic`, is refused before anything stops.
+- Fixed: a planner that reached its time limit no longer leaves its card behind, and an agent moved home from a node is listed under `local` again.
+- Fixed: a chat agent built on `agent.llm.converse()` remembers its conversation across a restart and a migration.
+- Fixed: the anomaly detector, time-series collector, smart-energy, manual and doc-to-pptx catalogue agents. Rate-of-change anomalies are detected, a failed database write no longer duplicates rows, a plug named "the hall lamp" no longer selects every plug, and the doc-to-pptx agent starts without Node.js.
 - Changed: the add-on states that it contains Ultralytics, which is AGPL-3.0, in its documentation ("Licences") and its image label. Nothing installed changes.
 
 ## 0.7.0

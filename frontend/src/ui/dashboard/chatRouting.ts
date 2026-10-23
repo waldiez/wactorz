@@ -66,6 +66,11 @@ export function sendBlockedReason(agents: AgentInfo[], target: string): string |
         // where "start it" would be wrong: there is nothing left to start.
         return `@${target} is no longer available.`;
     }
+    if (!canDirectMessage(chosen)) {
+        // Its thread is open only for a question it asked; text sent to it
+        // would be read as a task by an agent that takes none from people.
+        return `@${target} can't be messaged — answer its question with the buttons.`;
+    }
     return isReachable(chosen) ? null : `@${target} isn't running — start it and try again.`;
 }
 
@@ -135,4 +140,27 @@ export function replacementTarget(agents: AgentInfo[], current: string): string 
 export function preferredChatTarget(agents: AgentInfo[], remembered: string | null): string {
     const kept = agents.filter(canDirectMessage).find(a => a.name === remembered);
     return kept?.name ?? defaultChatTarget(agents);
+}
+
+/**
+ * `messages` with the question `id` marked answered by `option`, and that message.
+ *
+ * Null when no question with that id is held: an answer to a question this
+ * dashboard never showed, or to a plain message, changes nothing. The list is
+ * copied rather than edited, as the thread re-renders from it.
+ */
+export function markAnswered(
+    messages: ChatMessage[],
+    id: string,
+    option: string,
+): { messages: ChatMessage[]; message: ChatMessage } | null {
+    const idx = messages.findIndex(m => m.id === id && (m.options?.length ?? 0) > 0);
+    const found = idx === -1 ? undefined : messages[idx];
+    if (!found) {
+        return null;
+    }
+    const message: ChatMessage = { ...found, answer: option };
+    const next = [...messages];
+    next[idx] = message;
+    return { messages: next, message };
 }

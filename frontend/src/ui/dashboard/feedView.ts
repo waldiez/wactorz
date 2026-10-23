@@ -24,7 +24,9 @@ import { SYSTEM_AGENT_NAMES } from "./agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";
 import { timeLabel } from "../../time";
-import { button, el, option } from "../dom";
+import { uid } from "../../ids";
+import { button, el, expanded, labelled, live, option } from "../dom";
+import { agentPicker, listenForPicks, paintActive, tagRow, turnPicker } from "./feedPicks";
 
 const TYPE_CLASS: Record<string, string> = {
     spawn: "af-feed-spawn",
@@ -77,14 +79,11 @@ function isUserTurn(item: FeedItem): boolean {
  *  the resolved agent name. Chat turns are persisted under the agent's name, so
  *  without the role check every line would read as the agent. */
 function buildAgentSpan(item: FeedItem): HTMLElement {
-    const agent = el("span", "af-feed-agent");
     if (isUserTurn(item)) {
-        agent.textContent = "you";
-        agent.classList.add("af-feed-agent-user");
-    } else {
-        agent.textContent = displayName(item.agentName);
+        const you = el("span", "af-feed-agent af-feed-agent-user", "you");
+        return you;
     }
-    return agent;
+    return agentPicker(displayName(item.agentName), "af-feed-agent");
 }
 
 /** Split a feed label into an optional `@<agent>` routing mention and the body.
@@ -155,7 +154,11 @@ export function feedItemEl(container: HTMLElement, item: FeedItem): void {
     icon.innerHTML = iconName ? iconMarkup(iconName, 14) : "·";
 
     const { mention, body } = splitMention(item);
+    tagRow(row, item.turn, isUserTurn(item) ? undefined : displayName(item.agentName));
     row.append(icon, timeSpan(item.timestamp), buildAgentSpan(item), buildTextSpan(mention, body));
+    if (item.turn) {
+        row.appendChild(turnPicker(item.turn));
+    }
     if (needsExpanding(body)) {
         attachExpander(row, mention ? `${mention} ${body}` : body, "af-feed-full-prose");
     }
@@ -181,7 +184,15 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
 
     const text = el("span", "af-feed-text af-feed-log-text", summaryLine(item.text));
 
-    row.append(icon, timeSpan(item.ts * 1000), origin, text);
+    tagRow(row, item.turn, item.agent);
+    row.append(icon, timeSpan(item.ts * 1000), origin);
+    if (item.agent) {
+        row.appendChild(agentPicker(item.agent, "af-feed-agent-chip"));
+    }
+    row.appendChild(text);
+    if (item.turn) {
+        row.appendChild(turnPicker(item.turn));
+    }
 
     if (needsExpanding(item.text)) {
         attachExpander(row, item.text);
@@ -189,8 +200,47 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
     container.appendChild(row);
 }
 
+/** How long a copy button says what happened before it reads "Copy" again. */
+const COPIED_MS = 1500;
+
+/** Whether a click on `row` ends a drag that selected text in it, rather than asking to open it. */
+function endsASelection(row: HTMLElement): boolean {
+    const selection = window.getSelection();
+    return selection !== null && !selection.isCollapsed && row.contains(selection.anchorNode);
+}
+
 /**
- * Make a row reveal its whole text in place.
+ * A button that copies `text` whole, or null where the page may not use the
+ * clipboard: browsers allow it only to a secure page (HTTPS, or `localhost`).
+ */
+function copyButton(text: string): HTMLButtonElement | null {
+    if (!window.isSecureContext || !navigator.clipboard) {
+        return null;
+    }
+    const btn = labelled(button("af-mini-btn af-feed-copy", "Copy"), "Copy the whole message");
+    let reset: ReturnType<typeof setTimeout> | undefined;
+    const say = (word: string): void => {
+        btn.textContent = word;
+        clearTimeout(reset);
+        reset = setTimeout(() => (btn.textContent = "Copy"), COPIED_MS);
+    };
+    btn.addEventListener("click", () => {
+        navigator.clipboard.writeText(text).then(
+            () => say("Copied"),
+            () => say("Not copied"),
+        );
+    });
+    return btn;
+}
+
+/**
+ * Make a row reveal its whole text in place, with a button to copy it.
+ *
+ * The row has a toggle of its own rather than being a button itself: a row
+ * holds other buttons (its agent and turn chips, the copy button), and a button
+ * inside a button is announced as neither. A click anywhere else on the row
+ * opens or closes it too, except one inside the expanded text or one that ends
+ * a drag selecting it, so the text can be selected.
  *
  * `textContent`, never `innerHTML`. This is where the *entire* untrusted text
  * is rendered — a traceback, an agent's reply — which is exactly what an agent
@@ -200,25 +250,41 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
  */
 function attachExpander(row: HTMLElement, fullText: string, extraClass = ""): void {
     row.classList.add("af-feed-expandable");
-    row.tabIndex = 0;
-    row.setAttribute("role", "button");
-    row.setAttribute("aria-expanded", "false");
 
     const full = el("pre", `af-feed-full ${extraClass}`.trim(), fullText);
+    full.id = uid("af-feed-full");
     full.hidden = true;
-    row.appendChild(full);
+    const copy = copyButton(fullText);
 
-    const toggle = () => {
+    const toggle = expanded(labelled(button("af-feed-toggle", "▸"), "Show the whole message"), false);
+    toggle.setAttribute("aria-controls", full.id);
+    const flip = (): void => {
         full.hidden = !full.hidden;
-        row.setAttribute("aria-expanded", String(!full.hidden));
-    };
-    row.addEventListener("click", toggle);
-    row.addEventListener("keydown", e => {
-        if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggle();
+        expanded(toggle, !full.hidden);
+        toggle.textContent = full.hidden ? "▸" : "▾";
+        if (copy) {
+            copy.hidden = full.hidden;
         }
+    };
+    toggle.addEventListener("click", e => {
+        e.stopPropagation();
+        flip();
     });
+    row.addEventListener("click", e => {
+        const target = e.target as Node;
+        if (full.contains(target) || copy?.contains(target) || endsASelection(row)) {
+            return;
+        }
+        flip();
+    });
+
+    // Last on the line, after the turn chip: the columns before it line up with
+    // rows that do not open, which keep its place empty (see the stylesheet).
+    row.append(toggle, full);
+    if (copy) {
+        copy.hidden = true;
+        row.appendChild(copy);
+    }
 }
 
 /** Append any activity entry, dispatching on its source. */
@@ -297,6 +363,10 @@ export interface FeedFilters {
     /** Case-insensitive substring over the row's visible text. */
     search: string;
     hideHeartbeats: boolean;
+    /** Only the rows of this chat turn; "" for every turn. Set from a row's turn chip. */
+    turn: string;
+    /** Only the rows of this agent; "" for every agent. Set from a row's agent name. */
+    agent: string;
 }
 
 export const DEFAULT_FILTERS: FeedFilters = {
@@ -304,6 +374,8 @@ export const DEFAULT_FILTERS: FeedFilters = {
     level: "INFO",
     search: "",
     hideHeartbeats: true,
+    turn: "",
+    agent: "",
 };
 
 export interface FeedViewOptions {
@@ -317,8 +389,21 @@ export interface FeedViewOptions {
     following?: boolean;
 }
 
+/** Whether a row is of the turn and the agent the feed is narrowed to, if it is. */
+function belongs(row: HTMLElement, filters: FeedFilters): boolean {
+    // Exact: a turn id is picked from a row, not typed, and an agent's name is
+    // matched whole so `weather` is not also `weather-2`.
+    if (filters.turn && row.dataset["turn"] !== filters.turn) {
+        return false;
+    }
+    return !filters.agent || row.dataset["agent"] === filters.agent;
+}
+
 /** Whether one already-rendered row survives the current filters. */
 function rowMatches(row: HTMLElement, filters: FeedFilters): boolean {
+    if (!belongs(row, filters)) {
+        return false;
+    }
     const source = row.dataset["source"] === "app" ? "app" : "agent";
     if (filters.source !== "all" && filters.source !== source) {
         return false;
@@ -367,7 +452,7 @@ export function applyFilters(feed: HTMLElement, filters: FeedFilters): void {
     }
 }
 
-function labelled(text: string, control: HTMLElement): HTMLElement {
+function filterField(text: string, control: HTMLElement): HTMLElement {
     const wrap = el("label", "af-feed-filter");
     wrap.append(el("span", "", text), control);
     return wrap;
@@ -512,14 +597,29 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
         changed();
     });
 
+    const active = el("div", "af-feed-active");
+    const narrow = (patch: Partial<Pick<FeedFilters, "turn" | "agent">>): void => {
+        Object.assign(filters, patch);
+        // A turn is mostly in the application log, which "agents" hides.
+        if (patch.turn) {
+            filters.source = "all";
+            source.value = "all";
+        }
+        paintActive(active, filters, narrow);
+        changed();
+    };
+    listenForPicks(feed, narrow);
+
     const toolbar = el("div", "af-feed-toolbar");
     toolbar.append(
-        labelled("show", source),
-        labelled("level", level),
-        labelled("find", search),
+        filterField("show", source),
+        filterField("level", level),
+        filterField("find", search),
         heartbeats,
         ...logActions(opts),
+        active,
     );
+    paintActive(active, filters, narrow);
     syncControlRelevance(filters, level, heartbeats);
     return toolbar;
 }
@@ -538,11 +638,9 @@ function populateFeed(feed: HTMLElement, items: ActivityItem[], filters: FeedFil
 export function buildFeedView(items: ActivityItem[], opts: FeedViewOptions): HTMLElement {
     const wrap = el("div", "af-feed-wrap");
 
-    const feed = el("div", "af-feed");
-    feed.id = "af-feed-view";
     // Append-only activity log — announce new rows to screen readers as they arrive.
-    feed.setAttribute("role", "log");
-    feed.setAttribute("aria-live", "polite");
+    const feed = live(el("div", "af-feed"), "log", "Activity");
+    feed.id = "af-feed-view";
 
     wrap.appendChild(buildToolbar(feed, opts));
     populateFeed(feed, items, opts.filters);

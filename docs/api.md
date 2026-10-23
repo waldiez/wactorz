@@ -95,6 +95,68 @@ Conversation history for the actor (only useful for LLM-backed actors like `main
 
 ---
 
+### `GET /api/nodes`
+
+Every remote node main knows: whether it is online, its agents, its latest readings and what its machine is. The readings are the node's last heartbeat; `manifest` is the retained manifest it publishes (`null` from a node that has not sent one). Empty when there is no main.
+
+**Response** `200 OK`
+```json
+{
+  "nodes": [
+    {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
+     "version": "0.7.1", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
+     "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
+     "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
+                  "devices": ["bluetooth", "speaker", "gpio", "i2c"], "...": "..."}}
+  ]
+}
+```
+
+The fields of `manifest` are described with the `nodes/{node}/manifest` topic in [MQTT topics](mqtt_topics.md).
+
+---
+
+### `GET /api/history/agents/{name}` · `GET /api/history/nodes/{name}`
+
+An agent's or a node's metrics history: one sample about every minute, oldest first, for the last `hours` (default `24`). Kept for `WACTORZ_RETENTION_METRICS_DAYS` (default `7`); an agent is sampled while the dashboard is hearing from it.
+
+**Response** `200 OK`
+```json
+{
+  "agent":          "weather",
+  "hours":          24,
+  "kept_days":      7,
+  "sample_every_s": 60,
+  "samples": [
+    {"ts": 1740000000.0, "agent": "weather", "node": "", "state": "running",
+     "memory_mb": 42.5, "messages_processed": 7, "errors": 0,
+     "tasks_completed": 5, "tasks_failed": 0, "cost_usd": 0.0012,
+     "queue_wait_p95_s": 0.01, "message_p95_s": 0.2, "task_p95_s": null}
+  ]
+}
+```
+
+A node's samples carry `node`, `online`, `cpu_pct`, `mem_used_mb`, `mem_free_mb`, `agents` (how many it ran), `swap_used_mb`, `load_1m`, `disk_free_mb`, `temp_c` and `throttled` (a list of flags, `[]` for none; `null` where the node could not tell, as for any reading it did not send). `400` when `hours` is not a finite number above 0; `503` when there is no database to keep the history in.
+
+### `GET /api/history/agents`
+
+One field of every agent's samples, in one request: what the dashboard draws each card's trend from. `field` is one of `memory_mb`, `messages_processed`, `errors`, `tasks_completed`, `tasks_failed`, `cost_usd`, `queue_wait_p95_s`, `message_p95_s`, `task_p95_s` (default `messages_processed`); `hours` defaults to `1`.
+
+**Response** `200 OK`
+```json
+{
+  "field": "messages_processed",
+  "hours": 1,
+  "sample_every_s": 60,
+  "agents": {"weather": [[1740000000.0, 7], [1740000060.0, 9]]}
+}
+```
+
+`400` for a field outside that list or a `hours` that is not a finite number above 0; `503` when there is no database.
+
+---
+
 ### `POST /api/actors/{actor_id}/message`
 
 Send a content message to an actor.
@@ -217,6 +279,29 @@ Sanitized runtime configuration (no secrets).
 ### `GET /api/feed`
 
 Recent activity feed events.
+
+---
+
+### `GET /api/logs`
+
+Recent application log lines, oldest first, from an in-memory buffer of the last thousand or so; the same lines the dashboard's log view shows. Redacted on the way in.
+
+Query, all optional: `limit` (default `200`, at most `500`), `level` (this level and above), `logger` (part of the logger's name), `turn` and `agent`.
+
+A line written while a person's message was being answered names its `turn`: the id given to that message where it entered, which travels with everything done to answer it, through main, the planner and the agents it asks, their model and Home Assistant calls, and a task sent to an agent on a node. `?turn=` returns the lines of one answer. A line also names the `agent` that was at work when it was written, whatever logger wrote it; `?agent=` matches the name whole.
+
+**Response** `200 OK`
+```json
+{
+  "entries": [
+    {"source": "app", "ts": 1740000000.0, "level": "INFO", "origin": "wactorz.agents.main.actor",
+     "text": "[main] Intent: PIPELINE — …", "turn": "eea5bad62007", "agent": "main"}
+  ],
+  "capacity": 1000
+}
+```
+
+An agent's own errors and log events carry the turn as well (`turn`, on `agents/{id}/errors` and `agents/{id}/logs`).
 
 ---
 

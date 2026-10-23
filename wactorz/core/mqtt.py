@@ -156,6 +156,16 @@ def session_kwargs(expiry_seconds: int) -> dict[str, Any]:
     }
 
 
+def v5_kwargs() -> dict[str, Any]:
+    """Connect arguments for a short-lived connection that reads user properties.
+
+    Only MQTT v5 carries them, and a node's signature travels in them, so a
+    v3.1.1 subscriber receives every node's message as unsigned. Unlike
+    :func:`session_kwargs`, the session ends with the connection.
+    """
+    return {"protocol": aiomqtt.ProtocolVersion.V5}
+
+
 def client_id(role: str, scope: str, detail: str | None = None) -> str:
     """Build an MQTT client id: ``wactorz-<role>-<scope>[-<detail>]``.
 
@@ -172,6 +182,21 @@ def client_id(role: str, scope: str, detail: str | None = None) -> str:
     if detail:
         parts.append(detail)
     return "-".join(parts)
+
+
+def agent_client_id(actor_id: str, node: str = "", purpose: str | None = None) -> str:
+    """The client id of a connection an agent holds: scoped to where it runs.
+
+    Actor ids come from the agent's name, so the same agent has the same id on
+    every machine. Scoped by the id alone, a copy on a node and a copy on main --
+    the two sides of a migration, or a node still running what main took back --
+    took each other's connection in a loop, each one's connect the other's
+    disconnect. The scope is the node's name on a node and this install on main,
+    as it is for every other connection; ``purpose`` separates the connections
+    one agent holds.
+    """
+    detail = f"{actor_id}-{purpose}" if purpose else actor_id
+    return client_id("agent", node or install_id(), detail)
 
 
 def reconnect_wait(delay: float) -> float:
@@ -241,3 +266,9 @@ def publish_properties(user_properties: Sequence[tuple[str, str]]) -> Properties
     properties = Properties(PacketTypes.PUBLISH)
     properties.UserProperty = list(user_properties)
     return properties
+
+
+def user_properties(msg: Any) -> dict[str, str]:
+    """The MQTT v5 user properties a received message carries, by name."""
+    pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
+    return {str(name): str(value) for name, value in pairs}

@@ -1,10 +1,24 @@
 """Extension discovery.
 
-An extension is a module or package in wactorz/ext/
+An extension is a module or package in wactorz/ext/, or one any installed
+package registers under the ``wactorz.extensions`` entry-point group,
 exposing setup(app: web.Application) -> None, called once at app construction.
 Extensions add routes via app.add_routes(...) and startup work via
 app.on_startup.append(...), and read their OWN env vars (no CONFIG
 entanglement).
+
+From another package
+--------------------
+A package declares one in its ``pyproject.toml``::
+
+    [project.entry-points."wactorz.extensions"]
+    mlops = "wactorz_mlops.ext"
+
+The value names a module, or ``module:object``, with the same hooks as a
+module under ``wactorz/ext/``. The entry point's name is the extension's short
+name: what namespaces its ``public_config`` on ``/api/config`` and what another
+extension's ``__deps__`` refers to. A name a built-in extension already uses is
+refused, with a log line, so a package cannot stand in for one.
 
 An extension MAY also expose an optional
 ``public_config(app) -> dict[str, Any]`` returning **non-secret** values for the
@@ -41,6 +55,7 @@ FUTURE: if an extension might need a teardown ordering or prerequisite like
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import logging
 import pkgutil
 from collections import deque
@@ -51,6 +66,17 @@ if TYPE_CHECKING:
     from aiohttp.web import Application
 
 log = logging.getLogger(__name__)
+
+#: The entry-point group an installed package registers an extension under.
+ENTRY_POINT_GROUP = "wactorz.extensions"
+
+#: The short name of each extension loaded from an entry point, by the name of
+#: the module or object loaded: an entry point names the extension, where a
+#: module under ``wactorz/ext/`` is named by its file.
+_entry_point_names: dict[str, str] = {}
+
+#: What the entry points gave, once read; None until then.
+_external: list[Extension] | None = None
 
 
 class Extension(Protocol):  # pylint: disable=too-few-public-methods
@@ -83,8 +109,12 @@ class Extension(Protocol):  # pylint: disable=too-few-public-methods
     #     Cross-extension wiring — all other setup() calls have run.
 
 
-def discover() -> list[Extension]:
-    """Discover available extensions."""
+def discover(*, refresh: bool = False) -> list[Extension]:
+    """Every available extension: the modules under this package, then the entry points.
+
+    The entry points are read once and kept, since this runs more than once
+    while the server starts; ``refresh`` reads them again.
+    """
     mods: list[Extension] = []
     for m in pkgutil.iter_modules(__path__):
         if m.name.startswith("_"):
@@ -96,7 +126,65 @@ def discover() -> list[Extension]:
             continue
         if hasattr(mod, "setup"):
             mods.append(mod)  # pyright: ignore[reportArgumentType]
+    mods.extend(_from_entry_points({_short_name(m) for m in mods}, refresh=refresh))
     return mods
+
+
+def _from_entry_points(taken: set[str], *, refresh: bool = False) -> list[Extension]:
+    """The extensions installed packages register, less any whose name is ``taken``.
+
+    A broken entry point is logged and left out, as a broken module under
+    ``wactorz/ext/`` is: one bad package must not keep the server from
+    starting. One whose name a built-in extension already uses is refused,
+    so a package cannot quietly replace the built-in.
+    """
+    global _external
+    if _external is not None and not refresh:
+        return list(_external)
+    found: list[Extension] = []
+    names: dict[str, str] = {}
+    for entry_point in _entry_points():
+        name = str(entry_point.name)
+        if name in taken or name in names.values():
+            log.warning(
+                "[ext] Skipping entry point %s = %s: an extension called %r is already loaded",
+                name,
+                entry_point.value,
+                name,
+            )
+            continue
+        try:
+            loaded = entry_point.load()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            log.warning("[ext] Skipping entry point %s = %s: %s", name, entry_point.value, exc)
+            continue
+        if not callable(getattr(loaded, "setup", None)):
+            log.warning(
+                "[ext] Skipping entry point %s = %s: it has no setup(app)", name, entry_point.value
+            )
+            continue
+        names[_module_name(loaded)] = name
+        found.append(loaded)
+        log.info("[ext] %s found in entry point %s", name, entry_point.value)
+    _entry_point_names.clear()
+    _entry_point_names.update(names)
+    _external = found
+    return list(found)
+
+
+def _entry_points() -> list[Any]:
+    try:
+        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+    except Exception as exc:  # pragma: no cover - a broken installation
+        log.warning("[ext] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
+        return []
+
+
+def _module_name(loaded: Any) -> str:
+    """What identifies ``loaded`` for naming: its module name, or its own."""
+    return str(
+        getattr(loaded, "__name__", "") or f"{type(loaded).__module__}.{type(loaded).__name__}"
+    )
 
 
 def setup_all(app: Application) -> None:
@@ -138,7 +226,7 @@ def collect_public_config(app: Application) -> dict[str, Any]:
         provider = getattr(mod, "public_config", None)
         if provider is None:
             continue
-        name = mod.__name__.rsplit(".", 1)[-1]
+        name = _short_name(mod)
         try:
             out[name] = provider(app)
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -161,7 +249,7 @@ def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict], Non
         factory = getattr(mod, "actor_decorator", None)
         if factory is None:
             continue
-        name = mod.__name__.rsplit(".", 1)[-1]
+        name = _short_name(mod)
         try:
             dec = factory(app)
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -173,7 +261,9 @@ def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict], Non
 
 
 def _short_name(mod: Extension) -> str:
-    return mod.__name__.rsplit(".", 1)[-1]
+    """What an extension is called: its entry point's name, or its module's last part."""
+    module_name = _module_name(mod)
+    return _entry_point_names.get(module_name) or module_name.rsplit(".", 1)[-1]
 
 
 def _topo_sort_on_ready(mods: list[Extension]) -> list[Extension]:

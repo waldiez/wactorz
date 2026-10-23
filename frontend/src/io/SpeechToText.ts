@@ -13,6 +13,9 @@
  */
 import { toWav16k } from "./wav";
 
+/** Deployment opt-in for offering voice input before a person saves a choice. */
+export const STT_ENABLED = import.meta.env.VITE_STT_ENABLED === "true";
+
 /** Turns a recording into the WAV the server accepts. */
 export type WavConverter = (recording: Blob) => Promise<Blob>;
 

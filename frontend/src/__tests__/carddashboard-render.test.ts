@@ -37,6 +37,50 @@ describe("CardDashboard render", () => {
         }
     });
 
+    it("moves an agent between the nodes panel's rows when it moves", () => {
+        // The store changes the agent it already holds and hands the same object
+        // back, so only the dashboard's own note of where it was can tell.
+        cd.show([]);
+        const moving = agent("counter", { node: "edge" });
+        cd.addAgent(moving);
+        const localRow = (): string =>
+            cd.root.querySelector("#af-node-list .af-node-item .af-node-meta")!.textContent;
+        expect(localRow()).not.toContain("counter");
+
+        moving.node = "";
+        cd.updateAgent(moving);
+
+        expect(localRow()).toContain("counter");
+    });
+
+    it("places an agent that moved while another view showed once the overview is back", () => {
+        cd.show([]);
+        const moving = agent("counter", { node: "edge" });
+        cd.addAgent(moving);
+        cd._setView("chat");
+
+        moving.node = "";
+        cd.updateAgent(moving);
+        cd._setView("overview");
+
+        expect(cd.root.querySelector("#af-node-list .af-node-item .af-node-meta")!.textContent).toContain(
+            "counter",
+        );
+    });
+
+    it("places an agent that moved while the dashboard was hidden once it is shown", () => {
+        const moving = agent("counter", { node: "edge" });
+        cd.addAgent(moving);
+
+        moving.node = "";
+        cd.updateAgent(moving);
+        cd.show([moving]);
+
+        expect(cd.root.querySelector("#af-node-list .af-node-item .af-node-meta")!.textContent).toContain(
+            "counter",
+        );
+    });
+
     it("builds and mounts the root", () => {
         expect(cd.root).toBeTruthy();
         expect(cd.root.id).toBe("card-dashboard");

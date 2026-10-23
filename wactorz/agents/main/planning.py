@@ -17,6 +17,10 @@ from typing import TYPE_CHECKING, ClassVar
 
 from wactorz.llm_factory import provider_for
 
+from ..mixins import agent_type
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+
 logger = logging.getLogger(__name__)
 
 #: Persistence key for the rules that shape how a pipeline is planned.
@@ -156,6 +160,10 @@ _CONDITION_WORDS = {
 class PlanningMixin(_Host):
     """Plans, dry-run flow, and pipeline execution. Mix into an LLMAgent host."""
 
+    #: What every planner this host spawns plans for. Every integration unless
+    #: the host says otherwise.
+    _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
+
     def get_pipeline_rules(self) -> dict:
         return self.recall(PIPELINE_RULES_KEY) or {}
 
@@ -247,20 +255,20 @@ class PlanningMixin(_Host):
             name = step.get("name", "?")
             desc = step.get("description") or step.get("spawn_config", {}).get("description", "")
             spawn_cfg = step.get("spawn_config", {})
-            agent_type = spawn_cfg.get("type", "dynamic")
+            kind = agent_type(spawn_cfg)
             install = spawn_cfg.get("install", []) or []
 
             # The number lives inside the bold span on purpose: a bare "1."
             # is Markdown list syntax, and the "purpose:" line that follows
             # ends the list, so every renderer restarted the count at 1.
-            lines.append(f"\n  **{i}. {name}** ({agent_type})")
+            lines.append(f"\n  **{i}. {name}** ({kind})")
             if desc:
                 lines.append(f"     purpose: {desc}")
 
             # For scheduled agents: render the schedule prominently — this is
             # the field the user most needs to verify (did the LLM correctly
             # interpret "5pm every weekday"?).
-            if agent_type == "scheduled":
+            if kind == "scheduled":
                 schedule_spec = spawn_cfg.get("schedule") or {}
                 if isinstance(schedule_spec, dict) and schedule_spec:
                     try:
@@ -287,7 +295,7 @@ class PlanningMixin(_Host):
 
             # Outputs — what it publishes
             pubs = step.get("publishes", []) or spawn_cfg.get("publish", []) or []
-            if pubs and agent_type != "scheduled":  # already shown above for scheduled
+            if pubs and kind != "scheduled":  # already shown above for scheduled
                 lines.append(f"     publishes: {', '.join(pubs)}")
 
             # External side effects — webhooks/notifications/HA actions
@@ -304,11 +312,11 @@ class PlanningMixin(_Host):
                 "turn_on" in code or "turn_off" in code or "call_service" in code
             ):
                 side_effects.append("controls Home Assistant device")
-            if agent_type == "ha_actuator":
+            if kind == "ha_actuator":
                 side_effects.extend(_describe_ha_actions(spawn_cfg.get("actions")))
             if side_effects:
                 lines.append(f"     side effects: {'; '.join(side_effects)}")
-            if agent_type == "ha_actuator":
+            if kind == "ha_actuator":
                 guard = _describe_ha_guards(spawn_cfg)
                 if guard:
                     lines.append(f"     only when: {guard}")
@@ -543,6 +551,7 @@ class PlanningMixin(_Host):
                 plan_only=plan_only,
                 approved_plan=approved_plan,
                 max_lifetime_s=lifetime_s,
+                prompt_fragments=self._prompt_fragments,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             if not planner:
@@ -555,7 +564,6 @@ class PlanningMixin(_Host):
             spawned_names = result_payload.get("spawned", [])
             if spawned_names:
                 answer += f"\n\n[System: Planner created new agents: {', '.join(spawned_names)} — saved for future use]"
-            return answer
 
         except asyncio.TimeoutError:
             logger.warning("[%s] Planner timed out for: %s", self.name, task[:60])
@@ -563,6 +571,8 @@ class PlanningMixin(_Host):
         except Exception:
             logger.exception("[%s] Planner error", self.name)
             return None
+        else:
+            return answer
         finally:
             self._result_futures.pop(task_id, None)
 

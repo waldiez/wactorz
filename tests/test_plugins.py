@@ -142,6 +142,16 @@ class TestDiscover:
         assert "json:dumps" in caplog.text
         assert "PYTHONPATH" in caplog.text
 
+    def test_a_bad_target_is_logged_with_its_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A module that is found and fails needs its own frames to be fixed."""
+        plugins.discover(env="no.such.module:Thing")
+
+        failures = [r for r in caplog.records if "no.such.module:Thing" in r.getMessage()]
+        assert failures
+        assert all(r.exc_info is not None for r in failures)
+
     def test_targets_are_split_on_commas_and_spaces_once_each(self) -> None:
         assert plugins.targets_in(" a:b, c:d a:b\nc:d ") == ["a:b", "c:d"]
 
@@ -195,3 +205,42 @@ class TestTheCatalogue:
 
         assert "plugin" not in catalog[packaged]
         assert "shadowed" in caplog.text
+
+
+class TestBuildingUnderAMixin:
+    """A host puts its own class in front of the agent's, without the author knowing."""
+
+    def test_a_decorated_function_carries_it(self, tmp_path: Path) -> None:
+        class Hosted:
+            pass
+
+        @agent(subscribes="in/x")
+        def hosted_fn(reading: dict) -> dict:
+            return reading
+
+        actor = plugins.plugin_from(hosted_fn).build(persistence_dir=str(tmp_path), mixin=Hosted)
+
+        assert isinstance(actor, Hosted)
+        assert isinstance(actor, FunctionAgent)
+
+    def test_an_actor_subclass_carries_it_too(self, tmp_path: Path) -> None:
+        class Hosted:
+            pass
+
+        class Own(Actor):
+            async def handle_message(self, message: Message) -> None:
+                return None
+
+        actor = plugins.plugin_from(Own).build(persistence_dir=str(tmp_path), mixin=Hosted)
+
+        assert isinstance(actor, Hosted)
+        assert isinstance(actor, Own)
+
+    def test_without_one_the_class_is_the_agents_own(self, tmp_path: Path) -> None:
+        @agent(subscribes="in/x")
+        def plain(reading: dict) -> dict:
+            return reading
+
+        assert (
+            type(plugins.plugin_from(plain).build(persistence_dir=str(tmp_path))) is FunctionAgent
+        )

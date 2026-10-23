@@ -1,12 +1,13 @@
 """Bringing an agent home from a remote node.
 
-Migrating an agent back to main asks its node to send everything it has: the
-spawn config and the persistent state. That arrives on `nodes/+/state_return`,
-and main spawns the agent locally from it.
+Migrating an agent back to main asks its node to hand back the agent's
+persistent state. That arrives on `nodes/+/state_return`, and main spawns the
+agent locally from its own spawn registry entry with that state loaded.
 
-The config in that message is executed — it carries the agent's code. What makes
-that acceptable is the token: main mints one per migration it started, and only
-a message quoting that exact token is acted on. Tokens are single-use and expire,
+The message carries the config the node ran as well, and it is never spawned: a
+node is not trusted to say what main executes. The token decides whether the
+state is accepted at all: main mints one per migration it started, and only a
+message quoting that exact token is acted on. Tokens are single-use and expire,
 so a replayed message spawns nothing.
 """
 
@@ -74,6 +75,8 @@ class _Run:
         self.notifications: list[dict[str, Any]] = []
         self.published: list[tuple[str, Any]] = []
         self.spawn_error: Exception | None = None
+        #: What was started on a node: (config, node), as a failed return restarts it.
+        self.spawned_remote: list[tuple[dict[str, Any], str]] = []
 
     @property
     def only_spawn(self) -> dict[str, Any]:
@@ -92,7 +95,9 @@ def config(**over: Any) -> dict[str, Any]:
     return {"name": "collector", "type": "dynamic", "code": "print(1)", **over}
 
 
-def state_return(token: str = TOKEN, **over: Any) -> _Message:
+def state_return(
+    token: str = TOKEN, *, topic: str = "nodes/rpi/state_return", **over: Any
+) -> _Message:
     """A node returning an agent, as its runner publishes it."""
     body: dict[str, Any] = {
         "agent": "collector",
@@ -101,7 +106,7 @@ def state_return(token: str = TOKEN, **over: Any) -> _Message:
         "state": {"count": 7},
         **over,
     }
-    return _Message(json.dumps(body).encode())
+    return _Message(json.dumps(body).encode(), topic=topic)
 
 
 async def run_listener(
@@ -110,6 +115,7 @@ async def run_listener(
     *,
     pending: dict[str, dict[str, Any]] | None = None,
     spawn_error: Exception | None = None,
+    registry: dict[str, dict[str, Any]] | None = None,
 ) -> _Run:
     """Drive the real listener over `messages` until they are exhausted."""
     main = MainActor.__new__(MainActor)
@@ -121,6 +127,8 @@ async def run_listener(
     main._mqtt_broker = "localhost"
     main._mqtt_port = 1883
     main.migration.pending_returns = dict(pending or {})
+    # No agent runs here, and no library agent goes by the name either.
+    setattr(main, "_registry", None)
 
     run = _Run(main)
     run.spawn_error = spawn_error
@@ -134,10 +142,21 @@ async def run_listener(
     async def _publish(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
         run.published.append((topic, payload))
 
+    async def _spawn_remote(
+        cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+    ) -> None:
+        run.spawned_remote.append((cfg, node))
+
     setattr(main, "_mqtt_publish", _publish)
     setattr(main, "_spawn_from_config", _spawn)
+    setattr(main, "_spawn_remote", _spawn_remote)
     setattr(main, "_queue_notification", run.notifications.append)
     setattr(main, "_restore_earned_trust", lambda name, cfg: False)
+    # What main placed on the node: the agent is spawned from this entry, and
+    # the source's desired state is rebuilt from it without the agent.
+    entries = {"collector": config(node="rpi")} if registry is None else registry
+    setattr(main, "_get_spawn_registry", lambda: dict(entries))
+    setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
 
     def _stop() -> None:
         main.state = ActorState.STOPPED
@@ -171,6 +190,51 @@ class TestTheSourcesCopy:
 
         assert ("nodes/rpi/stop", {"name": "collector", "delete": True}) in run.published
 
+    async def test_the_source_stops_listing_it_once_it_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The list is retained and read again whenever the node reconnects: an
+        # agent left in it came back there, beside the copy now running here.
+        run = await run_listener(monkeypatch, [state_return()], pending=waiting())
+
+        desired = [p for t, p in run.published if t == "nodes/rpi/desired_state"]
+        assert desired, "the source's desired state was never rewritten"
+        assert [a.get("name") for a in desired[-1]["agents"]] == []
+
+    async def test_a_failed_spawn_leaves_the_source_listing_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The source's stopped copy is the only one left, and what brings it back.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not [t for t, _ in run.published if t.endswith("/desired_state")]
+
+    async def test_a_failed_spawn_starts_it_again_on_the_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Stopped there and running nowhere, it would wait for someone to notice.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        ((restored, node),) = run.spawned_remote
+        assert node == "rpi" and restored["node"] == "rpi"
+        assert "_initial_state" not in restored, "the source starts from its own state file"
+
+    async def test_a_failed_spawn_that_left_a_copy_here_leaves_the_source_stopped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Started there as well, there would be two.
+        monkeypatch.setattr(Migration, "_placed", lambda _self, _name: True)
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not run.spawned_remote
+        assert "FAILED" in run.messages[0]
+
     async def test_a_rejected_hand_back_deletes_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -191,8 +255,8 @@ class TestTheSourcesCopy:
 
 
 class TestTheToken:
-    """The config in a state_return is code that gets run, so only a message
-    answering a migration main itself started is acted on."""
+    """A state_return decides what state an agent starts with, so only a
+    message answering a migration main itself started is acted on."""
 
     async def test_a_matching_token_spawns_the_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_listener(monkeypatch, [state_return()], pending=waiting())
@@ -253,12 +317,74 @@ class TestTheToken:
         assert "token" in caplog.text
 
 
+class TestWhoMayHandItBack:
+    """Only the node main asked, about the agent it asked for, is acted on.
+
+    The token travels in the request, in the clear. The topic is what a node
+    cannot choose: with an account of its own it writes under its own
+    `nodes/<node>/` alone.
+    """
+
+    async def test_another_nodes_answer_spawns_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(topic="nodes/nuc/state_return")], pending=waiting()
+        )
+
+        assert not run.spawned
+        assert not run.published
+
+    async def test_an_answer_naming_another_agent_spawns_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spawned under the name it gives, it would replace an agent main never
+        # asked for.
+        run = await run_listener(
+            monkeypatch,
+            [state_return(agent="other", config=config(name="other"))],
+            pending=waiting(),
+        )
+
+        assert not run.spawned
+        assert not run.published
+
+    async def test_a_misaddressed_answer_leaves_the_migration_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Spent on the wrong answer, the token would turn the real one away.
+        run = await run_listener(
+            monkeypatch,
+            [state_return(topic="nodes/nuc/state_return", state={"count": 0}), state_return()],
+            pending=waiting(),
+        )
+
+        assert run.only_spawn["_initial_state"] == {"count": 7}
+
+    async def test_a_topic_outside_nodes_spawns_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(topic="rpi/state_return")], pending=waiting()
+        )
+
+        assert not run.spawned
+
+    async def test_a_misaddressed_answer_is_logged(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.migration"):
+            await run_listener(
+                monkeypatch, [state_return(topic="nodes/nuc/state_return")], pending=waiting()
+            )
+
+        assert "'nuc'" in caplog.text and "'rpi'" in caplog.text
+
+
 class TestTheConfigThatIsSpawned:
     async def test_the_remote_node_is_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # It is coming home; leaving the node on would send it straight back.
-        run = await run_listener(
-            monkeypatch, [state_return(config=config(node="rpi"))], pending=waiting()
-        )
+        run = await run_listener(monkeypatch, [state_return()], pending=waiting())
 
         assert "node" not in run.only_spawn
 
@@ -274,8 +400,9 @@ class TestTheConfigThatIsSpawned:
         # is whatever it was carrying at spawn time.
         run = await run_listener(
             monkeypatch,
-            [state_return(config=config(_initial_state={"count": 0}))],
+            [state_return()],
             pending=waiting(),
+            registry={"collector": config(node="rpi", _initial_state={"count": 0})},
         )
 
         assert run.only_spawn["_initial_state"] == {"count": 7}
@@ -294,18 +421,41 @@ class TestTheConfigThatIsSpawned:
     async def test_a_config_without_a_name_takes_the_agent_name(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        cfg = config()
+        cfg = config(node="rpi")
         cfg.pop("name")
 
-        run = await run_listener(monkeypatch, [state_return(config=cfg)], pending=waiting())
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), registry={"collector": cfg}
+        )
 
         assert run.only_spawn["name"] == "collector"
 
-    async def test_a_missing_config_spawns_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # There is nothing to build the agent from.
+    async def test_the_nodes_config_is_not_needed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The agent is built from main's entry; the node supplies the state.
         run = await run_listener(monkeypatch, [state_return(config={})], pending=waiting())
 
+        assert run.only_spawn["code"] == "print(1)"
+        assert run.only_spawn["_initial_state"] == {"count": 7}
+
+    async def test_the_nodes_program_is_never_spawned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(config=config(code="steal()"))], pending=waiting()
+        )
+
+        assert run.only_spawn["code"] == "print(1)"
+        assert "discarded" in run.messages[0]
+
+    async def test_no_registry_entry_spawns_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # There is nothing of main's own to build the agent from, and the
+        # node's program is not run; the agent stays stopped on its node.
+        run = await run_listener(monkeypatch, [state_return()], pending=waiting(), registry={})
+
         assert not run.spawned
+        assert not run.spawned_remote
+        assert not [t for t, _ in run.published if t.endswith("/stop")]
+        assert "no program" in run.messages[0]
 
 
 class TestTheGeneratedBridgeCode:
@@ -321,7 +471,12 @@ class TestTheGeneratedBridgeCode:
     async def test_it_is_dropped_for_an_llm_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg = config(type="llm", code=self.MARKER)
 
-        run = await run_listener(monkeypatch, [state_return(config=cfg)], pending=waiting())
+        run = await run_listener(
+            monkeypatch,
+            [state_return(config=cfg)],
+            pending=waiting(),
+            registry={"collector": {**cfg, "node": "rpi"}},
+        )
 
         assert "code" not in run.only_spawn
 
@@ -330,14 +485,24 @@ class TestTheGeneratedBridgeCode:
         # code survives even on an llm-typed agent.
         cfg = config(type="llm", code="print('mine')")
 
-        run = await run_listener(monkeypatch, [state_return(config=cfg)], pending=waiting())
+        run = await run_listener(
+            monkeypatch,
+            [state_return(config=cfg)],
+            pending=waiting(),
+            registry={"collector": {**cfg, "node": "rpi"}},
+        )
 
         assert run.only_spawn["code"] == "print('mine')"
 
     async def test_a_dynamic_agent_keeps_its_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg = config(type="dynamic", code=self.MARKER)
 
-        run = await run_listener(monkeypatch, [state_return(config=cfg)], pending=waiting())
+        run = await run_listener(
+            monkeypatch,
+            [state_return(config=cfg)],
+            pending=waiting(),
+            registry={"collector": {**cfg, "node": "rpi"}},
+        )
 
         assert run.only_spawn["code"] == self.MARKER
 

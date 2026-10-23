@@ -64,6 +64,8 @@ export interface LogPayload {
     agentName: string;
     message?: string;
     text?: string;
+    /** The chat turn the agent was working on when it logged this, if any. */
+    turn?: string;
 }
 
 /** Node heartbeat — a remote Wactorz node phoning home. */
@@ -71,6 +73,42 @@ export interface NodeHeartbeatPayload {
     node: string;
     agents: string[];
     nodeId?: string;
+    /** How close the node is to running out, as its heartbeat said. */
+    readings?: NodeReadings;
+}
+
+/** A node's readings, under the names its heartbeat uses. Absent where the node did not say. */
+export interface NodeReadings {
+    /** CPU in use, in percent. */
+    cpu_pct?: number;
+    /** Memory in use, in MiB. */
+    mem_used_mb?: number;
+    /** Memory available, in MiB, within any limit on the node. */
+    mem_free_mb?: number;
+    /** Swap in use, in MiB. */
+    swap_used_mb?: number;
+    /** One-minute load average. */
+    load_1m?: number;
+    /** Five-minute load average. */
+    load_5m?: number;
+    /** Free disk where the node keeps agent state, in MiB. */
+    disk_free_mb?: number;
+    /** The CPU's temperature in °C. */
+    temp_c?: number;
+    /** What holds the board back now; empty for nothing, absent where it cannot tell. */
+    throttled?: string[];
+}
+
+/** What the dashboard knows of one remote node. */
+export interface RemoteNode {
+    /** The agents its last heartbeat listed. */
+    agents: string[];
+    /** When it was last heard from, in milliseconds. */
+    lastSeen: number;
+    /** Its latest readings. */
+    readings?: NodeReadings;
+    /** What its machine is, from its manifest; null from a node that has not said. */
+    manifest?: Record<string, unknown> | null;
 }
 
 /** Status update payload. */
@@ -145,11 +183,27 @@ export interface ChatMessage {
     brain?: string;
     /** Files attached to this turn, if any. */
     attachments?: Attachment[];
+    /** The id of the agent that sent it, when the message came off its own topic. */
+    agentId?: string;
+    /** A choice the agent offers; the person answers by picking one. */
+    options?: string[];
+    /** The option picked, once the question is answered, on any channel. */
+    answer?: string;
+    /** A chat channel the message also went to ("telegram", "discord", "whatsapp"). */
+    channel?: string;
 }
 
-/** Custom DOM event payload for agent selection. */
-export interface AgentSelectedEvent {
-    agent: AgentInfo;
+/** A person's pick among the options an agent offered, from whichever channel showed them. */
+export interface AnswerPayload {
+    /** The id of the message answered. */
+    id: string;
+    agentId: string;
+    option: string;
+    /** The option's place among those offered, from zero. */
+    index: number;
+    /** Where it was picked: "dashboard", "telegram", "discord" or "whatsapp". */
+    channel: string;
+    timestampMs: number;
 }
 
 /** Host-level system stats from the backend. */

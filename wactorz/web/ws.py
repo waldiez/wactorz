@@ -16,7 +16,7 @@ from aiohttp import WSMsgType, web
 
 from ..core.persistence import chat_turn_recorded
 from ..monitoring.log_redaction import redact
-from . import chat, events, lifecycle, origins, runtime, uploads
+from . import answers, chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 #: The conversation, on the console. Its own name rather than this module's:
@@ -78,9 +78,10 @@ class Channel:
         """
         try:
             self._queue.put_nowait(payload)
-            return
         except asyncio.QueueFull:
             pass
+        else:
+            return
 
         self.dropped += 1
         while not self._queue.empty():
@@ -356,6 +357,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                     elif msg_type == "command":
                         await handle_command(data)
+
+                    elif msg_type == "answer":
+                        problem = await answers.answer_from_dashboard(data)
+                        if problem:
+                            await ws_reply(f"[error] {problem}")
 
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()

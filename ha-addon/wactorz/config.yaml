@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.7.0"
+version: "0.7.1"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
@@ -133,6 +133,13 @@ options:
   # its account up on its next /deploy.
   node_accounts: false
 
+  # A node in this add-on, under a user of its own, where code the model writes
+  # runs instead of beside the add-on's secrets: the model's API key, Home
+  # Assistant's token, your nodes' SSH keys. It needs node_accounts on (or the
+  # embedded broker), so that it has a broker account of its own. Agents that
+  # need main's credentials or devices stay in the add-on.
+  sandbox_node: false
+
   # With the embedded broker and at least one deployed node, a node's account may
   # use its own topics, the agent traffic every host shares, and the data topics
   # agents use by convention (custom/, sensors/, home/, schedule/, and reading
@@ -214,6 +221,7 @@ schema:
   retention_outbox_days: int
   node_signing: list(warn|enforce)?
   node_accounts: bool?
+  sandbox_node: bool?
   node_topics: str?
   broker_accounts: str?
   deploy_targets:

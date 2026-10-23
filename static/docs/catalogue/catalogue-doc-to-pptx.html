@@ -150,16 +150,32 @@
 <p><code>doc-to-pptx-agent</code> — converts a PDF or TXT document into a PowerPoint presentation. It
 extracts real embedded images from the PDF and can fall back to NVIDIA NIM FLUX to generate
 images for slides that don't have one.</p>
-<p><strong>Dependencies</strong> (installed on first spawn): <code>pymupdf</code>, <code>pdfplumber</code>, <code>pillow</code>.</p>
+<p><strong>Dependencies</strong> (installed on first spawn): <code>python-pptx</code>, <code>pymupdf</code>, <code>pdfplumber</code>, <code>pillow</code>.
+The deck is built in Python; nothing else needs installing.</p>
 <h2 id="spawn">Spawn</h2>
 <div class="highlight"><pre><span></span><code>@catalog spawn doc-to-pptx-agent
 </code></pre></div>
 
 <h2 id="usage">Usage</h2>
 <p>Give it a source file and where to save the deck:</p>
-<div class="highlight"><pre><span></span><code>turn /docs/report.pdf into a 10-slide deck at /out/report.pptx
+<div class="highlight"><pre><span></span><code>turn ~/Documents/report.pdf into a 10-slide deck at ~/Documents/report.pptx
 </code></pre></div>
 
+<p>Or attach the PDF or text file in the chat and ask for a deck; it is passed on by its upload id.</p>
+<h2 id="where-it-reads-and-writes">Where it reads and writes</h2>
+<p>The request is written by a model, from whatever it was reading, so the agent reads only</p>
+<ul>
+<li>files inside the <em>document folders</em>: those named in <code>WACTORZ_DOCUMENT_DIRS</code> (separated like
+  <code>PATH</code>: <code>:</code> on Linux and macOS, <code>;</code> on Windows), or, when it is unset, your Documents folder;</li>
+<li>files attached in the chat, by their upload id;</li>
+</ul>
+<p>and writes a deck only as a <code>.pptx</code> file inside a document folder, into a folder that already
+exists. With no <code>output_path</code> the deck goes to a new private temp folder, and its path comes back
+as <code>pptx_path</code>. Nothing under the state directory is ever read or written, even when a document
+folder contains it. Paths are compared after following symlinks.</p>
+<p>Windows can move the Documents folder (to OneDrive, for one); name the moved folder in
+<code>WACTORZ_DOCUMENT_DIRS</code>. On a node, the node's own variable and Documents folder apply, and
+uploads, which are kept on the server, cannot be read there.</p>
 <h2 id="structured-operations">Structured operations</h2>
 <table>
 <thead>
@@ -171,11 +187,15 @@ images for slides that don't have one.</p>
 <tbody>
 <tr>
 <td><code>file_path</code></td>
-<td>absolute path to the source PDF or TXT</td>
+<td>path to the source PDF or TXT, inside a document folder</td>
+</tr>
+<tr>
+<td><code>file_id</code></td>
+<td>or: the upload id of a file attached in the chat</td>
 </tr>
 <tr>
 <td><code>output_path</code></td>
-<td>where to save the <code>.pptx</code></td>
+<td>a <code>.pptx</code> path inside a document folder (default: a new temp folder)</td>
 </tr>
 <tr>
 <td><code>slide_count</code></td>

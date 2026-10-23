@@ -10,15 +10,13 @@ from typing import Any
 
 import pytest
 
-from wactorz.catalogue_agents.anomaly_detector_agent import AGENT_CODE
+from tests.programs import program_namespace
 
 
 @pytest.fixture(name="baseline_class", scope="module")
 def baseline_class_fixture() -> Any:
     """`EntityBaseline` as the agent defines it: its program run as a module."""
-    namespace: dict[str, Any] = {}
-    exec(compile(AGENT_CODE, "anomaly_detector_agent", "exec"), namespace)
-    return namespace["EntityBaseline"]
+    return program_namespace("anomaly_detector_agent.py")["EntityBaseline"]
 
 
 def test_a_baseline_without_the_newer_fields_reads_them_as_a_new_one_has_them(

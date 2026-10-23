@@ -39,14 +39,9 @@ SPAWN CONFIG
   "poll_interval": 3600
 }
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
 
-AGENT_CODE = r'''
-"""manual-agent — searches the internet for device manuals, downloads PDFs,
-extracts text, and answers questions using the agent's LLM.
-
-Recipe-style module: state lives in `agent.state`, the framework injects
-`agent` into setup() / handle_task() / process().
+State lives in `agent.state`; the framework passes `agent` to setup(),
+handle_task() and process().
 """
 
 import asyncio
@@ -59,7 +54,7 @@ import re
 import socket
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 logger = logging.getLogger("manual-agent")
@@ -90,6 +85,30 @@ _SEARCH_ENGINE_DOMAINS = {
     "microsofttranslator.com",
     "bingapis.com",
 }
+
+
+def _on_site(url: str, sites: Iterable[str]) -> bool:
+    """Whether ``url``'s host is one of ``sites`` or a subdomain of one.
+
+    Compares the parsed host, never the text: ``manualslib.com`` in a query
+    string or in ``manualslib.com.attacker.example`` does not make a URL
+    ManualsLib's.
+    """
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").rstrip(".")
+    except ValueError:
+        return False
+    return any(host == site or host.endswith("." + site) for site in sites)
+
+
+def _manualslib_viewer(url: str) -> bool:
+    """Whether ``url`` is a ManualsLib viewer page, whose PDF sits at ``/download.pdf``."""
+    return (
+        _on_site(url, ("manualslib.com",))
+        and urllib.parse.urlsplit(url).path.startswith("/manual/")
+        and not url.lower().endswith(".pdf")
+    )
+
 
 _STOPWORDS = {
     "how",
@@ -202,8 +221,8 @@ async def handle_task(agent, payload: str | dict[str, Any]) -> dict[str, Any]:
             inner = json.loads(raw_text)
             if isinstance(inner, dict):
                 payload = {**payload, **inner}
-        except Exception:
-            pass
+        except ValueError:
+            pass  # looked like JSON and was not: the text is the request
 
     # ── Mode 1: explicit action field → legacy direct dispatch ──────────────
     action = str(payload.get("action") or "").strip().lower()
@@ -407,8 +426,8 @@ def _parse_router_json(raw: Any) -> dict[str, Any] | None:
         obj = json.loads(s)
         if isinstance(obj, dict):
             return obj
-    except Exception:
-        pass
+    except ValueError:
+        pass  # fall through to the embedded-object search below
 
     # Fall back: greedy brace-matched substring
     m = re.search(r"\{[\s\S]*\}", s)
@@ -428,7 +447,20 @@ def _parse_router_json(raw: Any) -> dict[str, Any] | None:
 
 # Cheap keyword detector — only used as a last resort. The LLM router above
 # is the primary path.
-_CLEAR_RE = re.compile(r"\b(clear|reset|forget|unload|drop)\b", re.IGNORECASE)
+# The whole message, not a word in it: "reset" and "drop" are also what people
+# ask a manual about ("how do I reset the filter counter?").
+_CLEAR_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:clear|reset|forget|unload|drop)"
+    r"(?:\s+(?:it|that|this|everything|(?:the|this|current|the\s+current)\s+manual))?"
+    r"\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+# A question, by how it starts: with a manual loaded, one is about that manual,
+# even when it says "get" or "instructions" as a load request would.
+_QUESTION_RE = re.compile(
+    r"^\s*(?:how|what|why|where|when|which|who|is|are|does|do|did|should|will|would)\b",
+    re.IGNORECASE,
+)
 _STATUS_RE = re.compile(
     r"\b(status|what(?:'s| is) loaded|which manual|current manual)\b", re.IGNORECASE
 )
@@ -440,11 +472,14 @@ _LOAD_RE = re.compile(
 
 async def _heuristic_route(agent, text: str) -> dict[str, Any]:
     """No-LLM fallback. Tries to do the right thing with regex/keywords."""
-    if _CLEAR_RE.search(text) and len(text) < 40:
+    if _CLEAR_RE.search(text):
         return await _dispatch_action(agent, "clear", {})
 
     if _STATUS_RE.search(text):
         return _status(agent)
+
+    if agent.state.get("manual_text") and _QUESTION_RE.search(text):
+        return await _ask(agent, text)
 
     # Looks like a load request
     if _LOAD_RE.search(text):
@@ -504,9 +539,10 @@ async def _load_manual_bg(agent, device: str, explicit_url: str | None = None) -
     if hasattr(agent, "notify_user"):
         try:
             await agent.notify_user(message)
-            return
         except Exception as e:
             await agent.log(f"notify_user failed: {e}")
+        else:
+            return
     # No push channel available — at least leave it in the event log.
     await agent.log(message)
 
@@ -605,8 +641,8 @@ async def _suggest_device_variants(agent, device: str) -> list[str]:
         try:
             arr = json.loads(s)
             return [str(x) for x in arr if isinstance(x, (str,))]
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            pass  # fall through to the greedy match below
     # Try greedy array match
     m = re.search(r"\[[\s\S]*?\]", s)
     if m:
@@ -760,7 +796,7 @@ def _find_manual_candidates(agent, device: str) -> list[str]:
     if model_m:
         model = model_m.group(0).upper()
         ml = model.lower()
-        logger.info(f"Pass 1: trying direct Philips URLs for model {model}")
+        logger.info("Pass 1: trying direct Philips URLs for model %s", model)
         direct_urls = [
             f"https://www.download.p4c.philips.com/files/e/{ml}/{ml}_pss_aenghk.pdf",
             f"https://www.download.p4c.philips.com/files/e/{ml}_31/{ml}_31_pss_aenghk.pdf",
@@ -773,12 +809,12 @@ def _find_manual_candidates(agent, device: str) -> list[str]:
                         r = client.head(url)
                         ct = r.headers.get("content-type", "")
                         if r.status_code == 200 and ("pdf" in ct or url.endswith(".pdf")):
-                            logger.info(f"  ✓ direct URL works: {url}")
+                            logger.info("  ✓ direct URL works: %s", url)
                             add(url)
-                    except Exception:
+                    except Exception:  # noqa: S112  # an unreachable guess is just not a candidate
                         continue
         except Exception as e:
-            logger.info(f"  Philips direct check failed: {e}")
+            logger.info("  Philips direct check failed: %s", e)
 
     # ── Pass 2: DuckDuckGo HTML scrape (THIS is what works — your logs ───
     #     showed 40 hits / 10 URLs from this pass).  We promote it before
@@ -795,11 +831,11 @@ def _find_manual_candidates(agent, device: str) -> list[str]:
         for u in ddgs_urls:
             add(u)
     else:
-        logger.info(f"Skipping DDGS library: already have {len(candidates)} candidates")
+        logger.info("Skipping DDGS library: already have %s candidates", len(candidates))
 
-    logger.info(f"Total unique candidates collected: {len(candidates)}")
+    logger.info("Total unique candidates collected: %s", len(candidates))
     for i, u in enumerate(candidates[:10], 1):
-        logger.info(f"  [{i}] {u}")
+        logger.info("  [%s] %s", i, u)
 
     return candidates
 
@@ -822,7 +858,8 @@ def _ddgs_collect(agent, device: str) -> list[str]:
 
             logger.info("Pass 2: using ddgs package")
         except ImportError:
-            from duckduckgo_search import DDGS
+            # Optional, installed with the recipe; the older name of the ddgs package.
+            from duckduckgo_search import DDGS  # pyright: ignore[reportMissingImports]
 
             logger.info("Pass 2: using legacy duckduckgo_search")
 
@@ -841,22 +878,22 @@ def _ddgs_collect(agent, device: str) -> list[str]:
                         # very old API — no backend param
                         results = list(ddgs.text(query, max_results=8))
 
-                    logger.info(f"  query={query!r} → {len(results)} results")
+                    logger.info("  query=%r → %s results", query, len(results))
                     if results:
                         # log up to 3 URLs so you can see what we're getting
                         for i, r in enumerate(results[:3]):
                             logger.info(
-                                f"    [{i}] {get_url(r)!r}  title={r.get('title', '')[:50]!r}"
+                                "    [%s] %r  title=%r", i, get_url(r), r.get("title", "")[:50]
                             )
 
                     ranked = _rank_manual_urls(results, get_url)
-                    logger.info(f"    → {len(ranked)} URL(s) passed the manual filter")
+                    logger.info("    → %s URL(s) passed the manual filter", len(ranked))
                     out.extend(ranked)
                 except Exception as e:
-                    logger.info(f"  DDGS query failed ({query!r}): {e}")
+                    logger.info("  DDGS query failed (%r): %s", query, e)
                     continue
     except Exception as e:
-        logger.info(f"Pass 2: DDGS unavailable ({e})")
+        logger.info("Pass 2: DDGS unavailable (%s)", e)
     return out
 
 
@@ -901,31 +938,29 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
 
         # Direct anchor URLs
         for u in re.findall(r'href="(https?://[^"]+)"', html):
-            if any(d in u for d in _SEARCH_ENGINE_DOMAINS):
+            if _on_site(u, _SEARCH_ENGINE_DOMAINS):
                 continue
-            if u.lower().endswith(".pdf") or "manualslib.com" in u:
+            if u.lower().endswith(".pdf") or _on_site(u, ("manualslib.com",)):
                 page_urls.append(u)
 
         # DDG redirect wrapper /l/?uddg=<urlencoded>
         for m in re.finditer(r'/l/\?(?:kh=[^&]*&)?uddg=([^"&]+)', html):
             try:
                 decoded = urllib.parse.unquote(m.group(1))
-                if decoded.startswith("http") and not any(
-                    d in decoded for d in _SEARCH_ENGINE_DOMAINS
-                ):
+                if decoded.startswith("http") and not _on_site(decoded, _SEARCH_ENGINE_DOMAINS):
                     page_urls.append(decoded)
-            except Exception:
+            except Exception:  # noqa: S112  # one malformed result link is skipped
                 continue
 
         cleaned: list = []
         for u in page_urls:
             # Rewrite ManualsLib viewer pages → direct PDF download
-            if "manualslib.com/manual/" in u and not u.endswith(".pdf"):
+            if _manualslib_viewer(u):
                 u = u.split("?")[0].rstrip("/")
                 u = u[:-5] + "/download.pdf" if u.endswith(".html") else u + "/download.pdf"
             cleaned.append(u)
 
-        logger.info(f"  [{source}] harvested {len(cleaned)} URLs")
+        logger.info("  [%s] harvested %s URLs", source, len(cleaned))
         return cleaned
 
     # ── Engine 1: DuckDuckGo HTML ────────────────────────────────────────
@@ -934,33 +969,35 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
 
     with httpx.Client(follow_redirects=True, timeout=15) as client:
         for i, query in enumerate(queries):
-            ddg_headers["User-Agent"] = random.choice(user_agents)
+            ddg_headers["User-Agent"] = random.choice(user_agents)  # noqa: S311  # varies a header, not a secret
             q = urllib.parse.quote_plus(query)
             url = f"https://html.duckduckgo.com/html/?q={q}"
             try:
                 r = client.get(url, headers=ddg_headers)
             except Exception as e:
-                logger.info(f"  [DDG] query={query!r}: request failed ({e})")
+                logger.info("  [DDG] query=%r: request failed (%s)", query, e)
                 continue
 
             if r.status_code == 202 or not r.text or len(r.text) < 500:
                 # 202 = rate-limited / no body
                 logger.info(
-                    f"  [DDG] query={query!r}: status={r.status_code} "
-                    f"body_len={len(r.text)} — likely rate-limited"
+                    "  [DDG] query=%r: status=%s body_len=%s — likely rate-limited",
+                    query,
+                    r.status_code,
+                    len(r.text),
                 )
                 ddg_blocked = True
                 # Don't keep hammering — break out and try Mojeek
                 break
             if r.status_code != 200:
-                logger.info(f"  [DDG] query={query!r}: status {r.status_code}")
+                logger.info("  [DDG] query=%r: status %s", query, r.status_code)
                 continue
 
             out.extend(_harvest(r.text, "DDG"))
 
             # Jittered delay between queries (1.5–3.0s) to look human
             if i < len(queries) - 1:
-                time.sleep(1.5 + random.random() * 1.5)
+                time.sleep(1.5 + random.random() * 1.5)  # noqa: S311  # jitter, not a secret
 
     # ── Engine 2: Mojeek (independent index, fallback when DDG is blocked) ─
     if ddg_blocked or len(out) < 3:
@@ -968,25 +1005,28 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
         with httpx.Client(follow_redirects=True, timeout=15) as client:
             mojeek_headers = dict(headers)
             for i, query in enumerate(queries):
-                mojeek_headers["User-Agent"] = random.choice(user_agents)
+                mojeek_headers["User-Agent"] = random.choice(user_agents)  # noqa: S311  # varies a header, not a secret
                 q = urllib.parse.quote_plus(query)
                 url = f"https://www.mojeek.com/search?q={q}"
                 try:
                     r = client.get(url, headers=mojeek_headers)
                 except Exception as e:
-                    logger.info(f"  [Mojeek] query={query!r}: request failed ({e})")
+                    logger.info("  [Mojeek] query=%r: request failed (%s)", query, e)
                     continue
 
                 if r.status_code != 200 or len(r.text) < 500:
                     logger.info(
-                        f"  [Mojeek] query={query!r}: status={r.status_code} body_len={len(r.text)}"
+                        "  [Mojeek] query=%r: status=%s body_len=%s",
+                        query,
+                        r.status_code,
+                        len(r.text),
                     )
                     continue
 
                 out.extend(_harvest(r.text, "Mojeek"))
 
                 if i < len(queries) - 1:
-                    time.sleep(1.0 + random.random() * 1.0)
+                    time.sleep(1.0 + random.random() * 1.0)  # noqa: S311  # jitter, not a secret
 
     # Dedupe preserving order
     seen = set()
@@ -996,7 +1036,7 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
             seen.add(u)
             deduped.append(u)
 
-    logger.info(f"  HTML scrape total: {len(deduped)} unique URLs")
+    logger.info("  HTML scrape total: %s unique URLs", len(deduped))
     return deduped
 
 
@@ -1016,16 +1056,16 @@ def _rank_manual_urls(results, get_url_fn: Callable[[str], str]) -> list[str]:
         u_lower = u.lower()
 
         # Skip search-engine self-links
-        if any(d in u for d in _SEARCH_ENGINE_DOMAINS):
+        if _on_site(u, _SEARCH_ENGINE_DOMAINS):
             continue
 
         if u_lower.endswith(".pdf"):
             t1.append(u)
             continue
 
-        if any(t in u for t in TRUSTED_SITES):
+        if _on_site(u, TRUSTED_SITES):
             # ManualsLib viewer pages → append /download.pdf
-            if "manualslib.com" in u and not u_lower.endswith(".pdf"):
+            if _on_site(u, ("manualslib.com",)):
                 t2.append(u.rstrip("/") + "/download.pdf")
             else:
                 t2.append(u)
@@ -1070,7 +1110,7 @@ def _public_address(url: str) -> bool:
         return False
     addresses = {info[4][0] for info in infos}
     return bool(addresses) and all(
-        ipaddress.ip_address(address.split("%", 1)[0]).is_global for address in addresses
+        ipaddress.ip_address(str(address).split("%", 1)[0]).is_global for address in addresses
     )
 
 
@@ -1150,7 +1190,7 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple[str, int]:
 
     # ── Strategy 1: PyMuPDF (fitz) — fast, used by the doc-to-pptx agent too ─
     try:
-        import fitz  # pymupdf
+        import fitz  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe (pymupdf)
 
         t0 = time.time()
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1162,21 +1202,21 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple[str, int]:
                 t = doc[i].get_text()
                 if t:
                     parts.append(t)
-            except Exception:
+            except Exception:  # noqa: S112  # an unreadable page is left out of the text
                 continue
         doc.close()
         elapsed = time.time() - t0
-        logger.info(f"  PyMuPDF extracted {max_pages}/{total_pages} pages in {elapsed:.1f}s")
+        logger.info("  PyMuPDF extracted %s/%s pages in %.1fs", max_pages, total_pages, elapsed)
         if parts:
             return "\n".join(parts), total_pages
     except ImportError:
         logger.info("  PyMuPDF (fitz) not available — falling back to pdfplumber")
     except Exception as e:
-        logger.info(f"  PyMuPDF failed ({e}) — falling back to pdfplumber")
+        logger.info("  PyMuPDF failed (%s) — falling back to pdfplumber", e)
 
     # ── Strategy 2: pdfplumber fallback (slow but accurate) ──
     try:
-        import pdfplumber
+        import pdfplumber  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe
 
         t0 = time.time()
         parts = []
@@ -1187,23 +1227,23 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple[str, int]:
                 # Time-bound: if pdfplumber is taking too long, bail early
                 if time.time() - t0 > 45:
                     logger.info(
-                        f"  pdfplumber 45s budget exceeded at page {i}/{max_pages} — stopping"
+                        "  pdfplumber 45s budget exceeded at page %s/%s — stopping", i, max_pages
                     )
                     break
                 try:
                     t = pdf.pages[i].extract_text()
                     if t:
                         parts.append(t)
-                except Exception:
+                except Exception:  # noqa: S112  # an unreadable page is left out of the text
                     continue
         elapsed = time.time() - t0
-        logger.info(f"  pdfplumber extracted {len(parts)} pages in {elapsed:.1f}s")
+        logger.info("  pdfplumber extracted %s pages in %.1fs", len(parts), elapsed)
         if parts:
             return "\n".join(parts), total_pages
     except ImportError:
         logger.info("  pdfplumber not available either")
     except Exception as e:
-        logger.info(f"  pdfplumber failed: {e}")
+        logger.info("  pdfplumber failed: %s", e)
 
     return "", 0
 
@@ -1349,4 +1389,3 @@ def _rank_chunks(chunks: list[str], question: str) -> list[str]:
     scored = [(sum(c.lower().count(kw) for kw in kws), c) for c in chunks]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for _, c in scored]
-'''

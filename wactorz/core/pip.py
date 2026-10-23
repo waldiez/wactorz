@@ -15,6 +15,7 @@ import shutil
 import site
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 #: What a package name may look like. PEP 508 names are letters, digits, and
 #: `-`/`_`/`.` as internal separators; a version specifier or extras may follow.
@@ -105,9 +106,9 @@ def _version_matches(version: str, specifier: str) -> bool:
         from packaging.specifiers import InvalidSpecifier, SpecifierSet
     except ImportError:  # pragma: no cover - present wherever pip's usual companions are
         exact = re.fullmatch(r"==\s*([^,;\s]+)", specifier)
-        # Without packaging only an exact pin can be judged; anything else is
-        # taken as met rather than reinstalled on every spawn.
-        return exact is None or exact.group(1) == version
+        # Without packaging a range cannot be verified. Let the installer
+        # resolve it under the normal approval rules instead of accepting it.
+        return exact is not None and exact.group(1) == version
     try:
         return SpecifierSet(specifier).contains(version, prereleases=True)
     except InvalidSpecifier:
@@ -166,7 +167,7 @@ def make_user_site_importable() -> bool:
     if not site.ENABLE_USER_SITE:
         return False
     user_site = site.getusersitepackages()
-    if not os.path.isdir(user_site) or user_site in sys.path:
+    if not Path(user_site).is_dir() or user_site in sys.path:
         return False
     site.addsitedir(user_site)
     importlib.invalidate_caches()
@@ -202,6 +203,24 @@ def stale_loaded_distributions(before: dict[str, str], after: dict[str, str]) ->
 def missing_requirements(requirements: Sequence[str]) -> list[str]:
     """The entries of `requirements` that are not installed yet, in order."""
     return [req for req in requirements if req.strip() and not requirement_is_satisfied(req)]
+
+
+#: How long one pip run of the installer's may take, in seconds.
+PIP_TIMEOUT_S = 180
+
+#: The variable naming the package index every install uses, such as a private
+#: mirror. Unset, pip uses its own default.
+INDEX_URL_ENV = "WACTORZ_PIP_INDEX_URL"
+
+
+def index_args() -> list[str]:
+    """``--index-url`` and the configured index, or nothing when none is configured.
+
+    The value is the operator's, from this machine's environment; a package
+    list never carries one, which is what `is_installable_name` is for.
+    """
+    url = os.environ.get(INDEX_URL_ENV, "").strip()
+    return ["--index-url", url] if url else []
 
 
 def is_root() -> bool:
@@ -257,6 +276,7 @@ def install_command(packages: Sequence[str]) -> tuple[list[str], dict[str, str]]
         "install",
         "--disable-pip-version-check",
         "--no-input",
+        *index_args(),
     ]
     env: dict[str, str] = {}
     if not in_virtualenv():

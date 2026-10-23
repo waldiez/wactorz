@@ -182,10 +182,12 @@ restore action.</p>
 uv<span class="w"> </span>run<span class="w"> </span>--no-sync<span class="w"> </span>wactorz
 </code></pre></div>
 
-<p>The lock keeps the pinned SDK client with patched Starlette, following the secure
-range supported upstream. Plain <code>pip install</code> follows the SDK's published dependency
-constraints and does not apply this repository's uv override. This compatibility
-check covers Wactorz's SDK client and HTTP middleware, not the SDK daemon's dashboard.</p>
+<p>SDK 1.12.0 publishes secure Starlette requirements for both pip and uv. No uv
+metadata override is used. Reachy requires Python 3.11+; core Wactorz still supports
+3.10. Client and HTTP middleware checks do not validate the full daemon dashboard
+or physical robot. Old saved Reachy recipes with changed dependency pins are
+refused at restore: respawn through <code>@catalog spawn reachy-mini</code> to use the normal
+package approval flow, then restart if requested. Saved runtime state is retained.</p>
 <p>Where Wactorz runs decides what Reachy can do:</p>
 <table>
 <thead>
@@ -221,7 +223,7 @@ first. On Debian or Ubuntu:</p>
 <span class="w">  </span>gir1.2-gstreamer-1.0<span class="w"> </span>gir1.2-gst-plugins-base-1.0<span class="w"> </span>gir1.2-gst-plugins-bad-1.0
 </code></pre></div>
 
-<p>Run Wactorz with <strong>Python 3.13 or older</strong>. The SDK needs a version of PyGObject that
+<p>Run Wactorz with <strong>Python 3.11 to 3.13</strong>. The SDK needs a version of PyGObject that
 does not work on Python 3.14, which is the default on Ubuntu 26.04; there, create the
 virtual environment with an older Python and with pip in it, for example:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>venv<span class="w"> </span>--seed<span class="w"> </span>-p<span class="w"> </span><span class="m">3</span>.13<span class="w"> </span>venv
@@ -271,7 +273,7 @@ see in chat:</p>
 <li>Straight away, a reply saying which packages it is installing. The whole install takes
    a few minutes, longer on a slow connection.</li>
 <li>One line per package as it installs, for example
-   <code>Installing reachy-mini==1.8.4 (1/6) for reachy-mini…</code>.</li>
+   <code>Installing reachy-mini==1.12.0 (1/6) for reachy-mini…</code>.</li>
 <li>Then one of these:</li>
 <li><strong>"reachy-mini spawned and running"</strong>: go on to step 3.</li>
 <li><strong>"…restart Wactorz once to finish; reachy-mini will start by itself after the

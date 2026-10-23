@@ -12,7 +12,7 @@ commands into a terminal and editing a text file.
 | --- | --- |
 | A Reachy Mini | **Wireless** (Wi-Fi) or **Lite** (USB). Charged or plugged in. |
 | A computer to run Wactorz | **Windows or macOS** for every feature. Linux works for movement and speech; see [Installation › Linux](installation.md#linux) for what is missing there. |
-| Python 3.10 to 3.13 | 3.13 is what the robot SDK is tested with. On Linux, 3.14 does not work yet. |
+| Python 3.11 to 3.13 | 3.13 is what the robot SDK is tested with. On Linux, 3.14 does not work yet. |
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | Installs the exact, tested versions of every package. |
 | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | Only to run the message broker (Mosquitto) Wactorz needs. Any Mosquitto 2.x broker works instead. |
 | A language-model API key | Anthropic, OpenAI, Google Gemini or NVIDIA NIM, or a local [Ollama](https://ollama.com). This guide uses Anthropic. |

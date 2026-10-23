@@ -15,7 +15,7 @@ change it, see the [Developer guide](developer-guide.md).
  │  MQTT broker ◄──custom/reachy/*──► reachy-mini agent ─────┘  LLM provider (cloud   │
  │  (Mosquitto)                        (catalogue program)       or Ollama)           │
  │                                        │                                           │
- │                         reachy_mini SDK (Pollen Robotics, pinned 1.8.4)             │
+ │                         reachy_mini SDK (Pollen Robotics, pinned 1.12.0)             │
  └────────────────────────────────────────┼───────────────────────────────────────────┘
                      HTTP + WebSocket (motion, status, logs) │ WebRTC (camera, mic, speaker)
                                          ▼

@@ -43,10 +43,12 @@ uv sync --locked --extra anthropic --extra reachy
 uv run --no-sync wactorz
 ```
 
-The lock keeps the pinned SDK client with patched Starlette, following the secure
-range supported upstream. Plain `pip install` follows the SDK's published dependency
-constraints and does not apply this repository's uv override. This compatibility
-check covers Wactorz's SDK client and HTTP middleware, not the SDK daemon's dashboard.
+SDK 1.12.0 publishes secure Starlette requirements for both pip and uv. No uv
+metadata override is used. Reachy requires Python 3.11+; core Wactorz still supports
+3.10. Client and HTTP middleware checks do not validate the full daemon dashboard
+or physical robot. Old saved Reachy recipes with changed dependency pins are
+refused at restore: respawn through `@catalog spawn reachy-mini` to use the normal
+package approval flow, then restart if requested. Saved runtime state is retained.
 
 Where Wactorz runs decides what Reachy can do:
 
@@ -72,7 +74,7 @@ sudo apt install python3-venv python3-dev build-essential pkg-config \
   gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0
 ```
 
-Run Wactorz with **Python 3.13 or older**. The SDK needs a version of PyGObject that
+Run Wactorz with **Python 3.11 to 3.13**. The SDK needs a version of PyGObject that
 does not work on Python 3.14, which is the default on Ubuntu 26.04; there, create the
 virtual environment with an older Python and with pip in it, for example:
 
@@ -137,7 +139,7 @@ see in chat:
 1. Straight away, a reply saying which packages it is installing. The whole install takes
    a few minutes, longer on a slow connection.
 2. One line per package as it installs, for example
-   `Installing reachy-mini==1.8.4 (1/6) for reachy-mini…`.
+   `Installing reachy-mini==1.12.0 (1/6) for reachy-mini…`.
 3. Then one of these:
    - **"reachy-mini spawned and running"**: go on to step 3.
    - **"…restart Wactorz once to finish; reachy-mini will start by itself after the

@@ -23,7 +23,11 @@ def _extras() -> dict[str, list[str]]:
 
 
 def test_the_extra_lists_exactly_what_the_recipe_installs() -> None:
-    assert _extras()["reachy"] == _build_catalog()["reachy-mini"]["install"]
+    requirements = _extras()["reachy"]
+    assert all(req.endswith("; python_version >= '3.11'") for req in requirements)
+    assert [req.split(";", 1)[0] for req in requirements] == _build_catalog()["reachy-mini"][
+        "install"
+    ]
 
 
 def test_the_extra_stays_out_of_all() -> None:

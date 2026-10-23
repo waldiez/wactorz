@@ -372,10 +372,16 @@ class TestResolvingAnAgentByName:
 
 
 class TestCatalogAgentsComeBackCurrent:
-    """A catalog agent restores from today's recipe, not the one it was spawned from."""
+    """Only opted-in recipes refresh code, without approving new dependencies."""
 
     async def test_a_trusted_catalog_entry_takes_the_current_code_and_settings(self) -> None:
-        stale = {"name": "reachy-mini", "type": "dynamic", "code": "old = 1", "trusted": True}
+        stale = {
+            **_build_catalog()["reachy-mini"],
+            "code": "old = 1",
+            "trusted": True,
+            "task_timeout_s": 99,
+            "initial_state": {"robot_host": "192.0.2.1"},
+        }
         main = _Main(spawn_registry={"reachy-mini": stale})
 
         await main.restore()
@@ -383,7 +389,8 @@ class TestCatalogAgentsComeBackCurrent:
         current = _build_catalog()["reachy-mini"]
         restored = main.configs["reachy-mini"]
         assert restored["code"] == current["code"]
-        assert restored["task_timeout_s"] == current["task_timeout_s"]
+        assert restored["task_timeout_s"] == 99
+        assert restored["initial_state"] == stale["initial_state"]
         assert restored["install"] == current["install"]
         assert restored["trusted"] is True
 
@@ -401,7 +408,29 @@ class TestCatalogAgentsComeBackCurrent:
 
         restored = main.configs["smart-energy"]
         assert restored["node"] == "rpi"
-        assert restored["code"] == _build_catalog()["smart-energy"]["code"]
+        assert restored == entry
+
+    async def test_changed_dependencies_need_a_fresh_approved_spawn(self) -> None:
+        stale = {
+            **_build_catalog()["reachy-mini"],
+            "install": ["reachy-mini==1.8.4"],
+            "trusted": True,
+        }
+        main = _Main(spawn_registry={"reachy-mini": stale, "other": local("other")})
+
+        await main.restore()
+
+        assert "reachy-mini" not in main.configs
+        assert main.restored_names == ["other"]
+        assert stale["install"] == ["reachy-mini==1.8.4"]
+
+    async def test_remote_dependency_migration_is_refused_before_node_dispatch(self) -> None:
+        stale = {**_build_catalog()["reachy-mini"], "install": [], "trusted": True, "node": "rpi"}
+        main = _Main(spawn_registry={"reachy-mini": stale})
+
+        await main.restore()
+
+        assert main.remotely_spawned == []
 
     async def test_an_untrusted_entry_with_a_catalog_name_is_left_alone(self) -> None:
         # Only the catalog writes trusted entries; a model-written agent that

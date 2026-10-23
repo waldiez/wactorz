@@ -1,9 +1,14 @@
-# Capability matrix, test results and backlog (audit of 2026-10-09)
+# Historical capability matrix (audit of 2026-10-09)
 
 Branch `chore/reachy-release-readiness`, from `feat/reachy-deepgram-animations` @ `0c2ff2eb`.
 SDK `reachy-mini==1.8.4`. **No physical robot was available for this audit.** "Sim" means
 verified with `scripts/reachy_sim_check.py` against the SDK's own daemon in
 `--mockup-sim --no-media` mode (real SDK and agent code, simulated motors, no audio/camera).
+
+This is historical SDK 1.8.4 evidence. The current integration uses SDK 1.12.0;
+its hardware/media behavior has not been revalidated here. See
+[the current safety audit](../../../REACHY_CORE_SAFETY_AUDIT.md) for current evidence
+and the NO-GO recommendation. Dashboard microphone input is deferred.
 
 ## Capabilities
 
@@ -19,8 +24,6 @@ verified with `scripts/reachy_sim_check.py` against the SDK's own daemon in
 | Voice-input preflight (missing key/package) | Verified working (unit), new | `reachy_stt.configuration_problem` |
 | Conversation ends by itself → chat says why | Verified working (unit), new | `_announce_conversation_end` |
 | Help, routing of typed phrases, MQTT surface | Verified working (unit) | `handle_task`, `_help` |
-| Dashboard mic, Server engine (`POST /api/stt`) | Verified working (unit, both sides); not tried in a real browser | `wactorz/ext/stt`, `frontend/src/io/SpeechToText.ts`, `wav.ts` |
-| Dashboard mic, Browser engine (Web Speech) | Verified working (unit); not tried in a real browser | `frontend/src/io/WebSpeech.ts`, `voiceInput.ts` |
 | Speech output (edge-tts → robot speaker), volume | Implemented but untested on hardware this audit; now bounded by a 20 s stall timeout | `_prepare_speech`, `_say` |
 | Push-to-talk, Deepgram streaming conversation, VAD | Implemented but untested on hardware this audit (reported working at public demos) | `_ask_voice`, `_conversation_loop`, `reachy_vad` |
 | Local faster-whisper / whisper STT | Implemented but untested | `reachy_stt` |

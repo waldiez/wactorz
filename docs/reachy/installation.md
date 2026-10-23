@@ -4,13 +4,18 @@
 skips: which systems work, installing without cloning the repository, Linux preparation,
 local speech recognition, and how to check an installation.
 
+SDK 1.12.0 has clean Windows installation and API contract checks. Platform
+behavior below includes earlier hardware observations with SDK 1.8.4; the owner
+must revalidate robot movement, media and native Linux setup on 1.12.0 before
+merging. See the repository safety audit for the remaining evidence gaps.
+
 ## Supported systems
 
 | Wactorz runs on | Movement and speech | Listening, conversation, camera | Notes |
 | --- | --- | --- | --- |
 | Windows 10/11 | Yes | Yes | The robot SDK brings its own media libraries. |
 | macOS | Yes | Yes | As Windows. |
-| Linux | Yes | **No**, unless you build GStreamer's WebRTC plugin (`gst-plugins-rs`) yourself | Python 3.13 or older. Tested on Ubuntu 26.04 with Python 3.13 and a Reachy Mini Wireless. |
+| Linux | Yes | **No**, unless you build GStreamer's WebRTC plugin (`gst-plugins-rs`) yourself | Python 3.11 to 3.13. Tested on Ubuntu 26.04 with Python 3.13 and a Reachy Mini Wireless. |
 | Docker image, Home Assistant add-on | Not supported | Not supported | The `ultra` image carries the SDK's build tools, but running Reachy from a container has not been validated. |
 | WSL, virtual machines | Possible | As the host OS | Automatic discovery cannot reach the robot; set `REACHY_ROBOT_HOST`. |
 
@@ -19,13 +24,19 @@ local speech recognition, and how to check an installation.
 | Reachy Mini **Wireless** | Same Wi-Fi network as the computer | Nothing extra: the daemon runs on the robot. |
 | Reachy Mini **Lite** | USB cable | `reachy-mini-daemon -p <serial_port>` on the computer, left running. |
 
-Python: Wactorz supports 3.10 and newer; the robot SDK is pinned to `reachy-mini==1.8.4`
-and is used with Python 3.13 in testing. Prefer 3.13 everywhere.
+Python: Wactorz supports 3.10 and newer; the robot SDK is pinned to `reachy-mini==1.12.0`
+and requires Python 3.11 or newer. Prefer 3.13 for the robot.
+Core Wactorz still supports Python 3.10, but Reachy installation/spawning is
+unsupported there: the extra intentionally installs no robot packages and the
+catalogue refuses to spawn it. Do not install an older insecure SDK as a workaround.
+SDK 1.12.0 declares the secure Starlette range for both pip and uv; no metadata
+override is used. Linux also needs the native libraries below.
 
 ## Option A: from a clone, with the lock file (recommended)
 
-This installs the exact versions the project tests with, including a security override
-for one of the SDK's web dependencies that plain `pip` does not apply.
+This installs the exact locked versions. Both pip and uv use the SDK's published
+secure Starlette requirements. The universal lock still selects websockets 15
+because the SDK requires versions below 16, including for default locked installs.
 
 ```bash
 git clone https://github.com/waldiez/wactorz.git
@@ -81,7 +92,7 @@ sudo apt install python3-venv python3-dev build-essential pkg-config \
   gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0
 ```
 
-Use Python 3.13 or older: the SDK needs a PyGObject release that does not work on 3.14,
+Use Python 3.11 to 3.13: the SDK needs a PyGObject release that does not work on 3.14,
 which is the default on Ubuntu 26.04. With uv:
 
 ```bash
@@ -148,3 +159,13 @@ uv sync --locked --extra anthropic --extra reachy
 ```
 
 Then restart Wactorz. Reachy restarts with it.
+
+## Restoring a saved recipe
+
+Only recipes declaring `refresh_on_restore` refresh reviewed code. Instance settings,
+placement, artifacts and state remain saved. If dependency pins change, restoration
+stops for that agent and reports the reason in the server log; other agents still
+restore. Send `@catalog spawn reachy-mini` for a fresh spawn through package approval.
+Do not edit the registry to bypass approval. A repaired/untrusted recipe stays
+untrusted and is never replaced with trusted code; review and recreate it manually
+if it still requests an older SDK.

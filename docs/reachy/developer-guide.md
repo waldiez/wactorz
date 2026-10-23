@@ -25,7 +25,7 @@ working on Reachy. Branch from `dev` with a conventional prefix (`fix/`, `feat/`
 | `wactorz/catalogue_agents/reachy_stt.py` | Speech-to-text backends (a normal, importable module). |
 | `wactorz/catalogue_agents/reachy_vad.py` | Voice-activity capture (a normal module). |
 | `wactorz/agents/catalog_agent.py` | The catalogue entry (`catalog["reachy-mini"]`): packages, docs, input schema, `task_timeout_s`. |
-| `pyproject.toml` | The `reachy` extra and the uv override that keeps Starlette patched. |
+| `pyproject.toml` | The `reachy` extra and upstream SDK's secure dependency requirements. |
 | `tests/test_reachy_*.py` | The Reachy test suite. |
 | `scripts/reachy_sim_check.py` | End-to-end run against the SDK's simulated robot. |
 | `docs/catalogue-reachy-mini.md` | Full command reference, built into the docs site. |
@@ -92,7 +92,7 @@ network call.
 
 ## Supporting a new SDK version
 
-The SDK is pinned (`reachy-mini==1.8.4`) in both `pyproject.toml` and
+The SDK is pinned (`reachy-mini==1.12.0`) in both `pyproject.toml` and
 `catalog_agent.py`'s `_REACHY_MINI_SDK_VERSION`. To move it:
 
 1. Change both pins, then `make lock`.

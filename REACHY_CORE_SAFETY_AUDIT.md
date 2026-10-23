@@ -15,13 +15,14 @@ validation is incomplete. Tests do not establish safety by themselves.
 | Input | Commit |
 | --- | --- |
 | Updated `origin/dev`, fetched and verified remotely | `37cec13f406ba5a3f1b9d9022c0f9f96b98fc65e` |
-| Complete reviewed source/test head | `9a1515bcd8d961f9b4613174d96ad7eb52c870d7` |
+| Complete reviewed source/test head | `eaefc2297800e576916c9e7fb71f9ab28efc3e33` |
 | Preserved local integration merge | `1fbf808435581f260cb5835e0aae57138483eb2a` |
 | Published Reachy head before this remediation | `b4228a2aedc8937777e8c6c25179e5869428f74b` |
 | Original common ancestor | `09595dcee2be5c2f8c5019ba85c796383c1139ba` |
 
-The final documentation/audit commit adds this report and corrected guides on top of
-that reviewed source head; it does not change runtime code. These explicit SHAs avoid
+The final audit update follows that reviewed source/test head; it does not change
+runtime code. Runtime changes were complete at 9a1515bc; the later test-only
+commit eaefc229 corrects platform assumptions without changing production guards. These explicit SHAs avoid
 a self-referential report commit hash. The integration has parents `b4228a2a...` and
 `37cec13f...`, bringing 227 incoming dev commits into the feature branch, including
 package approval, node admission/signatures, artifacts and repair safeguards. It does
@@ -315,6 +316,7 @@ Evidence lives under `.local/reachy-remediation/` and is deliberately not commit
 | Frontend `make lint` | **Pass**: TypeScript, Prettier, ESLint, markdownlint. |
 | Frontend build | **Pass** via `make build-frontend` and package asset sync. Source and committed bundles match dev again; no manual hash selection. |
 | Full docs + wheel | **Pass** `make docs-build`, frontend TypeDoc and Python docs, `uv build --wheel`, `twine check`. |
+| Additional Windows Python 3.10.0 full suite | **FAIL: 1 failed, 9,553 passed, 146 skipped, 145 subtests passed**, using the exact all/dev projection and installed wheel, four workers. The remaining event-loop lag assertion is in unchanged dev code/tests; see analysis below. Catalogue/policy cases pass. |
 | Final lock validation | **Pass**, CI-pinned uv **0.13.3**, 263 packages. |
 | Exact CI audit | **FAIL**, exit 1: the same **11 Pillow 12.3.0 advisories**, 262 audited packages. Existing Makefile ignores unchanged. No new vulnerability suppression. |
 | Clean pip base wheel | **Pass**, Python **3.10.0**: imports main/catalogue and constructs web app, no robot SDK/NumPy/Pillow/Deepgram or API key; dependency check passes. |
@@ -334,11 +336,52 @@ path contamination. The final tests explicitly avoid ambient Python-path leakage
 
 ## CI, remaining evidence and human stopping point
 
-The old PR description's green CI and physical robot claims refer to older heads;
-they are not validation of this synchronized SDK 1.12 integration. At report authoring,
-this source head has not yet been pushed. The draft description will name the actual
-published head and available current workflow results; absent/pending checks are not
-passes. No workflow outcome is inferred from the old license/CLA status.
+The first published remediation head was `fbce6a14693aa157149f01b0273bae175ceae050`.
+[CI run 39900989765](https://github.com/waldiez/wactorz/actions/runs/39900989765)
+checks GitHub's temporary PR merge ref `bad0c67042dff508edcbc6f4f65a115a196678b3`
+against dev `37cec13f...`; this is not a merge into the protected branch.
+
+Available results inspected for that first head: Python 3.11/3.12/3.13/3.14,
+macOS, plain pip, Python/frontend coverage, frontend build/freshness, broker/node,
+default image, workflow/shell checks, CodeQL and up-to-date-branch check passed.
+Windows and the ultra image also completed successfully in the final snapshot of that first run. The Python lint
+job failed specifically at the exact audit with the same 11 Pillow advisories;
+lock freshness passed and subsequent lint/docs steps were skipped. Local lint/docs
+passed separately. These are results for that first head, not claims about a later
+head's rerun.
+
+Python 3.10 had **10 failed, 9,633 passed, 57 skipped** on Linux. Each failure
+was a mocked Reachy installation-policy test hitting the intentional Python 3.11
+preflight before exercising its installer fake. The follow-up test-only commit
+models a supported runtime in those unit fixtures without editing any recipe,
+production guard, security assertion or skip. The separate real-recipe 3.10 refusal
+test remains and explicitly checks the 3.11 minimum. The cross-policy tests now
+also model a supported runtime, so they cannot pass for the wrong preflight reason.
+Actual local Python 3.10 catalogue/policy tests pass **83 tests**, plus the final
+floor/refusal/policy rerun passes **14 tests**. The same 83 pass on Python 3.13;
+Ruff/format and basedpyright remain clean. The final publication triggers a fresh
+CI run; pending checks must not be represented as passes.
+
+The additional Windows Python 3.10.0 run initially used dev-only dependencies
+without installed project metadata: it had five failures (9,477 passed, 173 skipped).
+Installing CI's all/dev projection and the built wheel resolved the console-script
+and missing-provider fixture failures; the affected-file rerun had 96 passed,
+3 skipped and one event-loop assertion failure. The full corrected-environment
+run had **9,553 passed, 146 skipped, 145 subtests passed, one failure**.
+
+The remaining failure is
+`test_stuck_and_blocked.py::TestTheEventLoop::test_a_block_is_still_known_after_the_loop_has_answered_again`: it waits for a strictly positive sub-0.2s measured
+lag and times out. Both that test and `monitoring/loop_lag.py` have no diff against
+dev. This old Windows 3.10.0 interpreter reports a 0.015625-second GetTickCount64
+monotonic clock; zero-quantized fast replies are consistent with the assertion
+failure, but the exact platform cause has not been conclusively isolated. No test
+or product threshold was changed or skipped to hide it. Linux 3.10.22 CI reached
+all other tests successfully on the prior head; the final fixture-only correction
+needs its fresh CI rerun. This local Windows 3.10 full suite is not a passing result.
+
+The original PR description's older green CI and physical robot claims do not
+validate this synchronized SDK 1.12 integration. Existing core Python/OS CI uses
+all/dev, not a real Reachy SDK extra installation on each platform.
 
 Docker is installed but its Linux engine pipe is absent. Broker/node Docker tests,
 soak, browser E2E, image builds/smoke/Trivy and container workflow lint were therefore

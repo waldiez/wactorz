@@ -238,6 +238,10 @@ class LLMAgent(Actor):
         ]
         return summary_ctx + recent
 
+    def _assistant_history_content(self, response: str) -> str:
+        """The conversational form of a reply stored before summarizing or persisting."""
+        return response
+
     def _record_user_turn(self, user_message: str, blocks: list[dict] | None, ts: float) -> None:
         """Append the user's turn, keeping a text stand-in for any attachments.
 
@@ -345,7 +349,11 @@ class LLMAgent(Actor):
             )
 
             self._conversation_history.append(
-                {"role": "assistant", "content": response, "ts": time.time()}
+                {
+                    "role": "assistant",
+                    "content": self._assistant_history_content(response),
+                    "ts": time.time(),
+                }
             )
             self.metrics.tasks_completed += 1
             duration = time.time() - start
@@ -407,7 +415,11 @@ class LLMAgent(Actor):
         )
         ts_reply = time.time()
         self._conversation_history.append(
-            {"role": "assistant", "content": response, "ts": ts_reply}
+            {
+                "role": "assistant",
+                "content": self._assistant_history_content(response),
+                "ts": ts_reply,
+            }
         )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
@@ -479,7 +491,9 @@ class LLMAgent(Actor):
             # the partial response are lost on restart.
             if full_text:
                 partial = "".join(full_text)
-                self._conversation_history.append({"role": "assistant", "content": partial})
+                self._conversation_history.append(
+                    {"role": "assistant", "content": self._assistant_history_content(partial)}
+                )
                 self.persist("conversation_history", self._conversation_history)
             raise
 
@@ -495,7 +509,11 @@ class LLMAgent(Actor):
             )
         ts_reply = time.time()
         self._conversation_history.append(
-            {"role": "assistant", "content": response, "ts": ts_reply}
+            {
+                "role": "assistant",
+                "content": self._assistant_history_content(response),
+                "ts": ts_reply,
+            }
         )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)

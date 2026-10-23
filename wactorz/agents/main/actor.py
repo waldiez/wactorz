@@ -133,10 +133,14 @@ def _strip_delegate_blocks(history: list[dict[str, Any]]) -> bool:
         if item.get("role") != "assistant":
             continue
         content = str(item.get("content") or "")
-        if not _DELEGATE_BLOCK_RE.search(content):
-            continue
-        item["content"] = _DELEGATE_BLOCK_RE.sub("", content).strip() or "[Delegated task]"
-        changed = True
+        clean = _DELEGATE_BLOCK_RE.sub("", content)
+        # Cancellation can leave an opening transport tag without its close.
+        clean = re.sub(r"<delegate\b[^>]*>.*$", "", clean, flags=re.DOTALL | re.IGNORECASE)
+        clean = re.sub(r"@([\w][\w-]*)\s+(?=\{)", r"[Agent \1] ", clean)
+        clean = re.sub(r"(^|\n|[.!?:]\s+)@([\w][\w-]*)[ \t]+", r"\1[Agent \2] ", clean)
+        if clean != content:
+            item["content"] = clean.strip() or "[Delegated task]"
+            changed = True
     return changed
 
 
@@ -299,10 +303,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if raw_reply == clean_reply:
             return
         for item in reversed(self._conversation_history):
-            if item.get("role") == "assistant" and item.get("content") == raw_reply:
-                item["content"] = clean_reply
+            if item.get("role") == "assistant" and item.get("content") in (
+                raw_reply,
+                self._assistant_history_content(raw_reply),
+            ):
+                item["content"] = self._assistant_history_content(clean_reply)
                 self.persist("conversation_history", self._conversation_history)
                 return
+
+    def _assistant_history_content(self, response: str) -> str:
+        """Keep delegation transport syntax out of every durable reply path."""
+        history = [{"role": "assistant", "content": response}]
+        _strip_delegate_blocks(history)
+        return history[0]["content"]
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -473,7 +486,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 if not isinstance(item, dict):
                     continue
                 transcript = str(item.get("transcript") or "").strip()
-                response = str(item.get("response") or "").strip()
+                response = self._assistant_history_content(str(item.get("response") or "")).strip()
                 if transcript or response:
                     history.append({"transcript": transcript[:1000], "response": response[:2000]})
         source_value = str(payload.get("_interface_source") or "")
@@ -572,11 +585,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """
         if not user_message or assistant_response is None:
             return
+        assistant_response = self._assistant_history_content(str(assistant_response))
         try:
             self.metrics.messages_processed += 1
             self._conversation_history.append({"role": "user", "content": user_message})
             self._conversation_history.append(
-                {"role": "assistant", "content": str(assistant_response)}
+                {
+                    "role": "assistant",
+                    "content": self._assistant_history_content(str(assistant_response)),
+                }
             )
             # Same summarization + persistence path that LLMAgent.chat() uses
             await self._maybe_summarize()
@@ -603,7 +620,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     def _log_delivered_turn(self, text: str, reply: str, *, ts_user: float) -> None:
         """Store what the user typed and what they were sent, unless already stored."""
-        super()._log_chat_turn(text, reply, ts_user=ts_user, ts_reply=time.time())
+        super()._log_chat_turn(
+            text, self._assistant_history_content(reply), ts_user=ts_user, ts_reply=time.time()
+        )
 
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         """Queue a system notice for the next chat reply, keeping the newest.

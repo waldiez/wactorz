@@ -15,6 +15,11 @@ Three things cross the seam, and nothing else:
 * ``commands()`` names the slash commands the orchestrator answers, so a
   surface can say "unknown command" for the rest instead of forwarding it.
 
+An orchestrator may also offer ``command_forms()``: each way to type one of
+those commands, with what it does, for a surface that completes them as they
+are typed (`command_forms`). Optional, so an orchestrator written without it
+still fits the seam; its commands are then offered by name alone.
+
 The ``channel`` says where the message came from, which is a matter of trust
 rather than of transport: the dashboard, the terminal and the REST API are the
 operator's own, while a social channel is a public endpoint that anyone who
@@ -34,7 +39,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from .agents.lookup import MAIN_ACTOR_NAME
 from .agents.main.commands import registry as main_command_registry
-from .agents.main.commands.dispatch import REWRITES
+from .agents.main.commands.dispatch import REWRITES, Form
 from .core.actor import Actor, ActorState
 from .core.task_text import reply_text, task_payload
 from .core.turns import acting_as
@@ -97,6 +102,20 @@ class Orchestrator(Protocol):
     def commands(self) -> frozenset[str]:
         """The slash commands this orchestrator answers, by their first word (``/help``)."""
         ...
+
+
+def command_forms(orchestrator: Orchestrator) -> list[Form]:
+    """The ways to type the commands ``orchestrator`` answers, with what each does.
+
+    Its own ``command_forms()`` where it has one; otherwise each command by its
+    name, with nothing said of it.
+    """
+    offered = getattr(orchestrator, "command_forms", None)
+    if callable(offered):
+        # An orchestrator of anyone's: whatever it gives that is not a Form is
+        # left out rather than shown in a shape the surface cannot read.
+        return [form for form in cast("Iterable[Any]", offered()) if isinstance(form, Form)]
+    return [Form(name, "") for name in sorted(orchestrator.commands())]
 
 
 def _first_words(spellings: tuple[str, ...]) -> set[str]:
@@ -236,6 +255,15 @@ class MainOrchestrator:
     def commands(self) -> frozenset[str]:
         return main_commands()
 
+    def command_forms(self) -> list[Form]:
+        """Main's commands as `/help` lists them, the ones that start with a slash."""
+        return [
+            form
+            for described in main_command_registry
+            for form in described.forms
+            if form.usage.startswith("/")
+        ]
+
 
 #: How long the model-free orchestrator waits for an agent's reply. Generous on
 #: purpose: an agent that scores a reading answers at once, one that trains or
@@ -243,16 +271,23 @@ class MainOrchestrator:
 DIRECT_ASK_TIMEOUT_S = 150.0
 
 #: The slash commands the model-free orchestrator answers.
-DIRECT_COMMANDS = frozenset({"/agents", "/topics", "/nodes", "/help"})
+DIRECT_FORMS = (
+    Form("/agents", "the running agents and their state"),
+    Form("/topics", "the topics they publish and listen to"),
+    Form("/nodes", "this process is the one node"),
+    Form("/help", "this help"),
+)
 
-DIRECT_HELP = """\
-No model runs in this profile, so chat reaches the agents directly.
-  @<agent> {json}   send the JSON to an agent as its task; the reply is its return value
-  @<agent> <text>   send text, which the agent receives as {"text": ...}
-  /agents           the running agents and their state
-  /topics           the topics they publish and listen to
-  /nodes            this process is the one node
-  /help             this help"""
+DIRECT_COMMANDS = frozenset(form.usage for form in DIRECT_FORMS)
+
+DIRECT_HELP = "\n".join(
+    [
+        "No model runs in this profile, so chat reaches the agents directly.",
+        "  @<agent> {json}   send the JSON to an agent as its task; the reply is its return value",
+        '  @<agent> <text>   send text, which the agent receives as {"text": ...}',
+        *(f"  {form.usage:<17} {form.summary}" for form in DIRECT_FORMS),
+    ]
+)
 
 
 def _names(actors: Iterable[Actor]) -> str:
@@ -333,6 +368,9 @@ class DirectOrchestrator:
 
     def commands(self) -> frozenset[str]:
         return DIRECT_COMMANDS
+
+    def command_forms(self) -> list[Form]:
+        return list(DIRECT_FORMS)
 
     async def _ask(self, name: str, rest: str) -> str:
         if not rest:
@@ -422,14 +460,17 @@ __all__ = [
     "CLI",
     "DASHBOARD",
     "DIRECT_COMMANDS",
+    "DIRECT_FORMS",
     "ENV_VAR",
     "REST",
     "SOCIAL",
     "TRUSTED_CHANNELS",
     "DirectOrchestrator",
+    "Form",
     "MainOrchestrator",
     "Orchestrator",
     "as_orchestrator",
+    "command_forms",
     "is_trusted",
     "main_commands",
     "resolve_orchestrator",

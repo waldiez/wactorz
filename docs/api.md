@@ -210,6 +210,23 @@ Query the persistent chat log table. Query parameters:
 
 ---
 
+### `GET /api/commands`
+
+The slash commands the chat can send, each way to type them, for the dashboard's chat box to offer as a person types `/`. They come from the orchestrator that answers the chat (main's commands, the model-free profile's few, or an orchestrator's own by name), and from the server for the few it answers itself before any orchestrator: `/agents` where nothing else does, `/deploy`, `/migrate` and `/clear-plans`.
+
+**Response** `200 OK`
+```json
+{
+  "commands": [
+    {"usage": "/plans approve <id>", "typed": "/plans approve", "summary": "execute a proposed pipeline"}
+  ]
+}
+```
+
+`typed` is what goes in the box before the first argument. `/help` lists the same forms.
+
+---
+
 ### `GET /api/cost`
 
 Return current LLM spend, the active period, and the configured limit.

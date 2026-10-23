@@ -674,6 +674,11 @@ they arrive, and yields the whole answer once when there is nothing to stream;
 <code>commands</code> names the slash commands the orchestrator answers, by first word
 (<code>/help</code>), so a surface can say "unknown command" for the rest instead of
 handing it over.</p>
+<p>An orchestrator may also have a <code>command_forms()</code> method, returning a list of
+<code>wactorz.orchestration.Form(usage, summary)</code>: each way to type one of its
+commands, as <code>Form("/report &lt;day&gt;", "the readings for one day")</code>. The
+dashboard's chat box offers them as a person types <code>/</code>. Without it the
+dashboard offers each command by its name alone.</p>
 <p><strong>The channel.</strong> Every call says where the message came from: <code>"dashboard"</code>,
 <code>"cli"</code> and <code>"rest"</code> are the operator's own surfaces; <code>"social"</code> is Discord,
 Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,

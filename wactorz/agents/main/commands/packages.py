@@ -8,6 +8,7 @@ installer keeps it and asks on the dashboard about anything not on it; see
 
 from ....core.packages import normalized
 from .dispatch import CommandContext, command
+from .groups import AGENTS
 
 USAGE = "Usage: /packages · /packages allow <name> … · /packages forget <name> …"
 
@@ -64,6 +65,12 @@ def _forgetting(names: list[str], result: dict) -> list[str]:
     exact=("/packages",),
     prefixes=("/packages ",),
     summary="list, allow or forget packages installed without asking",
+    group=AGENTS,
+    forms=(
+        ("/packages", "list the packages agents may install without asking"),
+        ("/packages allow <package> …", "add packages to that list"),
+        ("/packages forget <package> …", "take off packages you added"),
+    ),
 )
 async def manage_packages(ctx: CommandContext, argument: str) -> str:
     """Show the list, or allow or forget packages on it."""

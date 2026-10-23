@@ -10,6 +10,7 @@ import logging
 from ....core.actor import ActorState
 from ....core.state_snapshot import FORCE_FLAG
 from .dispatch import CommandContext, command
+from .groups import AGENTS, NODES
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,13 @@ logger = logging.getLogger(__name__)
     exact=("/migrate",),
     prefixes=("/migrate ",),
     summary="move an agent to a different node",
+    group=NODES,
+    forms=(
+        (
+            "/migrate <agent> <node> [--force]",
+            "move an agent to a different node (state preserved)",
+        ),
+    ),
 )
 async def migrate_agent_cmd(ctx: CommandContext, argument: str) -> str:
     """Move an agent to a different node.
@@ -52,6 +60,8 @@ async def migrate_agent_cmd(ctx: CommandContext, argument: str) -> str:
     "/agents restart",
     prefixes=("/agents restart ",),
     summary="restart an agent, state preserved",
+    group=AGENTS,
+    forms=(("/agents restart <agent>", "restart an agent, local or remote, state preserved"),),
 )
 async def restart_agent(ctx: CommandContext, argument: str) -> str:
     """Restart an agent, state preserved."""
@@ -184,25 +194,56 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
     return f"Agent '{agent_name}' not found locally."
 
 
-@command("/start", prefixes=("/start ",), bare_ok=True, summary="start a stopped agent back up")
+@command(
+    "/start",
+    prefixes=("/start ",),
+    bare_ok=True,
+    summary="start a stopped agent back up",
+    group=AGENTS,
+    forms=(("/start <agent>", "start a stopped agent back up"),),
+)
 async def start_agent(ctx: CommandContext, argument: str) -> str:
     """Start a stopped agent back up."""
     return await _start_agent(ctx, argument)
 
 
-@command("/agents stop", prefixes=("/agents stop ",), summary="stop an agent, keeping its state")
+@command(
+    "/agents stop",
+    prefixes=("/agents stop ",),
+    summary="stop an agent, keeping its state",
+    group=AGENTS,
+    forms=(
+        ("/stop <agent>", "stop an agent, keeping its state (reversible)"),
+        ("/agents stop <agent>", "the same as /stop"),
+    ),
+)
 async def stop_agent(ctx: CommandContext, argument: str) -> str:
     """Stop an agent, keeping its state."""
     return await _act_on_agent(ctx, "stop", argument)
 
 
-@command("/agents delete", prefixes=("/agents delete ",), summary="delete an agent permanently")
+@command(
+    "/agents delete",
+    prefixes=("/agents delete ",),
+    summary="delete an agent permanently",
+    group=AGENTS,
+    forms=(
+        ("/delete <agent>", "stop an agent and remove it from the spawn registry"),
+        ("/agents delete <agent>", "the same as /delete"),
+    ),
+)
 async def delete_agent(ctx: CommandContext, argument: str) -> str:
     """Delete an agent and every trace of it."""
     return await _act_on_agent(ctx, "delete", argument)
 
 
-@command("/agents remove", prefixes=("/agents remove ",), summary="delete an agent permanently")
+@command(
+    "/agents remove",
+    prefixes=("/agents remove ",),
+    summary="delete an agent permanently",
+    group=AGENTS,
+    forms=(("/agents remove <agent>", "the same as /delete"),),
+)
 async def remove_agent(ctx: CommandContext, argument: str) -> str:
     """Delete an agent and every trace of it. Another spelling of delete."""
     return await _act_on_agent(ctx, "remove", argument)
@@ -213,6 +254,12 @@ async def remove_agent(ctx: CommandContext, argument: str) -> str:
     exact=("/agents", "/capabilities"),
     prefixes=("/agents ", "/capabilities "),
     summary="list all known agents, or filter by capability keyword",
+    group=AGENTS,
+    forms=(
+        ("/agents", "list all known agents with descriptions and schemas"),
+        ("/agents <keyword>", "filter agents by capability keyword"),
+        ("/capabilities", "the same as /agents"),
+    ),
 )
 async def list_agents(ctx: CommandContext, argument: str) -> str:
     """List every known agent, optionally filtered by a capability keyword.

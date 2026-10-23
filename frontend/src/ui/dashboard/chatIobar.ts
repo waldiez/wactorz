@@ -249,7 +249,8 @@ function buildInputArea(
     const ghost = el("div", "af-input-ghost");
     ghost.setAttribute("aria-hidden", "true");
     const input = buildTextarea(deps, select, ghost, mentionPanel);
-    const hint = el("div", "af-input-hint", "↑↓ history · Tab accept · @agent");
+    deps.chatInput.commands.attach(input);
+    const hint = el("div", "af-input-hint", "↑↓ history · Tab accept · @agent · / commands");
     // Pending-attachment chip tray (hidden while empty via CSS); filled by the
     // chat controller from `af-attachment-added` events (drop / paste).
     const tray = el("div", "af-attach-tray");
@@ -257,7 +258,7 @@ function buildInputArea(
     // Always attached, gated inside: the input is built before /api/config has
     // answered, so a check here would decide with an answer nobody has yet.
     input.addEventListener("paste", e => void handlePaste(e));
-    inputWrap.append(tray, mentionPanel, ghost, input, hint);
+    inputWrap.append(tray, mentionPanel, deps.chatInput.commands.element, ghost, input, hint);
     return { inputWrap, input, mentionPanel };
 }
 

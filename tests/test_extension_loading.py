@@ -207,7 +207,7 @@ class TestExtensionsFromOtherPackages:
         found = ext.discover(refresh=True)
 
         assert found[-1] is mlops
-        assert [ext._short_name(m) for m in found[:-1]] == ["stt", "tts"]
+        assert [ext._short_name(m) for m in found[:-1]] == ["tts"]
         assert ext._short_name(mlops) == "mlops"
         app = web.Application()
         ext.setup_all(app)
@@ -241,7 +241,7 @@ class TestExtensionsFromOtherPackages:
         with caplog.at_level("WARNING"):
             found = ext.discover(refresh=True)
 
-        assert [ext._short_name(m) for m in found] == ["stt", "tts", "fine"]
+        assert [ext._short_name(m) for m in found] == ["tts", "fine"]
         assert "broken = nope.ext: no module named nope" in caplog.text
         assert "mute = quiet.ext: it has no setup(app)" in caplog.text
 

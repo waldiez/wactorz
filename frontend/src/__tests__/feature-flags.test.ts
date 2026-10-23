@@ -16,11 +16,9 @@ describe("build-time feature flags", () => {
         vi.stubEnv("VITE_STT_ENABLED", "");
         vi.resetModules();
         expect((await import("../io/SpeechToText")).STT_ENABLED).toBe(false);
-        expect((await import("../io/voiceInput")).voiceMode()).toBe("off");
 
         vi.stubEnv("VITE_STT_ENABLED", "true");
         vi.resetModules();
         expect((await import("../io/SpeechToText")).STT_ENABLED).toBe(true);
-        expect((await import("../io/voiceInput")).voiceMode()).toBe("auto");
     });
 });

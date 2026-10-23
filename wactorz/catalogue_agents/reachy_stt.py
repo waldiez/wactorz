@@ -405,7 +405,7 @@ def capture_deepgram_turn(
     available to the caller for prerecorded fallback.
     """
     # Imported here, not at the top: it needs numpy, and transcribing an upload
-    # through `transcribe_wav` (the dashboard's /api/stt) must not.
+    # through `transcribe_wav` must not.
     from wactorz.catalogue_agents.reachy_vad import capture_utterance
 
     resolved_payload = payload or {}

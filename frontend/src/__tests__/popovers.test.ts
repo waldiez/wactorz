@@ -144,11 +144,11 @@ describe("buildAudioPopover: voice input", () => {
         localStorage.removeItem("wactorz-voice-input");
     });
 
-    it("offers every voice-input engine, starting on auto", () => {
+    it("offers every voice-input engine, starting with voice input off", () => {
         const select = buildAudioPopover().querySelector<HTMLSelectElement>("#af-voice-input")!;
 
         expect(Array.from(select.options).map(o => o.value)).toEqual(["auto", "browser", "server", "off"]);
-        expect(select.value).toBe("auto");
+        expect(select.value).toBe("off");
     });
 
     it("saves a choice, announces it, and says where the audio goes", () => {

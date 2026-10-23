@@ -20,6 +20,7 @@ from .agents import (
 )
 from .dispatch import Command, CommandContext, CommandRegistry, command, registry
 from .info import (
+    show_artifacts,
     show_bus,
     show_help,
     show_mqtt_status,
@@ -27,7 +28,9 @@ from .info import (
     show_registry,
     show_topics,
 )
-from .nodes import deploy_node, remove_node, restart_node, shutdown_node
+from .models import activate_model, clear_model_pointer, promote_model, shadow_model
+from .nodes import deploy_node, remove_node, restart_node, run_on_node, shutdown_node
+from .packages import manage_packages
 from .state import (
     clear_plans,
     delete_rule,
@@ -39,6 +42,12 @@ from .state import (
 
 registry.add(show_nodes)
 registry.add(show_topics)
+# The verbs ahead of the listing, whose prefix would otherwise take them as a name.
+registry.add(activate_model)
+registry.add(shadow_model)
+registry.add(promote_model)
+registry.add(clear_model_pointer)
+registry.add(show_artifacts)
 registry.add(show_mqtt_status)
 registry.add(show_bus)
 registry.add(show_help)
@@ -49,11 +58,13 @@ registry.add(delete_rule)
 registry.add(clear_plans)
 registry.add(manage_plans)
 registry.add(manage_webhooks)
+registry.add(manage_packages)
 registry.add(migrate_agent_cmd)
 registry.add(deploy_node)
 registry.add(restart_agent)
 registry.add(remove_node)
 registry.add(restart_node)
+registry.add(run_on_node)
 registry.add(shutdown_node)
 registry.add(start_agent)
 registry.add(stop_agent)

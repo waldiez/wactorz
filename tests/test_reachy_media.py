@@ -26,6 +26,7 @@ import types
 import unittest
 import wave
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -680,7 +681,7 @@ class QuietVoiceTest(unittest.TestCase):
             ),
         ):
             prepared = _run(NS["_prepare_speech"](agent, "Hello there.", {}))
-        os.unlink(prepared["play_path"])
+        Path(prepared["play_path"]).unlink()
         return volumes
 
     def test_without_ffmpeg_synthesis_asks_for_louder_speech(self):

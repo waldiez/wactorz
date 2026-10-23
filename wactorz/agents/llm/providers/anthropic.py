@@ -548,13 +548,14 @@ class AnthropicProvider(LLMProvider):
             async for item in self._stream_once(params):
                 started = True
                 yield item
-            return
         except Exception as exc:  # re-raised unless it is one of the cases we handle
             # The rejection lands on the opening request, before the first
             # chunk, so retrying cannot replay output the caller already saw.
             # `started` keeps that true even if a later release moves the error.
             if started or not self._degrade(exc, params):
                 raise
+        else:
+            return
         async for item in self._stream_once(params):
             yield item
 

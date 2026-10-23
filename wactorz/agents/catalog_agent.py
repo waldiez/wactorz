@@ -30,7 +30,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .. import plugins
-from ..core.actor import Actor, Message, MessageType
+from ..core.actor import Actor, Message, MessageType, ReplyError
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements
 from .dependency_install import InstallOutcome, install_for_agent
@@ -46,6 +46,8 @@ BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "
     "Use it for trials, not unattended production workflows."
 )
+
+INSTALL_WAIT_S = 120.0
 
 _REACHY_MINI_SDK_VERSION = "1.8.4"
 _REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
@@ -85,11 +87,28 @@ def _wants_experimental(text: str) -> bool:
     return any(word in low for word in _EXPERIMENTAL_REVEAL_WORDS)
 
 
-def _load_recipe(filename: str) -> str | None:
-    path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
-    if not path.exists():
-        logger.warning("[catalog] Recipe file not found: %s", path)
+#: Where the catalogue's programs live. A program is an ordinary module of this
+#: package; its source travels, as text, in the spawn config's `code`, and is
+#: compiled into a DynamicAgent wherever the agent runs.
+_PROGRAMS = pathlib.Path(__file__).parent.parent / "catalogue_agents"
+
+
+def _load_recipe(relative: str) -> str | None:
+    """The source of the catalogue program at `relative`, or None if it cannot be read."""
+    path = _PROGRAMS / relative
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("[catalog] Could not read recipe %s: %s", path, e)
         return None
+
+
+def _load_embedded_recipe(relative: str) -> str | None:
+    """The `AGENT_CODE` string a module under the catalogue holds as its program.
+
+    For a program not yet moved out of its string into a module of its own.
+    """
+    path = _PROGRAMS / relative
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
         if spec is None or spec.loader is None:
@@ -99,7 +118,7 @@ def _load_recipe(filename: str) -> str | None:
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
     except Exception as e:
-        logger.warning("[catalog] Could not load recipe from %s: %s", filename, e)
+        logger.warning("[catalog] Could not load recipe from %s: %s", relative, e)
         return None
 
 
@@ -306,10 +325,11 @@ def _build_catalog() -> dict:
                 "pptx_generation",
                 "document_conversion",
             ],
-            "install": ["pymupdf", "pdfplumber", "pillow"],
+            "install": ["python-pptx", "pymupdf", "pdfplumber", "pillow"],
             "input_schema": {
-                "file_path": "str  — absolute path to source PDF or TXT",
-                "output_path": "str  — where to save the .pptx",
+                "file_path": "str  — path to the source PDF or TXT, inside a document folder",
+                "file_id": "str  — or: the upload id of a file attached in the chat",
+                "output_path": "str  — a .pptx path inside a document folder; default a temp dir",
                 "slide_count": "int  — target slides, default 8",
                 "theme": "str  — e.g. 'dark executive', 'minimal light'",
                 "nim_fallback": "bool — NIM images for slides without PDF image, default true",
@@ -443,7 +463,7 @@ def _build_catalog() -> dict:
         logger.info("[catalog] Loaded manual-agent recipe")
 
     # ── reachy-mini ──────────────────────────────────────────────────────────
-    code = _load_recipe("reachy_mini_agent.py")
+    code = _load_embedded_recipe("reachy_mini_agent.py")
     if code:
         catalog["reachy-mini"] = {
             "name": "reachy-mini",
@@ -535,6 +555,7 @@ def _build_catalog() -> dict:
             # which outlasts the default handle_task() limit. Kept below the chat
             # gateway's own reply deadline so a reply still arrives.
             "task_timeout_s": 140.0,
+            "require_install_success": True,
             "input_schema": {
                 "cmd": "str  — help|wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
@@ -958,6 +979,41 @@ class CatalogAgent(Actor):
                     return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
+            if recipe.get("require_install_success") is not True:
+                needed = await asyncio.to_thread(missing_requirements, recipe.get("install", []))
+                if needed and self._registry and self._registry.find_by_name("installer"):
+                    try:
+                        await self.ask(
+                            "installer",
+                            {"action": "install", "packages": needed},
+                            timeout=INSTALL_WAIT_S,
+                        )
+                    except ReplyError as exc:
+                        if exc.reply.get("refused"):
+                            return {
+                                "ok": False,
+                                "message": str(exc.reply["error"]),
+                                "agent": resolved,
+                            }
+                        logger.warning(
+                            "[%s] installer: %s — proceeding with '%s' anyway",
+                            self.name,
+                            exc,
+                            resolved,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "[%s] Install timeout for '%s' — proceeding anyway", self.name, resolved
+                        )
+                    except RuntimeError as exc:
+                        logger.warning(
+                            "[%s] installer: %s — proceeding with '%s' anyway",
+                            self.name,
+                            exc,
+                            resolved,
+                        )
+                return await self._spawn_dynamic(resolved, recipe, beta_warning)
+
             if resolved in self._installing:
                 return {
                     "ok": True,
@@ -1012,7 +1068,7 @@ class CatalogAgent(Actor):
         restart the message asks for brings it up without being asked again.
         """
         message = outcome.problem(name)
-        if outcome.restart_required:
+        if outcome.restart_required and not (outcome.failed or outcome.refused or outcome.error):
             main = find_main_actor(self._registry)
             if main:
                 main._save_to_spawn_registry({**recipe, "trusted": True})

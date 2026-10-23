@@ -44,6 +44,16 @@ class TestRequirementName:
 
 
 class TestRequirementIsSatisfied:
+    def test_an_unverifiable_range_is_not_accepted_without_packaging(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "packaging.specifiers", None)
+        monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.0")
+
+        assert not requirement_is_satisfied("example-package>=2")
+        assert requirement_is_satisfied("example-package==1.0")
+        assert not requirement_is_satisfied("example-package==2.0")
+
     def test_an_installed_distribution_is_satisfied(self) -> None:
         assert requirement_is_satisfied("pytest")
 

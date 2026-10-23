@@ -82,6 +82,39 @@ groups:
           summary: Most Wactorz LLM requests are failing
           description: More than half the requests to {{ $labels.provider }} have failed over the last 10 minutes. The outcome label tells a provider that is unavailable from requests it rejects.
 
+      - alert: WactorzActorErrors
+        expr: sum by (actor_name) (increase(wactorz_actor_errors_total[15m])) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: A Wactorz agent keeps failing
+          description: Actor {{ $labels.actor_name }} recorded more than 10 errors in the last 15 minutes. It is running, so nothing restarts it; its log in the dashboard says what is going wrong. Agents on a node are not counted here.
+
+      - alert: WactorzActorRestartLoop
+        expr: max by (actor_name, node) (wactorz_actor_slow_restarts) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Wactorz agent keeps crashing
+          description: Actor {{ $labels.actor_name }} (node "{{ $labels.node }}", empty for the server) crashed so often in a row that its supervisor now restarts it slowly. It will not recover on its own; its log names the error.
+
+      - alert: WactorzLlmSpendNearLimit
+        expr: (max by (period) (wactorz_llm_spend_usd) / max by (period) (wactorz_llm_spend_limit_usd) >= 0.8) < 1
+        labels:
+          severity: warning
+        annotations:
+          summary: Wactorz model spend is near its limit
+          description: Spend this {{ $labels.period }} period has passed 80% of the limit. At the limit, model requests pause until the period ends or the limit is raised in Settings.
+
+      - alert: WactorzLlmSpendLimitReached
+        expr: max by (period) (wactorz_llm_spend_usd) / max by (period) (wactorz_llm_spend_limit_usd) >= 1
+        labels:
+          severity: critical
+        annotations:
+          summary: Wactorz model requests are paused at the spend limit
+          description: Spend this {{ $labels.period }} period has reached the limit, so no agent can ask a model anything until the period ends or the limit is raised in Settings.
+
   - name: wactorz-probes
     rules:
       - alert: OptionalDependencyProbeFailing

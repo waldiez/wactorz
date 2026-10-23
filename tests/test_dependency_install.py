@@ -6,6 +6,7 @@ restart, an installer that never answered, and none to ask.
 """
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -41,6 +42,12 @@ class _Requester:
 
     def __init__(self, installer: _Installer | None) -> None:
         self._registry = _Registry(installer)
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
+
+    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool:
+        installer = self._registry.find_by_name("installer")
+        await installer.receive(SimpleNamespace(payload=payload))
+        return True
 
 
 class _Main:
@@ -74,6 +81,7 @@ class TestWaitingForTheInstaller:
     ) -> None:
         installer, main = _Installer(), _Main()
         monkeypatch.setattr(dependency_install, "install_wait_s", lambda _count: 0.05)
+        monkeypatch.setattr(dependency_install, "APPROVAL_TIMEOUT_S", 0)
 
         outcome = await install_for_agent(_Requester(installer), main, ["numpy"], "x")
 

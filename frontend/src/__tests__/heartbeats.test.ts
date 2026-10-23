@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
 import { Heartbeats } from "../ui/dashboard/heartbeats";
-import { STALE_MS } from "../ui/dashboard/agentState";
+import { QUIET_MS, STALE_MS } from "../ui/dashboard/agentState";
 
 let root: HTMLElement;
 
@@ -44,16 +44,16 @@ describe("recording a heartbeat", () => {
         expect(ageOf("main").textContent).toBeTruthy();
     });
 
-    it("clears stale outright rather than re-deriving it", () => {
+    it("clears the warning outright rather than re-deriving it", () => {
         // Hearing from an agent is the fact. A clock skewed the wrong way
-        // should not leave a live agent greyed out.
+        // should not leave a live agent marked missing.
         card("main");
         const hb = new Heartbeats(root);
-        dotOf("main").classList.add("af-card-stale");
+        dotOf("main").classList.add("af-card-missing");
 
         hb.record("main", Date.now() - STALE_MS * 2);
 
-        expect(dotOf("main").classList.contains("af-card-stale")).toBe(false);
+        expect(dotOf("main").className).not.toMatch(/af-card-(missing|quiet)/);
     });
 
     it("remembers the time even when asked not to paint", () => {
@@ -74,15 +74,21 @@ describe("recording a heartbeat", () => {
 });
 
 describe("refreshing on the timer", () => {
-    it("marks a card stale once nothing has arrived for long enough", () => {
+    it("marks a card quiet, then missing, as nothing arrives", () => {
         // There is no event for "nothing happened", so something has to look.
         card("main");
         const hb = new Heartbeats(root);
-        hb.lastSeen.set("main", Date.now() - STALE_MS * 2);
 
+        hb.lastSeen.set("main", Date.now() - QUIET_MS - 1_000);
         hb.refresh();
+        expect(dotOf("main").classList.contains("af-card-quiet")).toBe(true);
+        expect(dotOf("main").title).toBe("not heard from lately");
 
-        expect(dotOf("main").classList.contains("af-card-stale")).toBe(true);
+        hb.lastSeen.set("main", Date.now() - STALE_MS - 1_000);
+        hb.refresh();
+        expect(dotOf("main").classList.contains("af-card-missing")).toBe(true);
+        expect(dotOf("main").classList.contains("af-card-quiet")).toBe(false);
+        expect(dotOf("main").title).toBe("not heard from for minutes");
     });
 
     it("leaves a recent card alone", () => {
@@ -92,7 +98,18 @@ describe("refreshing on the timer", () => {
 
         hb.refresh();
 
-        expect(dotOf("main").classList.contains("af-card-stale")).toBe(false);
+        expect(dotOf("main").className).not.toMatch(/af-card-(missing|quiet)/);
+        expect(dotOf("main").title).toBe("");
+    });
+
+    it("does not mark a stopped agent missing: it is expected to be quiet", () => {
+        card("main").dataset["state"] = "stopped";
+        const hb = new Heartbeats(root);
+        hb.lastSeen.set("main", Date.now() - STALE_MS * 2);
+
+        hb.refresh();
+
+        expect(dotOf("main").className).not.toMatch(/af-card-(missing|quiet)/);
     });
 
     it("skips ids with no rendered card", () => {

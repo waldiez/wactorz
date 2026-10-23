@@ -14,11 +14,18 @@ own modules, so these run on a checkout installed with `[dev]` alone.
 """
 
 import asyncio
-from typing import Any
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
+from wactorz.agents.main import MainActor
+from wactorz.core.registry import ActorRegistry
+from wactorz.core.turns import current_agent, current_turn
+from wactorz.interfaces.chat import cli as cli_module
 from wactorz.interfaces.chat.cli import CLIInterface
+from wactorz.orchestration import MainOrchestrator
 
 
 class _Registry:
@@ -47,7 +54,11 @@ class _PlainAgent:
 class _MainActor:
     """Only the surface `run()` actually touches."""
 
+    name = "main"
+
     def __init__(self) -> None:
+        #: (turn, agent) seen each time a reply was streamed.
+        self.streamed_in: list[tuple[str, str]] = []
         self._registry: _Registry | None = _Registry()
         self.persisted: dict[str, Any] = {}
         self.agents: list[dict[str, Any]] = []
@@ -75,7 +86,8 @@ class _MainActor:
         self.installer_calls.append({**payload, "timeout": timeout})
         return self.installer_result
 
-    async def process_user_input_stream(self, _text: str) -> Any:
+    async def process_user_input_stream(self, _text: str, attachments: Any = None) -> Any:
+        self.streamed_in.append((current_turn(), current_agent()))
         for chunk in self.stream_chunks:
             yield chunk
 
@@ -104,12 +116,43 @@ def drive_fixture(monkeypatch: pytest.MonkeyPatch):
     return _drive
 
 
+class _RecordingOrchestrator:
+    """Any orchestrator at all: records each turn and answers one word."""
+
+    def __init__(self) -> None:
+        self.turns: list[tuple[str, str, str | None]] = []
+
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        self.turns.append((text, channel, user))
+        return "word"
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
+
+
+def _cli(actor: _MainActor) -> CLIInterface:
+    """The CLI as the start builds it: main behind the seam, and main itself beside it."""
+    # The adapter only looks main up by name, which is all the fake registry offers.
+    seam = MainOrchestrator(cast(ActorRegistry, _Registry({"main": actor})))
+    return CLIInterface(seam, cast(MainActor, actor))
+
+
 class TestLeaving:
     @pytest.mark.parametrize("word", ["quit", "exit", "QUIT"])
     async def test_it_says_goodbye_and_stops(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str], word: str
     ) -> None:
-        out = await drive(CLIInterface(actor), [word], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), [word], capsys)
 
         assert "Goodbye" in out
 
@@ -124,14 +167,14 @@ class TestLeaving:
 
         monkeypatch.setattr(CLIInterface, "_prompt", staticmethod(_interrupt))
 
-        await CLIInterface(actor).run()  # type: ignore[arg-type]
+        await _cli(actor).run()
 
         assert "Goodbye" in capsys.readouterr().out
 
     async def test_a_blank_line_is_skipped(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["", "   "], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["", "   "], capsys)
 
         assert "@main" not in out
 
@@ -140,7 +183,7 @@ class TestInformationCommands:
     async def test_help_lists_the_commands(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["/help"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/help"], capsys)
 
         assert "/agents" in out
         assert "/deploy" in out
@@ -148,7 +191,7 @@ class TestInformationCommands:
     async def test_clearing_the_plan_cache_persists_an_empty_one(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["/clear-plans"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/clear-plans"], capsys)
 
         assert actor.persisted["_plan_cache"] == {}
         assert "cleared" in out.lower()
@@ -161,7 +204,7 @@ class TestInformationCommands:
             {"state": "stopped", "name": "picam", "actor_id": "99887766", "node": "rpi"},
         ]
 
-        out = await drive(CLIInterface(actor), ["/agents"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/agents"], capsys)
 
         assert "@main" in out
         assert "[protected]" in out
@@ -173,7 +216,7 @@ class TestInformationCommands:
         """An empty list and a broken heartbeat look identical otherwise."""
         actor.agents = [{"state": "running", "name": "main", "actor_id": "abcdef12"}]
 
-        out = await drive(CLIInterface(actor), ["/nodes"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/nodes"], capsys)
 
         assert "no remote nodes" in out
         assert "@main" in out
@@ -187,7 +230,7 @@ class TestInformationCommands:
             {"node": "rpi-shed", "online": True, "agents": []},
         ]
 
-        out = await drive(CLIInterface(actor), ["/nodes"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/nodes"], capsys)
 
         assert "OFFLINE" in out
         assert "(no agents)" in out
@@ -197,14 +240,14 @@ class TestMigrate:
     async def test_it_explains_itself_when_given_too_little(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["/migrate onlyone"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/migrate onlyone"], capsys)
 
         assert "[usage] /migrate" in out
 
     async def test_it_reports_the_result(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["/migrate temp rpi"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/migrate temp rpi"], capsys)
 
         assert "[OK] moved" in out
 
@@ -213,14 +256,14 @@ class TestMigrate:
     ) -> None:
         actor.migrate_result = {"success": False, "message": "no such node"}
 
-        out = await drive(CLIInterface(actor), ["/migrate temp nope"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/migrate temp nope"], capsys)
 
         assert "[FAIL] no such node" in out
 
     async def test_force_is_passed_on(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        await drive(CLIInterface(actor), ["/migrate temp rpi --force"], capsys)  # type: ignore[arg-type]
+        await drive(_cli(actor), ["/migrate temp rpi --force"], capsys)
 
         assert actor.migrate_forced is True
 
@@ -229,7 +272,7 @@ class TestDeployPkg:
     async def test_it_explains_itself_when_given_too_little(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["/deploy-pkg rpi"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/deploy-pkg rpi"], capsys)
 
         assert "[usage] /deploy-pkg" in out
 
@@ -238,17 +281,35 @@ class TestDeployPkg:
     ) -> None:
         """Credentials come from the environment, so an unknown name has nowhere
         to send the install — and the message names the variables to set."""
-        out = await drive(CLIInterface(actor), ["/deploy-pkg nowhere numpy"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/deploy-pkg nowhere numpy"], capsys)
 
         assert "[error]" in out
         assert not actor.installer_calls
+
+    async def test_typing_the_packages_allows_them_before_they_are_installed(
+        self,
+        actor: _MainActor,
+        drive: Any,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The operator named them, so the installer is not to ask the operator again.
+        target = SimpleNamespace(name="rpi", host="10.0.0.5")
+        monkeypatch.setattr(cli_module, "deploy_target", lambda _n: target)
+
+        await drive(_cli(actor), ["/deploy-pkg rpi wactorz-unlisted-probe"], capsys)
+
+        assert [(c["action"], c["packages"]) for c in actor.installer_calls] == [
+            ("packages_allow", ["wactorz-unlisted-probe"]),
+            ("node_install", ["wactorz-unlisted-probe"]),
+        ]
 
 
 class TestDeploy:
     async def test_no_argument_lists_the_configured_targets(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["/deploy"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/deploy"], capsys)
 
         assert "[usage] /deploy" in out
 
@@ -257,7 +318,7 @@ class TestDeploy:
     ) -> None:
         """The old form took a host here, which aimed one target's credentials at
         a machine of the caller's choosing. Targets are whole or unused."""
-        out = await drive(CLIInterface(actor), ["/deploy rpi 10.0.0.9"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["/deploy rpi 10.0.0.9"], capsys)
 
         assert "node name only" in out
 
@@ -275,7 +336,7 @@ class TestDeploy:
 
         monkeypatch.setattr(CLIInterface, "_deploy", _fake_deploy)
 
-        await drive(CLIInterface(actor), ["/deploy rpi-kitchen"], capsys)  # type: ignore[arg-type]
+        await drive(_cli(actor), ["/deploy rpi-kitchen"], capsys)
 
         assert seen == ["rpi-kitchen"]
 
@@ -284,7 +345,7 @@ class TestAddressingAnAgent:
     async def test_a_mention_with_no_message_shows_usage(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["@picam"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["@picam"], capsys)
 
         assert "[usage] @picam" in out
 
@@ -293,7 +354,7 @@ class TestAddressingAnAgent:
     ) -> None:
         """`@main` is the full pipeline, not a direct send — the CLI recognises
         its own actor and streams the orchestrated turn."""
-        interface = CLIInterface(actor)  # type: ignore[arg-type]
+        interface = _cli(actor)
         actor._registry = _Registry({"main": actor})
 
         out = await drive(interface, ["@main hello there"], capsys)
@@ -306,7 +367,7 @@ class TestAddressingAnAgent:
     ) -> None:
         actor._registry = _Registry({"chatty": _StreamingAgent(["one ", "two"])})
 
-        out = await drive(CLIInterface(actor), ["@chatty hi"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["@chatty hi"], capsys)
 
         assert "one two" in out
 
@@ -324,7 +385,7 @@ class TestAddressingAnAgent:
 
         monkeypatch.setattr(CLIInterface, "_get_agent_response", _answer)
 
-        out = await drive(CLIInterface(actor), ["@quiet ping"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["@quiet ping"], capsys)
 
         assert "quiet says ping" in out
 
@@ -343,7 +404,7 @@ class TestAddressingAnAgent:
 
         monkeypatch.setattr(CLIInterface, "_get_remote_agent_response", _remote)
 
-        out = await drive(CLIInterface(actor), ["@faraway ping"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["@faraway ping"], capsys)
 
         assert "remote faraway" in out
 
@@ -352,22 +413,41 @@ class TestPlainText:
     async def test_it_streams_through_main(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        out = await drive(CLIInterface(actor), ["what is the weather"], capsys)  # type: ignore[arg-type]
+        out = await drive(_cli(actor), ["what is the weather"], capsys)
 
         assert "@main:" in out
         assert "hello" in out
 
-    async def test_a_system_message_is_shown_after_the_answer(
+    async def test_a_line_that_names_no_agent_is_the_orchestrators(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The dict chunk is out-of-band — it is the system talking about the
-        turn, not part of it, so it must not land inside the streamed text."""
-        actor.stream_chunks = ["done", {"system_msg": "spawned @weather"}]
+        """Whichever orchestrator the start installed answers it, not main by name."""
+        seam = _RecordingOrchestrator()
 
-        out = await drive(CLIInterface(actor), ["make me a weather agent"], capsys)  # type: ignore[arg-type]
+        out = await drive(
+            CLIInterface(seam, cast(MainActor, actor)), ["what is the weather"], capsys
+        )
 
-        assert "[System: spawned @weather]" in out
+        assert seam.turns == [("what is the weather", "cli", None)]
+        assert actor.streamed_in == []
+        assert "word" in out
+
+    async def test_the_summary_dict_is_not_printed(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Main ends its stream with a dict about the turn. What it has to say
+        it also says in the stream, so the dict itself never reaches the screen."""
+        actor.stream_chunks = [
+            "done",
+            "\n\n_ℹ️ spawned @weather_",
+            {"system_msg": "spawned @weather"},
+        ]
+
+        out = await drive(_cli(actor), ["make me a weather agent"], capsys)
+
         assert "done" in out
+        assert "spawned @weather" in out
+        assert "system_msg" not in out
 
 
 class TestReadingAPrompt:
@@ -398,3 +478,16 @@ class TestReadingAPrompt:
                 await CLIInterface._prompt("You: ")
         finally:
             builtins.input = original
+
+
+class TestTurns:
+    async def test_each_line_is_a_turn_of_its_own_and_mains_work(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Main streams its answer rather than taking it through its mailbox,
+        # so the command line marks the work as main's itself.
+        await drive(_cli(actor), ["hello", "again"], capsys)
+
+        (first_turn, first_agent), (second_turn, second_agent) = actor.streamed_in
+        assert (first_agent, second_agent) == ("main", "main")
+        assert first_turn and second_turn and first_turn != second_turn

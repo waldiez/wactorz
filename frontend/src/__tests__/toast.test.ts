@@ -112,6 +112,25 @@ describe("ToastManager (DOM)", () => {
         expect(onClick).toHaveBeenCalled();
     });
 
+    it("a sticky toast stays until it is closed by its key", async () => {
+        vi.useFakeTimers();
+        try {
+            const t = await freshToast();
+            t.show({ title: "installer", message: "Install?", sticky: true, key: "q1" });
+            const el = document.querySelector<HTMLElement>(".wz-toast")!;
+
+            vi.advanceTimersByTime(10 * 60 * 1000);
+            expect(el.classList.contains("wz-toast--out")).toBe(false);
+
+            t.close("other");
+            expect(el.classList.contains("wz-toast--out")).toBe(false);
+            t.close("q1");
+            expect(el.classList.contains("wz-toast--out")).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("clicking a toast dismisses it", async () => {
         const t = await freshToast();
         t.show({ title: "Hi", message: "there" });

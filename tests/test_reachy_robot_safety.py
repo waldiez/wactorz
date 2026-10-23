@@ -12,6 +12,7 @@ import tempfile
 import threading
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
@@ -195,7 +196,7 @@ class SpeechSynthesisTimeoutTest(unittest.TestCase):
         self.assertIsInstance(outcome, RuntimeError)
         self.assertIn("internet connection", str(outcome))
         self.assertTrue(made)
-        self.assertFalse(any(os.path.exists(path) for path in made))
+        self.assertFalse(any(Path(path).exists() for path in made))
 
     def test_a_cancelled_synthesis_leaves_no_file_behind(self):
         made = []
@@ -228,7 +229,7 @@ class SpeechSynthesisTimeoutTest(unittest.TestCase):
             asyncio.run(scenario())
 
         self.assertTrue(made)
-        self.assertFalse(any(os.path.exists(path) for path in made))
+        self.assertFalse(any(Path(path).exists() for path in made))
 
     def test_a_healthy_stream_is_written_in_full(self):
         class Healthy:
@@ -240,9 +241,9 @@ class SpeechSynthesisTimeoutTest(unittest.TestCase):
         outcome, _made = self._prepare(Healthy())
 
         assert isinstance(outcome, dict), outcome
-        with open(outcome["play_path"], "rb") as handle:
+        with Path(outcome["play_path"]).open("rb") as handle:
             self.assertEqual(handle.read(), b"abcd")
-        os.unlink(outcome["play_path"])
+        Path(outcome["play_path"]).unlink()
         self.assertTrue(outcome["play_path"].startswith(tempfile.gettempdir()))
 
 

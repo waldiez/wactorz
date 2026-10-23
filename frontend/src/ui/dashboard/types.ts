@@ -17,4 +17,4 @@ export const BUILTIN_VIEWS: { key: View; label: string; icon: IconName }[] = [
 ];
 export const SETTINGS_VIEW = { key: "settings" as View, label: "Settings", icon: "settings" as IconName };
 
-export type ConnState = "live" | "connecting" | "demo";
+export type ConnState = "live" | "connecting" | "disconnected";

@@ -7,7 +7,7 @@ covers the monitor app, whose lifecycle verbs are registered under both the
 `/api/` prefix and the bare spelling.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 import pytest
@@ -74,14 +74,35 @@ class _Registry:
         self.unregistered.append(actor_id)
 
 
+class _Orchestrator:
+    """Echoes the turn it was given, and records which channel it was said to come from."""
+
+    def __init__(self) -> None:
+        self.channels: list[str] = []
+
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        self.channels.append(channel)
+        return f"echo:{text}"
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
+
+
 class _Main:
     def __init__(self, registry: _Registry) -> None:
         self._registry = registry
         self.commands: list[tuple[str, Any]] = []
         self.sent: list[dict[str, Any]] = []
-
-    async def process_user_input(self, message: str) -> str:
-        return f"echo:{message}"
 
     async def send_command(self, target: str, command: Any) -> None:
         self.commands.append((target, command))
@@ -92,7 +113,7 @@ class _Main:
 
 def _make(actor: _Actor | None = None, map_actor: Any = None) -> tuple[_Main, RESTInterface]:
     main = _Main(_Registry(actor, map_actor))
-    return main, RESTInterface(main, port=0)  # pyright: ignore[reportArgumentType]
+    return main, RESTInterface(_Orchestrator(), main, port=0)  # pyright: ignore[reportArgumentType]
 
 
 @pytest.fixture(name="actor")
@@ -138,6 +159,17 @@ class TestChat:
         resp = await client.post("/chat", json={"message": "hi"})
         assert resp.status == 200
         assert (await resp.json())["response"] == "echo:hi"
+
+    async def test_the_turn_is_the_orchestrators_and_says_it_came_over_rest(
+        self, actor: _Actor
+    ) -> None:
+        orchestrator = _Orchestrator()
+        iface = RESTInterface(orchestrator, _Main(_Registry(actor)), port=0)  # pyright: ignore[reportArgumentType]
+
+        async with TestClient(TestServer(iface.build_app())) as client:
+            await client.post("/chat", json={"message": "hi"})
+
+        assert orchestrator.channels == ["rest"]
 
     async def test_an_empty_message_is_refused(self, client: TestClient) -> None:
         assert (await client.post("/chat", json={"message": ""})).status == 400

@@ -18,25 +18,37 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import config, pipelines, plugins, retention
 from wactorz.agents.lookup import find_main_actor
+from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY
+from wactorz.agents.prompts.assemble import PromptFragment
+from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
+from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.cli import get_args
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation, own_tasks
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
-from wactorz.core.paths import ensure_state_dir, set_state_dir
+from wactorz.core.paths import ensure_state_dir, resolve_state_dir, set_state_dir
+from wactorz.core.state_lock import StateInUseError, StateLock
 from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_buffer import uninstall as uninstall_log_buffer
 from wactorz.monitoring.log_setup import install_fallback, setup_logging, uninstall_fallback
 from wactorz.monitoring.loop_lag import LoopLagMonitor
+from wactorz.orchestration import (
+    DirectOrchestrator,
+    MainOrchestrator,
+    as_orchestrator,
+    resolve_orchestrator,
+)
 from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
 
 if TYPE_CHECKING:
     from wactorz.agents.llm_agent import LLMProvider
     from wactorz.core.registry import ActorSystem
+    from wactorz.orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +60,8 @@ _shutting_down = threading.Event()
 #: Watches the event loop from a thread, and says in the log where it is when it
 #: stops running.
 _loop_lag = LoopLagMonitor()
+#: Held while the system runs, so nothing else runs on its state directory.
+_state_lock = StateLock(".")
 
 #: The ActorSystem this process is running, from the moment it is built until
 #: shutdown has stopped it. What :func:`system` answers with.
@@ -57,6 +71,10 @@ _current_system: "ActorSystem | None" = None
 #: dashboard and any companion channels only. What :func:`serve` runs with
 #: unless it is given an interface, so a library call never reads the host's stdin.
 HEADLESS = "none"
+
+#: The interfaces that need main itself, not only an orchestrator: the command
+#: line and the REST interface answer lifecycle commands through it.
+MAIN_INTERFACES = frozenset({"cli", "rest"})
 
 #: The names the system's own agents go by, whether or not this run starts
 #: them. The supervisor keeps one entry per name, so a plugin or pipeline agent
@@ -73,6 +91,34 @@ BUILT_IN_AGENT_NAMES = frozenset(
         runtime.IO_GATEWAY_ID,
     }
 )
+
+
+def placed_on_nodes(registry: Any) -> dict[str, str]:
+    """Agent name to node, for every spawn-registry entry that places its agent on a node.
+
+    A library agent moved to a node is recorded there like any other. Started
+    here as well, it would run twice, answering beside the copy the node
+    reconciles from its own retained state.
+    """
+    return {name: node for name, node in placed_by(registry).items() if node}
+
+
+def placed_by(registry: Any) -> dict[str, str]:
+    """Agent name to where the spawn registry places it: a node's name, or "" for main.
+
+    Every entry is main's to restore when it starts, wherever it places the
+    agent: one that came back from a node is restored here, from its record.
+    A library agent with an entry is therefore not supervised from its plugin
+    as well, which would start it twice, the first copy only to be stopped by
+    the restore a moment later.
+    """
+    if not isinstance(registry, dict):
+        return {}
+    placed: dict[str, str] = {}
+    for name, entry in registry.items():
+        if isinstance(entry, dict):
+            placed[str(name)] = str(entry.get("node") or "").strip()
+    return placed
 
 
 def startable_plugins(found: Iterable[plugins.AgentPlugin]) -> list[plugins.AgentPlugin]:
@@ -262,6 +308,22 @@ def home_assistant_agents_enabled(settings: AppConfig) -> bool:
     return bool(settings.ha_url and settings.ha_token)
 
 
+def prompt_fragments_for(settings: AppConfig) -> tuple[PromptFragment, ...]:
+    """What main's and the planner's prompts speak of on this installation.
+
+    Each integration's fragment is included exactly when its agents are part
+    of the system, so the same test decides both: a deployment whose Home
+    Assistant agents do not start is not told about lights either. Decided
+    once here and handed to main, which hands it to the planners it spawns.
+    """
+    fragments = []
+    for fragment in DEFAULT_FRAGMENTS:
+        if fragment is HOME_ASSISTANT_FRAGMENT and not home_assistant_agents_enabled(settings):
+            continue
+        fragments.append(fragment)
+    return tuple(fragments)
+
+
 #: The extra that installs each provider's SDK, for the message when it is missing.
 _PROVIDER_EXTRAS = {
     "anthropic": "anthropic",
@@ -423,12 +485,15 @@ async def build_system(
     def make_provider() -> LLMProvider | None:
         return provider  # stateless — same instance is fine
 
+    prompt_fragments = prompt_fragments_for(CONFIG)
+
     def make_main() -> MainActor:
         main_actor = _wire_persistence(
             MainActor(
                 llm_provider=provider_for("main", make_provider()),
                 name="main",
                 persistence_dir=_sd,
+                prompt_fragments=prompt_fragments,
             )
         )
         return cast(MainActor, main_actor)
@@ -580,7 +645,22 @@ async def build_system(
     # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
+    recorded = placed_by(_db.kv_get("main", SPAWN_REGISTRY_KEY, None))
+    elsewhere = {name: node for name, node in recorded.items() if node}
     for plugin in startable_plugins(plugins.discover().values()):
+        if plugin.name in elsewhere:
+            logger.info(
+                "Not starting %r here: it was moved to node %r, which runs it.",
+                plugin.name,
+                elsewhere[plugin.name],
+            )
+            continue
+        if plugin.name in recorded:
+            logger.info(
+                "Not supervising %r from its plugin: main restores it from its record.",
+                plugin.name,
+            )
+            continue
         system.supervisor.supervise(
             plugin.name,
             make_plugin_factory(plugin),
@@ -595,6 +675,13 @@ async def build_system(
     started_pipelines = startable_pipelines(pipelines.discover().values())
     for pipe in started_pipelines:
         for agent_name, factory in pipeline_factories(pipe):
+            if agent_name in elsewhere:
+                logger.info(
+                    "Not starting %r here: it was moved to node %r, which runs it.",
+                    agent_name,
+                    elsewhere[agent_name],
+                )
+                continue
             system.supervisor.supervise(
                 agent_name,
                 factory,
@@ -635,6 +722,9 @@ async def build_system(
     main_actor = find_main_actor(system.registry)
     if not main_actor and not minimal:
         raise StartupError("the main actor did not start; see the log above for why")
+    orchestrator = install_orchestrator(
+        system, main_actor, requested=getattr(args, "orchestrator", None)
+    )
     if main_actor is not None:
         # Recorded beside the planner's rules, so `/rules` lists a declared
         # pipeline and `/rules delete` stops the whole of it.
@@ -644,7 +734,31 @@ async def build_system(
                 main_actor.save_pipeline_rule(pipe.record())
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db
+    return system, main_actor, _db, orchestrator
+
+
+def install_orchestrator(
+    system: "ActorSystem", main_actor: Any, requested: Any = None
+) -> "Orchestrator":
+    """Choose what answers chat for this run, and make it ``runtime.orchestrator``.
+
+    In order: what the script asked for (``run(orchestrator=...)``), what the
+    deployment named in ``WACTORZ_ORCHESTRATOR``, main's adapter when main
+    runs, and the model-free one otherwise, which is the minimal profile. An
+    orchestrator asked for by either override that cannot be loaded or built is
+    a :class:`~wactorz.errors.StartupError`, as a refused configuration is.
+    """
+    chosen: Orchestrator
+    if requested is not None:
+        chosen = as_orchestrator(requested, system.registry)
+    elif CONFIG.orchestrator_env:
+        chosen = resolve_orchestrator(CONFIG.orchestrator_env, system.registry)
+    elif main_actor is not None:
+        chosen = MainOrchestrator(system.registry)
+    else:
+        chosen = DirectOrchestrator(system.registry)
+    runtime.set_orchestrator(chosen)
+    return chosen
 
 
 def _install_signal_handlers() -> None:
@@ -697,7 +811,7 @@ def _install_signal_handlers() -> None:
             signal.signal(sig, _request_stop)
 
 
-async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
     """Build the system, and stop what had started if startup does not finish.
 
     A stop requested during startup arrives as a cancellation inside build_system,
@@ -789,9 +903,10 @@ async def app(
             await _shut_down(None)
             raise
 
-        system, main_actor, _db = await _build_system_or_stop(args)
-        await _run(args, system, main_actor)
+        system, main_actor, _db, orchestrator = await _build_system_or_stop(args)
+        await _run(args, system, main_actor, orchestrator)
     finally:
+        _state_lock.release()
         own_tasks.stop(tagger)
 
 
@@ -820,6 +935,13 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
     refused = loop_refusal(asyncio.get_running_loop())
     if refused:
         raise StartupError(refused)
+    # Before anything reads the state directory: a second process on it would
+    # write back over the first, and an import into it would be undone.
+    _state_lock.directory = Path(resolve_state_dir())
+    try:
+        _state_lock.acquire()
+    except StateInUseError as exc:
+        raise StartupError(str(exc)) from None
     # Before anything binds, and at the *process* root rather than in one
     # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
     # REST API and the WhatsApp webhook — so a check that lived in the monitor
@@ -844,7 +966,109 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
         _install_signal_handlers()
 
 
-async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any) -> None:
+async def _run_interface(
+    args: argparse.Namespace,
+    system: "ActorSystem",
+    main_actor: Any,
+    orchestrator: "Orchestrator | None",
+    interface: str,
+    companions: list[Any],
+    outbox: Any = None,
+) -> None:
+    """Run ``interface``, the system and ``companions`` until one of them ends.
+
+    ``orchestrator`` answers the chat turns; ``main_actor`` is for what still
+    needs main itself. Both are None in the minimal profile. ``outbox`` carries
+    agents' messages to a chat channel run as the primary interface.
+    """
+    from wactorz.interfaces.chat_interfaces import (
+        CLIInterface,
+        DiscordInterface,
+        RESTInterface,
+        TelegramInterface,
+        WhatsAppInterface,
+    )
+    from wactorz.interfaces.chat_interfaces import (
+        run_all_interfaces as _run_all,
+    )
+
+    if orchestrator is None:
+        # Nothing to answer a chat turn: the dashboard, the monitor and the
+        # deployment's own agents run until asked to stop.
+        system._running = True
+        await system.run_forever()
+    elif interface == "cli" and main_actor is not None and sys.stdin.isatty():
+        iface = CLIInterface(orchestrator, main_actor)
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface == "rest" and main_actor is not None:
+        port = args.port or CONFIG.port
+        iface = RESTInterface(
+            orchestrator, main_actor, port=port, api_key=CONFIG.api_key, system=system
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface in (*MAIN_INTERFACES, HEADLESS):
+        # No chat interface of our own: what a library call asks for; what a
+        # CLI with no TTY (piped/Docker/systemd) falls back to, since input()
+        # would raise EOFError on the first read and, paired with
+        # run_forever(), tear the whole system down a second after boot; and
+        # the minimal profile's, where no main runs for the command line or
+        # the REST interface to answer lifecycle commands through. The
+        # dashboard and any companion channels still answer through the
+        # orchestrator.
+        if main_actor is None and interface in MAIN_INTERFACES:
+            logger.info("No main runs in this profile; the %s interface needs it", interface)
+        elif interface == "cli":
+            logger.info("stdin is not a TTY — running headless (no interactive CLI)")
+        system._running = True
+        await asyncio.gather(system.run_forever(), *_run_all(companions))
+    elif interface == "discord":
+        discord_token = args.discord_token or CONFIG.discord_token
+        if not discord_token:
+            raise StartupError("DISCORD_BOT_TOKEN not set.")
+        iface = DiscordInterface(
+            orchestrator,
+            token=discord_token,
+            allowed_user_ids=CONFIG.discord_allowed_user_ids,
+            outbox=outbox,
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface == "whatsapp":
+        port = args.port or CONFIG.port
+        iface = WhatsAppInterface(
+            orchestrator,
+            account_sid=CONFIG.twilio_account_sid,
+            auth_token=CONFIG.twilio_auth_token,
+            from_number=CONFIG.twilio_whatsapp_number,
+            port=port,
+            allowed_numbers=CONFIG.whatsapp_allowed_numbers,
+            outbox=outbox,
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface == "telegram":
+        telegram_token = args.telegram_token or CONFIG.telegram_token
+        if not telegram_token:
+            raise StartupError("TELEGRAM_BOT_TOKEN not set.")
+        iface = TelegramInterface(
+            orchestrator,
+            token=telegram_token,
+            allowed_user_id=args.telegram_allowed_user_id or None,
+            allowed_user_ids=CONFIG.telegram_allowed_user_ids,
+            outbox=outbox,
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    else:
+        raise StartupError(
+            f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
+            f"telegram or {HEADLESS}"
+        )
+
+
+async def _run(
+    args: argparse.Namespace,
+    system: "ActorSystem",
+    main_actor: Any,
+    orchestrator: "Orchestrator | None",
+) -> None:
     """Run the built system under the chosen interface until stopped, then shut it down."""
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
@@ -853,84 +1077,26 @@ async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any)
     # supervisor, so it binds even if the broker stalls agent startup.
 
     from wactorz.interfaces.chat_interfaces import (
-        CLIInterface,
-        DiscordInterface,
-        RESTInterface,
-        TelegramInterface,
-        WhatsAppInterface,
+        SOCIAL_INTERFACES,
+        Outbox,
         build_social_companions,
-    )
-    from wactorz.interfaces.chat_interfaces import (
-        run_all_interfaces as _run_all,
     )
 
     interface = args.interface or CONFIG.interface
 
     # Configured social channels run alongside the primary interface, not
-    # instead of it (the dashboard stays primary; the bots ride along).
-    companions = build_social_companions(main_actor, interface) if main_actor else []
+    # instead of it (the dashboard stays primary; the bots ride along). The
+    # outbox carries agents' messages to them, and runs only when there is a
+    # channel for it to serve.
+    outbox = Outbox(args.mqtt_broker or CONFIG.mqtt_host, args.mqtt_port or CONFIG.mqtt_port)
+    companions = (
+        build_social_companions(orchestrator, interface, outbox=outbox) if orchestrator else []
+    )
+    if orchestrator is not None and (companions or interface in SOCIAL_INTERFACES):
+        companions = [*companions, outbox]
 
     try:
-        if main_actor is None:
-            # The minimal profile: no orchestrator to talk to, so no chat
-            # interface. The dashboard, the monitor and the deployment's own
-            # agents run until asked to stop.
-            system._running = True
-            await system.run_forever()
-        elif interface == "cli" and sys.stdin.isatty():
-            iface = CLIInterface(main_actor)
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface in ("cli", HEADLESS):
-            # No chat interface of our own: what a library call asks for, and
-            # what a CLI with no TTY (piped/Docker/systemd) falls back to, since
-            # input() would raise EOFError on the first read and, paired with
-            # run_forever(), tear the whole system down a second after boot.
-            # The dashboard and any companion channels still talk to main.
-            if interface == "cli":
-                logger.info("stdin is not a TTY — running headless (no interactive CLI)")
-            system._running = True
-            await asyncio.gather(system.run_forever(), *_run_all(companions))
-        elif interface == "rest":
-            port = args.port or CONFIG.port
-            iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface == "discord":
-            discord_token = args.discord_token or CONFIG.discord_token
-            if not discord_token:
-                raise StartupError("DISCORD_BOT_TOKEN not set.")
-            iface = DiscordInterface(
-                main_actor,
-                token=discord_token,
-                allowed_user_ids=CONFIG.discord_allowed_user_ids,
-            )
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface == "whatsapp":
-            port = args.port or CONFIG.port
-            iface = WhatsAppInterface(
-                main_actor,
-                account_sid=CONFIG.twilio_account_sid,
-                auth_token=CONFIG.twilio_auth_token,
-                from_number=CONFIG.twilio_whatsapp_number,
-                port=port,
-                allowed_numbers=CONFIG.whatsapp_allowed_numbers,
-            )
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface == "telegram":
-            telegram_token = args.telegram_token or CONFIG.telegram_token
-            if not telegram_token:
-                raise StartupError("TELEGRAM_BOT_TOKEN not set.")
-            iface = TelegramInterface(
-                main_actor,
-                token=telegram_token,
-                allowed_user_id=args.telegram_allowed_user_id or None,
-                allowed_user_ids=CONFIG.telegram_allowed_user_ids,
-            )
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        else:
-            raise StartupError(
-                f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
-                f"telegram or {HEADLESS}"
-            )
+        await _run_interface(args, system, main_actor, orchestrator, interface, companions, outbox)
     except StartupError:
         # The caller's to report: the command exits on it, a host program
         # catches it. Shutdown below still runs.
@@ -953,6 +1119,7 @@ async def serve(
     llm: str | None = None,
     state_dir: "str | os.PathLike[str] | None" = None,
     interface: str | None = None,
+    orchestrator: Any = None,
     handle_signals: bool = False,
     configure_logging: bool = False,
 ) -> None:
@@ -972,7 +1139,9 @@ async def serve(
     not written to the environment. ``interface`` is the chat interface to
     run beside the dashboard (``"rest"``, ``"discord"``, ``"telegram"``,
     ``"whatsapp"``, ``"cli"``); by default there is none, so the system never
-    reads the host's stdin.
+    reads the host's stdin. ``orchestrator`` is what answers chat in place of
+    main or the model-free one: an :class:`~wactorz.orchestration.Orchestrator`,
+    or a class or factory called with the registry to build one.
 
     The agents and pipelines it is given are registered for this run only: a
     later ``serve`` in the same process starts what it is given, not what an
@@ -995,6 +1164,7 @@ async def serve(
                 mqtt_port=mqtt_port,
                 llm=llm,
                 interface=interface or HEADLESS,
+                orchestrator=orchestrator,
             )
             await app(args, handle_signals=handle_signals, configure_logging=configure_logging)
     finally:
@@ -1014,6 +1184,7 @@ def run(
     llm: str | None = None,
     state_dir: "str | os.PathLike[str] | None" = None,
     interface: str | None = None,
+    orchestrator: Any = None,
 ) -> None:
     """Start Wactorz from a script: :func:`serve` on a loop of its own, until stopped.
 
@@ -1037,6 +1208,7 @@ def run(
                 llm=llm,
                 state_dir=state_dir,
                 interface=interface or CONFIG.interface,
+                orchestrator=orchestrator,
                 handle_signals=True,
                 configure_logging=True,
             )
@@ -1055,6 +1227,7 @@ def serve_args(
     mqtt_port: int | None = None,
     llm: str | None = None,
     interface: str | None = None,
+    orchestrator: Any = None,
 ) -> argparse.Namespace:
     """The settings :func:`serve`'s arguments stand for, in the form :func:`app` reads.
 
@@ -1075,4 +1248,7 @@ def serve_args(
         args.llm = llm
     if interface is not None:
         args.interface = interface
+    if orchestrator is not None:
+        # Not a command-line setting: an object only a script can hand over.
+        args.orchestrator = orchestrator
     return args

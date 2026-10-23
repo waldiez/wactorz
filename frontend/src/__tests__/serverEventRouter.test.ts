@@ -7,12 +7,14 @@ import {
     ServerEventRouter,
     normaliseHeartbeat,
     normaliseChat,
+    normaliseAnswer,
     normaliseStatus,
     normaliseSpawn,
     normaliseAlert,
     normaliseQaFlag,
 } from "../io/ServerEventRouter";
 import { resolveAgentName } from "../agents/naming";
+import type { NodeHeartbeatPayload } from "../types/agent";
 
 describe("normaliseHeartbeat", () => {
     it("accepts camelCase payload", () => {
@@ -296,8 +298,26 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         const node = capture(r, "node-heartbeat");
         r.route("nodes/edge-1/heartbeat", { agents: ["a", "b"], node_id: "n1" });
         r.route("nodes/edge-2/heartbeat", { agents: ["c"] }); // no node_id → omitted
-        expect(node[0]).toEqual({ node: "edge-1", agents: ["a", "b"], nodeId: "n1" });
-        expect(node[1]).toEqual({ node: "edge-2", agents: ["c"] });
+        expect(node[0]).toEqual({ node: "edge-1", agents: ["a", "b"], nodeId: "n1", readings: {} });
+        expect(node[1]).toEqual({ node: "edge-2", agents: ["c"], readings: {} });
+    });
+
+    it("carries a node heartbeat's readings, leaving out what is not a number", () => {
+        const r = new ServerEventRouter();
+        const node = capture(r, "node-heartbeat");
+        r.route("nodes/rpi/heartbeat", {
+            agents: [],
+            cpu_pct: 12.5,
+            mem_free_mb: 7000,
+            disk_free_mb: "lots",
+            temp_c: Number.NaN,
+            throttled: ["under_voltage", 3],
+        });
+        expect((node[0] as NodeHeartbeatPayload).readings).toEqual({
+            cpu_pct: 12.5,
+            mem_free_mb: 7000,
+            throttled: ["under_voltage"],
+        });
     });
 
     it("falls back to the id prefix when no name is in the payload", () => {
@@ -407,5 +427,60 @@ describe("optional fields in normalised payloads", () => {
     it("carries `protected` on spawn under the same rule", () => {
         expect("protected" in normaliseSpawn({ agentId: "a" })).toBe(false);
         expect(normaliseSpawn({ agentId: "a", protected: true })).toMatchObject({ protected: true });
+    });
+});
+
+describe("a question and its answer", () => {
+    it("normaliseChat carries the options, the sender's id and the other channel", () => {
+        const msg = normaliseChat(
+            {
+                id: "q1",
+                from: "hvac",
+                content: "Changed?",
+                options: ["yes", " no ", ""],
+                channel: "telegram",
+            },
+            "agent-1",
+        );
+        expect(msg.id).toBe("q1");
+        expect(msg.agentId).toBe("agent-1");
+        expect(msg.options).toEqual(["yes", "no"]);
+        expect(msg.channel).toBe("telegram");
+    });
+
+    it("normaliseChat leaves the question fields out of a plain message", () => {
+        const msg = normaliseChat({ content: "hi", options: "not a list", channel: "dashboard" });
+        expect("options" in msg).toBe(false);
+        expect("channel" in msg).toBe(false);
+        expect("agentId" in msg).toBe(false);
+    });
+
+    it("normaliseAnswer reads the pick, defaulting what is absent", () => {
+        const answer = normaliseAnswer(
+            { id: "q1", option: "yes", index: 0, timestamp: 1_700_000_000 },
+            "agent-1",
+        );
+        expect(answer).toEqual({
+            id: "q1",
+            agentId: "agent-1",
+            option: "yes",
+            index: 0,
+            channel: "dashboard",
+            timestampMs: 1_700_000_000_000,
+        });
+        expect(normaliseAnswer({ agent_id: "a2", option: "x", channel: "telegram" }).agentId).toBe("a2");
+    });
+
+    it("routes agents/{id}/answer to the answer event, and chat with the sender's id", () => {
+        const r = new ServerEventRouter();
+        const answers: unknown[] = [];
+        const chats: unknown[] = [];
+        r.on("answer", a => answers.push(a));
+        r.on("chat", m => chats.push(m));
+        r.route("agents/a1/answer", { id: "q1", option: "yes", index: 0, channel: "telegram" });
+        r.route("agents/a1/chat", { id: "q1", content: "Changed?", options: ["yes"] });
+        expect(answers).toHaveLength(1);
+        expect((answers[0] as { channel: string }).channel).toBe("telegram");
+        expect((chats[0] as { agentId: string }).agentId).toBe("a1");
     });
 });

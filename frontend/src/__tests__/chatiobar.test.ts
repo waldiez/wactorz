@@ -182,7 +182,7 @@ describe("buildIobar", () => {
             const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
 
             sendTo("main");
-            emit("af-connection-status", { status: "demo" });
+            emit("af-connection-status", { status: "disconnected" });
 
             expect(send.disabled).toBe(false);
             expect(stop.style.display).toBe("none");

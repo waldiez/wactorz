@@ -152,6 +152,7 @@ async def handle_task(agent, payload):
 | `await agent.log(msg)` | Publish a log event |
 | `await agent.publish(topic, data)` | Publish to an MQTT topic |
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
+| `agent.artifact_path(key)` | Where a model the spawn names in `artifacts` is, on main or on a node |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
 | `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
@@ -355,6 +356,7 @@ What that means in practice:
 - `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
 - `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
 - A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
+- Bytes, numpy arrays, torch tensors, `state_dict()`s and modules, and scikit-learn-family models are kept as files of their own under `blobs/` in the agent's directory, written when their key is persisted rather than with every other key. A value changed in place is saved by persisting it again. A blob that cannot be read back — its library not installed, its file gone — is missing at the next start like an unpicklable value, and kept for when it can be.
 - Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
 
 **Changing what an agent stores.** When a new version of an agent keeps its state in a different shape, it declares a version and how to upgrade to it, and the state is brought up to date when the agent starts, before its own code runs:
@@ -438,6 +440,16 @@ Webhook URLs for Discord, Slack, and Telegram are stored separately and automati
 | `/webhook telegram <url>` | Save a Telegram webhook URL |
 
 You can also paste a webhook URL directly into any message — it is detected automatically and saved.
+
+### Packages installed without asking
+
+A package an agent asks for is installed at once only when it is on the list: what the catalogue and the examples install, the packages the installer knows by their import names, those in `WACTORZ_PIP_ALLOW`, and those you have allowed. Anything else is asked about on the dashboard, and the agent is not started if you refuse.
+
+| Command | Description |
+|---------|-------------|
+| `/packages` | Show the list: what you allowed, what `WACTORZ_PIP_ALLOW` adds, and what is built in |
+| `/packages allow <name> …` | Allow packages from now on |
+| `/packages forget <name> …` | Take packages you allowed off the list, for agents placed from then on; an agent already saved keeps the packages it was placed with |
 
 ---
 
@@ -653,20 +665,29 @@ Each layer catches what the previous one missed:
 | **4. Callback wrapper** (`_safe_invoke`) | Subscribe listener | Catches `TypeError` from `await None` inside callbacks, logs once, suppresses for all subsequent messages | Prevents infinite error spam |
 | **5. LLM self-correction** (`_run_setup`) | Setup phase | If `setup()` raises a runtime error, the traceback + API docs are sent to the LLM, code is fixed, recompiled, and retried (up to 2 attempts) | Last resort — works for most fixable errors |
  
+### What a repair may do
+
+A repair is code the model wrote, whatever program it repairs, and the error it is asked to fix comes from the failing run, which can carry text the agent was processing. So, at start, in `setup()` and in `process()` alike:
+
+- **It always meets the sanitizer and the safety validator**, a catalogue agent's included. An agent running a repair is no longer trusted, and neither is its spawn registry entry or the Supervisor's restart of it.
+- **It imports nothing the agent's own program did not**, beyond standard modules that only compute (`json`, `math`, `datetime`, `re`, `collections` and their like). A repair that reaches for `subprocess`, `socket`, an HTTP client or any other new module is refused and counts as a failed round; when the rounds run out the agent falls to the Supervisor. The comparison is with the program the agent was given, never an earlier repair.
+- **The failing run's report reaches the model as data.** The error, its traceback and what earlier repairs failed with are set between markers and named as data that is never to be followed, each error cut to a few hundred characters. The markers carry a token drawn for each prompt, so neither that text nor the program shown after it can end the block early.
+
 ### Pre-Exec Safety Validator
  
-`_validate_code_safety()` runs after sanitization but before `exec()`. It scans for dangerous patterns in two tiers:
+`_validate_code_safety()` runs after sanitization but before `exec()`. It parses the code and reads each name through the code's own imports, so `os . system`, `import os as o; o.system`, `from os import system as run` and `getattr(os, "system")` are all `os.system`, and a blocked name is refused whether it is called or only referenced. Two tiers:
  
 **Blocked (code won't run):**
  
-| Pattern | Reason |
+| Name | Reason |
 | --- | --- |
 | `os.system()`, `os.popen()`, `os.exec*()` | Shell execution |
-| `os.remove()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
-| `subprocess` with `rm` | Destructive shell commands |
-| `eval()`, `__import__()` | Arbitrary code execution |
-| `open()` in write mode | Use `agent.persist()` instead |
+| `os.remove()`, `os.unlink()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
+| `subprocess` running `rm` | Destructive shell commands |
+| `eval()`, `exec()`, `compile()`, `__import__()`, `importlib.import_module()` | Arbitrary code execution |
 | Raw `socket.socket()` | Use httpx or `agent.publish` |
+| `from os import *`, `getattr(os, name)`, `vars(os)`, `os.__dict__` (and the same for `builtins`, `importlib`, `shutil`, `socket`, `subprocess`) | Hides which function is used |
+| `__builtins__`, `__globals__`, `__subclasses__`, `__code__` and similar | Reaches the interpreter's internals |
  
 **Warned (runs but logged):**
  
@@ -677,7 +698,7 @@ Each layer catches what the previous one missed:
 | `pickle.loads` | Deserialization risk if data is untrusted |
 | `while True:` without `await` | May block event loop |
  
-This is a best-effort blocklist, not a sandbox. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
+This is a best-effort blocklist, not a sandbox. A name the parser cannot follow — held in a variable, looked up in `sys.modules`, a subscript of `globals()` — passes, and so does anything a permitted module can do, such as deleting through `pathlib`. Writing a file is not refused at all: from the code alone a data export and an overwritten state file look the same. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
  
 ### Planner Code Validator
  
@@ -746,11 +767,17 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/memory forget <key>` | Remove a specific stored fact |
 | `/webhook <service> <url>` | Store a notification webhook URL |
 | `/topics` | List known MQTT topics and their publishing agents |
+| `/artifacts [name]` | List the models kept on main with `wactorz-artifacts`, or every version of one. Main's model is told the same list, so an agent it writes names a model that is there |
+| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve: what a spawn naming the model without a version gets. Activating an earlier version is the rollback |
+| `/artifacts shadow <name:version> [reason]` | Mark a version to try beside the active one; refused for the active version itself |
+| `/artifacts promote <name> [reason]` | Make the shadow version active and clear `shadow` |
+| `/artifacts clear active\|shadow <name>` | Unset a pointer; with `active` unset the bare name means the newest version again |
 | `/cost` | Show per-agent token usage and cost breakdown |
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |
 | `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
-| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
+| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node, allowing them first |
+| `/packages [allow\|forget <pkg...>]` | Show, add to or take from the packages installed without asking |
 | `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
 | `/help` | Show all available commands |
 | `@agent-name` | Route your next message directly to a specific agent |
@@ -980,7 +1007,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Direct (from CLI):**
 
 ```text
-@catalog spawn image-gen-agent
+@catalog spawn weather-agent
 @catalog spawn doc-to-pptx-agent
 @catalog list
 @catalog info doc-to-pptx-agent
@@ -989,7 +1016,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Natural language via main:**
 
 ```text
-"spawn the image generation agent"
+"spawn the weather agent"
 "what agents can you spawn for me?"
 "I need to convert a PDF to PowerPoint"
 ```
@@ -1008,14 +1035,11 @@ Spawned agents are registered in main's spawn registry — they survive restarts
 
 ### Built-in Recipes
 
-| Recipe | Description | Key Dependencies |
-|--------|-------------|-----------------|
-| `image-gen-agent` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path. | `requests`, NIM API key |
-| `doc-to-pptx-agent` | Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from the PDF first; falls back to NIM FLUX generation for slides without images. | `pymupdf`, `pdfplumber`, `pptxgenjs` (Node.js) |
+Every recipe, what it does and what it needs, is listed in [Catalogue agents](catalogue-agents.md), with a page per recipe.
 
 ### Adding New Recipes
 
-Drop a Python file into `catalogue_agents/` with an `AGENT_CODE` string (the same format as any dynamic agent), then add its entry to `catalog_agent.py`:
+Drop a Python module into `catalogue_agents/` holding the program itself (the same functions as any dynamic agent's code), then add its entry to `catalog_agent.py`. The module's source is what gets sent and exec'd:
 
 ```python
 # In catalog_agent.py — _build_catalog()
@@ -1035,38 +1059,14 @@ if code:
 
 No changes to `cli.py` or any other file needed. On next restart the recipe is available system-wide.
 
-### image-gen-agent
-
-Generates images from text prompts via NVIDIA NIM FLUX.1-dev and saves them as PNG files. Requires a free NIM API key (1000 credits/month at [build.nvidia.com](https://build.nvidia.com)).
-
-**Setup:**
-
-```text
-@main remember nim_api_key = nvapi-xxxxxxxxxxxxxxxx
-```
-
-**Task payload:**
-
-```json
-{
-  "prompt": "minimalist flat illustration of renewable energy",
-  "output_path": "C:/Users/you/Documents/slide.png",
-  "width": 1024,
-  "height": 576,
-  "steps": 20
-}
-```
-
-**Result:** `{ "image_path": "...", "width": 1024, "height": 576, "size_kb": 312, "error": null }`
-
 ### doc-to-pptx-agent
 
 Converts a PDF or TXT document into a polished PowerPoint presentation in four steps:
 
-1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT)
+1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT), from a document folder or a chat upload (see [Doc → PPTX agent](catalogue-doc-to-pptx.md))
 2. **Extract images** — pulls real embedded images from the PDF using PyMuPDF; filters out small decorations (configurable minimum size); assigns images to slides by source-page proximity
 3. **LLM outline** — calls the LLM to produce a structured JSON outline: slide titles, bullets, theme colors, and per-slide image prompts
-4. **Build** — generates and runs a `pptxgenjs` Node.js script that assembles the final `.pptx` with two-column layouts (text left, image right) for content slides
+4. **Build** — assembles the `.pptx` with `python-pptx`, with two-column layouts (text left, image right) for content slides
 
 Slides that received a real PDF image skip NIM generation. Slides without one fall back to `image-gen-agent` (if running) or remain text-only.
 
@@ -1240,15 +1240,18 @@ For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': promp
 
 ### Installer Agent — Remote Actions
 
-The installer agent handles three actions for node management:
+The installer agent handles these actions for node management:
 
 | Action | Description |
 |--------|-------------|
 | `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
 | `node_install` | Install pip packages on a running node via SSH |
-| `node_run` | Run any shell command on a remote node via SSH |
+| `node_op` | Run a named, read-only operation on a node (`uptime`, `disk`, `memory`, `temperature`, `os`, `network`, `python`, `packages`, `node-log`; see `wactorz.core.node_operations`) |
+| `node_run` | Run a shell command on a node — sent only for `/nodes run`, typed by the operator; refused from a model's `<delegate>` |
 
-All three take `host` and, where relevant, `node_name`. **None of them accept SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
+`node_install` installs only packages on the list of packages installed without asking, or allowed by the operator when asked on the dashboard; the `packages_allow`, `packages_forget`, `packages_list` and `packages_clear` actions keep that list, and only main may send them. An agent main restores, on main or on a node, is installed with `install_restored` or `node_install_restored`, which ask nothing: its packages were cleared when it was placed. Neither is among the actions the model may send.
+
+Each takes `node_name` or `host`. Only main may ask for any of them: another agent's request is refused, though any agent may ask for a local `install`. **None of them accepts SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
 
 ---
 
@@ -1381,11 +1384,13 @@ wactorz/
 ├── node/                                      Edge node runtime — `wactorz-node --node <name>`
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
+├── artifacts_cli.py                           `wactorz-artifacts` CLI — models kept on main, by name and version
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
 │   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │   ├── topic_bus.py                           TopicBus — TopicContract / TopicRegistry, schema introspection
+│   ├── artifacts.py                           ArtifactStore — files kept once by SHA-256, named by version
 │   └── persistence/                           SQLite + memory + Pickle three-tier persistence
 │
 ├── agents/
@@ -1401,14 +1406,17 @@ wactorz/
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)
 │   ├── home_assistant_map_agent.py            HomeAssistantMapAgent — live entity/location map via HA WebSocket
 │   ├── home_assistant_state_bridge_agent.py   HomeAssistantStateBridgeAgent — HA state_changed → MQTT bridge
-│   ├── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
-│   └── timeseries_collector.py                TimeSeriesCollector — buffered MQTT → SQLite time-series tables
+│   └── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
 │
 ├── catalogue_agents/                          Pre-built recipe files (loaded by CatalogAgent at startup)
-│   ├── image_gen_agent.py                     NIM FLUX.1-dev image generation
-│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
 │   ├── anomaly_detector_agent.py              Statistical anomaly detection over HA + Sinergym streams
-│   └── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
+│   ├── flic_agent.py                          Flic 2 buttons over Bluetooth
+│   ├── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── reachy_mini_agent.py                   Reachy Mini robot: voice, gestures, camera
+│   ├── smart_energy_agent.py                  Smart-plug power, energy and guarded power-down rules
+│   ├── timeseries_collector_agent.py          Buffered MQTT → SQLite time-series tables
+│   └── weather_agent.py                       Weather by place, no API key
 │
 └── interfaces/
     ├── chat_interfaces.py                     CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
@@ -1417,7 +1425,9 @@ wactorz/
 state/                                         Persisted agent state (auto-created, never commit to git)
 ├── wactorz.db                                 SQLite — spawn registry, pipeline rules, user facts, conversation, time-series
 ├── mqtt_outbox.db                             SQLite — durable MQTT publish queue
-└── {agent-name}/state.pkl                     Per-agent pickle fallback (large/binary state)
+└── {agent-name}/
+    ├── state.pkl                              Per-agent pickle (the agent's own keys)
+    └── blobs/                                 One file per model, array or bytes value
 ```
 
 ---

@@ -46,6 +46,11 @@ And, for what the dashboard does not show:
 | `wactorz_actor_mailbox_depth{actor_name}` | Messages waiting in an actor's mailbox |
 | `wactorz_actor_messages_refused_total{actor_name}` | Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait |
 | `wactorz_actor_handling_seconds{actor_name}` | How long an actor has been on the message it is handling; `0` when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck |
+| `wactorz_actor_queue_wait_seconds{actor_name}` | Time from a message being made to the actor taking it: in the mailbox, or with its sender for room in a full one. An actor takes one message at a time, so a slow handler shows here as the wait of everything behind it, and a high wait beside `wactorz_actor_messages_refused_total` is a full mailbox |
+| `wactorz_actor_message_duration_seconds{actor_name}` | Time an actor's handler took over one message. A generated agent hands each task to a task of its own, so its handling time is in `wactorz_agent_task_duration_seconds` instead |
+| `wactorz_ha_requests_total{command,outcome}` | Home Assistant WebSocket requests by command (`get_states`, `call_service`, the registry lists, `subscribe_events`) and how they ended: `ok`, `error` or `timeout`. The events a subscription then waits for are not requests, and are not counted |
+| `wactorz_ha_request_duration_seconds{command}` | Time from a Home Assistant request to its answer, or to giving up on it |
+| `wactorz_ha_connect_duration_seconds` / `wactorz_ha_connect_failures_total` | Time to open and authenticate a WebSocket to Home Assistant, and the attempts that failed (unreachable, or a refused token) |
 | `wactorz_event_loop_lag_seconds` | Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting |
 | `wactorz_nodes{state}` | Edge nodes that are `up` and `down` |
 | `wactorz_node_up{node}` | `1` while a node's heartbeat is recent |
@@ -62,6 +67,9 @@ And, for what the dashboard does not show:
 | `wactorz_agent_task_duration_seconds{agent,outcome}` | Time a generated agent's `handle_task` took, by how it ended: `completed`, `failed` or `timed_out` |
 | `wactorz_agent_process_duration_seconds{agent}` | Time one cycle of a generated agent's `process()` took, whether it returned or raised |
 | `wactorz_agent_process_timeouts_total{agent}` | `process()` cycles still running when their time ran out |
+| `wactorz_actor_slow_restarts{actor_name,node}` | `1` for an agent that crashed so often in a row that its supervisor now restarts it slowly; `node` is empty for one on this server, and a node's come from its heartbeat |
+| `wactorz_llm_spend_usd{period}` | Spent on models so far this spend period (`daily`, `weekly` or `monthly`), as Settings shows it |
+| `wactorz_llm_spend_limit_usd{period}` | The spend limit for the period; absent when none is set. At it, model requests pause until the period ends or the limit is raised |
 
 A request counts once however many attempts it took, and one the caller cancelled is not counted. The `wactorz_agent_*` series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
 
@@ -245,6 +253,9 @@ Basic Prometheus alert rules are included for:
 - outgoing messages dropped or given up on
 - an edge node down for 5 minutes
 - more than half the requests to an LLM provider failing for 10 minutes
+- an agent recording more than 10 errors in 15 minutes
+- an agent restarted slowly after repeated crashes, for 5 minutes, on the server or a node
+- model spend past 80% of its limit, and at the limit (critical: model requests are paused)
 - optional dependency probe failing
 
 They live in `infra/prometheus/alerts.yml`. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.

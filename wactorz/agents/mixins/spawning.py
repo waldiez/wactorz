@@ -34,13 +34,16 @@ import asyncio
 import hashlib
 import logging
 import time
-import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from ...core.actor import Actor, ActorState, MessageType
-from ...core.paths import agent_state_dir
+from ...core.actor import Actor, ActorState, ReplyError, ask_through
+from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
+from ...core.packages import APPROVAL_TIMEOUT_S
+from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
-from ...core.pip import install_wait_s, missing_requirements
+from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements
+from ...core.state_codec import decode_state
 from ...core.topics import topic_name_error
 from ...plugins import for_target
 from ..dependency_install import InstallOutcome, outcome_from_result
@@ -48,6 +51,58 @@ from ..lookup import find_main_actor
 from ..rule_agent import RuleAgent, RuleConfig
 
 logger = logging.getLogger(__name__)
+
+#: How long a spawn waits for each package beyond the operator's answer: the
+#: installer's own bound on a pip run, twice, since a package may be retried
+#: under another name. A shorter wait would give up on a large download the
+#: installer is still making, and spawn the agent without it.
+PIP_WAIT_PER_PACKAGE_S = 2 * PIP_TIMEOUT_S
+
+
+def _store_here() -> ArtifactStore:
+    """Main's artifact store, where the state directory is at the time of asking."""
+    return ArtifactStore.in_state_dir(resolve_state_dir())
+
+
+def _pinned_here(wanted: object) -> tuple[dict[str, dict], str | None]:
+    """``wanted`` -- a config's ``artifacts`` -- pinned in main's store; or why it cannot be."""
+    try:
+        return _store_here().pin_all(wanted), None
+    except ArtifactError as exc:
+        return {}, str(exc)
+
+
+def _readable_here(config: dict) -> tuple[dict[str, dict], str | None]:
+    """Each artifact ``config`` names, with the path an agent here reads it at; or why not.
+
+    Unpacks a directory artifact the first time; call it off the event loop.
+    """
+    store = _store_here()
+    try:
+        return {
+            key: {**entry, "path": str(store.readable_path(entry))}
+            for key, entry in pinned_in(config).items()
+        }, None
+    except ArtifactError as exc:
+        return {}, str(exc)
+
+
+def agent_type(config: dict) -> str:
+    """The kind of agent ``config`` describes, read the same way wherever it is spawned.
+
+    Its ``type``, lowercased, or ``dynamic`` when it names none -- except that a
+    dynamic config with a system prompt and no code is an LLM agent: a model
+    often leaves ``type`` out when it writes one, and with no code there is no
+    other agent it could be.
+    """
+    kind = str(config.get("type") or "dynamic").strip().lower()
+    if (
+        kind == "dynamic"
+        and not str(config.get("code") or "").strip()
+        and str(config.get("system_prompt") or "").strip()
+    ):
+        return "llm"
+    return kind
 
 
 class SpawnPlaceholder:
@@ -62,6 +117,39 @@ class SpawnPlaceholder:
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<SpawnPlaceholder {self.name!r}>"
+
+
+@dataclass(frozen=True)
+class PlacedOnNode:
+    """A spawn sent to a node: there is no actor here to return, only where it went.
+
+    ``running`` is whether main has heard from the node. One that has not is
+    sent the agent all the same: its desired state is kept on the broker, and
+    the node starts the agent when it starts.
+    """
+
+    name: str
+    node: str
+    running: bool
+
+
+@dataclass(frozen=True)
+class KeptHere:
+    """A spawn not sent, because an agent of its name already runs here.
+
+    ``node`` is where the spawn would have gone; ``replace`` moves it there.
+    """
+
+    name: str
+    node: str
+
+
+@dataclass(frozen=True)
+class NotSpawned:
+    """A spawn refused before anything started, and why, as the turn reports it."""
+
+    name: str
+    reason: str
 
 
 if TYPE_CHECKING:
@@ -124,7 +212,7 @@ class SpawnMixin(_Host):
             # here first, before anything is written under it: a state shipped
             # with a migration would otherwise be half applied and then lost
             # when the agent failed to start.
-            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
             return None
         return await self._spawn_local_named(
             config,
@@ -168,28 +256,39 @@ class SpawnMixin(_Host):
                 return existing
             await self._stop_for_replace(existing, name)
 
-        agent_type = config.get("type", "dynamic")
+        if config.get("artifacts"):
+            pinned, problem = await asyncio.to_thread(_pinned_here, config["artifacts"])
+            if problem:
+                logger.error("[%s] Not spawning '%s': its artifacts: %s", self.name, name, problem)
+                return None
+            # What is saved then names the versions it runs, so a restart runs
+            # the same models. A copy: the caller's dict may be written elsewhere.
+            config = {**config, "artifacts": pinned}
+
+        kind = agent_type(config)
         code = config.get("code", "").strip()
-        system_prompt = config.get("system_prompt", "").strip()
 
         # ── Route to the right agent class ─────────────────────────────────
-        if agent_type == "native":
+        if kind == "native":
             actor = await self._spawn_native_agent(config, name)
-        elif agent_type == "ha_actuator":
+        elif kind == "ha_actuator":
             actor = await self._spawn_ha_actuator(config, name)
-        elif agent_type == "scheduled":
+        elif kind == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
-        elif agent_type == "rule":
+        elif kind == "rule":
             actor = await self._spawn_rule_agent(config, name)
-        elif agent_type == "module":
+        elif kind == "module":
             actor = await self._spawn_module_agent(config, name)
-        elif agent_type == "llm" or (not code and system_prompt):
-            # Implicit-llm route: a config with a system prompt but no code is
-            # an LLM agent even if 'type' was left at the "dynamic" default.
+        elif kind == "llm":
             actor = await self._spawn_llm_agent(config, name)
         elif code:
             actor = await self._spawn_dynamic_agent(
-                config, name, code, blocking_install=blocking_install
+                config,
+                name,
+                code,
+                blocking_install=blocking_install,
+                register=register,
+                restoring=from_registry,
             )
         else:
             logger.warning(
@@ -330,14 +429,15 @@ class SpawnMixin(_Host):
                 schedule_spec.get("type"),
                 publish_topic,
             )
-            return actor
         except ValueError as e:
             # An expected rejection of user input, reported in full by the message.
-            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400, RUF100  # an expected rejection of user input, reported in full
+            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400  # an expected rejection of user input, reported in full
             return None
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
+        else:
+            return actor
 
     async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""
@@ -345,7 +445,7 @@ class SpawnMixin(_Host):
             rule = RuleConfig.from_dict(config)
         except ValueError as exc:
             # An expected rejection of the config, reported in full by its message.
-            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
             return None
         logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
         return await self.spawn(
@@ -378,6 +478,9 @@ class SpawnMixin(_Host):
             )
             return None
         options = config.get("options")
+        # Coming home from a node: what it persisted there is written here
+        # before it starts, so its first recall finds it.
+        await self._apply_initial_state(name, config)
         logger.info("[%s] Spawning %r from %s", self.name, name, target)
         return await self.spawn(
             cast("type[Actor]", plugin.build),
@@ -405,12 +508,24 @@ class SpawnMixin(_Host):
         )
 
     async def _spawn_dynamic_agent(
-        self, config: dict, name: str, code: str, *, blocking_install: bool = False
+        self,
+        config: dict,
+        name: str,
+        code: str,
+        *,
+        blocking_install: bool = False,
+        register: bool = True,
+        restoring: bool = False,
     ) -> Actor | SpawnPlaceholder | None:
         """Spawn a DynamicAgent — sensors, pipelines, tools. If the config
         declares packages that aren't importable yet, either install in the
         background (default) and return a placeholder, or block until installed
         (``blocking_install=True``) and return the real actor.
+
+        ``register`` says whether this spawn saves the config, so a refusal
+        takes back only what it saved. ``restoring`` installs without asking
+        the operator: the config came from the spawn registry, whose packages
+        were cleared when the agent was first placed.
         """
         packages = config.get("install", [])
         if isinstance(packages, str):
@@ -426,8 +541,11 @@ class SpawnMixin(_Host):
         if blocking_install:
             # Pipeline path: the next step may depend on this agent being live.
             logger.info("[%s] Installing %s for '%s' (blocking)…", self.name, needed, name)
-            outcome = await self._install_packages(needed, agent_name=name)
-            if not outcome.ok:
+            strict = config.get("require_install_success") is True
+            outcome = await self._install_packages(
+                needed, agent_name=name, restoring=restoring, require_install_success=strict
+            )
+            if outcome.refused or (strict and not outcome.ok):
                 await self._report_install_problem(config, name, outcome)
                 return None
             return await self._do_spawn_dynamic(config, name, code)
@@ -437,11 +555,23 @@ class SpawnMixin(_Host):
             "[%s] Scheduling background install+spawn for '%s': %s", self.name, name, needed
         )
         self.run_detached(
-            self._install_then_spawn(config, name, code, needed), name=f"install-{name}"
+            self._install_then_spawn(
+                config, name, code, needed, registered=register, restoring=restoring
+            ),
+            name=f"install-{name}",
         )
         return SpawnPlaceholder(name)
 
-    async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
+    async def _install_then_spawn(
+        self,
+        config: dict,
+        name: str,
+        code: str,
+        packages: list,
+        *,
+        registered: bool = True,
+        restoring: bool = False,
+    ):
         """Background task: install packages, then spawn, then register.
 
         Emits the same dashboard log frames main historically published so the
@@ -459,13 +589,35 @@ class SpawnMixin(_Host):
                         "timestamp": time.time(),
                     },
                 )
-            outcome = await self._install_packages(packages, agent_name=name)
+            strict = config.get("require_install_success") is True
+            outcome = await self._install_packages(
+                packages, agent_name=name, restoring=restoring, require_install_success=strict
+            )
+            if outcome.refused:
+                refusal = outcome.problem(name)
+                logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
+                if registered:
+                    # The entry was saved when the placeholder was returned, and
+                    # a refused agent must not be restored at the next start. An
+                    # entry this spawn did not save belongs to whoever saved it.
+                    self._unregister_spawn(name)
+                if publish is not None:
+                    await publish(
+                        f"agents/{self.actor_id}/logs",
+                        {
+                            "type": "error",
+                            "message": f"Not spawning '{name}': {refusal}",
+                            "child_name": name,
+                            "timestamp": time.time(),
+                        },
+                    )
+                return
             if self.state == ActorState.STOPPED:
                 # An install can outlast the stop meant to cancel it. Spawning
                 # now would register an agent into a system that has shut down.
                 logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
                 return
-            if not outcome.ok:
+            if strict and not outcome.ok:
                 # Spawning now starts the agent against packages that are
                 # missing or that this process cannot load until it restarts.
                 await self._report_install_problem(config, name, outcome)
@@ -493,6 +645,10 @@ class SpawnMixin(_Host):
         and registers a TopicContract when the config declares pub/sub topics so
         the agent is eligible for auto-wiring on the TopicBus.
         """
+        artifacts, problem = await asyncio.to_thread(_readable_here, config)
+        if problem:
+            logger.error("[%s] Not spawning '%s': its artifacts: %s", self.name, name, problem)
+            return None
         await self._apply_initial_state(name, config)
 
         from ..dynamic import DynamicAgent
@@ -508,6 +664,7 @@ class SpawnMixin(_Host):
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
             trusted=bool(config.get("trusted", False)),
+            artifacts=artifacts,
             task_timeout_s=config.get("task_timeout_s"),
         )
 
@@ -535,34 +692,29 @@ class SpawnMixin(_Host):
 
     @staticmethod
     def _packages_needing_install(packages: list[str]) -> list[str]:
-        """Subset of ``packages`` not installed yet, version specifiers included.
-
-        Asks installed metadata rather than guessing an import name from the
-        pip name: a pinned ``name==1.2`` is no module name at all, and ``pillow``
-        installs the module ``PIL``. A wrong guess sends an installed package to
-        pip on every spawn and restore.
-        """
+        """Requirements absent from installed metadata, including version pins."""
         return missing_requirements(packages)
 
-    async def _install_packages(self, packages: list[str], agent_name: str = "?") -> InstallOutcome:
-        """Install packages through the 'installer' agent and report the outcome.
+    async def _install_packages(
+        self,
+        packages: list[str],
+        agent_name: str = "?",
+        *,
+        restoring: bool = False,
+        require_install_success: bool = False,
+    ) -> InstallOutcome:
+        """Ask the installer under its approval rules and report its complete outcome.
 
-        Waits as long as the installer is allowed to take: a package with
-        native libraries can take minutes, and giving up sooner spawns the agent
-        against a half-finished install.
+        Generic spawns retain best-effort installation. A recipe opting into
+        ``require_install_success`` waits for the longer native-package limit
+        and refuses to start against a failed or stale environment.
         """
         if not packages or not self._registry:
             return InstallOutcome()
-
         needed = await asyncio.to_thread(self._packages_needing_install, packages)
         if not needed:
-            logger.info(
-                "[%s] All packages for '%s' already available: %s", self.name, agent_name, packages
-            )
             return InstallOutcome()
-
-        installer = self._registry.find_by_name("installer")
-        if not installer:
+        if not self._registry.find_by_name("installer"):
             logger.warning(
                 "[%s] installer agent not found — cannot install %s for '%s'.",
                 self.name,
@@ -570,63 +722,43 @@ class SpawnMixin(_Host):
                 agent_name,
             )
             return InstallOutcome(unavailable=True)
-
-        task_id = f"install_{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[task_id] = future
-        try:
-            logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-            taken = await self.send(
-                installer.actor_id,
-                MessageType.TASK,
-                {
-                    "action": "install",
-                    "packages": needed,
-                    "for_agent": agent_name,
-                    "notify": True,
-                    "task": task_id,
-                    "_task_id": task_id,
-                    "reply_to": self.actor_id,
-                },
-            )
-            if taken is False:
-                # Its mailbox had no room, so no result is coming to wait for.
-                logger.warning(
-                    "[%s] installer is not taking messages — cannot install %s for '%s'",
-                    self.name,
-                    needed,
-                    agent_name,
-                )
-                return InstallOutcome(busy=True)
-            try:
-                result = await asyncio.wait_for(future, timeout=install_wait_s(len(needed)))
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] Install timed out for %s ('%s')", self.name, needed, agent_name
-                )
-                return InstallOutcome(timed_out=True)
-        finally:
-            self._result_futures.pop(task_id, None)
-        outcome = outcome_from_result(result)
-        logger.info(
-            "[%s] Install result for '%s': %s",
-            self.name,
-            agent_name,
-            result.get("message", result) if isinstance(result, dict) else result,
+        request = {
+            "action": "install_restored" if restoring else "install",
+            "packages": needed,
+            "agent": agent_name,
+            "for_agent": agent_name,
+            "notify": require_install_success,
+            "require_install_success": require_install_success,
+        }
+        answer = 0 if restoring else APPROVAL_TIMEOUT_S
+        wait = answer + (
+            install_wait_s(len(needed))
+            if require_install_success
+            else PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
         )
+        try:
+            result = await ask_through(self, "installer", request, timeout=wait)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] Install timed out for %s ('%s')", self.name, needed, agent_name)
+            return InstallOutcome(timed_out=True)
+        except ReplyError as exc:
+            logger.warning("[%s] Install failed: %s", self.name, exc)
+            return outcome_from_result(exc.reply)
+        except RuntimeError as exc:
+            logger.warning("[%s] Install failed: %s", self.name, exc)
+            return InstallOutcome(busy=True)
+        outcome = outcome_from_result(result)
+        if outcome.failed:
+            logger.warning("[%s] Failed to install: %s", self.name, list(outcome.failed))
         return outcome
 
     async def _report_install_problem(
         self, config: dict, name: str, outcome: InstallOutcome
     ) -> None:
-        """Tell the user why `name` was not started, keeping it for a restart if that is all.
-
-        When a restart is the only thing missing the agent is recorded now, so
-        the restart the message asks for brings it up by itself.
-        """
+        """Report a strict spawn's failure, saving a restart only after a successful install."""
         problem = outcome.problem(name)
         logger.warning("[%s] %s", self.name, problem)
-        if outcome.restart_required:
+        if outcome.restart_required and not (outcome.failed or outcome.refused or outcome.error):
             self._register_spawn(config)
         notify = getattr(self, "notify_user", None)
         if notify is not None:
@@ -654,7 +786,8 @@ class SpawnMixin(_Host):
             return
 
         api = PersistenceAPI(db, pkl, name)
-        applied = api.load_snapshot(snapshot, replace=True)
+        # As it travelled: a date or a set in its marked JSON form.
+        applied = api.load_snapshot(decode_state(snapshot), replace=True)
         logger.info(
             "[%s] Applied migrated state for '%s': %s SQLite, %s in-memory, %s pickle key(s)",
             self.name,
@@ -729,6 +862,18 @@ class SpawnMixin(_Host):
                 except Exception:
                     return None
         return None
+
+    def _unregister_spawn(self, name: str) -> None:
+        """Take ``name`` out of main's spawn registry, as `_register_spawn` put it in."""
+        own_remover = getattr(self, "_remove_from_spawn_registry", None)
+        if callable(own_remover):
+            own_remover(name)
+            return
+        if self._registry is None:
+            return
+        main = find_main_actor(self._registry)
+        if main is not None:
+            main._remove_from_spawn_registry(name)  # pyright: ignore[reportAttributeAccessIssue]
 
     def _register_spawn(self, config: dict) -> None:
         """Record a spawn in main's spawn registry so it survives restarts.

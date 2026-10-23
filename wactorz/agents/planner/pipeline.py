@@ -14,17 +14,25 @@ import json
 import logging
 import re
 import time
-import uuid
+from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ... import plugins
 from ...config import CONFIG
-from ...core.actor import MessageType
+from ...core.actor import ask_through
+from ...core.artifacts import ArtifactError, ArtifactStore, summary
+from ...core.paths import resolve_state_dir
+from ...plugins import AgentPlugin
 from ..lookup import find_main_actor
+from ..mixins.spawning import PlacedOnNode
+from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from ..prompts.planner_prompts import (
     HA_FEASIBILITY_PROMPT,
-    PIPELINE_DESIGN_PROMPT,
-    RULE_CONFLICT_PROMPT,
+    NODE_PLACEMENT_RULES,
+    pipeline_design_prompt,
+    rule_conflict_prompt,
 )
+from .nodes import nodes_section
 from .parsing import extract_json_array, extract_json_object, loads_lenient
 
 if TYPE_CHECKING:
@@ -171,7 +179,7 @@ class PipelineMixin(_Host):
             await self._log("Step missing name — skipping")
             return StepOutcome()
 
-        if self._registry and self._registry.find_by_name(name):
+        if self._registry and (self._registry.find_by_name(name) or self._running_on_a_node(name)):
             await self._log(f"'{name}' already running — skipping")
             self._spawn_results[name] = {"ok": True, "status": "already_running"}
             return StepOutcome(wired=f"**{name}** (already active)", rule_agent=name)
@@ -197,11 +205,20 @@ class PipelineMixin(_Host):
             return StepOutcome(wired=f"**{name}** — spawn failed: {e}")
 
         if not actor:
-            self._spawn_results[name] = {"ok": False, "status": "spawn_returned_none"}
-            return StepOutcome(wired=f"**{name}** — failed to spawn")
+            # Kept when the spawn said why it failed: placement refused it, or
+            # its node never reported it.
+            known = self._spawn_results.get(name) or {}
+            if known.get("ok") is not False:
+                known = {"ok": False, "status": "spawn_returned_none"}
+                self._spawn_results[name] = known
+            why = f": {known['error']}" if known.get("error") else ""
+            return StepOutcome(wired=f"**{name}** — failed to spawn{why}")
 
         self._spawned_by_planner.append(name)
         self._spawn_results[name] = {"ok": True, "status": "spawned"}
+        if isinstance(actor, PlacedOnNode):
+            # Saved with its node, or a restart would bring it back on main.
+            spawn_cfg["node"] = actor.node
         self._register_for_restore(spawn_cfg, name, task)
 
         topics = spawn_cfg.get("mqtt_topics", [])
@@ -263,7 +280,9 @@ class PipelineMixin(_Host):
             return ""
 
         prompt = (
-            RULE_CONFLICT_PROMPT.format(task=task) + "\n".join(existing_lines) + "\n\n"
+            rule_conflict_prompt(self._prompt_fragments).format(task=task)
+            + "\n".join(existing_lines)
+            + "\n\n"
             "Respond with ONLY a JSON object:\n"
             '{"conflict": <true|false>, "items": [{"rule_id": "<id>", '
             '"kind": "duplicate|contradiction", "reason": "<one short sentence>"}]}\n'
@@ -309,15 +328,29 @@ class PipelineMixin(_Host):
         if not self.llm:
             return []
 
-        ha_entities_text, ha_available, ha_section = await self._gather_ha_entities()
-
-        camera_section, camera_snapshot_section = await self._gather_camera_context(
-            task, ha_entities_text
-        )
+        # Home Assistant's entities and camera URLs are gathered, and shown,
+        # only where it is part of the system: on any other installation the
+        # model would be handed an empty section headed with a name it has
+        # never been told about.
+        with_home_assistant = HOME_ASSISTANT_FRAGMENT in self._prompt_fragments
+        ha_entities_text, ha_available, ha_section = "", False, ""
+        camera_section = camera_snapshot_section = ""
+        if with_home_assistant:
+            ha_entities_text, ha_available, ha_section = await self._gather_ha_entities()
+            camera_section, camera_snapshot_section = await self._gather_camera_context(
+                task, ha_entities_text
+            )
 
         topic_bus_section, topic_samples_section = await self._gather_topic_bus_context()
+        topic_samples_section = with_named_samples(
+            topic_samples_section, await self._sample_named_topics(task)
+        )
+
+        registered_section = self._gather_registered_agents()
 
         notif_section = await self._gather_notification_urls(task)
+
+        models_section = await _stored_models_section()
 
         if ha_available and ha_entities_text and not skips_ha_feasibility(task):
             verdict = await self._check_ha_feasibility(task, ha_section, topic_bus_section)
@@ -326,9 +359,25 @@ class PipelineMixin(_Host):
 
         # ── 3. Decompose into spawn configs ────────────────────────────────
 
+        home_assistant_parts = (
+            [
+                "═══ HOME ASSISTANT ENTITIES ═══",
+                ha_section,
+                "",
+                "═══ CAMERA STREAM URLS ═══",
+                camera_section,
+                "",
+                "═══ CAMERA SNAPSHOT URLS ═══",
+                camera_snapshot_section,
+                "",
+            ]
+            if with_home_assistant
+            else []
+        )
+
         # Build the prompt as a list of parts to avoid f-string escape issues
         prompt_parts = [
-            PIPELINE_DESIGN_PROMPT,
+            pipeline_design_prompt(self._prompt_fragments),
             topic_bus_section,
             "",
             *(  # Include live topic samples if available
@@ -345,17 +394,18 @@ class PipelineMixin(_Host):
                 if topic_samples_section
                 else []
             ),
-            "═══ HOME ASSISTANT ENTITIES ═══",
-            ha_section,
-            "",
+            *([registered_section, ""] if registered_section else []),
+            *home_assistant_parts,
             "═══ NOTIFICATION URLS ═══",
             notif_section,
             "",
-            "═══ CAMERA STREAM URLS ═══",
-            camera_section,
+            "═══ STORED MODELS ═══",
+            models_section,
             "",
-            "═══ CAMERA SNAPSHOT URLS ═══",
-            camera_snapshot_section,
+            "═══ NODES (the machines an agent can run on) ═══",
+            nodes_section(find_main_actor(self._registry) if self._registry else None),
+            "",
+            NODE_PLACEMENT_RULES,
             "",
             "═══ OUTPUT FORMAT ═══",
             "JSON array. Each element:",
@@ -374,7 +424,13 @@ class PipelineMixin(_Host):
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
-            plan = loads_lenient(extract_json_array(response))
+            try:
+                plan = loads_lenient(extract_json_array(response))
+            except ValueError as exc:
+                # The model answered without a plan in it, which the caller
+                # handles by answering directly: an outcome, not a fault.
+                logger.warning("[%s] No pipeline plan in the model's answer (%s)", self.name, exc)
+                return []
             if isinstance(plan, list):
                 # Validate generated code — catch common LLM mistakes
                 plan = self._validate_pipeline_code(plan)
@@ -503,6 +559,20 @@ class PipelineMixin(_Host):
             topic_bus_section = f"TopicBus unavailable: {e}"
 
         return topic_bus_section, topic_samples_section
+
+    def _gather_registered_agents(self) -> str:
+        """The deployment's own agents as building blocks, or "" when it has none.
+
+        A developer's agent, declared with ``@wactorz.agent`` or registered as
+        an actor class, is something a pipeline should use rather than rewrite:
+        subscribe to what it publishes when it runs, spawn it by its registered
+        target when it does not. The model is told both, with the one spawn
+        config that is accepted for it.
+        """
+        running = set()
+        if self._registry:
+            running = {actor.name for actor in self._registry.all_actors()}
+        return registered_agents_section(plugins.discover(), running)
 
     async def _gather_camera_context(self, task: str, ha_entities_text: str) -> tuple[str, str]:
         """Real camera stream and snapshot URLs, resolved via home-assistant-agent.
@@ -775,27 +845,19 @@ class PipelineMixin(_Host):
         entity_list = " ".join(entity_ids)
         await self._log(f"Bootstrap — sending get_entities_state to HA agent for: {entity_ids}")
 
-        task_id = str(uuid.uuid4())[:8]
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
         try:
-            await self.send(
-                ha_actor.actor_id,
-                MessageType.TASK,
-                {
-                    "text": f"get_entities_state {entity_list}",
-                    "_task_id": task_id,
-                    "_reply_to": self.actor_id,
-                },
+            result = await ask_through(
+                self,
+                "home-assistant-agent",
+                {"text": f"get_entities_state {entity_list}"},
+                timeout=15.0,
             )
-            result = await asyncio.wait_for(future, timeout=15.0)
-            await self._log(f"Bootstrap — HA agent responded: {result.get('result', '')[:120]}")
+            said = result.get("result", "") if isinstance(result, dict) else result
+            await self._log(f"Bootstrap — HA agent responded: {str(said)[:120]}")
         except asyncio.TimeoutError:
             await self._log("Bootstrap — HA agent timed out")
         except Exception as exc:
             await self._log(f"Bootstrap — error: {exc}")
-        finally:
-            self._result_futures.pop(task_id, None)
 
 
 def active_rule_lines(
@@ -1041,3 +1103,93 @@ def camera_candidates(camera_entity_ids: list[str], task: str) -> list[str]:
     if not candidates and any(kw in task.lower() for kw in ("camera", "webcam", "stream")):
         candidates = camera_entity_ids[:5]
     return candidates
+
+
+def registered_agents_section(
+    registered: Mapping[str, AgentPlugin], running: Collection[str]
+) -> str:
+    """The prompt section listing the deployment's own agents, or "" with none.
+
+    One block per agent: what it does, the topics it listens to and writes to,
+    its input and output, whether it is running, and the only spawn config that
+    will start it. The rules that follow say to prefer one of these over a
+    dynamic agent that does the same, and never to invent a target: a spawn
+    config can be model-written, and only a registered target is spawned.
+    """
+    if not registered:
+        return ""
+    lines = [
+        "═══ REGISTERED AGENTS (this deployment's own — use them, do not rewrite them) ═══",
+        "",
+    ]
+    for name in sorted(registered):
+        plugin = registered[name]
+        state = "running" if name in running else "NOT running"
+        lines.append(f"{name} — {plugin.description or '(no description)'}  [{state}]")
+        if plugin.subscribes:
+            lines.append(f"  subscribes: {', '.join(plugin.subscribes)}")
+        if plugin.publishes:
+            lines.append(f"  publishes:  {', '.join(plugin.publishes)}")
+        if plugin.input_schema:
+            lines.append(f"  input:  {json.dumps(plugin.input_schema)}")
+        if plugin.output_schema:
+            lines.append(f"  output: {json.dumps(plugin.output_schema)}")
+        if plugin.capabilities:
+            lines.append(f"  capabilities: {', '.join(plugin.capabilities)}")
+        if plugin.target:
+            spawn_config = {"name": name, "type": "module", "target": plugin.target}
+            lines.append(f"  spawn_config: {json.dumps(spawn_config)}")
+        else:
+            lines.append("  spawn_config: none — registered in code; it is started by its program")
+        lines.append("")
+    lines += [
+        "RULES FOR REGISTERED AGENTS:",
+        "- If one of these already does what a step needs, make it that step. Do not write a",
+        "  dynamic agent that duplicates it.",
+        "- When it is running, subscribe to the topic it publishes (it is a live data flow).",
+        "- When it is NOT running, its step is exactly the spawn_config shown above, with",
+        '  "type": "module" and that "target" — nothing else starts it. Downstream steps then',
+        "  subscribe to what it publishes.",
+        "- Never invent or alter a target. A target not listed here is refused.",
+        "- Send it a task with agent.send_to('<name>', {...}) using its input schema when a step",
+        "  needs an answer rather than a stream.",
+    ]
+    return "\n".join(lines)
+
+
+def with_named_samples(samples_section: str, named: list[str]) -> str:
+    """``samples_section`` with the samples of the topics a request names added.
+
+    A topic an agent declares is already sampled there, under its publisher;
+    it is not repeated.
+    """
+    added = [
+        line
+        for line in named
+        if line.splitlines()[0].split("  (")[0] + "  (" not in samples_section
+    ]
+    if not added:
+        return samples_section
+    if not samples_section:
+        samples_section = "LIVE TOPIC SAMPLES (actual payloads — use THESE field names in code):"
+    return "\n".join([samples_section, *added])
+
+
+async def _stored_models_section() -> str:
+    """The models a spawn may name in ``artifacts``, read off the event loop.
+
+    A store that cannot be read is said to hold none rather than failing the
+    plan: the user asked for a pipeline, not for the store.
+    """
+    store = ArtifactStore.in_state_dir(resolve_state_dir())
+    try:
+        lines = await asyncio.to_thread(summary, store)
+    except (ArtifactError, OSError) as exc:
+        logger.warning("Could not list the stored models for the planner: %s", exc)
+        lines = []
+    if not lines:
+        return 'STORED MODELS: none. A step must not name "artifacts".'
+    return "\n".join(
+        ['STORED MODELS (name one in "artifacts" by its name, or name:version):']
+        + [f"  {line}" for line in lines]
+    )

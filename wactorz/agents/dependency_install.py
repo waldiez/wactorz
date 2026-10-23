@@ -10,11 +10,11 @@ waiting and the reading of the answer live here so both spawn paths agree.
 
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..core.actor import Message, MessageType
+from ..core.actor import ReplyError, ask_through
+from ..core.packages import APPROVAL_TIMEOUT_S
 from ..core.pip import install_wait_s
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ class InstallOutcome:
     """Package → the tail of pip's error, for each package that did not install."""
     restart_required: list[str] = field(default_factory=list)
     """``name old -> new`` for each already-imported package pip replaced."""
+    refused: list[str] = field(default_factory=list)
+    error: str = ""
     timed_out: bool = False
     unavailable: bool = False
     """No installer to ask: the packages were not installed."""
@@ -38,11 +40,22 @@ class InstallOutcome:
     def ok(self) -> bool:
         """Whether the agent can be spawned in this process now."""
         return not (
-            self.failed or self.restart_required or self.timed_out or self.unavailable or self.busy
+            self.failed
+            or self.restart_required
+            or self.refused
+            or self.error
+            or self.timed_out
+            or self.unavailable
+            or self.busy
         )
 
     def problem(self, agent_name: str) -> str:
         """The user-facing reason `agent_name` was not started, or ``""``."""
+        if self.refused or self.error:
+            return (
+                self.error
+                or f"Packages for {agent_name} were not allowed: {', '.join(self.refused)}"
+            )
         if self.unavailable:
             return (
                 f"Could not install the packages {agent_name} needs: the installer "
@@ -90,8 +103,7 @@ async def install_for_agent(
 ) -> InstallOutcome:
     """Ask the installer for `packages` on behalf of `agent_name` and wait for it.
 
-    `requester` is the actor asking. The installer's reply is routed through
-    `main`'s result futures, where main resolves every RESULT addressed to it.
+    `requester` owns the request and its reply future through the actor ask API.
     With `notify`, the installer announces each package in chat as it starts.
     """
     registry = getattr(requester, "_registry", None)
@@ -105,40 +117,28 @@ async def install_for_agent(
         )
         return InstallOutcome(unavailable=True)
 
-    task_id = f"install_{uuid.uuid4().hex[:8]}"
-    future: asyncio.Future = asyncio.get_running_loop().create_future()
-    main._result_futures[task_id] = future
     try:
-        taken = await installer.receive(
-            Message(
-                type=MessageType.TASK,
-                sender_id=requester.actor_id,
-                reply_to=main.actor_id,
-                payload={
-                    "action": "install",
-                    "packages": list(packages),
-                    "for_agent": agent_name,
-                    "notify": notify,
-                    "task": task_id,
-                    "_task_id": task_id,
-                },
-            )
+        result = await ask_through(
+            requester,
+            "installer",
+            {
+                "action": "install",
+                "packages": list(packages),
+                "agent": agent_name,
+                "for_agent": agent_name,
+                "notify": notify,
+                "require_install_success": True,
+            },
+            timeout=APPROVAL_TIMEOUT_S + install_wait_s(len(packages)),
         )
-        if taken is False:
-            # Its mailbox had no room, so no result is coming to wait for.
-            logger.warning(
-                "Installer is not taking messages — cannot install %s for '%s'",
-                packages,
-                agent_name,
-            )
-            return InstallOutcome(busy=True)
-        try:
-            result = await asyncio.wait_for(future, timeout=install_wait_s(len(packages)))
-        except asyncio.TimeoutError:
-            logger.warning("Install for '%s' timed out: %s", agent_name, packages)
-            return InstallOutcome(timed_out=True)
-    finally:
-        main._result_futures.pop(task_id, None)
+    except asyncio.TimeoutError:
+        logger.warning("Install for '%s' timed out: %s", agent_name, packages)
+        return InstallOutcome(timed_out=True)
+    except ReplyError as exc:
+        return outcome_from_result(exc.reply)
+    except RuntimeError as exc:
+        logger.warning("Installer is not taking messages: %s", exc)
+        return InstallOutcome(busy=True)
 
     outcome = outcome_from_result(result)
     logger.info(
@@ -159,5 +159,8 @@ def outcome_from_result(result: Any) -> InstallOutcome:
         for pkg in result.get("failed") or []
     }
     return InstallOutcome(
-        failed=failed, restart_required=list(result.get("restart_required") or [])
+        failed=failed,
+        restart_required=list(result.get("restart_required") or []),
+        refused=list(result.get("refused") or []),
+        error=str(result.get("error") or ""),
     )

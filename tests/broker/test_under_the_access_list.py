@@ -12,6 +12,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -19,9 +20,11 @@ from pathlib import Path
 import pytest
 
 from wactorz.agents.lookup import find_main_actor
+from wactorz.agents.main import history as main_history
 from wactorz.agents.main.actor import MainActor
 from wactorz.core import broker_accounts, node_signing
 from wactorz.core.mqtt_publisher import MQTTPublisher
+from wactorz.core.persistence import WactorzDB
 from wactorz.core.registry import ActorSystem
 
 from .acl_fixture import PASSWORD, SERVER
@@ -42,6 +45,12 @@ async def setup(agent):
 
 async def handle_task(agent, payload):
     return {"result": "echo:" + str(payload.get("text", ""))}
+"""
+
+READER = """
+async def handle_task(agent, payload):
+    rows = await agent.query_ts(hours=1, field="temp")
+    return {"result": [row["value"] for row in rows]}
 """
 
 
@@ -123,9 +132,9 @@ def _agents_main_sees(main: MainActor) -> list[str]:
     return list(main._known_nodes.get(NODE, {}).get("agents", []))
 
 
-async def test_main_spawns_and_asks_an_agent_on_a_node_with_its_own_account(
-    main: MainActor, node_process: subprocess.Popen[bytes]
-) -> None:
+async def _node_heard(main: MainActor, node_process: subprocess.Popen[bytes]) -> None:
+    """Wait until main hears from the node process, failing at once if it exits."""
+
     def _node_is_running() -> bool:
         if node_process.poll() is not None:
             said = (
@@ -136,13 +145,42 @@ async def test_main_spawns_and_asks_an_agent_on_a_node_with_its_own_account(
 
     await until(_node_is_running, "main hearing from the node process", NODE_WAIT_S)
 
-    await main._spawn_remote({"name": "echo", "type": "dynamic", "code": ECHO}, NODE, save=False)
+
+async def _spawned_on_the_node(main: MainActor, name: str, code: str) -> None:
+    await main._spawn_remote({"name": name, "type": "dynamic", "code": code}, NODE, save=False)
     await until(
-        lambda: "echo" in _agents_main_sees(main), "main seeing 'echo' on the node", NODE_WAIT_S
+        lambda: name in _agents_main_sees(main), f"main seeing {name!r} on the node", NODE_WAIT_S
     )
+
+
+async def test_main_spawns_and_asks_an_agent_on_a_node_with_its_own_account(
+    main: MainActor, node_process: subprocess.Popen[bytes]
+) -> None:
+    await _node_heard(main, node_process)
+    await _spawned_on_the_node(main, "echo", ECHO)
 
     reply = await asyncio.wait_for(
         main.delegation.delegate_task("echo", "ping", timeout=30), timeout=60
     )
     assert reply is not None
     assert reply.get("result") == "echo:ping"
+
+
+async def test_an_agent_on_the_node_reads_main_s_history(
+    main: MainActor,
+    node_process: subprocess.Popen[bytes],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = WactorzDB(str(tmp_path / "history.db"))
+    db.write_sensor(time.time(), "sensors/t", "sensor.kitchen", "temp", 21.5)
+    monkeypatch.setattr(main_history, "get_db", lambda: db)
+    await _node_heard(main, node_process)
+    await _spawned_on_the_node(main, "reader", READER)
+
+    reply = await asyncio.wait_for(
+        main.delegation.delegate_task("reader", "how warm?", timeout=30), timeout=60
+    )
+
+    assert reply is not None
+    assert reply.get("result") == [21.5]

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OverviewView, type OverviewHost } from "../ui/dashboard/overview";
 import type { AgentInfo } from "../types/agent";
 import type { StatCardData, AgentAction } from "../ui/dashboard/cards";
+import type { TrendKind } from "../ui/dashboard/trendPanel";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
@@ -30,6 +31,9 @@ function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): Overv
         statData,
         onChat: vi.fn<(name: string) => void>(),
         onCommand: vi.fn<(id: string, action: AgentAction, btn: HTMLButtonElement) => void>(),
+        agentTrend: () => undefined,
+        nodeTrend: () => undefined,
+        onOpenTrend: vi.fn<(kind: TrendKind, name: string) => void>(),
     };
 }
 
@@ -187,5 +191,70 @@ describe("OverviewView before it is mounted", () => {
         const view = new OverviewView(makeHost());
 
         expect(() => view.renderNodes()).not.toThrow();
+    });
+});
+
+describe("OverviewView trends", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    it("draws each card's trend on build and repaints it when asked", () => {
+        const host = makeHost([agent("worker")]);
+        let rate = [{ t: 0, v: 1 }];
+        host.agentTrend = name => (name === "worker" ? rate : undefined);
+        mount(host);
+        const value = (): string | null | undefined =>
+            host.root.querySelector('[data-id="worker"] .af-card-trend-value')?.textContent;
+        expect(value()).toBe("1.0/min");
+
+        rate = [{ t: 0, v: 5 }];
+        new OverviewView(host).paintTrends();
+        expect(value()).toBe("5.0/min");
+    });
+
+    it("opens an agent's history from its card's History button", () => {
+        const host = makeHost([agent("worker")]);
+        mount(host);
+        host.root.querySelector<HTMLButtonElement>('[data-id="worker"] .af-history-btn')!.click();
+        expect(host.onOpenTrend).toHaveBeenCalledWith("agents", "worker");
+    });
+
+    it("draws each remote node as a card with its manifest and trend, and opens its history", () => {
+        const host = makeHost([agent("worker")]);
+        host.remoteNodes.set("rpi", {
+            agents: ["flic"],
+            lastSeen: Date.now(),
+            readings: { cpu_pct: 7 },
+            manifest: { arch: "aarch64" },
+        });
+        host.nodeTrend = name => (name === "rpi" ? { cpu: [{ t: 0, v: 7 }], free: [] } : undefined);
+        mount(host);
+
+        const card = host.root.querySelector<HTMLElement>('.af-node-card[data-node="rpi"]')!;
+        expect(card.querySelector(".af-node-machine")?.textContent).toBe("aarch64");
+        expect(card.querySelector(".af-node-readings")?.textContent).toBe("CPU 7%");
+        expect(card.querySelectorAll(".af-node-trend").length).toBe(2);
+
+        card.querySelector<HTMLButtonElement>(".af-node-history")!.click();
+        expect(host.onOpenTrend).toHaveBeenCalledWith("nodes", "rpi");
+    });
+});
+
+describe("a card's state for its dot", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    it("is set when the card is drawn and kept current when it is patched", () => {
+        // The dot's freshness reads it: a stopped agent is expected to be quiet.
+        const host = makeHost([agent("worker")]);
+        const view = mount(host);
+        const card = (): HTMLElement => host.root.querySelector<HTMLElement>('[data-id="worker"]')!;
+        expect(card().dataset["state"]).toBe("running");
+
+        view.patchCard(agent("worker", { state: "stopped" }));
+
+        expect(card().dataset["state"]).toBe("stopped");
     });
 });

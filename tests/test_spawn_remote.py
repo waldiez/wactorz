@@ -8,12 +8,15 @@ in the registry and being carried home again on a migrate-back. A move that
 saved the wire config instead would look correct and would quietly grow the
 registry with code nobody wrote.
 
-Package installs happen before the spawn, over SSH, through the installer
-agent. The node's address is looked for in three places, and the install is
-allowed to fail: an agent that spawns without its packages reports a real error
-later, whereas one that never spawns because a `pip` call timed out is a silent
-loss. The payload carries the node's name rather than its credentials, so the
-installer resolves the target itself.
+Before anything is sent, the agent's packages are cleared: the node installs
+what the spawn lists, so one the operator did not allow stops the spawn here.
+An agent put back where it ran is not asked about again. The install itself
+then runs over SSH through the installer agent, and is allowed to fail: an
+agent that spawns without its packages reports a real error later, whereas one
+that never spawns because a `pip` call timed out is a silent loss. The node's
+address is looked for in the heartbeat table, the spawn registry and what the
+installer recorded, and the payload carries the node's name rather than its
+credentials, so the installer resolves the target itself.
 """
 
 import asyncio
@@ -62,6 +65,7 @@ class _Main:
         installer: _Installer | None = None,
         install_result: dict[str, Any] | None = None,
         install_hangs: bool = False,
+        clear_result: dict[str, Any] | None = None,
     ) -> None:
         main = MainActor.__new__(MainActor)
         main.name = "main"
@@ -76,6 +80,7 @@ class _Main:
         self.desired_state: list[tuple[str, Any]] = []
         self.saved: list[dict[str, Any]] = []
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
+        self.cleared: list[dict[str, Any]] = []
         self._spawn_registry = dict(spawn_registry or {})
         main._result_futures = {}
 
@@ -86,10 +91,15 @@ class _Main:
             self.desired_state.append((node, cfg))
 
         async def _send(actor_id: str, kind: Any, payload: dict[str, Any]) -> None:
+            future = main._result_futures.get(payload["_task_id"])
+            if payload.get("action") == "packages_clear":
+                # Asked before the install, and answered apart from it.
+                self.cleared.append(payload)
+                future.set_result(clear_result or {"success": True})  # pyright: ignore[reportOptionalMemberAccess]
+                return
             self.sent.append((actor_id, kind, payload))
             if install_hangs:
                 return
-            future = main._result_futures.get(payload["_task_id"])
             if future is not None and not future.done():
                 future.set_result(install_result or {"success": True})
 
@@ -134,7 +144,7 @@ class TestWhatGoesOverTheWireVersusWhatIsSaved:
 
         await main.spawn(llm_agent())
 
-        assert main.saved == [llm_agent()]
+        assert main.saved == [{**llm_agent(), "node": "rpi"}]
 
     async def test_the_callers_config_is_left_alone(self) -> None:
         # The same dict is handed to several writers, so synthesis copies.
@@ -222,7 +232,7 @@ class TestReachingTheNode:
 
 
 class TestInstallingPackagesFirst:
-    """Installs run before the spawn, and are never allowed to prevent it."""
+    """Installs run before the spawn, and only a refused package prevents it."""
 
     async def test_a_comma_separated_string_is_a_list_of_packages(self) -> None:
         main = _Main(known_nodes={"rpi": {"host": "h"}}, installer=_Installer())
@@ -264,6 +274,59 @@ class TestInstallingPackagesFirst:
         await main.spawn(llm_agent(install=["httpx"]))
 
         assert main.published_to("/spawn")[0] == "nodes/rpi/spawn"
+
+    async def test_a_package_the_operator_did_not_allow_stops_it(self) -> None:
+        # The node installs what the spawn lists, so sending it anyway would
+        # install there what the installer refused here.
+        main = _Main(
+            known_nodes={"rpi": {"host": "h"}},
+            installer=_Installer(),
+            clear_result={
+                "success": False,
+                "error": "not allowed",
+                "refused": ["wactorz-unlisted-probe"],
+            },
+        )
+
+        await main.spawn(llm_agent(install=["wactorz-unlisted-probe"]))
+
+        assert main.cleared[0]["packages"] == ["wactorz-unlisted-probe"]
+        assert not main.sent
+        assert not [row for row in main.published if row[0].endswith("/spawn")]
+        assert not main.desired_state
+        assert not main.saved
+        (_, log, _) = main.published_to("/logs")
+        assert "not allowed" in log["message"]
+
+    async def test_with_no_installer_only_listed_packages_go(self) -> None:
+        # The node would install them itself, so no installer is no excuse.
+        main = _Main(known_nodes={"rpi": {"host": "h"}}, installer=None)
+
+        await main.spawn(llm_agent(install=["wactorz-unlisted-probe"]))
+        await main.spawn(llm_agent(name="other", install=["numpy"]))
+
+        spawned = [row[1]["name"] for row in main.published if row[0].endswith("/spawn")]
+        assert spawned == ["other"]
+
+    async def test_putting_an_agent_back_where_it_ran_clears_nothing(self) -> None:
+        # Its packages were cleared when it was first placed; main saves no other.
+        main = _Main(known_nodes={"rpi": {"host": "h"}}, installer=None)
+
+        await main.actor.spawns._spawn_remote(
+            llm_agent(install=["wactorz-unlisted-probe"]), "rpi", save=False, restoring=True
+        )
+
+        assert main.published_to("/spawn")[0] == "nodes/rpi/spawn"
+
+    async def test_and_installs_without_asking(self) -> None:
+        main = _Main(known_nodes={"rpi": {"host": "h"}}, installer=_Installer())
+
+        await main.actor.spawns._spawn_remote(
+            llm_agent(install=["wactorz-unlisted-probe"]), "rpi", save=False, restoring=True
+        )
+
+        assert not main.cleared
+        assert [payload["action"] for _, _, payload in main.sent] == ["node_install_restored"]
 
     async def test_the_waiting_future_is_always_dropped(self) -> None:
         # It is keyed by a fresh task id each time; keeping them would grow the
@@ -333,6 +396,15 @@ class TestSynthesizingTheBridge:
 
     def test_an_llm_config_without_code_gets_some(self) -> None:
         assert self._inject(llm_agent())["code"]
+
+    def test_a_prompt_without_a_type_gets_code_and_is_named_llm(self) -> None:
+        config = {"name": "helper", "system_prompt": "Be brief."}
+
+        injected = self._inject(config)
+
+        assert injected["code"]
+        assert injected["type"] == "llm", "so a move home takes the bridge code out again"
+        assert "type" not in config, "the caller's dict is left alone"
 
     def test_a_config_that_brought_its_own_code_is_untouched(self) -> None:
         config = llm_agent(code="print(1)")
@@ -404,7 +476,7 @@ class TestWhatANodeCanRun:
             {"name": "flic", "type": "native"},
             {"name": "lights", "type": "ha_actuator"},
             {"name": "nightly", "type": "scheduled"},
-            {"name": "helper", "system_prompt": "Be brief."},
+            {"name": "empty"},
         ],
     )
     async def test_one_with_no_program_is_not_sent(self, config: dict[str, Any]) -> None:
@@ -423,6 +495,8 @@ class TestWhatANodeCanRun:
         [
             {"name": "collector", "code": "async def process(agent):\n    pass\n"},
             llm_agent(),
+            # A prompt and no code: an LLM agent, which main writes the code for.
+            {"name": "helper", "system_prompt": "Be brief."},
         ],
     )
     async def test_generated_code_and_an_llm_agent_are(self, config: dict[str, Any]) -> None:

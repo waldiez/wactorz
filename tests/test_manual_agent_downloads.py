@@ -16,10 +16,9 @@ from typing import Any
 
 import pytest
 
-from wactorz.catalogue_agents.manual_agent import AGENT_CODE
+from tests.programs import program_namespace
 
-NS: dict[str, Any] = {}
-exec(compile(AGENT_CODE, "manual_agent<AGENT_CODE>", "exec"), NS)
+NS = program_namespace("manual_agent.py")
 
 #: Host names the stubbed lookup knows, and the addresses each resolves to.
 DNS: dict[str, list[str]] = {

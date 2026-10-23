@@ -11,11 +11,12 @@ Usage::
     python -m wactorz.evalharness --models ollama:llama3 --categories intent,ha
     python -m wactorz.evalharness --prompts bench.jsonl --repeat 3 --out results/
     python -m wactorz.evalharness --models ollama:llama3 --temperature 0
+    python -m wactorz.evalharness --models ollama:llama3 --profile minimal
 
 Benchmark file format (JSONL, one case per line)::
 
     {"id": "intent-001", "category": "intent", "prompt": "turn on the lamp",
-     "expected": "ACTUATE"}
+     "expected": "ACTUATE", "expected_minimal": "OTHER"}
 
 ``expected`` semantics per category:
 
@@ -30,11 +31,21 @@ Benchmark file format (JSONL, one case per line)::
     dynamic   list of function names the generated Python must define
               (checked by parsing the code — it must also compile)
 
-The intent / ha / actuator categories use the framework's unmodified
-production system prompts. The planner / dynamic system prompts here are
-condensed variants of the production ones (which are built dynamically inside
-the agents and run to hundreds of lines); they preserve the required output
-format so scoring stays faithful.
+The intent, ha, actuator and planner categories use the framework's
+production system prompts; the planner's is the pipeline-design preamble with
+the output format the planner appends at runtime and none of its live
+context. The dynamic system prompt is a condensed variant of the production
+one, which is built inside the agent; it preserves the required output format
+so scoring stays faithful.
+
+``--profile`` says which installation the prompts are assembled for: ``ha``
+(the default) is one with Home Assistant configured, ``minimal`` one without,
+where main's prompts never mention it and the classifier offers PIPELINE and
+OTHER only. On the minimal profile the ha and actuator categories are skipped,
+since those call sites exist only with Home Assistant, and a case's
+``expected_minimal`` replaces its ``expected`` when present, for a prompt whose
+right answer differs there ("turn on the lamp" is ACTUATE with Home Assistant
+and OTHER without).
 
 Without ``--prompts``, a small built-in seed set (three cases per category)
 runs so the pipeline can be smoke-tested end to end; real experiments should
@@ -48,27 +59,44 @@ import csv
 import json
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+from .agents.prompts.assemble import PromptFragment
+from .agents.prompts.fragments import DEFAULT_FRAGMENTS
+from .agents.prompts.planner_prompts import pipeline_design_prompt
 
 logger = logging.getLogger(__name__)
 
 CATEGORIES = ("intent", "ha", "actuator", "planner", "dynamic")
 
+#: Which installation the prompts are assembled for: with Home Assistant, or without.
+PROFILES = ("ha", "minimal")
+
+#: Call sites that exist only with Home Assistant; skipped on the minimal profile.
+HOME_ASSISTANT_CATEGORIES = ("ha", "actuator")
+
 # Output budget per category — mirrors what the framework passes in production
 # (e.g. the intent classifier runs with max_tokens=10).
-_MAX_TOKENS = {"intent": 10, "ha": 10, "actuator": 500, "planner": 800, "dynamic": 1200}
+_MAX_TOKENS = {"intent": 10, "ha": 10, "actuator": 500, "planner": 4000, "dynamic": 1200}
 
-_PLANNER_SYSTEM = (
-    "You are designing reactive automation pipelines for a multi-agent IoT system.\n"
-    "Output ONLY a valid JSON array - no explanation, no markdown, no code fences.\n"
-    "Each array item is a spawn config dict with at least:\n"
-    '  "name": "<kebab-case-agent-name>"\n'
-    '  "type": one of "ha_actuator" | "scheduled" | "dynamic"\n'
-    '  "description": "<what this agent does>"\n'
-    'Use "ha_actuator" to call Home Assistant services on an MQTT trigger,\n'
-    '"scheduled" for time-based triggers, and "dynamic" for custom logic.\n'
+#: What the planner appends after its preamble at runtime, less the live
+#: context (topic contracts, entities, URLs), which a benchmark has not got.
+_PLANNER_TAIL = (
+    "\n(none)\n\n"
+    "═══ OUTPUT FORMAT ═══\n"
+    "JSON array. Each element:\n"
+    '{"name": "<unique-kebab-name>", "description": "<one sentence>", "spawn_config": {<full spawn_config>}}'
 )
+
+
+def _planner_system(fragments: Sequence[PromptFragment]) -> str:
+    """The planner's production preamble for these integrations, with the
+    output format it is given at runtime.
+    """
+    return pipeline_design_prompt(fragments) + _PLANNER_TAIL
+
 
 _CODEGEN_SYSTEM = (
     "You write Python code for a dynamic agent in a multi-agent IoT framework.\n"
@@ -89,6 +117,7 @@ _SEED_CASES: list[dict[str, Any]] = [
         "category": "intent",
         "prompt": "turn on the office light",
         "expected": "ACTUATE",
+        "expected_minimal": "OTHER",
     },
     {
         "id": "intent-002",
@@ -101,6 +130,7 @@ _SEED_CASES: list[dict[str, Any]] = [
         "category": "intent",
         "prompt": "list my home assistant automations",
         "expected": "HA",
+        "expected_minimal": "OTHER",
     },
     {
         # The word "automation" does not make it HA: a new rule is a Wactorz
@@ -164,18 +194,21 @@ _SEED_CASES: list[dict[str, Any]] = [
         "category": "planner",
         "prompt": "when the front door opens, turn on the hallway light (entity light.hall). Door state arrives on homeassistant/state_changes/# with entity_id binary_sensor.front_door.",
         "expected": ["ha_actuator", "dynamic"],
+        "expected_minimal": ["dynamic", "scheduled"],
     },
     {
         "id": "planner-002",
         "category": "planner",
         "prompt": "every weekday at 7:30 turn on the coffee machine (switch.coffee).",
         "expected": ["scheduled", "ha_actuator"],
+        "expected_minimal": ["dynamic", "scheduled"],
     },
     {
         "id": "planner-003",
         "category": "planner",
         "prompt": "when temperature on sensors/livingroom/temp goes above 28, send a Discord notification via webhook https://discord.example/hook.",
         "expected": ["dynamic", "ha_actuator", "scheduled"],
+        "expected_minimal": ["dynamic", "scheduled"],
     },
     {
         "id": "dynamic-001",
@@ -281,11 +314,21 @@ def score_planner(output: str, expected: list[str]) -> bool:
     for item in plan:
         if not isinstance(item, dict):
             return False
-        if str(item.get("type")) not in allowed:
+        if str(_step_type(item)) not in allowed:
             return False
         if not item.get("name") or not item.get("description"):
             return False
     return True
+
+
+def _step_type(item: dict) -> Any:
+    """A plan step's agent type: at the top level, or inside the spawn_config
+    the production output format puts it in.
+    """
+    if "type" in item:
+        return item["type"]
+    spawn_config = item.get("spawn_config")
+    return spawn_config.get("type") if isinstance(spawn_config, dict) else None
 
 
 def score_dynamic(output: str, expected: list[str]) -> bool:
@@ -308,19 +351,31 @@ _SCORERS = {
 }
 
 
-def _system_prompts() -> dict[str, str]:
-    """Production prompts where importable; condensed variants otherwise.
-    Imported lazily so scorer unit tests never pull agent modules.
+def _fragments_for(profile: str) -> tuple[PromptFragment, ...]:
+    """The prompt fragments of the installation a profile stands for."""
+    if profile not in PROFILES:
+        msg = f"unknown profile {profile!r}; one of {PROFILES}"
+        raise ValueError(msg)
+    return DEFAULT_FRAGMENTS if profile == "ha" else ()
+
+
+def _system_prompts(profile: str = "ha") -> dict[str, str]:
+    """The system prompt of each call site, assembled for ``profile``.
+
+    Production prompts where importable; a condensed variant for the dynamic
+    call site. Imported here rather than at module scope so the scorer unit
+    tests never pull the agent modules.
     """
     from .agents.one_off_actuator_agent import _RESOLVER_PROMPT
     from .agents.prompts.home_assistant_prompts import HA_ACTION_CLASSIFICATION_PROMPT
-    from .agents.prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
+    from .agents.prompts.main_actor_prompts import intent_classifier_prompt
 
+    fragments = _fragments_for(profile)
     return {
-        "intent": INTENT_CLASSIFIER_PROMPT,
+        "intent": intent_classifier_prompt(fragments),
         "ha": HA_ACTION_CLASSIFICATION_PROMPT,
         "actuator": _RESOLVER_PROMPT,
-        "planner": _PLANNER_SYSTEM,
+        "planner": _planner_system(fragments),
         "dynamic": _CODEGEN_SYSTEM,
     }
 
@@ -328,9 +383,15 @@ def _system_prompts() -> dict[str, str]:
 # ── Case loading ─────────────────────────────────────────────────────────────
 
 
-def load_cases(path: str | None, categories: list[str]) -> list[dict[str, Any]]:
+def load_cases(
+    path: str | None, categories: list[str], profile: str = "ha"
+) -> list[dict[str, Any]]:
     """Load benchmark cases from a JSONL file (or the built-in seed set) and
     filter to the requested categories. Malformed lines are skipped loudly.
+
+    A case carrying ``expected_<profile>`` is returned with that as its
+    ``expected``, so one benchmark serves both profiles; a case without one is
+    returned as it is.
     """
     if path:
         cases = []
@@ -354,7 +415,14 @@ def load_cases(path: str | None, categories: list[str]) -> list[dict[str, Any]]:
             cases.append(case)
     else:
         cases = list(_SEED_CASES)
-    return [c for c in cases if c["category"] in categories]
+    return [_for_profile(c, profile) for c in cases if c["category"] in categories]
+
+
+def _for_profile(case: dict[str, Any], profile: str) -> dict[str, Any]:
+    key = f"expected_{profile}"
+    if key not in case:
+        return case
+    return {**case, "expected": case[key]}
 
 
 # ── Runner ───────────────────────────────────────────────────────────────────
@@ -436,10 +504,11 @@ async def run_eval(
     repeat: int,
     out_dir: Path,
     temperature: float | None = None,
+    profile: str = "ha",
 ) -> list[dict]:
     from .llm_factory import create_provider
 
-    systems = _system_prompts()
+    systems = _system_prompts(profile)
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"
     records: list[dict] = []
@@ -533,6 +602,13 @@ def main(argv: list[str] | None = None) -> int:
         "Omit to use LLM_TEMPERATURE, or each provider's default when that is unset.",
     )
     parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default="ha",
+        help="Which installation the prompts are assembled for: ha (with Home Assistant, "
+        "the default) or minimal (without; skips the ha and actuator call sites).",
+    )
+    parser.add_argument(
         "--out", default="eval_results", help="Output directory (default ./eval_results)"
     )
     args = parser.parse_args(argv)
@@ -542,13 +618,25 @@ def main(argv: list[str] | None = None) -> int:
     unknown = [c for c in categories if c not in CATEGORIES]
     if unknown:
         parser.error(f"unknown categories: {unknown}")
+    if args.profile == "minimal":
+        skipped = [c for c in categories if c in HOME_ASSISTANT_CATEGORIES]
+        if skipped:
+            logger.info("[eval] Minimal profile: skipping %s (Home Assistant only)", skipped)
+        categories = [c for c in categories if c not in HOME_ASSISTANT_CATEGORIES]
     model_specs = [m.strip() for m in args.models.split(",") if m.strip()]
-    cases = load_cases(args.prompts, categories)
+    cases = load_cases(args.prompts, categories, args.profile)
     if not cases:
         parser.error("no benchmark cases matched")
 
     rows = asyncio.run(
-        run_eval(model_specs, cases, args.repeat, Path(args.out), temperature=args.temperature)
+        run_eval(
+            model_specs,
+            cases,
+            args.repeat,
+            Path(args.out),
+            temperature=args.temperature,
+            profile=args.profile,
+        )
     )
     _print_summary(rows)
     print(

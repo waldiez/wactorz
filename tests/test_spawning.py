@@ -11,6 +11,7 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 
 import asyncio
 import json
+import logging
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,8 +25,10 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
-from wactorz.core.actor import ActorState
+from wactorz.core.actor import ActorState, ReplyError
+from wactorz.core.packages import APPROVAL_TIMEOUT_S
 from wactorz.core.persistence import PickleStore, WactorzDB
+from wactorz.core.pip import PIP_TIMEOUT_S
 
 
 def run(coro):
@@ -142,6 +145,9 @@ class MainHost(_BaseHost):
 
     def _save_to_spawn_registry(self, config):
         self.registered.append(config)
+
+    def _remove_from_spawn_registry(self, name):
+        self.registered = [c for c in self.registered if c.get("name") != name]
 
     def get_user_facts(self):
         return {"pref_timezone": "Europe/Athens"}
@@ -390,7 +396,13 @@ def test_a_failed_install_is_reported_and_not_spawned(main_host):
     }
     actor = run(
         main_host._spawn_local_from_config(
-            {"name": "d6", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            {
+                "name": "d6",
+                "type": "dynamic",
+                "code": "x",
+                "require_install_success": True,
+                "install": ["totally_missing_pkg_zzz"],
+            },
             blocking_install=True,
         )
     )
@@ -407,7 +419,13 @@ def test_an_install_needing_a_restart_keeps_the_agent_for_after_it(main_host):
 
     async def scenario():
         await main_host._spawn_local_from_config(
-            {"name": "d7", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            {
+                "name": "d7",
+                "type": "dynamic",
+                "code": "x",
+                "require_install_success": True,
+                "install": ["totally_missing_pkg_zzz"],
+            },
             blocking_install=False,
         )
         await asyncio.gather(*main_host.detached)
@@ -424,7 +442,7 @@ def test_the_install_request_asks_for_chat_progress(main_host):
     main_host._registry.add(FakeActor("installer"))
     run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d8"))
     (request,) = main_host.sent
-    assert request["notify"] is True
+    assert request["notify"] is False
     assert request["for_agent"] == "d8"
 
 
@@ -450,6 +468,168 @@ def test_install_fast_path_no_send(main_host):
     main_host._registry.add(FakeActor("installer"))
     run(main_host._install_packages(["os", "json"], agent_name="x"))
     assert not main_host.sent
+
+
+def test_an_install_that_times_out_is_a_warning_not_a_stop(monkeypatch, main_host, caplog):
+    # The agent is spawned regardless and says so itself if the import fails.
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _never(*_args, **_kwargs):
+        raise asyncio.TimeoutError("'installer' did not answer within 120s")
+
+    monkeypatch.setattr(spawning, "ask_through", _never)
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Install timed out" in caplog.text
+
+
+def test_an_install_the_installer_refuses_is_a_warning(monkeypatch, main_host, caplog):
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _refused(*_args, **_kwargs):
+        raise RuntimeError("'installer' answered with an error: pip exited with 1")
+
+    monkeypatch.setattr(spawning, "ask_through", _refused)
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Install failed: 'installer' answered with an error" in caplog.text
+
+
+def test_packages_the_installer_could_not_install_are_named(main_host, caplog):
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _send(target_id, msg_type, payload):
+        fut = main_host._result_futures[payload["_task_id"]]
+        fut.set_result({"message": "partly", "failed": ["totally_missing_pkg_zzz"]})
+        return True
+
+    main_host.send = _send
+    with caplog.at_level(logging.WARNING, logger="wactorz.agents.mixins.spawning"):
+        run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
+
+    assert "Failed to install: ['totally_missing_pkg_zzz']" in caplog.text
+
+
+def _refusing_installer(monkeypatch, main_host):
+    """The installer answering that the operator did not allow the package."""
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _refused(*_args, **_kwargs):
+        raise ReplyError(
+            "installer",
+            {
+                "error": "Not installed: wactorz-unlisted-probe is not allowed",
+                "refused": ["wactorz-unlisted-probe"],
+            },
+        )
+
+    monkeypatch.setattr(spawning, "ask_through", _refused)
+
+
+def test_a_package_the_operator_did_not_allow_stops_a_blocking_spawn(monkeypatch, main_host):
+    _refusing_installer(monkeypatch, main_host)
+
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "d6", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
+            blocking_install=True,
+        )
+    )
+
+    assert actor is None
+    assert main_host.spawn_calls == []
+
+
+def test_a_package_the_operator_did_not_allow_stops_a_background_spawn(monkeypatch, main_host):
+    _refusing_installer(monkeypatch, main_host)
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d7", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+    assert main_host.spawn_calls == []
+    assert not main_host.registered
+    errors = [p["message"] for _, p in main_host.published if p.get("type") == "error"]
+    assert errors and "wactorz-unlisted-probe is not allowed" in errors[0]
+
+
+def test_a_restore_installs_without_asking(monkeypatch, main_host):
+    # Its packages were cleared when it was first placed; nobody may be there to answer.
+    main_host._registry.add(FakeActor("installer"))
+    asked: list[str] = []
+
+    async def _ask(_host, _target, request, **_kwargs):
+        asked.append(request["action"])
+        return {"success": True}
+
+    monkeypatch.setattr(spawning, "ask_through", _ask)
+
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "d8", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
+            register=False,
+            from_registry=True,
+            blocking_install=True,
+        )
+    )
+
+    assert asked == ["install_restored"]
+
+
+def test_a_restore_waits_for_pip_only(monkeypatch, main_host):
+    # Nothing is asked on that path, so there is no answer to wait for.
+    main_host._registry.add(FakeActor("installer"))
+    waited: list[float] = []
+
+    async def _ask(*_args, timeout, **_kwargs):
+        waited.append(timeout)
+        return {"success": True}
+
+    monkeypatch.setattr(spawning, "ask_through", _ask)
+
+    run(main_host._install_packages(["missing_a_zzz"], agent_name="d", restoring=True))
+
+    assert waited[0] < APPROVAL_TIMEOUT_S + 2 * PIP_TIMEOUT_S
+
+
+def test_a_refused_spawn_it_did_not_save_leaves_the_registry_alone(monkeypatch, main_host):
+    _refusing_installer(monkeypatch, main_host)
+    saved = {"name": "d9", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]}
+    main_host.registered.append(saved)
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            dict(saved), register=False, blocking_install=False
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+    assert main_host.registered == [saved]
+
+
+def test_the_wait_outlasts_every_pip_run_the_installer_may_make(monkeypatch, main_host):
+    # A shorter wait would give up on a large download still being made, and
+    # spawn the agent without it.
+    main_host._registry.add(FakeActor("installer"))
+    waited: list[float] = []
+
+    async def _ask(*_args, timeout, **_kwargs):
+        waited.append(timeout)
+        return {"success": True}
+
+    monkeypatch.setattr(spawning, "ask_through", _ask)
+
+    run(main_host._install_packages(["missing_a_zzz", "missing_b_zzz"], agent_name="d"))
+
+    assert waited[0] > APPROVAL_TIMEOUT_S + 2 * 2 * PIP_TIMEOUT_S
 
 
 # ── Flags / wiring ───────────────────────────────────────────────────────────
@@ -683,9 +863,10 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
     main_host._registry.add(FakeActor("installer"))
     real_install = main_host._install_packages
 
-    async def install_then_stop(packages, agent_name):
-        await real_install(packages, agent_name=agent_name)
+    async def install_then_stop(packages, agent_name, restoring=False, **kwargs):
+        outcome = await real_install(packages, agent_name=agent_name, restoring=restoring, **kwargs)
         main_host.state = ActorState.STOPPED
+        return outcome
 
     main_host._install_packages = install_then_stop
 
@@ -714,12 +895,17 @@ def test_without_an_installer_the_install_is_reported_unavailable(main_host):
 def test_an_installer_that_never_answers_times_out(main_host, monkeypatch):
     main_host._registry.add(FakeActor("installer"))
     monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 0.05)
+    monkeypatch.setattr(spawning, "APPROVAL_TIMEOUT_S", 0)
 
     async def silent_send(target_id, msg_type, payload):
         main_host.sent.append(payload)  # taken in, never answered
 
     main_host.send = silent_send
-    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d11"))
+    outcome = run(
+        main_host._install_packages(
+            ["totally_missing_pkg_zzz"], agent_name="d11", require_install_success=True
+        )
+    )
     assert outcome.timed_out
     assert main_host._result_futures == {}
 

@@ -110,6 +110,8 @@ dev       = [
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
+    # So the doc-to-pptx agent's deck is built for real in its tests.
+    "python-pptx>=1.0.2",
     "prek>=0.5.3",
     "coverage>=7.13.5",
     "watchdog>=6.0.0",
@@ -157,6 +159,8 @@ wactorz         = "wactorz.cli:main"
 wactorz-node    = "wactorz.node.cli:main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
+wactorz-state   = "wactorz.state_archive:main"
+wactorz-artifacts = "wactorz.artifacts_cli:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
@@ -182,6 +186,12 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # proposes older ones in their place. Kept in the lockfile as a span, so
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
+# A security fix younger than that is let through by name, up to the day it was
+# taken: certifi drops emSign roots whose intermediate keys were compromised
+# (GHSA-6q48-6c7w-9gw2), pip vendors that certifi, and Pillow 13 fixes decoder
+# memory-safety flaws (GHSA-8g5g-8vmr-9782 and others). An entry can go once the
+# release it admits is older than the window.
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", pip = "2026-10-21T00:00:00Z", pillow = "2026-10-21T00:00:00Z" }
 
 # Reachy's SDK client uses the Starlette APIs retained in the patched releases.
 # Follow upstream's secure range without changing the robot SDK version; the
@@ -310,6 +320,10 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
+    "TRY300",  # a try guards the call that can fail; the success return goes in its else
+    "TRY301",  # a raise inside a try that catches it: control flow by exception
+    "TRY400",  # logger.error in an except drops the traceback; log after the handler
+    "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -327,14 +341,9 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, pathlib, security) stay
-# advisory via `make lint-py` until each is triaged and gated. One member of the
-# pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
-# is already a Path, and the convention here is that a path is a Path — which
-# those call sites satisfy — not that every read goes through `Path.open`. It is
-# declined on the `make lint-py` line itself rather than in the `ignore` above,
-# which a CLI `--extend-select` outranks; the per-file entries below still apply,
-# which is why the exemptions there work. Logging moved out
+# Further families (exception style, complexity, prints) stay advisory via
+# `make lint-py` until each is triaged and gated. Pathlib moved out once the tree
+# reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
 # debug line in production, and the message loses the structure that lets a log
@@ -350,8 +359,9 @@ ignore = [
 # mechanism rather than a guard stripped under `-O`, the credentials are fixture
 # strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
 # a path a test asserts about rather than writes to, and `exec` is how the
-# catalogue programs get parsed. None of it reaches an installed wheel.
-"tests/*" = ["B", "E402", "D", "S"]
+# catalogue programs get parsed. None of it reaches an installed wheel. A test
+# raises inside a `try` to produce the exception, or the rollback, it examines.
+"tests/*" = ["B", "E402", "D", "S", "TRY301"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
@@ -377,6 +387,7 @@ ignore = [
 "wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow
 "wactorz/core/integrations/google_mcp.py" = ["T201", "PTH105"] # the OAuth URL the user must open
 "wactorz/monitoring/log_setup.py" = ["T201"]         # stderr, because file logging just failed
+"wactorz/node/local_setup.py" = ["T201"]             # a command run once, by hand, as root
 # Atomic writes, written at the os level deliberately: the replace is ordered
 # against an `os.fsync` here, and against a 0600 `os.open` there, so the whole
 # sequence reads in one vocabulary. `Path.replace` is the same syscall.
@@ -425,7 +436,10 @@ reportMissingTypeStubs = false
 [tool.coverage.run]
 source = ["wactorz"]
 branch = true
-omit = ["wactorz/_version.py", "tests/*"]
+omit = [
+    "wactorz/_version.py",
+    "tests/*",
+]
 
 [tool.coverage.report]
 show_missing = true
@@ -437,7 +451,7 @@ exclude_also = [
     "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 90
+fail_under = 92
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

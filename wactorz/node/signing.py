@@ -16,6 +16,7 @@ from typing import Any
 
 from ..core.atomic_io import write_text
 from ..core.compatibility import compatible
+from ..core.node_publications import PublicationSigner
 from ..core.node_signing import (
     SEQUENCE_PROPERTY,
     SIGNATURE_PROPERTY,
@@ -52,12 +53,6 @@ def message_bytes(payload: Any) -> bytes:
     if isinstance(payload, (bytes, bytearray)):
         return bytes(payload)
     return str(payload).encode("utf-8")
-
-
-def user_properties(msg: Any) -> dict[str, str]:
-    """The MQTT user properties a received message carries, by name."""
-    pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
-    return {str(name): str(value) for name, value in pairs}
 
 
 def server_mismatch(properties: dict[str, str], own: str) -> str | None:
@@ -114,6 +109,10 @@ class ControlGuard:
         if self._key is None:
             return request
         return sign_request(request, self._key)
+
+    def publication_signer(self) -> PublicationSigner | None:
+        """What signs this node's own messages, or None when it holds no usable key."""
+        return PublicationSigner(self._key) if self._key is not None else None
 
     @property
     def mode(self) -> str:

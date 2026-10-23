@@ -17,7 +17,7 @@
 import { safeStorage } from "../safeStorage";
 import { emit } from "../events";
 import { WebSpeech } from "./WebSpeech";
-import { SpeechToText } from "./SpeechToText";
+import { SpeechToText, STT_ENABLED } from "./SpeechToText";
 
 /** What the person chose in the audio settings. */
 export type VoiceMode = "auto" | "browser" | "server" | "off";
@@ -53,10 +53,10 @@ function isMode(value: string | null): value is VoiceMode {
     return VOICE_MODES.some(entry => entry.mode === value);
 }
 
-/** The saved choice, `auto` when nothing valid is saved. */
+/** The saved choice; voice stays off until a person or deployment opts in. */
 export function voiceMode(): VoiceMode {
     const saved = safeStorage.get(VOICE_MODE_KEY);
-    return isMode(saved) ? saved : "auto";
+    return isMode(saved) ? saved : STT_ENABLED ? "auto" : "off";
 }
 
 /** Save the choice and tell the composer, so the mic appears or goes at once. */

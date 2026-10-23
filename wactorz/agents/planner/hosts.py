@@ -18,7 +18,8 @@ from ..mixins.host import SpawnHost
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
-    from ..mixins.spawning import SpawnPlaceholder
+    from ..mixins.spawning import PlacedOnNode, SpawnPlaceholder
+    from ..prompts.assemble import PromptFragment
 
 
 class PlannerHost(SpawnHost, Protocol):
@@ -36,6 +37,8 @@ class PlannerHost(SpawnHost, Protocol):
     _auto_terminate: bool
     _spawned_by_planner: list[str]
     _spawn_results: dict[str, dict[str, Any]]
+    #: The integrations the prompts speak of and live context is gathered for.
+    _prompt_fragments: tuple[PromptFragment, ...]
 
     def _accrue_usage(self, usage: dict[str, Any]) -> None: ...
 
@@ -64,7 +67,11 @@ class ExecutionHost(PlannerHost, Protocol):
 class PipelineHost(ExecutionHost, Protocol):
     """The pipeline path drives both of the other mixins."""
 
-    async def _spawn_agent(self, config: dict[str, Any]) -> Actor | SpawnPlaceholder | None: ...
+    async def _spawn_agent(
+        self, config: dict[str, Any]
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None: ...
+
+    def _running_on_a_node(self, name: str) -> str: ...
 
     async def _delegate(
         self, agent_name: str, task: str, timeout: float = 60.0
@@ -77,3 +84,5 @@ class PipelineHost(ExecutionHost, Protocol):
     async def _resolve_data_references(self, task: str) -> tuple[str, str]: ...
 
     async def _sample_live_topics(self, bus: Any) -> list[str]: ...
+
+    async def _sample_named_topics(self, task: str) -> list[str]: ...

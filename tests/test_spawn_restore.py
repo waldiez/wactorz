@@ -116,6 +116,8 @@ class _Main:
         self.remotely_spawned: list[tuple[str, str, bool]] = []
         #: The config each spawn was handed, local and remote alike.
         self.configs: dict[str, dict[str, Any]] = {}
+        #: Whether each remote spawn was a restore, which asks about no packages.
+        self.restoring: list[bool] = []
 
         async def _local(config: dict[str, Any], save: bool = True, *, from_registry: bool = False):
             name = config.get("name", "?")
@@ -124,8 +126,11 @@ class _Main:
             self.locally_spawned.append((name, save, from_registry))
             self.configs[name] = config
 
-        async def _remote(config: dict[str, Any], node: str, save: bool) -> None:
+        async def _remote(
+            config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+        ) -> None:
             name = config.get("name", "?")
+            self.restoring.append(restoring)
             if name in remote_spawn_fails:
                 raise RuntimeError(_NODE_UNREACHABLE)
             self.remotely_spawned.append((name, node, save))
@@ -229,6 +234,7 @@ class TestRestoringWhatWasRunning:
         await main.restore()
 
         assert main.remotely_spawned == [("sensor", "rpi-kitchen", False)]
+        assert main.restoring == [True]
         assert not main.locally_spawned
 
     async def test_an_agent_already_running_locally_is_not_spawned_again(self) -> None:

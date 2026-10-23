@@ -35,7 +35,9 @@ def detect(reading: dict) -> dict | None:
 `detect` is still a function: call it in a test, import it elsewhere. As an
 agent it is called once per message on `sensors/imu/#` with the decoded
 payload, and once per task sent to it by chat or by another agent. What it
-returns is published to `anomalies/imu`; `None` publishes nothing. A plain
+returns is published to `anomalies/imu`; `None` publishes nothing. A task's
+payload is untrusted input: on a node, any node on the broker may send one by
+name, so check what the function acts on. A plain
 function runs on a worker thread, so a slow model never holds the event loop
 every other agent shares; a coroutine function runs on the loop.
 
@@ -145,6 +147,7 @@ writing a script. Three ways, all equivalent:
 | --- | ----- | --- |
 | `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:Sink` | the environment | a configured deployment |
 | `[project.entry-points."wactorz.agents"]` in `pyproject.toml` | your package | anything `pip install`ed |
+| `[project.entry-points."wactorz.extensions"]` in `pyproject.toml` | your package | a server extension (routes, `/api/config` values) loaded like those in `wactorz/ext/`; see the extensions guide |
 | `wactorz.run(agents=[...])` or `serve(...)` | a script | development |
 
 The target must be importable from where `wactorz` starts: a package that is
@@ -153,6 +156,58 @@ and left out. A registered agent is supervised, listed by `@catalog list`,
 restored after a restart, and may be spawned under another name with a
 `type: "module"` spawn config; only registered targets are accepted there,
 because a spawn config can be written by the model.
+
+## On a node, and moving between machines
+
+A registered agent can run on a [node](remote-nodes.md) as well as on main,
+and move between the two with `/migrate`. Main sends its code with it, so
+nothing has to be copied to the node by hand, as long as the agent keeps to
+one rule.
+
+**An agent's own code lives in its own folder.** What main sends is the folder
+its module is in -- every `.py` file in it and in the folders under it -- or,
+for a module inside a package, the package. Everything else the agent imports
+must be one of:
+
+- the standard library, or `wactorz`;
+- a package pip installs, listed in `requires={"packages": [...]}` on the
+  decorator (or `REQUIRES` on a class), which the node installs before it
+  builds the agent.
+
+Code of your own from anywhere else -- a `mylab` package in another folder, on
+`PYTHONPATH` or installed with `pip install -e` -- would not be on the node, so
+the move is refused before anything stops, naming the import: move that code
+into the agent's folder, or publish it and list it in `requires`. Only `.py`
+files go, up to 1 MiB of them; a model goes as one of the agent's models
+(`models=`, above), and a folder that is hidden, a cache or a virtual
+environment is skipped. Two agents on one node cannot both have a module of
+the same name, so give an agent's module a name of its own (`imu_detector.py`
+rather than `agent.py`) when several will share a node.
+
+A node that has the agent installed itself -- the package in its environment
+and the target in `WACTORZ_AGENTS` there, or a `wactorz.agents` entry point --
+builds it from that instead, and is sent no code; that is how to run code that
+cannot follow the rule. A node from before this release takes no code from
+main, and is refused the move until it is deployed again.
+
+On the node the agent subscribes, publishes and persists as it does on main,
+answers tasks sent to it by name, and keeps its state under the node's state
+directory. It has no model there: `me.llm` is `None`, since a node makes no
+model calls.
+
+```text
+/migrate imu-anomaly rpi-kitchen      # its code, packages and models go with it
+/migrate imu-anomaly local            # and back, with its state
+```
+
+What it persisted goes with it both ways, blobs included: a model, an array
+or bytes an agent persists is kept as a file of its own beside its state and
+travels beside the snapshot, so a detector that keeps its model with
+`persist()` arrives with it. A pickled model, or a torch module, loads by
+running code: main sends such a value to a node but does not take one from
+a node, so an agent that must come home keeps a `state_dict()` or plain
+bytes instead. On a restart of main, an agent the spawn registry places on a
+node is not started on main as well.
 
 ## An `Actor` subclass
 
@@ -222,6 +277,44 @@ itself, so what it shares between calls must cope with that; a model loaded
 once and read by every call is fine, a counter updated with `persist` is a
 race. A plain `def` under concurrency runs on that many worker threads.
 
+## Models
+
+A model kept with `wactorz-artifacts` (see the deployment guide) is named by the
+agent that loads it, under a key of its own:
+
+```python
+@wactorz.agent(subscribes="sensors/imu/#", models={"model": "imu-detector:3"})
+async def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None:
+    model = await me.load_model("model")  # {"mean": array, "inverse_covariance": array}
+    ...
+
+class Watcher(wactorz.Actor):
+    MODELS = {"detector": "yolo-onnx"}  # the newest, pinned when it starts
+
+    async def on_start(self) -> None:
+        self.session = onnxruntime.InferenceSession(self.artifact_path("detector"))
+```
+
+Each is found before `on_start`, and an agent whose model is not stored does
+not start. `artifact_path(key)` is where the file is on this machine (for a
+directory artifact, the directory it unpacks to), for whatever library reads
+it. `await load_model(key)` reads the formats that need only a well-known
+library, once, off the event loop, the way that runs no code from the file:
+
+| Format | `load_model` gives |
+| ------ | ------------------ |
+| `npz` | a dict of numpy arrays (`allow_pickle=False`) |
+| `npy` | the numpy array (`allow_pickle=False`) |
+| `safetensors` | a dict of numpy arrays, through `safetensors.numpy` |
+| `state_dict` | the tensors, through `torch.load(weights_only=True)` on the CPU |
+| `onnx` | an `onnxruntime.InferenceSession` |
+| `raw` | the bytes |
+
+A pickle, a joblib file and a whole torch module run code when they load, so
+`load_model` refuses them unless given `allow_code=True`. GGUF, TFLite, skops
+and directories are opened through `artifact_path` by the library that reads
+them. `me.artifacts` lists each model with its name, version, format and path.
+
 ## Your own files
 
 `me.state_dir` (or `self.state_dir` in a subclass) is the agent's own
@@ -230,7 +323,12 @@ local experiment log, anything too large or too un-JSON for `persist()`. It
 exists from construction, survives restarts, and is removed with the agent on
 a delete. What moves with a migration to another node is the persisted
 state, not these files; an agent that needs a file on another machine ships
-it.
+it, and a model it loads belongs among its models (above).
+
+A value the agent learns -- bytes, a numpy array, a torch tensor or
+`state_dict()`, a scikit-learn-family model -- is better persisted than written
+here: `persist()` keeps each as a file of its own beside the state, written when
+its key is persisted rather than with every counter, and a migration carries it.
 
 ```python
 checkpointer = SqliteSaver.from_conn_string(str(me.state_dir / "graph.sqlite"))
@@ -335,7 +433,9 @@ rules=[{"triggers": ["anomalies/imu"],
         "cooldown_seconds": 30}]
 ```
 
-Actions are `publish`, `task` (sent to an agent by name) and `webhook`.
+Actions are `publish`, `task` (sent to an agent by name), `webhook` and
+`ask_operator` (a question to the person, with options, whose pick is published
+when it comes; see *Asking and waiting* in the interfaces guide).
 Conditions take `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`,
 `exists`, `absent`, with dotted fields such as `reading.ax`; an action's
 payload may name trigger fields in braces and carries the trigger under
@@ -348,14 +448,159 @@ world without saying so. A pipeline declared at module level is found through
 `WACTORZ_PIPELINES=mypkg.flows:watch`, a `wactorz.pipelines` entry point, or
 `wactorz.run(pipelines_=[watch])`.
 
+## From chat
+
+A registered agent is a building block for main and the planner, with nothing
+more to declare than the decorator already says.
+
+**Ask it directly.** In the dashboard chat, the REST interface or the CLI,
+address it by name with a JSON object matching its input schema, and the
+function's return value is the reply:
+
+```text
+@imu-anomaly {"ax": 9, "ay": 0, "az": 1}
+→ {"score": 12.4, "reading": {"ax": 9, "ay": 0, "az": 1}}
+```
+
+Plain text after the name travels as `{"text": "..."}`, for an agent that
+reads natural language.
+
+**Let main start it.** Main's system prompt lists the registered agents that
+are not running, each with the one spawn config that starts it (`"type":
+"module"` and its registered target), so "start the IMU detector" is a spawn
+of yours rather than freshly written code. Registered targets only: a spawn
+config can be model-written, and `type: "module"` refuses anything not in the
+registry.
+
+**Let the planner use it.** When the planner designs a pipeline, its prompt
+carries a *registered agents* section: name, description, the topics each
+listens to and writes to, its schemas, whether it is running, and the same
+spawn config. The rules say to prefer one of yours over a dynamic agent that
+does the same, to subscribe to what it publishes when it runs, and to spawn it
+by that exact target when it does not. So "alert me when the IMU detector
+scores above 20" proposes your detector as the first step, and a notifier
+listening on `anomalies/imu` after it.
+
+To see all of this with a real agent, run the IMU example with
+`python run.py --with-main` and follow *Ask it from chat* in
+`examples/imu_anomaly/README.md`.
+
+## Asking an agent
+
+An agent that needs another agent's answer, and a program that needs one from
+the running system, use the same call:
+
+```python
+# inside an agent: the actor is the second parameter
+@wactorz.agent(name="relay")
+async def relay(payload: dict, me: wactorz.FunctionAgent) -> dict:
+    score = await me.ask("imu-anomaly", {"ax": 9, "ay": 0, "az": 1})
+    return {"score": score["score"]}
+
+# beside the system: a notebook cell, a web handler, a test
+score = await wactorz.ask("imu-anomaly", {"ax": 9, "ay": 0, "az": 1}, timeout=30)
+```
+
+The request goes to the agent as a task, the way chat or a pipeline step would
+send it, and the reply is what the agent answered: a function's return value,
+with a plain value wrapped as `{"result": ...}`. Three things go wrong loudly
+rather than quietly. No agent of that name is running: `LookupError`. The
+agent answered with an error, which is what a function that raised reports:
+`RuntimeError` carrying the message, a `wactorz.core.actor.ReplyError` whose
+`reply` holds the agent's whole answer. No reply within `timeout` seconds, 60
+by default: `asyncio.TimeoutError`. In every case nothing is left waiting.
+
+`wactorz.ask` needs a running system, from `run()` or `serve()`; it raises
+`RuntimeError` otherwise. Its reply address is a slot of the registry rather
+than an actor, so nothing is registered, listed or supervised on the caller's
+behalf.
+
+## Your own orchestrator
+
+What answers a chat message, in the dashboard, the REST interface, the
+terminal, Discord, Telegram or WhatsApp, is an *orchestrator*. Main, the
+model-driven one, is the default. Without a model, in the minimal profile, a
+model-free one answers. And a deployment can supply its own: a LangGraph graph,
+a rule engine, anything that implements three methods.
+
+```python
+from collections.abc import AsyncIterator
+
+import wactorz
+
+
+class Rules:
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        if text.startswith("score "):
+            ax, ay, az = (float(v) for v in text[6:].split())
+            verdict = await wactorz.ask("imu-anomaly", {"ax": ax, "ay": ay, "az": az})
+            return f"score {verdict['score']}"
+        return "Say: score <ax> <ay> <az>"
+
+    async def handle_turn_stream(
+        self, text: str, *, channel: str, user: str | None = None, attachments=None
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
+
+
+wactorz.run(agents=[detect], minimal=True, orchestrator=Rules())
+```
+
+No base class: `wactorz.Orchestrator` is a protocol, and a class with these
+three methods satisfies it. `handle_turn` answers a message in full;
+`handle_turn_stream` answers it in pieces, for the surfaces that show words as
+they arrive, and yields the whole answer once when there is nothing to stream;
+`commands` names the slash commands the orchestrator answers, by first word
+(`/help`), so a surface can say "unknown command" for the rest instead of
+handing it over.
+
+**The channel.** Every call says where the message came from: `"dashboard"`,
+`"cli"` and `"rest"` are the operator's own surfaces; `"social"` is Discord,
+Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,
+and `user` is the sender's id there. Main answers a social message through its
+restricted path (conversation and device control, no spawning, deleting or
+code) and treats any channel it does not know as social, which is the safe
+default; an orchestrator of your own should draw the same line.
+
+**What stays with the agents and with main.** Naming an agent, `@imu-anomaly
+{"ax": 9, "ay": 0, "az": 1}`, reaches that agent directly, whichever
+orchestrator is installed, and a task sent to one on a node travels as before.
+`/deploy`, `/migrate` and `/nodes` are main's, since the nodes are reached
+through it; in a profile without main they say so.
+
+**Choosing one.** From a script, `run(orchestrator=...)` or
+`serve(orchestrator=...)`: an orchestrator object, or a class or factory that
+is called with the actor registry, since most orchestrators need it to reach
+the agents. From a deployment, `WACTORZ_ORCHESTRATOR=package.module:attr`,
+loaded the way a `WACTORZ_AGENTS` entry is; the target may be any of the
+three. Either wins over main and over the model-free one. A target that cannot
+be imported, or is not an orchestrator, refuses to start with the target in the
+message, since answering with main instead would be a silent substitution.
+
+**Without a model.** In the minimal profile `wactorz.DirectOrchestrator`
+answers: `@name {json}` sends the JSON to that agent as its task and shows the
+reply, `@name words` sends `{"text": "words"}`, bare text is answered with the
+running agents and how to address one, and `/agents`, `/topics`, `/nodes` and
+`/help` are answered from the registry. The IMU example's README walks through
+it. `wactorz.MainOrchestrator` is main behind the same seam, for a program that
+wants to wrap or delegate to it.
+
 ## Profiles
 
 Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) its agents do not
-start; `WACTORZ_HA_AGENTS=on|off` decides outright. `wactorz --minimal`,
+start, and main and the planner are not told about it either: their prompts
+are assembled from a core plus what each configured integration adds, so an
+assistant for your agents never offers to dim the lights (see
+[Prompt fragments](architecture.md#prompt-fragments)).
+`WACTORZ_HA_AGENTS=on|off` decides outright. `wactorz --minimal`,
 `WACTORZ_MINIMAL=1` or `minimal=True` starts the monitor, the dashboard and
 your agents only. The minimal profile runs no planner, no generated code and
 no runtime package install, which is the reproducible mode a pinned
-environment wants.
+environment wants. Its dashboard chat still reaches your agents, through the
+model-free orchestrator described above.
 
 ## Examples
 
@@ -414,15 +659,22 @@ What this guide uses is the surface you can rely on:
 | `wactorz.pipeline` | declare steps, a schedule and rules together |
 | `wactorz.run`, `wactorz.serve` | start the system from a script, or on a running loop |
 | `wactorz.system` | the running `ActorSystem` (`registry`, `supervisor`), `None` outside a run |
+| `wactorz.ask`, `Actor.ask` | send an agent a task and wait for its reply, from host code or from another agent |
+| `wactorz.Orchestrator` | what answers chat: `handle_turn`, `handle_turn_stream`, `commands`, with the channel named on every call |
+| `orchestrator=` on `wactorz.run` and `wactorz.serve` | your own orchestrator, an object or a class or factory called with the registry |
+| `wactorz.DirectOrchestrator`, `wactorz.MainOrchestrator` | the model-free orchestrator of the minimal profile, and main behind the same seam |
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
+| `notify_user(text, options=[...], channel=..., user=...)` and `agents/<id>/answer` | a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see *Messages from an agent* in the interfaces guide) |
+| `ask_operator(text, options=[...], channel=..., user=..., timeout=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart |
+| `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
 | `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.model_config` and `record_reply` | LangChain and AG2 beside the system |
 | `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |
 | `wactorz.RuleConfig`, `RuleCondition`, `RuleAction`, `wactorz.RuleAgent` | typed rules |
 | `wactorz.Message`, `MessageType` | what `handle_message` receives |
-| `WACTORZ_AGENTS`, `WACTORZ_PIPELINES`, `WACTORZ_MINIMAL`, `WACTORZ_HA_AGENTS` | the settings above |
+| `WACTORZ_AGENTS`, `WACTORZ_PIPELINES`, `WACTORZ_MINIMAL`, `WACTORZ_HA_AGENTS`, `WACTORZ_ORCHESTRATOR` | the settings above |
 
 Other names the package exports, the built-in agents among them, are the
 application's own and may change between releases.

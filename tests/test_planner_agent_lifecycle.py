@@ -12,12 +12,14 @@ workers that were alive to run it.
 """
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.waiting import until
 from wactorz.agents.llm.providers.fake import FakeProvider
 from wactorz.agents.planner import agent as agent_mod
 from wactorz.agents.planner.agent import PlannerAgent, _fmt_worker
@@ -373,6 +375,57 @@ class TestRunPlanRouting:
         assert taken == ["answer"]
 
 
+class TestReadingAPlan:
+    async def test_a_model_answering_in_prose_is_a_warning_not_a_fault(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The caller answers directly when there is no plan, so the log says what
+        # happened without the traceback that marks a failure.
+        planner = _planner(tmp_path, script={"news": "Here is the news in a sentence."})
+
+        with caplog.at_level(logging.WARNING, logger=agent_mod.__name__):
+            plan = await planner._decompose("summarise the news", [])
+
+        assert plan == []
+        assert [r.levelno for r in caplog.records] == [logging.WARNING]
+        assert "No plan in the model's answer" in caplog.records[0].getMessage()
+
+    async def test_a_pipeline_answered_in_prose_is_a_warning_too(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        planner = _planner(tmp_path, script={"lamp": "I would turn the lamp on."})
+
+        async def _nothing(*_args: Any) -> str:
+            return ""
+
+        # Context the pipeline prompt gathers from the system, none of it at issue.
+        for gather in ("_gather_notification_urls", "_topic_schema_context"):
+            if hasattr(planner, gather):
+                monkeypatch.setattr(planner, gather, _nothing)
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.planner.pipeline"):
+            plan = await planner._decompose_pipeline("when motion turn the lamp on", [])
+
+        assert plan == []
+        # Its feasibility check warns of the same prose on its own account.
+        assert all(r.levelno == logging.WARNING for r in caplog.records)
+        assert any(
+            "No pipeline plan in the model's answer" in r.getMessage() for r in caplog.records
+        )
+
+    async def test_a_fault_while_planning_is_still_an_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        planner = _planner(tmp_path)
+        planner.llm = _Llm()  # pyright: ignore[reportAttributeAccessIssue]
+
+        with caplog.at_level(logging.WARNING, logger=agent_mod.__name__):
+            plan = await planner._decompose("summarise the news", [])
+
+        assert plan == []
+        assert [r.levelno for r in caplog.records] == [logging.ERROR]
+
+
 class TestRunPlanOneShot:
     PLAN: list[dict[str, Any]] = [{"step": 1, "agent": "news", "task": "get news"}]  # noqa: RUF012  # read-only fixture
 
@@ -433,14 +486,37 @@ class TestRunPlanOneShot:
 
         assert counts["decompose"] == 2
 
-    async def test_a_self_terminating_planner_schedules_its_stop(self, tmp_path: Path) -> None:
+    async def test_a_self_terminating_planner_ends_once_it_has_answered(
+        self, tmp_path: Path
+    ) -> None:
         planner = PlannerAgent(llm_provider=FakeProvider(), persistence_dir=str(tmp_path))
         counts = self._executes(planner, self.PLAN)
 
-        await planner._run_plan("summarise the news")
+        await planner._report_plan("summarise the news")
         await asyncio.sleep(0)
 
         assert counts["stop"] == 1
+
+    async def test_one_that_answers_directly_ends_too(self, tmp_path: Path) -> None:
+        # No plan in what the model said: the planner answers the task itself,
+        # and has no more reason to stay than one that planned.
+        planner = PlannerAgent(llm_provider=FakeProvider(), persistence_dir=str(tmp_path))
+        counts = self._executes(planner, [])
+
+        await planner._report_plan("what is the capital of France")
+        await asyncio.sleep(0)
+
+        assert counts["stop"] == 1
+
+    async def test_one_whose_work_goes_on_is_left_to_its_lifetime_cap(self, tmp_path: Path) -> None:
+        planner = PlannerAgent(llm_provider=FakeProvider(), persistence_dir=str(tmp_path))
+        counts = self._executes(planner, self.PLAN)
+        planner._auto_terminate = False  # what a pipeline with a bootstrap running sets
+
+        await planner._report_plan("summarise the news")
+        await asyncio.sleep(0)
+
+        assert counts["stop"] == 0
 
 
 class TestWorkerDiscovery:
@@ -725,6 +801,40 @@ class TestEnding:
     def test_the_task_description_is_the_task(self, tmp_path: Path) -> None:
         assert _planner(tmp_path)._current_task_description() == "waiting for task"
         assert _planner(tmp_path, task="x" * 100)._current_task_description() == "x" * 60
+
+
+class _Recorder:
+    """The broker client a planner publishes through, keeping what it was given."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, Any]] = []
+
+    async def publish(
+        self, topic: str, payload: Any, retain: bool = False, qos: int = 0, **_: Any
+    ) -> None:
+        self.published.append((topic, payload))
+
+
+async def test_the_lifetime_cap_ends_the_planner_and_withdraws_its_card(tmp_path: Path) -> None:
+    """The watchdog runs the teardown, so the teardown must survive `stop()` from it.
+
+    `stop()` runs `on_stop` shielded, in a task of its own; a check there for
+    "am I the watchdog?" never holds, and cancelling the watchdog cut the
+    teardown off before the withdrawal that takes the planner's card away.
+    """
+    planner = _planner(tmp_path, max_lifetime_s=0.05)
+    broker = _Recorder()
+    planner._mqtt_client = broker  # pyright: ignore[reportAttributeAccessIssue]
+    await planner.start()
+    withdrawal = (f"agents/{planner.actor_id}/manifest", b"")
+
+    await until(lambda: withdrawal in broker.published, "the planner to withdraw its card")
+
+    assert planner._terminated
+    watchdog = planner._lifetime_task
+    assert watchdog is not None
+    await asyncio.gather(watchdog, return_exceptions=True)
+    assert not watchdog.cancelled()
 
 
 async def test_stopping_a_planner_ends_its_lifetime_watchdog(tmp_path: Path) -> None:

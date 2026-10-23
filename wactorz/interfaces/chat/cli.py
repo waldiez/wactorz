@@ -15,11 +15,15 @@ from ...config import (
     deploy_target_help,
     deploy_target_names,
 )
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
+from ...core.node_publications import admit
 from ...core.state_snapshot import FORCE_FLAG
+from ...core.turns import acting_as, begin_turn
+from ...orchestration import CLI
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +52,14 @@ class CLIInterface:
       /deploy <node-name>           deploy remote runner (auto-discovers host)
       /help                         show commands
       quit / exit                   shutdown
+
+    A line that names no agent is the orchestrator's. Main is still held for
+    what needs main itself: the lifecycle commands, and reaching an agent that
+    is not in this process.
     """
 
-    def __init__(self, main_actor: "MainActor") -> None:
+    def __init__(self, orchestrator: "Orchestrator", main_actor: "MainActor") -> None:
+        self.orchestrator = orchestrator
         self.agent = main_actor
 
     def _print_help(self) -> None:
@@ -67,7 +76,7 @@ class CLIInterface:
     /help                       show this help
     quit / exit                 shutdown
 
-  Everything else goes to the main orchestrator.
+  Everything else goes to the orchestrator.
   Spawn on a remote node: "spawn a temp sensor on rpi-kitchen"
   Migrate via chat:       "move temp-sensor to rpi-bedroom"
 """)
@@ -127,27 +136,31 @@ class CLIInterface:
         """Route a message to a remote agent via MQTT and wait for reply."""
         main = self.agent
 
-        # Find which node hosts this agent
-        remote_node = None
-        for node_name, nd in main._known_nodes.items():
-            if agent_name in nd.get("agents", []):
-                remote_node = node_name
-                break
-
+        remote_node = main.nodes.node_for(agent_name)
         if not remote_node:
             known = [a for nd in main._known_nodes.values() for a in nd.get("agents", [])]
             if known:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
             return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
+        refusal = main.nodes.refuses_tasks(remote_node)
+        if refusal:
+            return f"[error] {agent_name} was not asked: {refusal}"
 
         reply_topic = f"main/reply/{main.actor_id}/{uuid.uuid4().hex[:8]}"
         result_holder = []
 
         async def _listen_for_reply() -> None:
             try:
-                async with mqtt_client(main._mqtt_broker, main._mqtt_port) as client:
+                async with mqtt_client(main._mqtt_broker, main._mqtt_port, **v5_kwargs()) as client:
                     await client.subscribe(reply_topic)
                     async for msg in client.messages:
+                        # Any node can answer here: only the one the task went
+                        # to is listened to.
+                        raw = bytes(msg.payload or b"")
+                        if not admit(
+                            remote_node, reply_topic, raw, user_properties(msg), "a task reply"
+                        ):
+                            continue
                         try:
                             result_holder.append(json.loads(msg.payload.decode()))
                         except Exception:
@@ -293,6 +306,8 @@ class CLIInterface:
                 text = user_input.strip()
                 if not text:
                     continue
+                # Everything done to answer this line, wherever it is done.
+                begin_turn()
 
                 if text.lower() in ("quit", "exit"):
                     break
@@ -388,6 +403,11 @@ class CLIInterface:
                             print("[error] " + deploy_target_help(node) + "\n")
                             continue
                         host = pkg_target.host or node
+                        # Typed here, so allowed here: the installer would
+                        # otherwise ask on the dashboard about what was just typed.
+                        await self.agent.delegate_to_installer(
+                            {"action": "packages_allow", "packages": packages}, timeout=10.0
+                        )
                         print(f"  Installing {packages} on {host}...")
                         result = await self.agent.delegate_to_installer(
                             {
@@ -439,11 +459,12 @@ class CLIInterface:
                     if target is self.agent:
                         print(f"\n@{agent_name}: ", end="", flush=True)
                         system_msg = ""
-                        async for chunk in self.agent.process_user_input_stream(message):
-                            if isinstance(chunk, dict):
-                                system_msg = chunk.get("system_msg", "")
-                            else:
-                                print(chunk, end="", flush=True)
+                        with acting_as(self.agent.name):
+                            async for chunk in self.agent.process_user_input_stream(message):
+                                if isinstance(chunk, dict):
+                                    system_msg = chunk.get("system_msg", "")
+                                else:
+                                    print(chunk, end="", flush=True)
                         print()
                         if system_msg:
                             print(f"[System: {system_msg}]")
@@ -452,9 +473,10 @@ class CLIInterface:
                     # Stream if target is an LLMAgent with chat_stream support
                     if target and hasattr(target, "chat_stream"):
                         print(f"\n@{agent_name}: ", end="", flush=True)
-                        async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
-                            if not isinstance(chunk, dict):
-                                print(chunk, end="", flush=True)
+                        with acting_as(agent_name):
+                            async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
+                                if not isinstance(chunk, dict):
+                                    print(chunk, end="", flush=True)
                         print("\n")
                     elif target:
                         response = await self._get_agent_response(agent_name, message)
@@ -466,15 +488,11 @@ class CLIInterface:
                     continue
 
                 print("\n@main: ", end="", flush=True)
-                system_msg = ""
-                async for chunk in self.agent.process_user_input_stream(text):
-                    if isinstance(chunk, dict):
-                        system_msg = chunk.get("system_msg", "")
-                    else:
-                        print(chunk, end="", flush=True)
+                # The orchestrator labels its own work; what it has to say
+                # about the turn, it says in the stream.
+                async for chunk in self.orchestrator.handle_turn_stream(text, channel=CLI):
+                    print(chunk, end="", flush=True)
                 print()  # newline after streamed response
-                if system_msg:
-                    print(f"[System: {system_msg}]")
                 print()
 
             except (KeyboardInterrupt, EOFError):

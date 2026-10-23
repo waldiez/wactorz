@@ -184,3 +184,79 @@ def test_summarize_accuracy_latency_cost():
     assert row["accuracy"] == round(1 / 3, 4)
     assert row["mean_latency_s"] == 2.0
     assert row["total_cost_usd"] == 0.02
+
+
+# ── Profiles ─────────────────────────────────────────────────────────────────
+
+
+def test_system_prompts_follow_the_profile():
+    from wactorz.evalharness import _system_prompts
+
+    with_ha = _system_prompts("ha")
+    without = _system_prompts("minimal")
+
+    assert "ACTUATE, HA, PIPELINE, or OTHER" in with_ha["intent"]
+    assert "PIPELINE or OTHER" in without["intent"]
+    assert "Home Assistant" not in without["intent"]
+    assert 'TYPE 1 — "ha_actuator"' in with_ha["planner"]
+    assert "ha_actuator" not in without["planner"]
+    assert "═══ OUTPUT FORMAT ═══" in with_ha["planner"]
+    # The Home Assistant call sites are the same text on both; the runner skips them.
+    assert with_ha["ha"] == without["ha"]
+    assert with_ha["actuator"] == without["actuator"]
+
+
+def test_the_default_profile_is_the_home_assistant_one():
+    from wactorz.evalharness import _system_prompts
+
+    assert _system_prompts() == _system_prompts("ha")
+
+
+def test_an_unknown_profile_is_refused():
+    import pytest
+
+    from wactorz.evalharness import _system_prompts
+
+    with pytest.raises(ValueError, match="unknown profile"):
+        _system_prompts("desktop")
+
+
+def test_a_case_with_a_minimal_expectation_uses_it_on_that_profile():
+    by_id = {c["id"]: c for c in load_cases(None, ["intent"], "minimal")}
+    assert by_id["intent-001"]["expected"] == "OTHER"
+    assert by_id["intent-003"]["expected"] == "OTHER"
+    # The pipeline case needs no override: a rule is a pipeline on either profile.
+    assert by_id["intent-002"]["expected"] == "PIPELINE"
+
+    with_ha = {c["id"]: c for c in load_cases(None, ["intent"])}
+    assert with_ha["intent-001"]["expected"] == "ACTUATE"
+    assert with_ha["intent-003"]["expected"] == "HA"
+
+
+def test_a_case_without_a_minimal_expectation_is_returned_as_it_is(tmp_path):
+    path = tmp_path / "bench.jsonl"
+    case = {"id": "x", "category": "intent", "prompt": "p", "expected": "OTHER"}
+    path.write_text(json.dumps(case) + "\n")
+    assert load_cases(str(path), ["intent"], "minimal") == [case]
+
+
+def test_every_seed_planner_case_can_pass_without_home_assistant():
+    """A minimal-profile plan has no ha_actuator; the allowed types must say so."""
+    for case in load_cases(None, ["planner"], "minimal"):
+        assert "ha_actuator" not in case["expected"], case["id"]
+        assert set(case["expected"]) <= {"dynamic", "scheduled"}, case["id"]
+
+
+def test_score_planner_reads_the_type_from_the_spawn_config_too():
+    """The production output format nests the type in spawn_config."""
+    plan = json.dumps(
+        [
+            {
+                "name": "door-watch",
+                "description": "watches the door",
+                "spawn_config": {"type": "dynamic", "code": "pass"},
+            }
+        ]
+    )
+    assert score_planner(plan, ["dynamic"])
+    assert not score_planner(plan, ["scheduled"])

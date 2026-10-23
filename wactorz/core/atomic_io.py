@@ -43,7 +43,7 @@ def write_pickle(path: Path, obj: Any) -> None:
     """
     tmp = _temporary(path)
     try:
-        with open(tmp, "wb") as f:
+        with tmp.open("wb") as f:
             pickle.dump(obj, f)
             # The rename is atomic, but only orders against data the filesystem
             # has actually been handed. Without this, a power loss can leave the
@@ -64,7 +64,7 @@ def write_bytes(path: Path, data: bytes) -> None:
     """
     tmp = _temporary(path)
     try:
-        with open(tmp, "wb") as f:
+        with tmp.open("wb") as f:
             f.write(data)
             # See `write_pickle`: the rename only orders against data the
             # filesystem has been handed.
@@ -90,7 +90,7 @@ def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     """
     tmp = _temporary(path)
     try:
-        with open(tmp, "w", encoding=encoding) as f:
+        with tmp.open("w", encoding=encoding) as f:
             f.write(text)
             # The rename is atomic, but only orders against data the filesystem
             # has actually been handed. Without this, a power loss can leave the
@@ -151,6 +151,7 @@ def quarantine_unreadable(path: Path) -> Path | None:
             target = path.with_name(f"{path.name}.corrupt.{int(time.time())}.{suffix}")
             suffix += 1
         os.replace(path, target)
-        return target
     except Exception:
         return None
+    else:
+        return target

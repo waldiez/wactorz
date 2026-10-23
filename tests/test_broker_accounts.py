@@ -152,7 +152,11 @@ class TestTheAccessList:
         kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
         about_main = [line for line in kitchen.splitlines() if " main/" in line]
 
-        assert about_main == ["topic write main/llm_request", "topic write main/reply/#"]
+        assert about_main == [
+            "topic write main/llm_request",
+            "topic write main/history_request",
+            "topic write main/reply/#",
+        ]
 
     def test_a_node_gets_the_conventional_data_topics(self) -> None:
         kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")

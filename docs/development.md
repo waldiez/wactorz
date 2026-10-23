@@ -407,8 +407,8 @@ always goes through pip.
 ### Adding a catalog recipe
 
 ```bash
-# 1. Create the recipe file
-#    Must export AGENT_CODE = r'''...'''
+# 1. Create the recipe file: an ordinary module defining setup / process /
+#    handle_task / cleanup, as any dynamic agent's code does
 touch wactorz/catalogue_agents/my_agent.py
 
 # 2. Register it in catalog_agent.py → _build_catalog()

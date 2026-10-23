@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ── Current version ────────────────────────────────────────────────────────
 # Increment this when adding new migrations.
 # The startup sequence runs all migrations between the stored version and this.
-FRAMEWORK_VERSION = 3
+FRAMEWORK_VERSION = 4
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -81,12 +81,36 @@ def migrate_sql_3(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE chat_log ADD COLUMN attachments TEXT DEFAULT ''")
 
 
+#: The columns node samples gained once nodes reported how close they are to
+#: running out, with their types.
+NODE_HISTORY_READINGS = (
+    ("swap_used_mb", "REAL"),
+    ("load_1m", "REAL"),
+    ("disk_free_mb", "REAL"),
+    ("temp_c", "REAL"),
+    ("throttled", "TEXT"),
+)
+
+
+def migrate_sql_4(conn: sqlite3.Connection):
+    """v3 → v4: node samples keep swap, load, free disk, temperature and throttling.
+
+    A database whose ``node_metrics_history`` has none of them would refuse
+    every sample, and the agents' samples are written in the same transaction.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(node_metrics_history)")}
+    for column, kind in NODE_HISTORY_READINGS:
+        if column not in present:
+            conn.execute(f"ALTER TABLE node_metrics_history ADD COLUMN {column} {kind}")
+
+
 # Register SQL migrations: version → function
 # Each migration upgrades FROM (version-1) TO (version)
 _SQL_MIGRATIONS = {
     2: migrate_sql_2,
     3: migrate_sql_3,
-    # 3: migrate_sql_3,  ← add future migrations here
+    4: migrate_sql_4,
+    # 5: migrate_sql_5,  ← add future migrations here
 }
 
 
@@ -172,6 +196,28 @@ _STATE_HISTORY_PREFIX = "State data migration v"
 # ══════════════════════════════════════════════════════════════════════════════
 # MIGRATION RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+def stamp_new_database(conn: sqlite3.Connection) -> None:
+    """Record a database made from today's schema as already current.
+
+    The schema creates everything the SQL migrations add, and a new database
+    holds no data a state migration could change, so there is nothing to apply.
+    Without this it read as the first release and was walked through every
+    migration on empty tables, logging an upgrade that never was.
+    """
+    conn.execute(
+        "INSERT INTO schema_version (version, framework_version) VALUES (1, ?)",
+        (FRAMEWORK_VERSION,),
+    )
+    now = time.time()
+    conn.executemany(
+        "INSERT INTO migration_history (version, applied_at, description) VALUES (?, ?, ?)",
+        [
+            (version, now, f"{_STATE_HISTORY_PREFIX}{version} (new database: nothing to migrate)")
+            for version in sorted(_STATE_MIGRATIONS)
+        ],
+    )
 
 
 def get_current_version(db) -> int:

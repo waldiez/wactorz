@@ -20,6 +20,8 @@ from wactorz._version import __version__
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands import info, state
+from wactorz.agents.main.commands import nodes as node_cmds
+from wactorz.agents.main.commands import packages as package_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
 from wactorz.config import CONFIG
@@ -62,9 +64,13 @@ class _Registry:
 class _Nodes:
     def __init__(self, online: list[str]) -> None:
         self._online = online
+        self.forgotten: list[str] = []
 
     def online_names(self) -> list[str]:
         return list(self._online)
+
+    def forget(self, node_name: str) -> None:
+        self.forgotten.append(node_name)
 
 
 class _Main:
@@ -89,6 +95,7 @@ class _Main:
         self.published: list[tuple[str, Any]] = []
         self.migrate_result: Any = {"success": True, "message": "moved"}
         self.delete_error: Exception | None = None
+        self.installer_result: Any = {"success": True, "output": "up 3 days", "exit_code": 0}
 
     # memory
     def persist(self, key: str, value: Any) -> None:
@@ -161,6 +168,10 @@ class _Main:
 
     def _record_agent_deletion(self, name: str, reason: str = "") -> None:
         self.calls.append(("record", (name, reason)))
+
+    async def delegate_to_installer(self, payload: dict[str, Any], timeout: float = 0) -> Any:
+        self.calls.append(("installer", payload))
+        return self.installer_result
 
 
 @pytest.fixture(name="main")
@@ -390,6 +401,123 @@ class TestHelpAndNodes:
         assert f"v{__version__}" in rows["local"]
         assert f"|  v{__version__}  |" in rows["same"]
         assert "v0.0.1 ≠ server, redeploy" in rows["behind"]
+
+    async def test_an_online_node_says_how_close_it_is_to_running_out(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "rpi",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "cpu_pct": 12.4,
+                "load_1m": 0.5,
+                "mem_free_mb": 700,
+                "disk_free_mb": 3277,
+                "temp_c": 61.0,
+                "throttled": ["under_voltage"],
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert (
+            "cpu 12% · load 0.50 · 700 MB memory free · 3.2 GB disk free · 61°C · ⚠ under voltage"
+        ) in text
+
+    async def test_a_reading_the_node_did_not_send_is_left_out(self, main: _Main) -> None:
+        # Not shown as zero: "0 MB free" would read as a node about to fall over.
+        main._registry = None
+        main.node_list = [
+            {"node": "old", "online": True, "agents": [], "last_seen": time.time(), "cpu_pct": 3.0}
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "cpu 3%  |  last heartbeat" in text
+        assert "free" not in text
+
+    async def test_an_offline_nodes_last_readings_are_not_shown(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "gone",
+                "online": False,
+                "agents": [],
+                "last_seen": time.time() - 90,
+                "mem_free_mb": 700,
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "memory free" not in text
+
+    async def test_a_node_says_what_its_machine_is_beneath_its_row(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "rpi",
+                "online": False,
+                "agents": [],
+                "last_seen": time.time() - 90,
+                "manifest": {
+                    "manifest_v": 1,
+                    "model": "Raspberry Pi 5 Model B Rev 1.0",
+                    "arch": "aarch64",
+                    "os_release": "Debian GNU/Linux 12 (bookworm)",
+                    "python": "3.12.3",
+                    "cpu_count": 4,
+                    "ram_total_mb": 8064,
+                    "container": False,
+                    "gpu": [{"kind": "hailo", "name": "Hailo"}],
+                    "devices": ["bluetooth", "gpio"],
+                },
+            }
+        ]
+
+        lines = (await info.show_nodes(_ctx(main), "")).splitlines()
+
+        # Shown offline too: what the machine is does not change while it is away.
+        row = next(i for i, line in enumerate(lines) if line.lstrip().startswith("rpi"))
+        assert lines[row + 1].strip() == (
+            "Raspberry Pi 5 Model B Rev 1.0 · aarch64 · Debian GNU/Linux 12 (bookworm) · "
+            "Python 3.12.3 · 4 CPUs · 7.9 GB memory · Hailo · bluetooth, gpio"
+        )
+
+    async def test_a_field_that_is_not_a_number_is_left_out(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "odd",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "manifest": {"manifest_v": 1, "arch": "aarch64", "cpu_count": True},
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "aarch64" in text
+        assert "CPUs" not in text
+
+    async def test_a_node_without_a_manifest_has_no_machine_line(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [{"node": "old", "online": True, "agents": [], "last_seen": time.time()}]
+
+        lines = (await info.show_nodes(_ctx(main), "")).splitlines()
+
+        row = next(i for i, line in enumerate(lines) if line.lstrip().startswith("old"))
+        assert lines[row + 1].startswith("To remove")
+
+    async def test_removing_a_node_clears_its_retained_manifest(self, main: _Main) -> None:
+        # Left retained, it would describe a machine that is gone to every main
+        # that connects afterwards.
+        await node_cmds.remove_node(_ctx(main), "rpi")
+
+        assert ("nodes/rpi/manifest", b"") in main.published
+        assert main.nodes.forgotten == ["rpi"]
 
     async def test_no_remote_nodes_suggests_deploying_one(self, main: _Main) -> None:
         main._registry = None
@@ -710,3 +838,133 @@ class TestListAgents:
         assert "📦 [gmail]" in text
         assert "    spawnable   : yes — @catalog spawn gmail" in text
         assert "🔴 [old]" in text
+
+
+class TestRunningACommandOnANode:
+    """`/nodes run`: the one way free text reaches a node's shell, typed by the operator."""
+
+    async def test_the_command_goes_to_the_installer_for_that_node(self, main: _Main) -> None:
+        await node_cmds.run_on_node(_ctx(main), "rpi-kitchen df -h /home")
+
+        assert main.calls == [
+            (
+                "installer",
+                {"action": "node_run", "node_name": "rpi-kitchen", "command": "df -h /home"},
+            )
+        ]
+
+    async def test_a_tab_after_the_node_separates_it_too(self, main: _Main) -> None:
+        await node_cmds.run_on_node(_ctx(main), "rpi-kitchen\tuptime")
+
+        assert main.calls == [
+            ("installer", {"action": "node_run", "node_name": "rpi-kitchen", "command": "uptime"})
+        ]
+
+    async def test_its_output_is_the_reply(self, main: _Main) -> None:
+        text = await node_cmds.run_on_node(_ctx(main), "rpi-kitchen uptime")
+
+        assert "up 3 days" in text
+
+    async def test_a_failure_says_so(self, main: _Main) -> None:
+        main.installer_result = {"success": False, "error": "No deploy target configured"}
+
+        text = await node_cmds.run_on_node(_ctx(main), "ghost uptime")
+
+        assert "No deploy target configured" in text
+
+    @pytest.mark.parametrize("argument", ["", "rpi-kitchen", "rpi-kitchen   "])
+    async def test_without_a_node_and_a_command_it_says_how(
+        self, main: _Main, argument: str
+    ) -> None:
+        text = await node_cmds.run_on_node(_ctx(main), argument)
+
+        assert text.startswith("Usage: /nodes run")
+        assert main.calls == []
+
+
+class TestThePackagesInstalledWithoutAsking:
+    """`/packages`: the operator's list, which neither the model nor an agent may change."""
+
+    async def test_allowing_names_the_packages(self, main: _Main) -> None:
+        main.installer_result = {"allowed": ["wactorz-unlisted-probe"], "refused": []}
+
+        text = await package_cmds.manage_packages(_ctx(main), "allow wactorz-unlisted-probe, other")
+
+        assert main.calls == [
+            (
+                "installer",
+                {"action": "packages_allow", "packages": ["wactorz-unlisted-probe", "other"]},
+            )
+        ]
+        assert "wactorz-unlisted-probe" in text
+
+    async def test_a_name_that_is_not_one_is_said_to_be_refused(self, main: _Main) -> None:
+        main.installer_result = {"allowed": [], "refused": ["--index-url=x"]}
+
+        text = await package_cmds.manage_packages(_ctx(main), "allow --index-url=x")
+
+        assert "Not package names: --index-url=x" in text
+
+    async def test_forgetting_takes_them_off(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": [],
+            "forgotten": ["wactorz-unlisted-probe"],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget wactorz-unlisted-probe")
+
+        assert main.calls == [
+            ("installer", {"action": "packages_forget", "packages": ["wactorz-unlisted-probe"]})
+        ]
+        assert "Forgotten: wactorz-unlisted-probe." in text
+
+    async def test_forgetting_says_what_was_taken_off_and_what_was_never_on(
+        self, main: _Main
+    ) -> None:
+        # A misspelt name forgets nothing, and saying it was forgotten would hide the typo.
+        main.installer_result = {
+            "allowed": ["wactorz-unlisted-probe"],
+            "forgotten": [],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget wactorz-ulisted-probe")
+
+        assert "Forgotten" not in text
+        assert "Not on your list: wactorz-ulisted-probe" in text
+
+    async def test_forgetting_a_built_in_one_says_it_stays(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": [],
+            "forgotten": [],
+            "refused": [],
+            "default": ["numpy"],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget NumPy")
+
+        assert "Still allowed, built in or named in WACTORZ_PIP_ALLOW: NumPy" in text
+
+    async def test_with_nothing_after_it_the_list_is_shown(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": ["wactorz-unlisted-probe"],
+            "from_env": ["internal-lib"],
+            "default": ["numpy"],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "")
+
+        assert main.calls == [("installer", {"action": "packages_list"})]
+        assert "wactorz-unlisted-probe" in text and "internal-lib" in text and "numpy" in text
+
+    @pytest.mark.parametrize("argument", ["allow", "forget  ", "remove wactorz-unlisted-probe"])
+    async def test_anything_else_says_how(self, main: _Main, argument: str) -> None:
+        text = await package_cmds.manage_packages(_ctx(main), argument)
+
+        assert text.startswith("Usage: /packages")
+        assert main.calls == []
+
+    def test_a_social_channel_may_not_use_it(self) -> None:
+        assert package_cmds.manage_packages.command.restricted_ok is False  # pyright: ignore[reportFunctionMemberAccess]

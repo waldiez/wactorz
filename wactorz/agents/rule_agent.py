@@ -28,6 +28,7 @@ trigger payload itself under ``trigger`` unless told not to.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import operator
 import string
@@ -39,6 +40,7 @@ from typing import Any
 import aiohttp
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.outbound import check_channel, check_options
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,10 @@ _ALIASES = {"==": "eq", "=": "eq", "!=": "ne", ">": "gt", ">=": "gte", "<": "lt"
 #: Operators that need no value: whether the field is there at all.
 _PRESENCE = ("exists", "absent")
 
-ACTION_TYPES = ("publish", "task", "webhook")
+ACTION_TYPES = ("publish", "task", "webhook", "ask_operator")
+
+#: Where an ``ask_operator`` action publishes the pick when it names no topic.
+ANSWERS_TOPIC = "answers/{rule}"
 
 
 def field_value(payload: Any, path: str) -> tuple[bool, Any]:
@@ -126,12 +131,34 @@ class RuleAction:
     payload: dict[str, Any] = field(default_factory=dict)
     #: Whether the trigger payload travels with the action, under ``trigger``.
     include_trigger: bool = True
+    #: For ``ask_operator``: the question, its options, where and to whom it
+    #: goes, and how long to wait before the dashboard is tried and given up on.
+    text: str = ""
+    options: tuple[str, ...] = ()
+    channel: str = ""
+    user: str = ""
+    timeout: float = 0.0
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleAction:
         kind = str(raw.get("type", "")).strip()
         if kind not in ACTION_TYPES:
             raise ValueError(f"unknown action type {kind!r}; one of {', '.join(ACTION_TYPES)}")
+        options = tuple(str(o) for o in (raw.get("options") or ()))
+        channel = str(raw.get("channel", ""))
+        timeout = float(raw.get("timeout", 0.0) or 0.0)
+        if kind == "ask_operator":
+            if not str(raw.get("text", "")).strip():
+                raise ValueError("an ask_operator action needs the 'text' to ask")
+            try:
+                options = check_options(options)
+                channel = check_channel(channel)
+            except ValueError as exc:
+                raise ValueError(f"an ask_operator action: {exc}") from None
+            if not options:
+                raise ValueError("an ask_operator action needs 'options' to pick from")
+            if timeout < 0:
+                raise ValueError("an ask_operator action's 'timeout' is seconds, zero to wait")
         action = cls(
             type=kind,
             topic=str(raw.get("topic", "")),
@@ -140,6 +167,11 @@ class RuleAction:
             method=str(raw.get("method", "POST")).upper(),
             payload=dict(raw.get("payload") or {}),
             include_trigger=bool(raw.get("include_trigger", True)),
+            text=str(raw.get("text", "")),
+            options=options,
+            channel=channel,
+            user=str(raw.get("user", "")),
+            timeout=timeout,
         )
         if kind == "publish" and not action.topic:
             raise ValueError("a publish action needs a 'topic'")
@@ -160,6 +192,14 @@ class RuleAction:
             out["method"] = self.method
         if not self.include_trigger:
             out["include_trigger"] = False
+        if self.type == "ask_operator":
+            out["text"] = self.text
+            out["options"] = list(self.options)
+            out["channel"] = self.channel
+            if self.user:
+                out["user"] = self.user
+            if self.timeout:
+                out["timeout"] = self.timeout
         return out
 
     def body(self, trigger: Any) -> dict[str, Any]:
@@ -257,8 +297,15 @@ class RuleConfig:
 
     @property
     def publishes(self) -> tuple[str, ...]:
-        """The topics this rule's publish actions write to, for wiring."""
-        return tuple(a.topic for a in self.actions if a.type == "publish")
+        """The topics this rule's actions write to, for wiring.
+
+        An ``ask_operator`` action counts when it names its topic; one that
+        does not publishes under the rule's own name, which the config does
+        not know.
+        """
+        return tuple(
+            a.topic for a in self.actions if a.type in ("publish", "ask_operator") and a.topic
+        )
 
 
 class RuleAgent(Actor):
@@ -321,6 +368,35 @@ class RuleAgent(Actor):
             await self._send_task(action.agent, body)
         elif action.type == "webhook":
             await self._call_webhook(action, body)
+        elif action.type == "ask_operator":
+            # The person may take hours: the rule goes on evaluating meanwhile,
+            # and the pick is published when it comes.
+            self.run_detached(self._ask_operator(action, trigger, body), name="ask_operator")
+
+    async def _ask_operator(self, action: RuleAction, trigger: Any, body: dict[str, Any]) -> None:
+        """Ask the person, and publish what they picked beside the trigger."""
+        text = str(_render(action.text, trigger))
+        try:
+            option = await self.ask_operator(
+                text,
+                options=action.options,
+                channel=action.channel,
+                user=action.user,
+                timeout=action.timeout or None,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[%s] nobody answered %r; the question stays open", self.name, text[:60])
+            return
+        topic = action.topic or ANSWERS_TOPIC.format(rule=self.name)
+        await self.publish(
+            topic,
+            {
+                "question": text,
+                "option": option,
+                "index": list(action.options).index(option),
+                **body,
+            },
+        )
 
     async def _send_task(self, agent_name: str, body: dict[str, Any]) -> None:
         target = self._registry.find_by_name(agent_name) if self._registry else None

@@ -7,10 +7,13 @@ import { defineConfig } from "vitest/config";
 // Coverage floors — ratchet up as coverage grows, never down. Lines, statements
 // and functions share TARGET; branches trail (defensive guards + flag-gated
 // paths cover slower), so they keep a small offset.
-const TARGET = 95;
+const TARGET = 96;
 const BRANCHES_FLOOR = TARGET - 5;
 
 export default defineConfig({
+    // The test-id contract (testids.test.ts) reads the end-to-end harness, which
+    // sits outside the frontend; this lets Vite read that folder and no other.
+    server: { fs: { allow: [".", "../e2e/harness"] } },
     test: {
         environment: "happy-dom",
         pool: "vmThreads",

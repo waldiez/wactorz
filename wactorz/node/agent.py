@@ -6,15 +6,20 @@ node used to carry its own lightweight retelling of that contract, and the two
 drifted: a program that worked on main would reach for ``agent.run_in_background``
 or ``agent.send_to_many`` on a node and find nothing there.
 
-What this subclass adds is the four things that are true only on a node:
+What this subclass adds is what is true only on a node:
 
 - **Where its messages go.** There is no ``MQTTPublisher`` here, so the actor
   publishes through the runner's bounded queue.
 - **Where its memory lives.** JSON under the node's state directory, so it
   survives a reboot and can be shipped to another machine by a migration.
 - **What answers its LLM calls.** Main does, over the broker — see :mod:`.llm`.
+- **Where its history comes from.** Main's database, read over the broker a page
+  at a time — see :mod:`.history`.
 - **How it is asked to do something.** A task arrives on an MQTT topic rather
   than in a mailbox, and the reply goes back the same way.
+
+All but the LLM calls and the history hold for a library agent a node builds too, and live in
+`NodeHosted` (see :mod:`.hosted`), which both put in front of their own class.
 """
 
 import asyncio
@@ -25,10 +30,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
-from ..core.actor import forbidden
 from ..core.topic_bus import TopicContract
+from ..monitoring.agent_metrics import RecentDurations
+from .history import read_history, read_stats
+from .hosted import NodeHosted
 from .llm import BridgeProvider, request_over_mqtt
-from .state import JsonState, flush_states, state_path
 
 if TYPE_CHECKING:
     from .runner import NodeRunner
@@ -36,7 +42,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class NodeAgent(DynamicAgent):
+class NodeAgent(NodeHosted, DynamicAgent):
     """A dynamic agent whose host is a node rather than main."""
 
     def __init__(
@@ -51,6 +57,7 @@ class NodeAgent(DynamicAgent):
             input_schema=config.get("input_schema"),
             output_schema=config.get("output_schema"),
             trusted=bool(config.get("trusted", False)),
+            artifacts=runner.readable_artifacts(config),
             # Passed in rather than assigned after, because `AgentAPI` is built
             # inside this call and decides there whether `agent.llm` exists. It
             # only holds the reference, so handing it a half-built agent is safe.
@@ -58,112 +65,42 @@ class NodeAgent(DynamicAgent):
             name=str(name),
             persistence_dir=str(directory),
         )
-        self._runner = runner
-        self._config = config
-        #: What `agent.node` reports, and what every heartbeat carries.
-        self._node = runner.node_name
-        #: The broker this node dials, which generated code opening a
-        #: connection of its own reads through `agent`.
-        self._mqtt_broker = runner.broker
-        self._mqtt_port = runner.port
-        #: The runner's publish queue, standing in for an aiomqtt client. Every
-        #: `Actor._mqtt_publish` on this agent lands there.
-        self._mqtt_client = runner.publisher
         #: What the spawn said this agent does, so the planner sees it before
         #: the agent's own code has declared or published anything.
         self.capabilities = list(config.get("capabilities") or [])
-        self._spawn_contract = TopicContract.from_spawn_config({**config, "node": self._node})
-        self._state_file = JsonState(state_path(directory, str(name)), str(name))
-        self._apply_initial_state(config)
+        self._spawn_contract = TopicContract.from_spawn_config({**config, "node": runner.node_name})
+        #: What this agent's model requests took, there through main and back,
+        #: and how many main never answered in time. Reported in the metrics
+        #: frame, since a node serves no `/metrics`.
+        self._llm_round_trips = RecentDurations()
+        self._llm_timeouts = 0
+        self._llm_unsent = 0
+        self.host_on(runner, config, directory)
 
-    # ── State ─────────────────────────────────────────────────────────────────
+    def llm_round_trip(self, seconds: float, *, answered: bool) -> None:
+        """Record one model request sent to main: what it took, and whether it was answered."""
+        self._llm_round_trips.add(seconds)
+        if not answered:
+            self._llm_timeouts += 1
 
-    def _apply_initial_state(self, config: dict) -> None:
-        """Take the state this agent starts with, from a migration or from disk.
+    def llm_unsent(self) -> None:
+        """Record one model request that could not be sent to main at all."""
+        self._llm_unsent += 1
 
-        Two cases have to be told apart. A plain start or restart has no
-        ``_initial_state``: the agent ran here before, and whatever is on disk
-        is its memory. A migration arrival has one, and it is authoritative --
-        the source node was running this agent moments ago, so any file here is
-        from an older incarnation that lived here before it moved away. Letting
-        that file win is what produced ghost memory and duplicated conversation
-        history when an agent was migrated back to a node it once lived on.
+    def _build_metrics(self) -> dict:
+        """The generated agent's frame, plus its model requests' round trips through main.
+
+        The model call itself is timed on main, where it is made; this is the
+        whole wait this agent sees, the broker both ways included, which is
+        what a slow answer on a node is made of.
         """
-        initial = config.pop("_initial_state", None)
-        if not (initial and isinstance(initial, dict)):
-            self._persistent_state = self._state_file.load()
-            return
-        if self._state_file.path.exists():
-            logger.info(
-                "[%s] Migration: overwriting the stale state file at %s with %s key(s) "
-                "shipped from the source node",
-                self.name,
-                self._state_file.path,
-                len(initial),
-            )
-            self._state_file.delete()
-        self._persistent_state = dict(initial)
-        self._state_file.save(self._persistent_state)
-        logger.info(
-            "[%s] Restored %s state key(s) from migration: %s",
-            self.name,
-            len(initial),
-            list(initial),
-        )
-
-    async def _load_persistent_state(self) -> None:
-        """Already read in the constructor, from the node's JSON file."""
-
-    async def _save_persistent_state(self) -> None:
-        """Called on stop: once it returns, the file holds what the agent remembers.
-
-        Not left to the moment a save otherwise waits. A migration ships the
-        state and keeps this file to roll back to, and a stop is rare enough
-        to wait for the disk.
-        """
-        self._state_file.save(self._persistent_state)
-        flush_states()
-
-    def persist(self, key: str, value: Any) -> None:
-        self._persistent_state[key] = value
-        self._state_file.save(self._persistent_state)
-
-    def _own_state(self) -> dict[str, Any]:
-        """Everything in the node's state file is the agent's own."""
-        return dict(self._persistent_state)
-
-    def _replace_own_state(self, old: dict[str, Any], new: dict[str, Any]) -> None:
-        self._persistent_state = dict(new)
-        self._state_file.save(self._persistent_state)
-
-    def recall(self, key: str, default: Any = None) -> Any:
-        return self._persistent_state.get(key, default)
-
-    def delete_state(self) -> bool:
-        """Remove this agent's memory for good. True when there was any.
-
-        In-memory state goes first, so a save still in flight -- from a
-        supervisor restart, or the agent's own stop -- cannot write the file
-        back after it is gone.
-        """
-        self._persistent_state = {}
-        removed = self._state_file.delete()
-        # `Actor.__init__` makes a directory per agent for the pickle store this
-        # one does not use -- its memory is the flat JSON file above. Left
-        # behind, every agent ever spawned here leaves an empty directory on a
-        # machine chosen for being small. `rmdir`, so anything unexpectedly
-        # inside it survives to be looked at.
-        try:
-            self._persistence_dir.rmdir()
-        except OSError:
-            logger.debug("[%s] Left %s in place", self.name, self._persistence_dir)
-        return removed
-
-    # ── Identity ──────────────────────────────────────────────────────────────
-
-    @property
-    def node(self) -> str:
-        return self._node
+        metrics = super()._build_metrics()
+        summary = self._llm_round_trips.summary("llm_round_trip")
+        if summary or self._llm_unsent:
+            metrics.update(summary)
+            metrics["llm_timeouts"] = self._llm_timeouts
+            metrics["llm_unsent"] = self._llm_unsent
+        return metrics
 
     # ── Talking to main ───────────────────────────────────────────────────────
 
@@ -175,13 +112,18 @@ class NodeAgent(DynamicAgent):
         """Publish a request to main and wait for the reply it sends back."""
         return await request_over_mqtt(self, topic, payload, timeout)
 
-    def deliver_reply(self, reply_topic: str, data: Any) -> bool:
-        """Resolve whatever call was waiting on ``reply_topic``. True if one was."""
-        future = self._result_futures.get(reply_topic)
-        if future is not None and not future.done():
-            future.set_result(data)
-            return True
-        return False
+    #: Main keeps the history; see `DynamicAgent.reads_history_from_main`.
+    reads_history_from_main = True
+
+    async def read_history(
+        self, query: str, filters: dict[str, Any], *, hours: float, limit: int
+    ) -> list[dict[str, Any]] | None:
+        """Rows of main's history, asked of main a page at a time."""
+        return await read_history(self, query, filters, hours=hours, limit=limit)
+
+    async def read_history_stats(self) -> dict[str, Any] | None:
+        """Row counts of main's history tables, asked of main."""
+        return await read_stats(self)
 
     # ── Tasks, which arrive on a topic rather than in a mailbox ───────────────
 
@@ -241,28 +183,6 @@ class NodeAgent(DynamicAgent):
         """
         self._runner.remember_code(self.name, fixed_code)
         return super()._persist_fixed_code(fixed_code)
-
-    # ── Commands, which main may send straight to the agent ───────────────────
-
-    async def apply_command(self, command: str) -> bool:
-        """Carry out a command, through the node that is running this agent.
-
-        A node's agents hold a command listener of their own, so `stop` and
-        `delete` can arrive on `agents/<id>/commands` without passing through
-        the node's control plane. The base class does the right thing for an
-        agent on main and only half of it here: a stop would leave the agent in
-        this node's registry — still in its heartbeat, still refusing a respawn
-        without `replace` — and a delete would leave the state file and the
-        retained topics behind, which is exactly what makes a deleted agent
-        come back. Both are routed to the node instead, which owns that
-        bookkeeping.
-        """
-        if command in ("stop", "delete") and not forbidden(
-            command, protected=self.protected, essential=self.essential
-        ):
-            await self._runner.stop_agent(self.name, delete=command == "delete")
-            return True
-        return await super().apply_command(command)
 
     # ── Ending ────────────────────────────────────────────────────────────────
 

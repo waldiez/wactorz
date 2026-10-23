@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from tests.old_database import as_first_release
 from wactorz.core.persistence import WactorzDB, migrations
 from wactorz.core.persistence.migrations import (
     FRAMEWORK_VERSION,
@@ -174,7 +175,7 @@ class TestRunMigrationsFailures:
         monkeypatch.setattr(migrations, "_SQL_MIGRATIONS", sql)
 
         with WactorzDB(str(tmp_path / "w.db")) as db:
-            result = run_migrations(db, store)
+            result = run_migrations(as_first_release(db), store)
 
             assert result["errors"] == [
                 f"SQL migration v{FRAMEWORK_VERSION} failed: disk I/O error"
@@ -189,7 +190,7 @@ class TestRunMigrationsFailures:
         monkeypatch.setattr(migrations, "_SQL_MIGRATIONS", sql)
 
         with WactorzDB(str(tmp_path / "w.db")) as db:
-            result = run_migrations(db, store)
+            result = run_migrations(as_first_release(db), store)
 
             assert result["errors"] == []
             assert get_current_version(db) == FRAMEWORK_VERSION

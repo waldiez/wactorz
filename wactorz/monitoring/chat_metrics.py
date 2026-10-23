@@ -19,9 +19,11 @@ from typing import Any
 
 from prometheus_client import Histogram
 
-#: Where a turn went: a slash command, an agent in this process (main among
-#: them), an agent on a node, or a name nothing answers to.
+#: Where a turn went: a slash command, the orchestrator (a message that names
+#: no agent), an agent in this process named with ``@``, an agent on a node, or
+#: a name nothing answers to.
 COMMAND = "command"
+ORCHESTRATOR = "orchestrator"
 LOCAL = "local"
 REMOTE = "remote"
 UNROUTED = "unrouted"

@@ -12,8 +12,10 @@ claimed is in :meth:`Dashboard.all_unclaimed` when the scenario ends, and fails
 it (see ``conftest.py``). A suite that only waits for
 "an answer" passes when the answer is "I could not do that"; this one reads it.
 
-Selectors are the ids and classes the dashboard ships, listed in one block so a
-rename shows up as a change to a list.
+Elements are found the way a person using a screen reader finds them: by role
+and the name read out for them. What has no such name carries a test id, from
+the dashboard's one list of them (``frontend/src/ui/testIds.ts``); a unit test
+there checks that every id used here is on it.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from . import waiting
+from . import axe, waiting
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, ConsoleMessage, Locator, Page
@@ -37,47 +39,98 @@ GONE_MS = 2_000
 
 WIDTH, HEIGHT = 1280, 800
 
-#: The dashboard is one page with these views, not one URL each.
-VIEWS = ("overview", "chat", "feed", "settings")
+#: The dashboard is one page with these views, not one URL each: each by the
+#: words on its button.
+VIEWS = {"overview": "Overview", "chat": "Chat", "feed": "Feed", "settings": "Settings"}
 
-#: What each view puts on screen when it has really drawn itself.
-VIEW_CONTENT = {
-    "overview": "#af-stats-grid",
-    "chat": "#af-chat-thread",
-    "feed": "#af-feed-view",
-    "settings": "#af-cost-period",
+LOGIN_KEY = "API key"
+LOGIN_SUBMIT = "Sign in"
+NAV = "Views"
+AGENTS = "Agents"
+NODES = "Nodes"
+
+#: Installed in the page by `Dashboard.watch_card`: records each change in
+#: whether a card for the agent is on the page. Transitions rather than DOM
+#: nodes, so the overview replacing a card with a fresh one in one step is not
+#: counted as a going and a coming.
+_WATCH_CARD = """
+name => {
+    const events = [];
+    (window.__cardEvents = window.__cardEvents || {})[name] = events;
+    const selector = `[data-testid="agent-card"][data-name="${CSS.escape(name)}"]`;
+    let present = document.querySelector(selector) !== null;
+    if (present) {
+        events.push("present");
+    }
+    new MutationObserver(() => {
+        const now = document.querySelector(selector) !== null;
+        if (now !== present) {
+            events.push(now ? "added" : "removed");
+            present = now;
+        }
+    }).observe(document.body, { childList: true, subtree: true });
 }
-
-LOGIN_KEY = "#key"
-LOGIN_SUBMIT = "button[type=submit]"
-NAV_BUTTON = ".af-view-btn[data-view='{view}']"
-AGENT_CARD = ".af-card[data-id]"
-CHAT_INPUT = "#af-iobar-input"
-SEND_BUTTON = ".af-send-btn"
-TARGET_SELECT = "#af-target-select"
-AGENT_MESSAGE = ".af-chat-msg-agent"
-USER_MESSAGE = ".af-chat-msg-user"
-MESSAGE_FROM = ".af-chat-msg-from"
-MESSAGE_BODY = ".af-chat-msg-bubble"
-WAITING_BODY = "af-chat-waiting"
-NODE_LIST = "#af-node-list"
-CONNECTION_BADGE = ".af-conn-badge"
-CARD_NAME = ".af-card-name"
-CARD_STATE = ".af-card-state-label"
-CARD_ACTION = "[data-action='{action}']"
-CARD_CHAT = ".af-chat-btn"
-CONFIRM = ".af-confirm"
+"""
+#: As `_WATCH_CARD`, for every card whose name starts with a prefix: for agents
+#: whose names are made up as they start, such as a planner's.
+_WATCH_CARDS_LIKE = """
+prefix => {
+    const seen = {};
+    (window.__cardsLike = window.__cardsLike || {})[prefix] = seen;
+    const named = () => new Set(
+        [...document.querySelectorAll('[data-testid="agent-card"][data-name]')]
+            .map(card => card.dataset.name)
+            .filter(name => name.startsWith(prefix)),
+    );
+    let present = named();
+    present.forEach(name => { seen[name] = ["present"]; });
+    new MutationObserver(() => {
+        const now = named();
+        now.forEach(name => { if (!present.has(name)) (seen[name] = seen[name] || []).push("added"); });
+        present.forEach(name => { if (!now.has(name)) (seen[name] = seen[name] || []).push("removed"); });
+        present = now;
+    }).observe(document.body, { childList: true, subtree: true });
+}
+"""
+#: The agents each row of the nodes panel lists, by row: `local`, then each node.
+_NODE_ROWS = """
+() => {
+    const listed = text => {
+        const value = (text || "").trim();
+        return value === "" || value === "no agents" ? [] : value.split(", ");
+    };
+    const rows = {};
+    for (const row of document.querySelectorAll('[data-testid="node"]')) {
+        rows[row.dataset.node] = listed(row.querySelector('[data-testid="node-agents"]')?.textContent);
+    }
+    return rows;
+}
+"""
+#: Where keyboard focus is now, and whether it shows: what has it, and the
+#: outline or shadow that marks it. ``None`` when nothing in the page has it.
+_FOCUS = """
+() => {
+    const e = document.activeElement;
+    if (!e || e === document.body) return null;
+    const s = getComputedStyle(e);
+    const name = e.getAttribute("aria-label") || e.innerText || e.getAttribute("placeholder") || "";
+    return {
+        what: `${e.tagName.toLowerCase()} ${JSON.stringify(name.trim().slice(0, 40))}`,
+        shown: (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== "none",
+    };
+}
+"""
+#: How many Tab presses a view is given before its walk is cut short.
+TAB_STOPS_AT_MOST = 80
+#: The names of the items of a list, as assistive technology reads them.
+_ITEM_NAMES = "items => items.map(item => item.getAttribute('aria-label'))"
+CHAT_INPUT = "Chat message"
+SEND_BUTTON = "Send message"
+TARGET_SELECT = "Chat target agent"
 RESET_MENU = "Clear stored state"
-RESET_MENU_OPEN = ".af-audio-popover.open"
-RESET_ENTRY = ".af-audio-popover.open button"
 #: Two presses clear something: one asks, one answers. More are allowed for a
 #: machine slow enough that the question lapsed in between.
 RESET_PRESSES_AT_MOST = 6
-CONFIRM_TITLE = ".af-confirm-title"
-CONFIRM_MESSAGE = ".af-confirm-message"
-CONFIRM_OK = ".af-confirm-ok"
-CONFIRM_CANCEL = ".af-confirm-cancel"
-TOAST = ".wz-toast"
 
 #: How long an agent is given to say what a scenario expects of it.
 REPLY_TIMEOUT = 60.0
@@ -125,10 +178,18 @@ class Dashboard:
     def sign_in(self, key: str) -> Dashboard:
         """Open the dashboard, be sent to the sign-in page, and sign in with ``key``."""
         self.page.goto(self.base_url, wait_until="domcontentloaded")
-        self.page.wait_for_selector(LOGIN_KEY, state="visible")
-        self.page.fill(LOGIN_KEY, key)
-        self.page.click(LOGIN_SUBMIT)
+        self.submit_key(key)
         self._wait_until_drawn()
+        # A first visit opens the overview; its cards say the agents have loaded.
+        self.page.get_by_test_id("agent-card").first.wait_for(state="visible")
+        return self
+
+    def submit_key(self, key: str) -> Dashboard:
+        """Type ``key`` into the sign-in page and send it."""
+        field = self.page.get_by_label(LOGIN_KEY, exact=True)
+        field.wait_for(state="visible")
+        field.fill(key)
+        self.page.get_by_role("button", name=LOGIN_SUBMIT, exact=True).click()
         return self
 
     def reload(self) -> Dashboard:
@@ -138,28 +199,56 @@ class Dashboard:
 
     def _wait_until_drawn(self) -> None:
         # The page builds its own DOM, so the document finishing loading says
-        # nothing about there being anything on screen.
-        self.page.wait_for_selector(NAV_BUTTON.format(view="overview"), state="visible")
-        self.page.wait_for_selector(AGENT_CARD, state="visible")
+        # nothing about there being anything on screen. Whichever view it opens:
+        # the address, or the view last open, decides that.
+        self._nav_button("overview").wait_for(state="visible")
+        self.page.locator("[data-testid^='view-']").first.wait_for(state="visible")
+
+    def open_address(self, hash_: str) -> Dashboard:
+        """Load the dashboard at ``hash_`` (``#/feed``), as a link or a typed address does."""
+        self.page.goto(f"{self.base_url.rstrip('/')}/{hash_}", wait_until="domcontentloaded")
+        self._wait_until_drawn()
+        return self
+
+    def back(self) -> Dashboard:
+        """Press the browser's Back button."""
+        self.page.go_back(wait_until="commit")
+        return self
+
+    @property
+    def view(self) -> str:
+        """The view on screen, by its key."""
+        mounted = self.page.locator("[data-testid^='view-']").first
+        return (mounted.get_attribute("data-testid") or "").removeprefix("view-")
+
+    @property
+    def address(self) -> str:
+        """The hash of the page's address: where a refresh returns to."""
+        return str(self.page.evaluate("() => location.hash"))
 
     @property
     def at_sign_in(self) -> bool:
-        return self.page.locator(LOGIN_KEY).count() == 1
+        return self.page.get_by_label(LOGIN_KEY, exact=True).count() == 1
 
     def connection(self) -> str:
         """What the header says about the page's feed from the server."""
-        return self.page.locator(CONNECTION_BADGE).first.inner_text().strip()
+        return self.page.get_by_test_id("connection").first.inner_text().strip()
+
+    def _nav_button(self, view: str) -> Locator:
+        """The button that opens ``view``, in whichever navigation is on screen."""
+        nav = self.page.get_by_role("navigation", name=NAV, exact=True)
+        return nav.get_by_role("button", name=VIEWS[view], exact=True).first
 
     def show(self, view: str) -> Dashboard:
-        self.page.locator(NAV_BUTTON.format(view=view)).first.click()
-        self.page.wait_for_selector(VIEW_CONTENT[view], state="visible")
+        self._nav_button(view).click()
+        self.page.get_by_test_id(f"view-{view}").wait_for(state="visible")
         return self
 
     # ── Agents ──────────────────────────────────────────────────────────────
 
     def card_names(self) -> set[str]:
-        names = self.page.locator(f"{AGENT_CARD} .af-card-name").all_inner_texts()
-        return {name.strip() for name in names}
+        cards = self.page.get_by_role("list", name=AGENTS, exact=True).get_by_role("listitem")
+        return set(cards.evaluate_all(_ITEM_NAMES))
 
     def wait_for_card(self, name: str, *, timeout: float = 60.0) -> Dashboard:
         self.show("overview")
@@ -170,6 +259,31 @@ class Dashboard:
             interval=0.25,
         )
         return self
+
+    def watch_card(self, name: str) -> Dashboard:
+        """Start recording every time the agent's card appears or goes, on the overview.
+
+        Recorded in the page, on every change to it, so a card that goes and
+        comes back between two polls is caught. Read with `card_comings_and_goings`;
+        stay on the overview meanwhile, since another view takes the cards away.
+        """
+        self.show("overview")
+        self.page.evaluate(_WATCH_CARD, name)
+        return self
+
+    def card_comings_and_goings(self, name: str) -> list[str]:
+        """What `watch_card` recorded for ``name``: "present", "added" and "removed", in order."""
+        return list(self.page.evaluate("name => (window.__cardEvents || {})[name] || []", name))
+
+    def watch_cards_named_like(self, prefix: str) -> Dashboard:
+        """As `watch_card`, for every card whose name starts with ``prefix``."""
+        self.show("overview")
+        self.page.evaluate(_WATCH_CARDS_LIKE, prefix)
+        return self
+
+    def cards_named_like(self, prefix: str) -> dict[str, list[str]]:
+        """What `watch_cards_named_like` recorded: each matching name's comings and goings."""
+        return dict(self.page.evaluate("p => (window.__cardsLike || {})[p] || {}", prefix))
 
     def wait_for_no_card(self, name: str, *, timeout: float = 60.0) -> Dashboard:
         self.show("overview")
@@ -183,42 +297,45 @@ class Dashboard:
 
     def _card(self, name: str) -> Locator:
         """The card of the agent called exactly ``name``."""
-        named = self.page.locator(CARD_NAME).get_by_text(name, exact=True)
-        return self.page.locator(AGENT_CARD).filter(has=named)
+        agents = self.page.get_by_role("list", name=AGENTS, exact=True)
+        return agents.get_by_role("listitem", name=name, exact=True)
 
     def card_state(self, name: str) -> str:
         """What the agent's card says its state is."""
         self.show("overview")
-        return self._card(name).locator(CARD_STATE).inner_text().strip()
+        return self._card(name).get_by_test_id("agent-state").inner_text().strip()
 
     def card_actions(self, name: str) -> list[str]:
         """The buttons the agent's card offers, by what each says."""
         self.show("overview")
-        buttons = self._card(name).locator("button:visible").all_inner_texts()
+        buttons = self._card(name).get_by_role("button").all_inner_texts()
         return [text.strip() for text in buttons]
 
     def press(self, name: str, action: str) -> Dashboard:
         """Press ``action`` (start, stop or delete) on the agent's card."""
         self.show("overview")
-        self._card(name).locator(CARD_ACTION.format(action=action)).click()
+        label = f"{action.capitalize()} {name}"
+        self._card(name).get_by_role("button", name=label, exact=True).click()
         return self
 
     # ── The question before something that cannot be undone ────────────────
 
     def asked_to_confirm(self) -> tuple[str, str]:
         """The title and the message of the dialog on screen."""
-        self.page.wait_for_selector(CONFIRM, state="visible")
-        title = self.page.locator(CONFIRM_TITLE).inner_text().strip()
-        return title, self.page.locator(CONFIRM_MESSAGE).inner_text().strip()
+        dialog = self.page.get_by_test_id("confirm-dialog")
+        dialog.wait_for(state="visible")
+        title = dialog.get_by_test_id("confirm-title").inner_text().strip()
+        return title, dialog.get_by_test_id("confirm-message").inner_text().strip()
 
     def confirm(self) -> Dashboard:
-        self.page.locator(CONFIRM_OK).click()
-        self.page.wait_for_selector(CONFIRM, state="detached")
-        return self
+        return self._answer_dialog(self.page.get_by_test_id("confirm-ok"))
 
     def cancel(self) -> Dashboard:
-        self.page.locator(CONFIRM_CANCEL).click()
-        self.page.wait_for_selector(CONFIRM, state="detached")
+        return self._answer_dialog(self.page.get_by_test_id("confirm-cancel"))
+
+    def _answer_dialog(self, answer: Locator) -> Dashboard:
+        answer.click()
+        self.page.get_by_test_id("confirm-dialog").wait_for(state="detached")
         return self
 
     # ── Clearing what the install has stored ────────────────────────────────
@@ -230,8 +347,9 @@ class Dashboard:
         and the second answers it. Returns the question it asked.
         """
         self.page.get_by_role("button", name=RESET_MENU, exact=True).click()
-        menu = self.page.locator(RESET_MENU_OPEN)
-        entry = self.page.locator(RESET_ENTRY).filter(has_text=what)
+        # The menu is in the page while closed, but hidden: only an open one counts.
+        menu = self.page.get_by_role("group", name=RESET_MENU, exact=True)
+        entry = menu.get_by_role("button").filter(has_text=what)
         asked = ""
         # The question lapses a few seconds after it is asked, and a press that
         # comes after that asks it again instead of answering. So: press until
@@ -246,16 +364,66 @@ class Dashboard:
     def notices(self) -> list[str]:
         """The toasts on screen now, each as its title and its message."""
         return list(
-            self.page.locator(TOAST).evaluate_all(
+            self.page.get_by_test_id("toast").evaluate_all(
                 """toasts => toasts.map(toast =>
-                    (toast.querySelector('.wz-toast__name')?.innerText || '').trim() + ': ' +
-                    (toast.querySelector('.wz-toast__message')?.innerText || '').trim())"""
+                    (toast.querySelector('[data-testid="toast-title"]')?.innerText || '').trim() + ': ' +
+                    (toast.querySelector('[data-testid="toast-message"]')?.innerText || '').trim())"""
             )
         )
 
+    def _node(self, name: str) -> Locator:
+        """The row of the nodes panel for ``name``: `local`, or a node."""
+        nodes = self.page.get_by_role("list", name=NODES, exact=True)
+        return nodes.get_by_role("listitem", name=name, exact=True)
+
     def node_names(self) -> set[str]:
-        names = self.page.locator(f"{NODE_LIST} .af-node-name").all_inner_texts()
-        return {name.strip() for name in names}
+        rows = self.page.get_by_role("list", name=NODES, exact=True).get_by_role("listitem")
+        return set(rows.evaluate_all(_ITEM_NAMES))
+
+    def node_rows(self) -> dict[str, list[str]]:
+        """The agents each row of the nodes panel lists: `local`, then each node by name."""
+        self.show("overview")
+        return dict(self.page.evaluate(_NODE_ROWS))
+
+    def rows_listing(self, agent: str) -> set[str]:
+        """The rows of the nodes panel that list ``agent``: `local`, a node's name, or none."""
+        return {row for row, agents in self.node_rows().items() if agent in agents}
+
+    def node_machine(self, name: str) -> str:
+        """What the node's card says its machine is, or "" before its manifest arrives."""
+        self.show("overview")
+        machine = self._node(name).get_by_test_id("node-machine")
+        return machine.inner_text().strip() if machine.count() else ""
+
+    # ── History ─────────────────────────────────────────────────────────────
+
+    def open_history(self, name: str, *, node: bool = False) -> str:
+        """Open an agent's or a node's history from its card's History button.
+
+        Returns what the panel shows once it has loaded: the titles of its
+        charts, or the sentence it says instead when there is nothing to draw.
+        """
+        self.show("overview")
+        card = self._node(name) if node else self._card(name)
+        card.get_by_role("button", name=f"History of {name}", exact=True).click()
+        panel = self.page.get_by_test_id("history-panel")
+        panel.wait_for(state="visible")
+        self.page.wait_for_function(
+            """() => !document.querySelector('[data-testid="history-body"]')
+                ?.textContent?.startsWith('Loading')"""
+        )
+        titles = panel.locator("figcaption").all_inner_texts()
+        return ", ".join(titles) or panel.get_by_test_id("history-body").inner_text().strip()
+
+    def history_title(self) -> str:
+        """The name the open history panel is about."""
+        return self.page.get_by_test_id("history-panel").get_by_role("heading").inner_text().strip()
+
+    def close_history(self) -> Dashboard:
+        """Close the history panel as a person would, with Escape."""
+        self.page.keyboard.press("Escape")
+        self.page.get_by_test_id("history-panel").wait_for(state="detached")
+        return self
 
     # ── The chat ────────────────────────────────────────────────────────────
 
@@ -269,8 +437,8 @@ class Dashboard:
             interval=0.25,
         )
         self.read_thread_of(to)
-        self.page.locator(CHAT_INPUT).fill(message)
-        self.page.locator(SEND_BUTTON).click()
+        self.page.get_by_role("textbox", name=CHAT_INPUT, exact=True).fill(message)
+        self.page.get_by_role("button", name=SEND_BUTTON, exact=True).click()
         waiting.until(
             lambda: message in self.sent(),
             what=f"{message!r} to appear in the thread as sent",
@@ -281,32 +449,39 @@ class Dashboard:
     def read_thread_of(self, agent: str) -> Dashboard:
         """Address the composer to ``agent``, which puts its thread on screen."""
         self.show("chat")
-        self.page.locator(TARGET_SELECT).select_option(agent)
+        self._target_select().select_option(agent)
         return self
+
+    def _target_select(self) -> Locator:
+        return self.page.get_by_role("combobox", name=TARGET_SELECT, exact=True)
 
     @property
     def talking_to(self) -> str:
         """The agent whose thread is on screen."""
-        return self.page.locator(TARGET_SELECT).input_value()
+        return self._target_select().input_value()
 
     def _targets(self) -> list[str]:
-        options = self.page.locator(f"{TARGET_SELECT} option")
+        options = self._target_select().locator("option")
         return list(options.evaluate_all("options => options.map(o => o.value)"))
 
     def sent(self) -> list[str]:
         """What the user has said, as the thread shows it."""
-        bodies = self.page.locator(f"{USER_MESSAGE} {MESSAGE_BODY}").all_inner_texts()
+        bodies = (
+            self.page.get_by_test_id("user-message")
+            .get_by_test_id("message-body")
+            .all_inner_texts()
+        )
         return [body.strip() for body in bodies]
 
     def said(self) -> list[Said]:
         """Every agent message in the thread, in order, without one still being awaited."""
-        rows = self.page.locator(AGENT_MESSAGE).evaluate_all(
+        rows = self.page.get_by_test_id("agent-message").evaluate_all(
             """rows => rows.map(row => {
-                const body = row.querySelector('.af-chat-msg-bubble');
+                const body = row.querySelector('[data-testid="message-body"]');
                 return {
-                    sender: (row.querySelector('.af-chat-msg-from')?.innerText || '').trim(),
+                    sender: (row.querySelector('[data-testid="message-from"]')?.innerText || '').trim(),
                     text: (body?.innerText || '').trim(),
-                    waiting: !!body && body.classList.contains('af-chat-waiting'),
+                    waiting: row.querySelector('[data-testid="message-waiting"]') !== null,
                 };
             })"""
         )
@@ -329,7 +504,7 @@ class Dashboard:
             if agent not in self._targets():
                 continue
             try:
-                self.page.locator(TARGET_SELECT).select_option(agent, timeout=GONE_MS)
+                self._target_select().select_option(agent, timeout=GONE_MS)
             except PlaywrightTimeoutError:
                 continue
             threads[agent] = self.said()
@@ -344,6 +519,11 @@ class Dashboard:
             for agent, said in self._every_thread().items()
         }
         return {agent: said for agent, said in pending.items() if said}
+
+    def threads_wiped(self) -> Dashboard:
+        """Forget what was claimed: every thread is empty, and counts start again from it."""
+        self._claimed.clear()
+        return self
 
     def all_said(self) -> list[Said]:
         """Every agent message in every thread."""
@@ -401,15 +581,90 @@ class Dashboard:
         self._claimed[thread] = self._claimed.get(thread, 0) + 1
         return found
 
+    # ── Questions an agent asks ─────────────────────────────────────────────
+
+    def _question_toast(self, sender: str) -> Locator:
+        # A toast that asks is a group named after the agent asking.
+        return self.page.get_by_test_id("toast").and_(
+            self.page.get_by_role("group", name=sender, exact=True)
+        )
+
+    def question_from(self, sender: str) -> str:
+        """The question ``sender`` is asking in a notice on screen, or "" when there is none."""
+        notice = self._question_toast(sender)
+        if notice.count() == 0:
+            return ""
+        return notice.first.get_by_test_id("toast-message").inner_text().strip()
+
+    def answer_notice(self, sender: str, option: str) -> Dashboard:
+        """Press ``option`` on the notice of ``sender``'s question."""
+        notice = self._question_toast(sender).first
+        notice.get_by_role("button", name=option, exact=True).click()
+        return self
+
+    def thread_opens(self, agent: str) -> bool:
+        """Whether ``agent``'s row in the chat list can be opened."""
+        self.show("chat")
+        return self._list_row(agent).is_enabled()
+
+    def open_from_list(self, agent: str) -> Dashboard:
+        """Open ``agent``'s thread from the chat list, the way to one that cannot be messaged."""
+        self.show("chat")
+        self._list_row(agent).click()
+        waiting.until(
+            lambda: self.page.get_by_test_id("chat-title").inner_text().strip() == f"@{agent}",
+            what=f"{agent!r}'s thread to be on screen",
+        )
+        return self
+
+    def _list_row(self, agent: str) -> Locator:
+        """``agent``'s row in the chat's list of agents."""
+        rows = self.page.get_by_test_id("chat-agent-list")
+        return rows.get_by_role("button", name=agent, exact=True)
+
+    def options_in_thread(self) -> list[str]:
+        """The answers the thread on screen offers that can still be pressed."""
+        buttons = self.page.get_by_test_id("chat-option")
+        return [
+            buttons.nth(i).inner_text().strip()
+            for i in range(buttons.count())
+            if buttons.nth(i).is_enabled()
+        ]
+
     # ── What the page complains about ───────────────────────────────────────
+
+    def tab_stops(self) -> list[tuple[str, bool]]:
+        """Walk the page with Tab from the top: each stop, and whether focus shows on it.
+
+        Ends where the walk comes round to its first stop again, or leaves the page.
+        """
+        self.page.evaluate("() => document.activeElement?.blur()")
+        stops: list[tuple[str, bool]] = []
+        for _ in range(TAB_STOPS_AT_MOST):
+            self.page.keyboard.press("Tab")
+            focus = self.page.evaluate(_FOCUS)
+            if focus is None or (stops and focus["what"] == stops[0][0]):
+                break
+            stops.append((focus["what"], focus["shown"]))
+        return stops
+
+    def accessibility_findings(self) -> list[str]:
+        """The serious and critical axe findings on screen now that nobody accepted."""
+        return axe.blocking_findings(self.page)
+
+    def assert_accessible(self, where: str) -> Dashboard:
+        """Fail on any serious or critical axe finding on screen now, saying ``where`` it was."""
+        found = self.accessibility_findings()
+        assert not found, f"axe, on {where}:\n" + "\n".join(found)
+        return self
 
     def note_toasts(self) -> None:
         """Remember any error toast on screen now. Called often: they do not stay."""
         # Read in one step inside the page: a toast can go between two reads.
-        shown = self.page.locator(TOAST).evaluate_all(
+        shown = self.page.get_by_test_id("toast").evaluate_all(
             """toasts => toasts.map(toast => ({
-                kind: (toast.querySelector('.wz-toast__badge')?.innerText || '').trim().toLowerCase(),
-                text: (toast.querySelector('.wz-toast__message')?.innerText || '').trim(),
+                kind: (toast.querySelector('[data-testid="toast-kind"]')?.innerText || '').trim().toLowerCase(),
+                text: (toast.querySelector('[data-testid="toast-message"]')?.innerText || '').trim(),
             }))"""
         )
         for toast in shown:

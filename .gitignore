@@ -4,6 +4,8 @@ package-lock.json
 # Runtime state (actor persistence)
 state/
 actor_state/
+# What examples/imu_anomaly/train.py writes before storing it
+examples/imu_anomaly/imu_model.npz
 
 # Logs
 *.log

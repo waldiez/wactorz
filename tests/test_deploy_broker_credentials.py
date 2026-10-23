@@ -20,7 +20,7 @@ import pytest
 from wactorz.agents import installer_agent
 from wactorz.agents.installer_agent import InstallerAgent
 from wactorz.config import CONFIG, DeployTarget
-from wactorz.core import broker_accounts, node_signing
+from wactorz.core import broker_accounts, node_env, node_signing
 
 
 class FakeSftp:
@@ -207,11 +207,9 @@ class TestAnAccountOfItsOwn:
         monkeypatch.setattr(node_signing, "_secret", None)
 
     def _accounts_on(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
-        monkeypatch.setattr(
-            installer_agent,
-            "CONFIG",
-            replace(CONFIG, node_accounts=True, **fields),
-        )
+        # Both: the installer reads where the broker is, node_env which account a node gets.
+        for module in (installer_agent, node_env):
+            monkeypatch.setattr(module, "CONFIG", replace(CONFIG, node_accounts=True, **fields))
 
     async def test_the_node_gets_the_account_derived_for_it(
         self, monkeypatch: pytest.MonkeyPatch
@@ -280,8 +278,7 @@ def _server_broker(monkeypatch: pytest.MonkeyPatch, user: str, password: str) ->
     `replace` rather than setattr: AppConfig is frozen, so the module binding is
     what a test can move.
     """
-    monkeypatch.setattr(
-        installer_agent,
-        "CONFIG",
-        replace(CONFIG, mqtt_username=user, mqtt_password=password),
-    )
+    for module in (installer_agent, node_env):
+        monkeypatch.setattr(
+            module, "CONFIG", replace(CONFIG, mqtt_username=user, mqtt_password=password)
+        )

@@ -20,14 +20,16 @@ Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ON
 | **restarts** | 10 |
 | **persists** | `_spawned_agents`, `_pipeline_rules`, `_user_facts`, `_notification_urls`, `conversation_history`, `history_summary` → SQLite |
 
-The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (`ACTUATE` / `HA` / `PIPELINE` / `OTHER`), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to `OTHER`.
+The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (`PIPELINE` / `OTHER`, plus `ACTUATE` / `HA` where Home Assistant is configured), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to `OTHER`.
+
+Its prompts are assembled for the installation: a core every installation shares, plus what each configured integration adds — see [Prompt fragments](architecture.md#prompt-fragments). Without Home Assistant, main is never told about devices, and a turn cannot be classified as `ACTUATE` or `HA`.
 
 #### Intent routing
 
 | Intent | Routed to | Example |
 |--------|-----------|---------|
-| `ACTUATE` | `OneOffActuatorAgent` (ephemeral) | "turn off the lamp" |
-| `HA` | `home-assistant-agent` | "list all automations" |
+| `ACTUATE` | `OneOffActuatorAgent` (ephemeral) — Home Assistant only | "turn off the lamp" |
+| `HA` | `home-assistant-agent` — Home Assistant only | "list all automations" |
 | `PIPELINE` | a new `PlannerAgent` | "notify me on Discord when the door opens" |
 | `OTHER` | `main.chat()` | "what's the weather like?" |
 | `@mention` | named actor directly | `@my-agent {"action": "status"}` |
@@ -70,7 +72,7 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 | **name** | `planner-{hash}` (ephemeral) |
 | **lifetime** | per-request |
 
-Spawned by MainActor for every `PIPELINE`-classified request. The planner queries `home-assistant-agent` for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an `ha_actuator` agent (declarative HA service call), a `scheduled` agent (first-class time trigger — see [ScheduledAgent](#scheduledagent-spawned)), or a `dynamic` agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits.
+Spawned by MainActor for every `PIPELINE`-classified request. The planner samples live topic schemas from the TopicBus and, where Home Assistant is configured, queries `home-assistant-agent` for the full list of real entity IDs and resolves camera URLs, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an `ha_actuator` agent (declarative HA service call, offered only where Home Assistant is configured), a `scheduled` agent (first-class time trigger — see [ScheduledAgent](#scheduledagent-spawned)), or a `dynamic` agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits. Its prompts follow the same [fragments](architecture.md#prompt-fragments) main's do, inherited from the main that spawned it.
 
 After spawning, the planner fires a background `_bootstrap_ha_entity_states()` task that extracts HA entity IDs from the plan (generated code, `ha_actuator` actions, MQTT topics, and the enriched task string) and sends a `get_entities_state` request to `home-assistant-agent`. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to `homeassistant/state_changes/#` fire immediately — without waiting for the next real HA state change.
 
@@ -127,7 +129,7 @@ Tracks heartbeat timestamps from every registered actor. If an actor's last hear
 | **name** | `installer` |
 | **restarts** | 3 |
 
-Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. Also handles remote node deployment via SSH (`node_deploy`, `node_install`, `node_run` actions), for machines listed in `DEPLOY_TARGETS` — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
+Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. A package not on the list of packages installed without asking (the catalogue's, the examples', `WACTORZ_PIP_ALLOW`, and what the operator has allowed with `/packages allow` or the dashboard) is asked about on the dashboard first, and not installed if the operator refuses or does not answer. Also handles remote nodes over SSH (`node_deploy`, `node_install`, `node_op` — a named read-only operation — and `node_run` — a command typed as `/nodes run`), for machines listed in `DEPLOY_TARGETS`, and takes those only from main — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
 
 ```
 @installer {"action": "install", "packages": ["httpx", "aiomqtt"]}
@@ -145,7 +147,7 @@ Runs `pip install` in a subprocess on request. Called automatically by `CatalogA
 | **restarts** | 10 |
 | **recipes dir** | `wactorz/catalogue_agents/` |
 
-Pre-built agent recipe library. On startup it loads every `AGENT_CODE` string from `wactorz/catalogue_agents/*.py` and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and `trusted=True` — bypassing the code safety validator since catalog agents are pre-built and tested.
+Pre-built agent recipe library. On startup it reads every recipe's program from `wactorz/catalogue_agents/` and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and `trusted=True` — bypassing the code safety validator since catalog agents are pre-built and tested.
 
 #### Usage
 
@@ -322,7 +324,7 @@ Maintains a live map of entity IDs to friendly names and domains. Used by Planne
 |---|---|
 | **name** | set at spawn time (e.g. `evening-lights-trigger`) |
 | **spawned by** | PlannerAgent (pattern 5 — scheduled trigger) |
-| **persists** | `_schedule_state` (last fire time, fire count) → SQLite |
+| **persists** | `_schedule_state` (last fire time, fire count) → the agent's `state.pkl` |
 
 First-class scheduled trigger primitive. Sleeps until the next fire time, publishes to its topic, then loops. Replaces the broken `while True: if datetime.now()…` patterns that LLM-generated dynamic agents kept producing for time-based rules.
 
@@ -365,7 +367,7 @@ The internal sleep is bounded to 5 minutes so DST transitions, system clock jump
 
 ### TimeSeriesCollector `[core]`
 
-**File:** `wactorz/agents/timeseries_collector.py`
+**File:** `wactorz/catalogue_agents/timeseries_collector_agent.py`
 
 | | |
 |---|---|
@@ -427,6 +429,8 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `async def process(agent)` | Every `poll_interval` seconds | For periodic work. Timeout: 120s per call. Only started after `setup()` returns (or immediately if no setup). |
 | `async def handle_task(agent, payload)` | On every inbound TASK message | Must return a dict. Timeout: 60s per call. Used for command/response interactions. |
 
+> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
+
 #### Agent API (`agent` object inside generated code)
 
 | Method | Sync/Async | Description |
@@ -438,13 +442,16 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `await agent.alert(message, level)` | async | Publish an alert (`info`, `warning`, `error`) |
 | `agent.persist(key, value)` | **sync** | Write a value (routes to SQLite/memory/Pickle based on key) |
 | `agent.recall(key)` | **sync** | Read a persisted value |
+| `agent.artifact_path(key)` | **sync** | Where the artifact the spawn names as `key` is on this host — `"artifacts": {"model": "imu-detector:3"}` in the spawn, then `onnxruntime.InferenceSession(agent.artifact_path("model"))`. A file, or for a directory artifact the directory it unpacks to; a `str`. `KeyError` naming the keys the spawn gave for any other |
+| `await agent.load_model(key)` | async | The artifact named `key`, loaded once: a dict of numpy arrays for `npz` and `safetensors`, an array for `npy`, an `onnxruntime.InferenceSession` for `onnx`, tensors for a `state_dict`, bytes for `raw`. A pickle, joblib file or whole torch module only with `allow_code=True` |
+| `agent.artifacts` | — | Each artifact the spawn names: name, version, format, size and path |
 | `agent.state` | — | In-memory dict (not persisted) |
 | `agent.window(topic, seconds)` | **sync** | Create a sliding time window over an MQTT topic stream |
 | `agent.declare_contract(...)` | **sync** | Register a TopicBus contract for auto-wiring |
-| `agent.query_ts(hours, field, ...)` | **sync** | Query historical sensor data from SQLite |
-| `agent.query_detections(hours, ...)` | **sync** | Query historical YOLO detections from SQLite |
-| `agent.query_ha_states(hours, ...)` | **sync** | Query historical HA state changes from SQLite |
-| `agent.ts_stats()` | **sync** | Row counts for all time-series tables |
+| `await agent.query_ts(hours, field, ...)` | async | Query historical sensor data from main's SQLite |
+| `await agent.query_detections(hours, ...)` | async | Query historical YOLO detections from main's SQLite |
+| `await agent.query_ha_states(hours, ...)` | async | Query historical HA state changes from main's SQLite |
+| `await agent.ts_stats()` | async | Row counts for all time-series tables |
 | `agent.agents()` | **sync** | List all currently running agents |
 | `agent.topics(keyword)` | **sync** | List known MQTT topics |
 
@@ -455,18 +462,25 @@ Any dynamic agent can query historical data collected by the TimeSeriesCollector
 ```python
 async def handle_task(agent, payload):
     # Get last 24h of temperature readings
-    rows = agent.query_ts(hours=24, field='temp')
+    rows = await agent.query_ts(hours=24, field='temp')
 
     # Get as pandas DataFrame for ML training
-    df = agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
+    df = await agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
 
     # Query YOLO detections
-    df = agent.query_detections(hours=12, class_name='person', as_dataframe=True)
+    df = await agent.query_detections(hours=12, class_name='person', as_dataframe=True)
 
     # Check available data volume
-    stats = agent.ts_stats()
+    stats = await agent.ts_stats()
     # {'sensor_readings': 145230, 'detections': 8920, ...}
 ```
+
+The history lives in main's database. On a node, a query reads it from main
+over the broker, a page at a time, so there it must be awaited; written with
+`await`, the same code runs on main and on a node. On main the call without
+`await` works too, as it always has. On a node that form fails as soon as
+its result is used, and the error says to add `await`. If main does not answer
+a read, the agent gets no rows (`None` for a DataFrame) and the node logs why.
 
 #### Code safety
 
@@ -558,19 +572,16 @@ See [API reference](api.md#cost-management) for the full endpoint spec.
 
 ## Catalog recipes
 
-Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `AGENT_CODE` string. They are loaded by `CatalogAgent` at startup and spawned on demand as DynamicAgents with `trusted=True` (safety validator bypassed).
+Recipes live in `wactorz/catalogue_agents/` as plain Python modules, each one the program itself; the module's source is what gets sent. They are loaded by `CatalogAgent` at startup and spawned on demand as DynamicAgents with `trusted=True` (safety validator bypassed).
 
 | Recipe name | File | Description | Deps |
 |-------------|------|-------------|------|
-| `image-gen-agent` | `image_gen_agent.py` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns the absolute path to the saved PNG. | `requests` |
 | `doc-to-pptx-agent` | `doc_to_pptx_agent.py` | Converts PDF or TXT documents into PowerPoint presentations. Extracts embedded images from PDF; optionally uses NIM FLUX for slides without images. | `pymupdf`, `pdfplumber`, `pillow` |
-| `sinergym-collector` | `sinergym_collector_agent.py` | Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on `sinergym/env/{env_id}/observation`, buffers transitions per-episode, persists episode blobs, and signals the optimizer on collection complete. | `aiomqtt`, `numpy` |
-| `sinergym-optimizer` | `sinergym_optimizer_agent.py` | Env-aware GP-UCB Q(s,a) optimizer with RBC warm-start. Trains from collected episodes (RL PPO/SAC or Bayesian GP), then publishes actions to `sinergym/env/{env_id}/action` during deployment. Auto-introspects obs/action variable names and comfort models. | `stable-baselines3`, `scikit-learn`, `numpy`, `torch`, `aiomqtt`, `gymnasium` |
 | `anomaly-detector` | `anomaly_detector_agent.py` | Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data. | `aiomqtt`, `numpy` |
 | `smart-energy` | `smart_energy_agent.py` | Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules. | none |
 | `manual-agent` | `manual_agent.py` | Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM. | `httpx`, `pdfplumber`, `duckduckgo_search` |
 
-> **💡 Adding a recipe** — Create `wactorz/catalogue_agents/my_agent.py` exporting `AGENT_CODE = r'''...'''`, then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.
+> **💡 Adding a recipe** — Write the program as `wactorz/catalogue_agents/my_agent.py` (`setup`, `process`, `handle_task`, `cleanup`, as any dynamic agent's code), then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.
 
 ---
 

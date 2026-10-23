@@ -218,7 +218,7 @@ class TestTheInterfaceOfALibraryCall:
                 record["ran"] = True
 
         class RecordingCLI:
-            def __init__(self, main: object) -> None:
+            def __init__(self, orchestrator: object, main: object) -> None:
                 record["cli"] = True
 
             async def run(self) -> None:
@@ -226,8 +226,8 @@ class TestTheInterfaceOfALibraryCall:
 
         fake_system = FakeSystem()
 
-        async def build(args: object) -> tuple[object, object, None]:
-            return fake_system, object(), None
+        async def build(args: object) -> tuple[object, object, None, object]:
+            return fake_system, object(), None, object()
 
         async def shut_down(system: object) -> None:
             return None
@@ -236,7 +236,9 @@ class TestTheInterfaceOfALibraryCall:
         monkeypatch.setattr(app_module, "prepare_broker_files", lambda: "")
         monkeypatch.setattr(app_module, "_build_system_or_stop", build)
         monkeypatch.setattr(app_module, "_shut_down", shut_down)
-        monkeypatch.setattr(chat_interfaces, "build_social_companions", lambda main, primary: [])
+        monkeypatch.setattr(
+            chat_interfaces, "build_social_companions", lambda main, primary, **_kw: []
+        )
         monkeypatch.setattr(chat_interfaces, "CLIInterface", RecordingCLI)
         # A terminal, so the CLI would start if the interface asked for it.
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
@@ -488,8 +490,8 @@ class TestAppAsALibraryCall:
         fake_system, fake_main = FakeSystem(), object()
         stopped: list[object] = []
 
-        async def built(args: object) -> tuple[object, object, None]:
-            return fake_system, fake_main, None
+        async def built(args: object) -> tuple[object, object, None, object]:
+            return fake_system, fake_main, None, object()
 
         async def shut_down(system: object) -> None:
             stopped.append(system)
@@ -498,7 +500,9 @@ class TestAppAsALibraryCall:
         monkeypatch.setattr(app_module, "prepare_broker_files", lambda: "")
         monkeypatch.setattr(app_module, "_build_system_or_stop", built)
         monkeypatch.setattr(app_module, "_shut_down", shut_down)
-        monkeypatch.setattr(chat_interfaces, "build_social_companions", lambda main, primary: [])
+        monkeypatch.setattr(
+            chat_interfaces, "build_social_companions", lambda main, primary, **_kw: []
+        )
         monkeypatch.setattr(
             app_module,
             "CONFIG",
@@ -650,3 +654,31 @@ class TestTheProviderUnderTheMinimalProfile:
         # The message names both ways out.
         assert "wactorz[anthropic]" in str(refused.value)
         assert "LLM_PROVIDER=none" in str(refused.value)
+
+
+class TestWhatTheRegistryPlacesOnNodes:
+    """A library agent moved to a node is not started here as well."""
+
+    def test_entries_with_a_node_are_named_with_it(self) -> None:
+        registry = {
+            "imu-anomaly": {"type": "module", "node": "rpi-kitchen"},
+            "collector": {"code": "x = 1", "node": " "},
+            "helper": {"type": "llm"},
+            "junk": "not a config",
+        }
+
+        assert app_module.placed_on_nodes(registry) == {"imu-anomaly": "rpi-kitchen"}
+
+    def test_no_registry_places_nothing(self) -> None:
+        assert app_module.placed_on_nodes(None) == {}
+
+    def test_every_entry_is_mains_to_restore_wherever_it_places_the_agent(self) -> None:
+        """One that came home from a node has an entry placing it here; main
+        restores it from that, so its plugin must not start it as well."""
+        registry = {
+            "imu-anomaly": {"type": "module", "node": ""},
+            "collector": {"code": "x = 1", "node": "rpi"},
+            "junk": "not a config",
+        }
+
+        assert app_module.placed_by(registry) == {"imu-anomaly": "", "collector": "rpi"}

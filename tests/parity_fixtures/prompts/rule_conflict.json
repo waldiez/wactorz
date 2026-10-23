@@ -1,0 +1,14 @@
+{
+  "prompt": "rule_conflict",
+  "lines": [
+    "You are reviewing a NEW home-automation rule against rules that are ALREADY ACTIVE. Flag only two things:",
+    "  1. DUPLICATE — the new rule does essentially the same thing as an existing one (same trigger AND same action).",
+    "  2. CONTRADICTION — the new rule fires on the same or overlapping condition but takes an OPPOSING action (e.g. one turns a device ON, the other turns it OFF under the same condition).",
+    "",
+    "NEW RULE:",
+    "{task}",
+    "",
+    "ALREADY-ACTIVE RULES:",
+    ""
+  ]
+}

@@ -3,15 +3,19 @@
 import asyncio
 import logging
 from collections import OrderedDict
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
 from ...config import CONFIG, MAX_REQUEST_BYTES
+from ...core.outbound import numbered
+from ...orchestration import SOCIAL
+from .outbound import Outbox, PendingChoices, outbound
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main import MainActor
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +27,29 @@ class WhatsAppInterface:
     """WhatsApp via Twilio. Runs an aiohttp webhook server.
     Requires: pip install aiohttp twilio
     Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in environment.
+
+    Answers through the orchestrator as a social channel: conversation and
+    device control, none of the admin surface.
+
+    Also carries messages the other way: an agent's message to a person goes
+    out through ``send``, its options numbered, and a reply with the number is
+    published for the agent through the outbox. WhatsApp lets a business
+    write first only inside a day of the person's last message, or through a
+    template Meta approved; outside that window Twilio refuses the send, and
+    the refusal is logged with the message's words.
     """
 
     def __init__(
         self,
-        main_actor: "MainActor",
+        orchestrator: "Orchestrator",
         account_sid: str,
         auth_token: str,
         from_number: str,
         port: int = 8080,
         allowed_numbers: frozenset[str] | set[str] | None = None,
+        outbox: Outbox | None = None,
     ) -> None:
-        self.agent = main_actor
+        self.orchestrator = orchestrator
         self.account_sid = account_sid
         self.auth_token = auth_token
         self.from_number = from_number
@@ -46,11 +61,15 @@ class WhatsAppInterface:
             self._normalize_number(n) for n in (allowed_numbers or CONFIG.whatsapp_allowed_numbers)
         )
         self.limiter = SocialRateLimiter()
+        self.outbox = outbox or Outbox()
+        self.choices = PendingChoices()
         #: Replies still being worked out. The webhook answers Twilio before
         #: the model does, so these are what keeps them alive until they finish.
         self._replies: set[asyncio.Task[None]] = set()
         #: Twilio message ids already taken in, newest last -- see `webhook`.
         self._seen: OrderedDict[str, None] = OrderedDict()
+        #: The Twilio client, once `build_app` has made it: what `send` talks through.
+        self._twilio: Any = None
 
     @staticmethod
     def _normalize_number(number: str) -> str:
@@ -96,6 +115,38 @@ class WhatsAppInterface:
             to=to,
         )
 
+    # ── outbound ──────────────────────────────────────────────────────────────
+
+    async def send(
+        self,
+        user: str,
+        text: str,
+        options: Sequence[str] = (),
+        *,
+        message_id: str = "",
+        agent_id: str = "",
+    ) -> str:
+        """Send ``text`` to the WhatsApp number ``user``, its options numbered.
+
+        ``user`` is the number, with or without the ``whatsapp:`` prefix. Raises
+        ``RuntimeError`` before the webhook runs; a send Twilio refuses raises
+        what its SDK does.
+        """
+        twilio = self._twilio
+        if twilio is None:
+            raise RuntimeError("the WhatsApp webhook is not running")
+        number = self._normalize_number(user)
+        if not number:
+            raise ValueError("a WhatsApp user is a phone number")
+        message = outbound("whatsapp", number, text, options, message_id, agent_id)
+        await self._send_message(
+            twilio, numbered(message.text, message.options), f"whatsapp:{number}"
+        )
+        self.choices.remember(message)
+        return message.id
+
+    # ── inbound ───────────────────────────────────────────────────────────────
+
     def _first_delivery(self, message_sid: str) -> bool:
         """Whether ``message_sid`` is new, remembering it if so. A message with no id is."""
         if not message_sid:
@@ -110,8 +161,9 @@ class WhatsAppInterface:
     async def _reply(self, twilio: Any, message: str, to: str, sender: str) -> None:
         """Answer one message, after the webhook has already acknowledged it."""
         try:
-            # Restricted mode: same guarantees as the other social channels.
-            response_text = await self.agent.process_user_input_restricted(message)
+            response_text = await self.orchestrator.handle_turn(
+                message, channel=SOCIAL, user=sender
+            )
             await self._send_message(twilio, response_text, to)
         except Exception:
             logger.exception("[WhatsApp] Could not answer a message from %s", sender)
@@ -125,6 +177,7 @@ class WhatsAppInterface:
 
         twilio = TwilioClient(self.account_sid, self.auth_token)
         validator = RequestValidator(self.auth_token)
+        self._twilio = twilio
 
         async def webhook(request):
             data = await request.post()
@@ -144,6 +197,13 @@ class WhatsAppInterface:
             # a message handled twice is answered twice, and paid for twice.
             if not self._first_delivery(str(data.get("MessageSid", ""))):
                 logger.info("[WhatsApp] Ignoring a message from %s delivered again", sender)
+                return web.Response(text="OK")
+
+            # A reply to a question an agent asked: "2", or the option's words.
+            # Not a turn for the model, so not counted against the sender.
+            answer = self.choices.match(sender, user_msg)
+            if answer is not None:
+                await self.outbox.answered(answer)
                 return web.Response(text="OK")
 
             throttled = self.limiter.check(sender)
@@ -181,9 +241,9 @@ class WhatsAppInterface:
         try:
             app = self.build_app()
         except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+            logger.error(  # noqa: TRY400  # the ImportError is the whole diagnosis
                 "Missing deps. Run: pip install twilio"
-            )  # the ImportError is the whole diagnosis
+            )
             return
 
         runner = web.AppRunner(app)
@@ -191,4 +251,8 @@ class WhatsAppInterface:
         site = web.TCPSite(runner, CONFIG.bind_host, self.port)
         await site.start()
         logger.info("[WhatsApp] Webhook server running on %s:%s", CONFIG.bind_host, self.port)
-        await asyncio.Event().wait()  # Run forever
+        self.outbox.register("whatsapp", self)
+        try:
+            await asyncio.Event().wait()  # Run forever
+        finally:
+            self.outbox.unregister("whatsapp")

@@ -9,11 +9,12 @@ import asyncio
 import json
 import logging
 import re
-import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import MessageType
+from ...config import CONFIG
+from ...core.actor import ask_through
 from ...core.mqtt import mqtt_client
+from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
     from .hosts import PlannerHost
@@ -65,6 +66,7 @@ class ContextMixin(_Host):
             r"\benergy\b": ["energy", "power", "kwh", "watt"],
             r"\bcpu\b": ["cpu", "processor"],
             r"\bmemory\b": ["memory", "ram"],
+            r"\bdisk\b": ["disk", "storage"],
             r"\bco2\b": ["co2", "carbon"],
             r"\bair quality\b": ["air", "quality", "voc", "pm25"],
             r"\blight level\b": ["light", "lux", "illumin"],
@@ -87,6 +89,14 @@ class ContextMixin(_Host):
 
         if not matched_concepts:
             return task, ""  # No vague data references found
+
+        # A named machine's own readings are read there, whatever else matches:
+        # a Home Assistant "processor" sensor measures Home Assistant's host.
+        named = [
+            node for node in self._node_names() if re.search(rf"\b{re.escape(node)}\b", task_lower)
+        ]
+        if named and set(matched_concepts) <= MACHINE_CONCEPTS:
+            return unresolved(task, matched_concepts)
 
         # ── Search TopicRegistry first ─────────────────────────────────────
         try:
@@ -113,19 +123,13 @@ class ContextMixin(_Host):
             logger.debug("[%s] HA entity search failed: %s", self.name, e)
 
         # ── Nothing found — return task unchanged with a note ──────────────
-        concepts_str = ", ".join(set(matched_concepts[:4]))
-        enriched = (
-            f"{task} "
-            f"[NOTE: No registered MQTT topics or HA entities found matching: {concepts_str}. "
-            f"If the user has a sensor agent running, it may not have published yet. "
-            f"Ask the user to specify the exact MQTT topic or HA entity ID, "
-            f"or check agent.topics() for available data streams.]"
-        )
-        note = (
-            f"No data source found for: {concepts_str}. "
-            f"You may need to specify the exact topic or entity."
-        )
-        return enriched, note
+        return unresolved(task, matched_concepts)
+
+    def _node_names(self) -> list[str]:
+        """The nodes main knows of, lower-cased: those it has heard from and its deploy targets."""
+        main = find_main_actor(self._registry) if self._registry else None
+        known = set(main.nodes.known) if main is not None else set()
+        return sorted({n.lower() for n in known | {t.name for t in CONFIG.deploy_targets}})
 
     async def _fetch_ha_entities(self) -> list[dict[str, Any]]:
         """Ask home-assistant-agent for its entity list, or an empty list.
@@ -133,37 +137,23 @@ class ContextMixin(_Host):
         Bounded by a short timeout: this runs while the user waits for a plan,
         so an unresponsive HA agent costs a fallback rather than the request.
         """
-        if not self._registry:
-            return []
-        ha_agent = self._registry.find_by_name("home-assistant-agent")
-        if not ha_agent:
-            return []
-
-        task_id = f"resolve_{uuid.uuid4().hex[:6]}"
-        future = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
-        await self.send(
-            ha_agent.actor_id,
-            MessageType.TASK,
-            {"text": "list entities", "_task_id": task_id, "task": task_id},
-        )
         try:
-            result = await asyncio.wait_for(future, timeout=8.0)
-            # home-assistant-agent returns {"entities": [...]} — a flat list of
-            # entity dicts with entity_id, name, state, etc. NOT a nested
-            # devices-to-entities structure.
-            entities_raw = (
-                result.get("entities", [])
-                or result.get("result", [])
-                or result.get("devices", [])  # legacy fallback
+            result = await ask_through(
+                self, "home-assistant-agent", {"text": "list entities"}, timeout=8.0
             )
-            if isinstance(entities_raw, str):
-                entities_raw = []
-        except (asyncio.TimeoutError, Exception):
-            entities_raw = []
-        finally:
-            self._result_futures.pop(task_id, None)
-        return entities_raw
+        except (LookupError, RuntimeError, asyncio.TimeoutError):
+            return []
+        if not isinstance(result, dict):
+            return []
+        # home-assistant-agent returns {"entities": [...]} — a flat list of
+        # entity dicts with entity_id, name, state, etc. NOT a nested
+        # devices-to-entities structure.
+        entities_raw = (
+            result.get("entities", [])
+            or result.get("result", [])
+            or result.get("devices", [])  # legacy fallback
+        )
+        return [] if isinstance(entities_raw, str) else entities_raw
 
     async def _sample_live_topics(self, bus: Any) -> list[str]:
         """Peek at one live MQTT message from each registered publish topic.
@@ -196,6 +186,71 @@ class ContextMixin(_Host):
             )
         return sample_lines
 
+    async def _sample_named_topics(self, task: str) -> list[str]:
+        """One live payload from each MQTT topic ``task`` names, wildcards included.
+
+        A topic is sampled from its contract when an agent declares it; a device
+        or a script that publishes without being an agent declares nothing, and
+        its topic is known only from the request. Without a sample the model
+        writes field names it imagines, and code reading fields no payload has
+        does nothing at all.
+        """
+        named = topics_named_in(task)
+        if not named:
+            return []
+        received = await collect_one_payload_per_topic(
+            getattr(self, "_mqtt_broker", "localhost"),
+            getattr(self, "_mqtt_port", 1883),
+            [(topic, "") for topic in named],
+            self.name,
+            max_wait=NAMED_TOPIC_WAIT_S,
+        )
+        return [
+            _sample_line(topic, "named in the request", payload)
+            for topic, payload in received.items()
+        ]
+
+
+#: How many topics a request names are listened to, and for how long in all:
+#: long enough for a sensor that publishes every second or so, short enough not
+#: to hold up a plan for a topic nothing publishes on.
+NAMED_TOPICS = 3
+NAMED_TOPIC_WAIT_S = 4.0
+
+#: An MQTT topic as a request writes it: segments of letters, digits, ``_``,
+#: ``-`` and ``$``, a ``+`` standing for one segment and a final ``#`` for any.
+_TOPIC_SEGMENT = re.compile(r"^(?:[A-Za-z0-9_$-]+|\+|#)$")
+#: What surrounds a topic in a sentence, rather than being part of it.
+_AROUND_A_TOPIC = "`'\"()[]{}<>,;:!?."
+
+
+def topics_named_in(task: str) -> list[str]:
+    """The MQTT topics ``task`` names, in order, without repeats.
+
+    A word is one when it has at least two segments and each is a topic segment,
+    so a URL, a file name or a Windows path is not. ``#`` may only end one.
+    """
+    topics: list[str] = []
+    for word in task.split():
+        topic = word.strip(_AROUND_A_TOPIC)
+        segments = topic.split("/")
+        if (
+            len(segments) < 2
+            or not all(_TOPIC_SEGMENT.match(segment) for segment in segments)
+            or "#" in segments[:-1]
+            or topic in topics
+        ):
+            continue
+        topics.append(topic)
+        if len(topics) >= NAMED_TOPICS:
+            break
+    return topics
+
+
+def _sample_line(topic: str, source: str, payload: dict[str, Any]) -> str:
+    fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
+    return f"  Topic: {topic}  ({source})\n    Fields: {fields}\n    Example payload: {payload}"
+
 
 #: How many topics are listened to for a sample, and how many of them one
 #: agent may take: the wait is shared, so a few agents with many topics each
@@ -220,13 +275,21 @@ def topics_worth_sampling(bus: Any) -> list[tuple[str, str]]:
 
 
 async def collect_one_payload_per_topic(
-    broker: str, port: int, topics: list[tuple[str, str]], log_name: str
+    broker: str,
+    port: int,
+    topics: list[tuple[str, str]],
+    log_name: str,
+    *,
+    max_wait: float | None = None,
 ) -> dict[str, dict[str, Any]]:
     """First dict payload seen on each topic, within one shared deadline.
 
     One connection for all topics, and one global timeout rather than a
     per-topic one: the wait is for producers that publish every few seconds, so
-    a topic that is idle is skipped rather than holding up planning.
+    a topic that is idle is skipped rather than holding up planning. A topic may
+    be a filter with wildcards; what is kept is then keyed by the topic each
+    payload came on. ``max_wait`` overrides the deadline, which otherwise grows
+    with the number of topics.
     """
     received: dict[str, dict[str, Any]] = {}
 
@@ -249,7 +312,8 @@ async def collect_one_payload_per_topic(
         except Exception as e:
             logger.debug("[%s] _sample_live_topics connection error: %s", log_name, e)
 
-    max_wait = min(15.0, 5.0 + 2.0 * len(topics))
+    if max_wait is None:
+        max_wait = min(15.0, 5.0 + 2.0 * len(topics))
     try:
         await asyncio.wait_for(_collect(), timeout=max_wait)
     except asyncio.TimeoutError:
@@ -265,16 +329,11 @@ def describe_samples(
     lines = []
     for topic, payload in received.items():
         agent_name = topic_to_agent.get(topic, "?")
-        fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
         for contract in bus.registry.all_contracts():
             if topic in (contract.publishes or []):
                 contract.update_observed(topic, payload)
                 break
-        lines.append(
-            f"  Topic: {topic}  (published by {agent_name})\n"
-            f"    Fields: {fields}\n"
-            f"    Example payload: {payload}"
-        )
+        lines.append(_sample_line(topic, f"published by {agent_name}", payload))
     return lines
 
 
@@ -408,5 +467,38 @@ def describe_ha_source(task: str, candidates: list[dict[str, Any]]) -> tuple[str
         + ", ".join(f"`{c['entity_id']}`" for c in candidates[:3])
         + (" and more" if len(candidates) > 3 else "")
         + " — planner will pick the most relevant."
+    )
+    return enriched, note
+
+
+#: What a machine measures about itself: an agent on it reads these with psutil,
+#: so no topic or entity has to publish them. Temperature is not among them: the
+#: temperature "of" a node is as often a sensor wired to it as the board's own,
+#: so it is searched for, and the model is told psutil can read the board's.
+MACHINE_CONCEPTS = frozenset({"cpu", "processor", "memory", "ram", "disk", "storage"})
+
+
+def unresolved(task: str, concepts: list[str]) -> tuple[str, str]:
+    """``task`` with a note for the model, and one for the user, when no source was found.
+
+    A machine's own readings have a source wherever an agent runs, so asking
+    for one only says where. For anything else the model is told to report
+    what is missing rather than plan around it, never to plan an agent that
+    asks: the plan is shown before anything runs, which is the place to ask.
+    """
+    concepts_str = ", ".join(sorted(set(concepts))[:4])
+    if set(concepts) <= MACHINE_CONCEPTS:
+        enriched = (
+            f"{task} [NOTE: {concepts_str} is a reading of a machine. An agent on that machine "
+            f"reads it with psutil; see NODES for which machine.]"
+        )
+        return enriched, f"Read on the machine itself: {concepts_str}."
+    enriched = (
+        f"{task} [NOTE: No registered MQTT topics or HA entities found matching: {concepts_str}. "
+        f"A sensor agent may not have published yet. If nothing listed can provide it, report "
+        f"what is missing instead of planning an agent to ask for it.]"
+    )
+    note = (
+        f"No data source found for: {concepts_str}. You may need to name the exact topic or entity."
     )
     return enriched, note

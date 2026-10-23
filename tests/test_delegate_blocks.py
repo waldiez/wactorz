@@ -506,6 +506,18 @@ class TestStoredHistoryLosesItsBlocks:
         assert _strip_delegate_blocks(history) is False
         assert history[1]["content"] == "Just words."
 
+    @pytest.mark.parametrize(
+        "text", ["@weather check now", 'Ask @weather {"text":"now"}', "Done. @ha turn off"]
+    )
+    def test_executable_mentions_lose_their_transport_marker(self, text: str) -> None:
+        history = [{"role": "assistant", "content": text}]
+        assert _strip_delegate_blocks(history)
+        assert "@" not in history[0]["content"]
+
+    def test_a_prose_mention_is_preserved(self) -> None:
+        history = [{"role": "assistant", "content": "You can use @weather for forecasts."}]
+        assert not _strip_delegate_blocks(history)
+
 
 class TestAskingTheInstaller:
     """The model reaches a node by named operation; a command is the operator's to type."""

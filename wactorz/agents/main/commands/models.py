@@ -12,6 +12,7 @@ import asyncio
 from ....core.artifacts import ArtifactError, ArtifactStore, Pointer
 from ....core.paths import resolve_state_dir
 from .dispatch import CommandContext, command
+from .groups import MODELS
 
 #: Who a move from chat is recorded as. Chat knows the channel a turn came
 #: from, not a person's name, so the record says where, not who.
@@ -41,6 +42,8 @@ async def _announce(ctx: CommandContext) -> None:
     "/artifacts activate",
     prefixes=("/artifacts activate ",),
     summary="make a model version the one agents serve",
+    group=MODELS,
+    forms=(("/artifacts activate <name:version> [reason]", "make a version the one agents serve"),),
 )
 async def activate_model(ctx: CommandContext, argument: str) -> str:
     """``/artifacts activate <name:version> [reason]``."""
@@ -57,6 +60,8 @@ async def activate_model(ctx: CommandContext, argument: str) -> str:
     "/artifacts shadow",
     prefixes=("/artifacts shadow ",),
     summary="try a model version beside the active one",
+    group=MODELS,
+    forms=(("/artifacts shadow <name:version> [reason]", "try a version beside the active one"),),
 )
 async def shadow_model(ctx: CommandContext, argument: str) -> str:
     """``/artifacts shadow <name:version> [reason]``."""
@@ -73,6 +78,8 @@ async def shadow_model(ctx: CommandContext, argument: str) -> str:
     "/artifacts promote",
     prefixes=("/artifacts promote ",),
     summary="make a model's shadow version the active one",
+    group=MODELS,
+    forms=(("/artifacts promote <name> [reason]", "make the shadow version active"),),
 )
 async def promote_model(ctx: CommandContext, argument: str) -> str:
     """``/artifacts promote <name> [reason]``."""
@@ -89,6 +96,8 @@ async def promote_model(ctx: CommandContext, argument: str) -> str:
     "/artifacts clear",
     prefixes=("/artifacts clear ",),
     summary="unset a model's active or shadow pointer",
+    group=MODELS,
+    forms=(("/artifacts clear active|shadow <name>", "unset a pointer"),),
 )
 async def clear_model_pointer(ctx: CommandContext, argument: str) -> str:
     """``/artifacts clear active|shadow <name>``."""

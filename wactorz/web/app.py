@@ -20,6 +20,7 @@ from ..core.paths import ensure_state_dir
 from ..monitoring import http_metrics
 from . import (
     api_actors,
+    api_commands,
     api_log_capture,
     api_logs,
     api_reset,
@@ -177,6 +178,8 @@ def build_app() -> web.Application:
 
     app.router.add_get("/api/chats", api_system.chat_log_handler)
     app.router.add_get("/chats", api_system.chat_log_handler)
+    # `/api/` only, unlike the pairs around it: the commands the chat box completes.
+    app.router.add_get("/api/commands", api_commands.commands_handler)
 
     app.router.add_get("/api/config", api_system.config_handler)
     app.router.add_get("/config", api_system.config_handler)

@@ -5,10 +5,25 @@ hardware-free catalogue tests install and checks the actual package imports.
 """
 
 import importlib.metadata
+import os
 import subprocess
 import sys
 
 import pytest
+
+
+def _sdk_environment() -> dict[str, str]:
+    """Let each child initialize its own bundled GI paths instead of inheriting them.
+
+    GStreamer's .pth file appends GST_PYTHONPATH_1_0 as a single sys.path entry;
+    an inherited value becomes a path-separated list that cannot import gi.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONPATH", "GST_PYTHONPATH_1_0"}
+    }
+
 
 CLIENT_CHECK = """
 from fastapi import FastAPI, Request
@@ -42,11 +57,12 @@ def test_real_reachy_client_and_http_middleware_with_patched_starlette() -> None
         pytest.skip("Reachy SDK compatibility requires the opt-in reachy extra")
 
     result = subprocess.run(
-        [sys.executable, "-c", CLIENT_CHECK],
+        [sys.executable, "-I", "-c", CLIENT_CHECK],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
+        env=_sdk_environment(),
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -78,11 +94,12 @@ def test_the_sdk_provides_every_robot_call_the_agent_makes() -> None:
         pytest.skip("Reachy SDK contract requires the opt-in reachy extra")
 
     result = subprocess.run(
-        [sys.executable, "-c", CONTRACT_CHECK],
+        [sys.executable, "-I", "-c", CONTRACT_CHECK],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
+        env=_sdk_environment(),
     )
 
     assert result.returncode == 0, result.stdout + result.stderr

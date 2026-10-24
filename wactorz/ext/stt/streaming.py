@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from ...config import _env_int
+from .written import as_written
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ class StreamingSession:
                 logger.warning("[stt] unexpected reply shape from %s: %r", self._uri, payload)
                 continue
             segment = int(payload.get("segment", 0))
-            text = str(payload.get("text", ""))
+            text = as_written(str(payload.get("text", "")))
             # Two servers ship with sherpa-onnx and they answer differently: one
             # says `is_final` outright, the other reports an endpoint only by
             # starting to number the next segment. Take the flag where it is

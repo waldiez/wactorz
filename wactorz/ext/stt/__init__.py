@@ -31,6 +31,7 @@ from .. import voice
 from ..tts import speaker
 from ..voice import settings as voice_settings
 from . import listener, streaming
+from .written import as_written
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +232,7 @@ async def _exchange(
         if Transcript.is_type(event.type):
             # Stripped: recognisers conventionally lead with a space, and the
             # caller appends this to whatever the composer already holds.
-            return Transcript.from_event(event).text.strip()
+            return as_written(Transcript.from_event(event).text.strip())
 
 
 async def transcribe(raw: bytes, uri: str | None = None) -> str:

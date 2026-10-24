@@ -211,6 +211,14 @@ class TestAServerThatStatesFinality:
         # endpoint by moving to the next segment number.
         assert any(r.final and r.text == "hello there" for r in readings)
 
+    async def test_a_reading_in_capitals_comes_out_as_written(self, serve: Any) -> None:
+        # The small English streaming model answers in upper case.
+        uri, _fake = await serve([{"text": "WHAT TIME IS IT", "segment": 0, "is_final": True}])
+
+        readings = await collect(uri, [b"\x00" * 8])
+
+        assert readings[-1].text == "What time is it"
+
     async def test_a_stated_final_does_not_repeat_as_an_inferred_one(self, serve: Any) -> None:
         uri, _fake = await serve(
             [

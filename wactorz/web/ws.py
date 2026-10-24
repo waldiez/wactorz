@@ -15,8 +15,9 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from .. import config
 from ..core.persistence import chat_turn_recorded
-from ..ext.stt import service_uri, streaming
+from ..ext.stt import listens_elsewhere, service_uri, streaming
 from ..monitoring.log_redaction import redact
 from . import answers, chat, events, lifecycle, origins, runtime, uploads
 
@@ -466,6 +467,13 @@ class Listening:
         if self.session is not None:
             return  # already listening; a second start is not an error
 
+        # The branch that sends a browser's audio here. On any other, a socket
+        # holding the API key could still reach the recogniser this way.
+        elsewhere = listens_elsewhere("server")
+        if elsewhere:
+            await _send(ws, {"type": "stt_error", "message": elsewhere})
+            return
+
         uri = service_uri()
         if not streaming.is_streaming_uri(uri):
             # A batch recogniser answers once, at the end. Saying so is better
@@ -509,25 +517,40 @@ class Listening:
 
         Takes the session as an argument rather than reading the attribute: the
         attribute is cleared when the turn ends, and this loop outlives that.
+
+        Bounded by `config.STT_LIVE_SECONDS`, so a microphone left open in a tab
+        nobody is watching stops being heard instead of streaming for ever.
         """
+        limit = config.STT_LIVE_SECONDS or None
         try:
-            async for reading in session.readings():
-                await _send(
-                    ws,
-                    {
-                        "type": "stt_final" if reading.final else "stt_partial",
-                        "text": reading.text,
-                        "segment": reading.segment,
-                    },
-                )
+            await asyncio.wait_for(_relay(ws, session), limit)
         except asyncio.CancelledError:
             raise
+        # Spelled this way on purpose: the two names are one object from 3.11
+        # and separate classes on 3.10, where the builtin would catch nothing.
+        except asyncio.TimeoutError:
+            await _send(
+                ws, {"type": "stt_error", "message": f"listening stopped after {limit:g} seconds"}
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("[ws] recognition ended: %s", exc)
             await _send(ws, {"type": "stt_error", "message": "recognition stopped"})
         # Reached when the turn ends on its own or fails and is reported, never
         # when cancelled -- `stop` owns the session in that case.
         await self._release()
+
+
+async def _relay(ws: web.WebSocketResponse, session: streaming.LiveTranscription) -> None:
+    """Send every reading of `session` to the browser as it arrives."""
+    async for reading in session.readings():
+        await _send(
+            ws,
+            {
+                "type": "stt_final" if reading.final else "stt_partial",
+                "text": reading.text,
+                "segment": reading.segment,
+            },
+        )
 
 
 async def _send(ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:

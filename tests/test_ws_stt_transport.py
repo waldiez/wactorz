@@ -15,8 +15,16 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import until
+from wactorz import config
 from wactorz.ext.stt.streaming import Partial
 from wactorz.web import ws
+
+
+@pytest.fixture(autouse=True)
+def _on_the_server_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The branch a browser's live audio is served on; tests about another set their own."""
+    monkeypatch.setattr(config, "STT_MODE", "server")
 
 
 class FakeSocket:
@@ -59,6 +67,17 @@ class FakeLive:
             yield reading
         if self._fail is not None:
             raise self._fail
+
+
+class EndlessLive(FakeLive):
+    """A recogniser that keeps the session open and never says another word."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+
+    async def readings(self) -> Any:
+        await asyncio.Event().wait()
+        yield Partial(text="", segment=0, final=True)  # never reached
 
 
 def use(monkeypatch: pytest.MonkeyPatch, live: Any, uri: str = "ws://recogniser:6006/") -> None:
@@ -243,3 +262,42 @@ class TestListeningAgain:
 
         assert len(opened) == 2
         await listening.stop()
+
+
+class TestWhichBranchListens:
+    @pytest.mark.parametrize("branch", ["off", "browser", "host"])
+    async def test_a_session_opens_on_the_server_branch_only(
+        self, monkeypatch: pytest.MonkeyPatch, branch: str
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", branch)
+        opened: list[str] = []
+        monkeypatch.setattr(ws, "service_uri", lambda: "ws://recogniser:6006/")
+        monkeypatch.setattr(ws.streaming, "LiveTranscription", opened.append)
+        socket, listening = FakeSocket(), ws.Listening()
+
+        await listening.start(socket)  # pyright: ignore[reportArgumentType]
+
+        # A socket holding the key could otherwise reach the recogniser on a
+        # deployment that has said nothing is heard through a browser.
+        assert socket.types() == ["stt_error"]
+        assert f"listens through '{branch}'" in socket.sent[0]["message"]
+        assert not opened
+        assert listening.session is None
+
+
+class TestALongSession:
+    async def test_it_is_ended_and_the_browser_told_why(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "STT_LIVE_SECONDS", 0.05)
+        live = EndlessLive()
+        use(monkeypatch, live)
+        socket, listening = FakeSocket(), ws.Listening()
+
+        await listening.start(socket)  # pyright: ignore[reportArgumentType]
+        await until(lambda: listening.session is None, "the session to be let go")
+
+        # Ended by the server, not left to a tab nobody is watching.
+        assert socket.types() == ["stt_error"]
+        assert socket.sent[0]["message"] == "listening stopped after 0.05 seconds"
+        assert live.closed

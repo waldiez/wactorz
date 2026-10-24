@@ -67,6 +67,12 @@ class FakeClient:
         return None if self.silent else Transcript(text=self.text).event()
 
 
+@pytest.fixture(autouse=True)
+def _on_the_server_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The branch a posted clip is served on; tests about another set their own."""
+    monkeypatch.setattr(config, "STT_MODE", "server")
+
+
 @pytest.fixture(name="service")
 def service_fixture(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
     """Point the extension at a fake recogniser."""
@@ -322,6 +328,22 @@ class TestWhatTheBrowserIsTold:
         # the second is installed.
         assert payload["stt"]["mode"] == "server"
         assert payload["stt"]["available"] is True
+
+
+class TestWhichBranchIsServed:
+    @pytest.mark.parametrize("branch", ["off", "browser", "host"])
+    async def test_a_clip_is_read_on_the_server_branch_only(
+        self, monkeypatch: pytest.MonkeyPatch, service: FakeClient, branch: str
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", branch)
+
+        status, body = await post_audio()
+
+        # Refused before the recogniser is reached: on any other branch it is
+        # not a browser's to use, however it is configured.
+        assert status == 503
+        assert f"listens through '{branch}'" in body["error"]
+        assert "WACTORZ_STT=server" in body["error"]
 
 
 class TestABranchNothingServes:

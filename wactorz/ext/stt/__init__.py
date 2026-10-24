@@ -118,6 +118,21 @@ def setup(app: web.Application) -> None:
     warn_if_it_cannot_listen()
 
 
+def listens_elsewhere(branch: str) -> str:
+    """Why a request for `branch` is not served, or empty when it is in force.
+
+    One wording for every route that serves a single branch, naming the branch
+    in force and both ways to change it.
+    """
+    mode = voice_settings.listening()
+    if mode == branch:
+        return ""
+    return (
+        f"this deployment listens through '{mode}', not here "
+        f"— change it in Settings, or set WACTORZ_STT={branch}"
+    )
+
+
 def warn_if_it_cannot_listen() -> None:
     """Say what the branch in force is missing, at startup and on a change."""
     mode = voice_settings.listening()
@@ -287,16 +302,9 @@ async def listen_handler(request: web.Request) -> web.Response:
         if isinstance(body, dict):
             act = body.get("act", True) is not False
 
-    if voice_settings.listening() != "host":
-        return web.json_response(
-            {
-                "error": (
-                    f"this deployment listens through '{voice_settings.listening()}', not here "
-                    "— change it in Settings, or set WACTORZ_STT=host"
-                )
-            },
-            status=503,
-        )
+    elsewhere = listens_elsewhere("host")
+    if elsewhere:
+        return web.json_response({"error": elsewhere}, status=503)
     if not listener.available():
         return web.json_response(
             {"error": "no microphone on this machine — pip install 'wactorz[host]'"}, status=503
@@ -468,7 +476,14 @@ async def stt_handler(request: web.Request) -> web.Response:
     names. 503 when that one cannot be reached at all -- a Wyoming service
     without wyoming installed -- so a browser can tell "this deployment does not
     recognise speech" from "it tried and failed".
+
+    Served on the ``server`` branch only. On any other the recogniser is not
+    this browser's to use, however it is reached: a deployment set to ``off``
+    has said nothing is heard here.
     """
+    elsewhere = listens_elsewhere("server")
+    if elsewhere:
+        return web.json_response({"error": elsewhere}, status=503)
     if not recogniser_reachable():
         return web.json_response(
             {"error": "wyoming not installed — pip install 'wactorz[stt]'"}, status=503

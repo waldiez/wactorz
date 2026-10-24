@@ -457,7 +457,7 @@ finalises and posts `⏹ Stopped.` over the WebSocket.
 |---|---|---|
 | `GET` | `/api/tts/voices` | The voices there are to choose between, which may be none |
 | `POST` | `/api/tts` | Turn `{"text": ..., "voice": ...}` into audio |
-| `POST` | `/api/stt` | Transcribe an uploaded clip |
+| `POST` | `/api/stt` | Transcribe an uploaded clip (`WACTORZ_STT=server` only) |
 | `POST` | `/api/stt/listen` | Listen through this machine's microphone (`WACTORZ_STT=host` only) |
 | `POST` | `/api/voice` | Choose which branch listens, speaks and wakes, and the voice, while running |
 
@@ -553,6 +553,13 @@ After connection the server streams every MQTT message as a JSON object. Field n
 ```
 
 The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
+
+**Live recognition** runs over the same socket on the `server` branch with a
+`ws://` recogniser. The browser sends `{"type": "stt_start"}`, then the audio as
+binary frames, then `{"type": "stt_stop"}`; the server answers with
+`stt_partial` and `stt_final` frames (`{text, segment}`) as words are heard. On
+any other branch, or after `WACTORZ_STT_LIVE_SECONDS`, it sends `stt_error` with
+a `message` saying why, and the session is over.
 
 ---
 

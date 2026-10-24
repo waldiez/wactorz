@@ -311,6 +311,11 @@ WAKE_MODEL_DIR = _unquote(os.getenv("WACTORZ_WAKE_MODEL", "") or "")
 #: the microphone is offered exactly where it can work.
 STT_MODE = _stt_mode()
 
+#: How long one live recognition from a browser may run, in seconds, before the
+#: server ends it. Generous for an utterance, and a firm end for a microphone
+#: left open in a tab nobody is watching. 0 sets no limit.
+STT_LIVE_SECONDS = _env_int("WACTORZ_STT_LIVE_SECONDS", 120)
+
 #: How this deployment speaks, if it does.
 #:
 #: ``browser`` and ``server`` differ in where the speech is made, and so in

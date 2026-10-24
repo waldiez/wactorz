@@ -9,6 +9,8 @@
 #                 docker compose --profile python up -d
 #   full        — Python app + Home Assistant
 #                 docker compose --profile full up -d
+#   voice       — Whisper to hear (:10300) and Piper to speak (:10200), on
+#                 this machine; voice-live is a streaming recogniser (:6006)
 #
 # External ports (defaults, override via .env):
 #   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT       (this host only; MQTT_EXTERNAL_BIND)
@@ -608,11 +610,69 @@ services:
       retries: 5
       start_period: 60s
 
+  # Whisper over Wyoming: the recogniser WACTORZ_STT_URI points at unset
+  # (tcp://localhost:10300, or tcp://voice-stt:10300 from the backend). It reads
+  # a turn once it has been spoken, which is all the host branch ever sends, and
+  # hears short phrases far better than the small streaming model below.
   voice-stt:
     profiles: [voice]
+    image: rhasspy/wyoming-whisper:3.8.1@sha256:ba6fcb6056ebe237d15a325381763a80af2fc8fcedaa04f6a714a7375eb20d80
+    container_name: wactorz-voice-stt
+    restart: unless-stopped
+    # The distilled small English model, int8 on the CPU, with room for a long
+    # turn. VOICE_WHISPER_MODEL=tiny-int8 is lighter, for a Pi, and hears less.
+    command:
+      - --model
+      - "${VOICE_WHISPER_MODEL:-Systran/faster-distil-whisper-small.en}"
+      - --language
+      - "${VOICE_WHISPER_LANGUAGE:-en}"
+      # int8 rather than the float32 the CPU would widen the model to: a
+      # quarter of the memory, faster, and hearing the same.
+      - --compute-type
+      - int8
+    mem_limit: 1g
+    pids_limit: 256
+    networks:
+      - wactorz-net
+    volumes:
+      - whisper-models:/data
+    # Loopback only, for the reason given on the streaming one below. Set
+    # WACTORZ_STT_URI=tcp://voice-stt:10300 for the backend.
+    ports:
+      - "127.0.0.1:${VOICE_WHISPER_PORT:-10300}:10300"
+    # The image's own health check; the first start downloads the model, which
+    # its start period allows for.
+
+  # Piper over Wyoming: speech made on this machine, so the words of a reply
+  # never leave it, as they do with edge-tts, the synthesiser used when
+  # WACTORZ_TTS_URI is unset. Set WACTORZ_TTS_URI=tcp://voice-tts:10200 for
+  # the backend, tcp://localhost:10200 for one run on this host.
+  voice-tts:
+    profiles: [voice]
+    image: rhasspy/wyoming-piper:2.5.2@sha256:7d39aafac409c2b6b09d999ed04d84c311d632e558b35baa60fad6aac722af7a
+    container_name: wactorz-voice-tts
+    restart: unless-stopped
+    # Any voice from the Piper voices list; the first start downloads it.
+    command:
+      - --voice
+      - "${VOICE_PIPER_VOICE:-en_US-lessac-medium}"
+    mem_limit: 512m
+    pids_limit: 256
+    networks:
+      - wactorz-net
+    volumes:
+      - piper-voices:/data
+    # Loopback only: like the recognisers, it has no authentication of its own.
+    ports:
+      - "127.0.0.1:${VOICE_PIPER_PORT:-10200}:10200"
+
+  # A sherpa-onnx streaming recogniser, for the server branch with words shown
+  # while the speaker is still talking (--profile voice-live).
+  voice-stt-live:
+    profiles: [voice-live]
     build:
       context: ./infra/voice/stt
-    container_name: wactorz-voice-stt
+    container_name: wactorz-voice-stt-live
     restart: unless-stopped
     # A small streaming model on the CPU takes a few hundred megabytes, and the
     # runtime a thread per core.
@@ -630,7 +690,7 @@ services:
     # Loopback only. The recogniser has no authentication of its own, and the
     # backend reaches it over the compose network by name -- publishing it wider
     # would offer anyone on the LAN a transcription service and whatever is said
-    # near the microphone driving it. Set WACTORZ_STT_URI=ws://voice-stt:6006 there;
+    # near the microphone driving it. Set WACTORZ_STT_URI=ws://voice-stt-live:6006 there;
     # this mapping is for reaching it from this host.
     ports:
       - "127.0.0.1:${VOICE_PORT:-6006}:${VOICE_PORT:-6006}"
@@ -652,6 +712,8 @@ volumes:
   sandbox-state:
   api-key-data:
   voice-models:
+  whisper-models:
+  piper-voices:
   mosquitto-data:
   mosquitto-logs:
   prometheus-data:

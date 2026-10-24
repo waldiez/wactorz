@@ -26,7 +26,7 @@ from ...config import _unquote
 logger = logging.getLogger(__name__)
 
 try:  # optional dependency — the module must import without it
-    import sherpa_onnx
+    import sherpa_onnx  # pyright: ignore[reportMissingImports]  # not in `all`, so absent where CI checks
 
     SILERO = True
 except ImportError:

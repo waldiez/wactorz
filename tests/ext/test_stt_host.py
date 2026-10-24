@@ -14,9 +14,11 @@ from typing import Any
 import pytest
 from aiohttp import web
 
+from tests.waiting import until
 from wactorz.core.persistence import chat_turn_recorded
 from wactorz.ext import stt
 from wactorz.ext.stt import listener, streaming, vad
+from wactorz.web import chat as web_chat
 
 
 def tone(seconds: float, level: float, rate: int = listener.RATE) -> bytes:
@@ -256,7 +258,40 @@ class TestAskingTheMachineToListen:
         assert body == {"text": "turn on the lights", "heard": True, "acted": True}
         # One routing path, not two: an @mention reaches the agent it names and
         # anything else reaches main, exactly as from the composer.
+        await until(lambda: routed, "the heard turn to be routed")
         assert routed == ["turn on the lights"]
+
+    async def test_it_answers_once_heard_and_routes_as_a_turn_stop_can_reach(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The reply comes to the chat over the socket, for as long as the model
+        # takes; held open for it, the asker waits on a turn it already started.
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
+        monkeypatch.setattr(stt.listener, "available", lambda: True)
+        replying = asyncio.Event()
+
+        async def heard(**_kwargs: object) -> bytes:
+            return b"a clip"
+
+        async def read(_clip: bytes) -> str:
+            return "tell me a long story"
+
+        async def route(_said: str) -> None:
+            await replying.wait()
+
+        tracked: list[asyncio.Task[None]] = []
+        monkeypatch.setattr(stt.listener, "listen", heard)
+        monkeypatch.setattr(stt, "transcribe", read)
+        monkeypatch.setattr(stt, "_route_as_typed", route)
+        monkeypatch.setattr(web_chat, "track_chat_task", lambda task: tracked.append(task) or task)
+
+        status, body = await asyncio.wait_for(_listen(), timeout=5)
+
+        assert status == 200
+        assert body["acted"] is True
+        assert len(tracked) == 1 and not tracked[0].done()
+        replying.set()
+        await tracked[0]
 
     async def test_it_reads_through_a_streaming_recogniser_too(
         self, monkeypatch: pytest.MonkeyPatch
@@ -287,6 +322,7 @@ class TestAskingTheMachineToListen:
         # is the recogniser `infra/voice/stt/` builds.
         assert status == 200
         assert body["text"] == "lights on"
+        await until(lambda: routed, "the heard turn to be routed")
         assert routed == ["lights on"]
 
     async def test_it_will_not_listen_while_the_machine_is_talking(
@@ -751,6 +787,7 @@ class TestCheckingTheMicrophoneWithoutSpending:
             routed.clear()
             _status, body = await _listen(asked)
             assert body["acted"] is True
+            await until(lambda: routed, "the heard turn to be routed")
             assert routed == ["turn on the lights"]
 
     async def test_a_body_that_will_not_read_still_acts(
@@ -764,6 +801,7 @@ class TestCheckingTheMicrophoneWithoutSpending:
         _status, body = await _listen(ValueError("not json"))
 
         assert body["acted"] is True
+        await until(lambda: routed, "the heard turn to be routed")
         assert routed == ["hello"]
 
 

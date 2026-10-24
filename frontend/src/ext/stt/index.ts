@@ -22,6 +22,7 @@ import { SpeechToText } from "./Recorder";
 export { SpeechToText } from "./Recorder";
 export { LiveMic, attachLiveSocket, liveMic } from "./LiveMic";
 export { WebSpeech, canRecognise } from "./webSpeech";
+export { listenInTheRoom, type RoomAnswer } from "./room";
 export type { WebSpeechHandlers } from "./webSpeech";
 export type { LiveSocket, LiveMicHandlers } from "./LiveMic";
 export { toWav, encodeWav, resample, toMono, TARGET_RATE } from "./wav";

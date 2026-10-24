@@ -20,7 +20,7 @@
  * someone deliberately opened.
  */
 
-import { sttMode, sttAvailable, sttLive, canRecognise } from "../../ext/stt";
+import { sttMode, sttAvailable, sttLive, canRecognise, listenInTheRoom } from "../../ext/stt";
 import { waking, wakeReady, wakePhrases } from "../../ext/wake";
 import { ttsMode, ttsAvailable, tts, ttsVoice } from "../../ext/tts";
 import { allows, ceilingSays, nothingToChoose, type BranchSetting } from "./voiceAllowed";
@@ -85,29 +85,15 @@ async function checkMicrophone(btn: HTMLButtonElement, apiBase: string): Promise
     const was = btn.textContent;
     btn.textContent = "Listening…";
     try {
-        // Generous, because listening legitimately takes many seconds -- but
-        // bounded, because a connection that never answers would otherwise leave
-        // the button saying "Listening…" for the life of the page.
-        const res = await fetch(`${apiBase}/api/stt/listen`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ act: false }),
-            signal: AbortSignal.timeout(LISTEN_TIMEOUT_MS),
-        });
-        const body = (await res.json()) as {
-            text?: string;
-            heard?: boolean;
-            speaking?: boolean;
-            error?: string;
-        };
-        if (!res.ok) {
-            toast.show({ type: "alert-error", title: "Could not listen", message: body.error ?? "" });
-        } else if (body.speaking) {
+        const answer = await listenInTheRoom(apiBase, false);
+        if (answer.kind === "failed") {
+            toast.show({ type: "alert-error", title: "Could not listen", message: answer.reason });
+        } else if (answer.kind === "speaking") {
             // Not silence: it declines while the room is being spoken to, so that
             // it does not hear the reply and answer it.
             toast.show({ type: "alert-warning", title: "Still speaking", message: "Try again in a moment." });
-        } else if (body.heard) {
-            toast.show({ type: "system", title: "Microphone works", message: body.text ?? "" });
+        } else if (answer.kind === "heard") {
+            toast.show({ type: "system", title: "Microphone works", message: answer.text });
         } else {
             toast.show({
                 type: "system",
@@ -115,16 +101,11 @@ async function checkMicrophone(btn: HTMLButtonElement, apiBase: string): Promise
                 message: "The microphone opened, but nobody spoke.",
             });
         }
-    } catch {
-        toast.show({ type: "alert-error", title: "Could not listen", message: "The server did not answer." });
     } finally {
         btn.disabled = false;
         btn.textContent = was;
     }
 }
-
-/** How long to wait on one turn: the recording, and then reading it back. */
-const LISTEN_TIMEOUT_MS = 120_000;
 
 /** The branches, in the order they read. */
 const STT_BRANCHES = ["off", "browser", "server", "host"] as const;

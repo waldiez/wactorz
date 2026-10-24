@@ -9,7 +9,8 @@
  */
 import type { ChatInput } from "./chatInput";
 import type { SpeechToText, LiveMic } from "../../ext/stt";
-import { micOffered, liveOffered, liveMic, recognisesHere, WebSpeech } from "../../ext/stt";
+import { micOffered, liveOffered, liveMic, recognisesHere, sttMode, WebSpeech } from "../../ext/stt";
+import { buildRoomMicBtn } from "./roomMic";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
@@ -451,6 +452,8 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     bar.append(select, inputWrap);
     if (micOffered()) {
         bar.appendChild(buildMicBtn(deps, input));
+    } else if (sttMode() === "host") {
+        bar.appendChild(buildRoomMicBtn());
     }
     if (uploadsEnabled()) {
         const { button, picker } = buildAttachBtn();

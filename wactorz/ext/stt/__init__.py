@@ -317,8 +317,22 @@ async def listen_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "transcription failed"}, status=502)
 
     if said and act:
-        await _route_as_typed(said)
+        _route_after_answering(said)
     return web.json_response({"text": said, "heard": bool(said), "acted": bool(said) and act})
+
+
+def _route_after_answering(said: str) -> None:
+    """Route what was heard once the request has its answer, as a typed turn would be.
+
+    The caller asked to be heard, not to wait for the reply: that comes to the
+    chat over the socket, for as long as the model takes. Held as a chat task,
+    so the chat's stop button reaches it as it reaches a typed one.
+
+    Imported here for the reason `_route_as_typed` gives.
+    """
+    from ...web import chat
+
+    chat.track_chat_task(asyncio.create_task(_route_as_typed(said)))
 
 
 async def _wants_to_act(request: web.Request) -> bool:

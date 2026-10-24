@@ -340,15 +340,21 @@ class Dashboard:
 
     # ── Clearing what the install has stored ────────────────────────────────
 
-    def clear(self, what: str) -> str:
-        """Choose ``what`` in the header's "Clear stored state" menu, and confirm.
+    def clear(self, what: str, *, agent: str | None = None) -> str:
+        """Choose ``what`` in the header's "Clear stored state" menu, for ``agent`` or for all, and confirm.
 
-        The menu asks in place: the first press turns the entry into a question,
-        and the second answers it. Returns the question it asked.
+        With a conversation open the menu offers that agent first, so whom it is
+        for is picked as a person would: the agent named, else every agent. The
+        menu asks in place: the first press turns the entry into a question, and
+        the second answers it. Returns the question it asked.
         """
         self.page.get_by_role("button", name=RESET_MENU, exact=True).click()
         # The menu is in the page while closed, but hidden: only an open one counts.
         menu = self.page.get_by_role("group", name=RESET_MENU, exact=True)
+        whom = f"@{agent}" if agent else "All agents"
+        choice = menu.get_by_role("radio", name=whom, exact=True)
+        if agent or choice.count():
+            choice.check()
         entry = menu.get_by_role("button").filter(has_text=what)
         asked = ""
         # The question lapses a few seconds after it is asked, and a press that

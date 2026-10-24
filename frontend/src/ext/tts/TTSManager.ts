@@ -38,6 +38,10 @@ export class TTSManager {
     private _serverAvailable: boolean | null = null;
     private _mode: "off" | "browser" | "server" | "host" = "server";
     private _voices: TTSVoice[] = [];
+    /** The voices the deployment itself speaks in, from the server; null until known.
+     *  Kept apart from `_voices`, which may be this browser's own: a deployment
+     *  sent one of those as its voice would fail every reply. */
+    private _deploymentVoices: TTSVoice[] | null = null;
     /** What is playing from the server, while something is. */
     private _source: AudioBufferSourceNode | null = null;
     /** Moves on whenever speech starts or stops, so audio fetched for older speech
@@ -80,6 +84,11 @@ export class TTSManager {
      * Call once after the page loads -- non-blocking.
      */
     async init(): Promise<void> {
+        // The deployment's own voices wherever it is the one speaking, the room
+        // included: they are what its voice is chosen from in Settings.
+        if (this._mode === "server" || this._mode === "host") {
+            this._deploymentVoices = await this._fetchServerVoices();
+        }
         if (this._mode === "off" || this._mode === "host") {
             return;
         }
@@ -89,35 +98,33 @@ export class TTSManager {
             await this._loadBrowserVoices();
             return;
         }
-        if (!(await this._loadServerVoices())) {
-            await this._loadBrowserVoices();
+        // An empty list means there is no choice to make -- a named synthesiser
+        // speaks in whatever it is configured for -- and is not the same as a
+        // server that cannot speak. Reading it as the latter would hand the
+        // words to this browser while the service sat there working.
+        if (this._deploymentVoices !== null) {
+            this._voices = this._deploymentVoices;
+            this._emitVoices();
+            return;
         }
+        this._serverAvailable = false;
+        await this._loadBrowserVoices();
     }
 
-    /**
-     * Take the voice list the server offers, which may be empty.
-     *
-     * An empty list means there is no choice to make -- a named synthesiser
-     * speaks in whatever it is configured for -- and is not the same as a server
-     * that cannot speak. Reading it as the latter would hand the words to this
-     * browser while the service sat there working.
-     */
-    private async _loadServerVoices(): Promise<boolean> {
+    /** The voice list the server offers, which may be empty; null when it does not answer. */
+    private async _fetchServerVoices(): Promise<TTSVoice[] | null> {
         try {
             const res = await fetch(`${this._apiBase}/api/tts/voices`);
             if (res.ok) {
                 const data: unknown = await res.json();
                 if (Array.isArray(data)) {
-                    this._voices = data as TTSVoice[];
-                    this._emitVoices();
-                    return true;
+                    return data as TTSVoice[];
                 }
             }
         } catch {
             /* network error */
         }
-        this._serverAvailable = false;
-        return false;
+        return null;
     }
 
     private _loadBrowserVoices(): Promise<void> {
@@ -174,6 +181,10 @@ export class TTSManager {
     /** The voices there are to choose between, which may be none. */
     get voices(): TTSVoice[] {
         return this._voices;
+    }
+    /** The voices the deployment itself speaks in: never this browser's own. Empty until known. */
+    get deploymentVoices(): readonly TTSVoice[] {
+        return this._deploymentVoices ?? [];
     }
 
     /** The persisted selected voice name, or "" for the default. */

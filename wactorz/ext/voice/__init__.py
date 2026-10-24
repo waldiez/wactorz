@@ -23,6 +23,12 @@ Reaction = Callable[[], "Awaitable[None] | None"]
 
 _REACTIONS: web.AppKey[list[Reaction]] = web.AppKey("voice_reactions", list)
 
+#: Why a voice cannot be chosen, or "" when it can: the tts extension's to answer,
+#: since only it knows which voices its synthesiser has.
+VoiceCheck = Callable[[str], str]
+
+_VOICE_CHECK: web.AppKey[VoiceCheck] = web.AppKey("voice_check")
+
 
 def setup(app: web.Application) -> None:
     """Register the route that changes the voice settings."""
@@ -38,6 +44,14 @@ def on_change(app: web.Application, reaction: Reaction) -> None:
     if _REACTIONS not in app:
         app[_REACTIONS] = []
     app[_REACTIONS].append(reaction)
+
+
+def check_voices_with(app: web.Application, check: VoiceCheck) -> None:
+    """Have ``POST /api/voice`` ask `check` about a voice before keeping it.
+
+    Without one, any name is kept: this package knows no synthesiser's voices.
+    """
+    app[_VOICE_CHECK] = check
 
 
 def public_config(_app: web.Application) -> dict[str, Any]:
@@ -83,13 +97,9 @@ async def voice_settings_handler(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "nothing to change: listening, speaking, waking or voice"}, status=400
         )
-    # Checked before any of it is kept: a request naming one good setting and one
-    # bad one would otherwise leave the deployment half-changed, in a state
-    # nobody asked for and the answer does not describe.
-    for setting, value in changed.items():
-        problem = settings.refuses(setting, str(value))
-        if problem:
-            return web.json_response({"error": problem}, status=400)
+    problem = _refused(request.app, changed)
+    if problem:
+        return web.json_response({"error": problem}, status=400)
     try:
         for setting, value in changed.items():
             settings.choose(setting, str(value))
@@ -98,6 +108,24 @@ async def voice_settings_handler(request: web.Request) -> web.Response:
 
     await _settle(request.app)
     return web.json_response(_now())
+
+
+def _refused(app: web.Application, changed: dict[str, Any]) -> str:
+    """Why any of `changed` cannot be kept, or "" when all of it can.
+
+    Checked before any of it is kept: a request naming one good setting and one
+    bad one would otherwise leave the deployment half-changed, in a state nobody
+    asked for and the answer does not describe.
+    """
+    for setting, value in changed.items():
+        problem = settings.refuses(setting, str(value))
+        if setting == "voice" and not problem and _VOICE_CHECK in app:
+            # A voice the synthesiser does not have is refused, not kept: kept, it
+            # would be sent with every reply and every reply would fail.
+            problem = app[_VOICE_CHECK](str(value).strip())
+        if problem:
+            return problem
+    return ""
 
 
 async def _settle(app: web.Application) -> None:

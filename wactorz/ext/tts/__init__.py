@@ -76,6 +76,7 @@ def setup(app: web.Application) -> None:
     app.router.add_post("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
     app.on_cleanup.append(_quiet_on_cleanup)
+    voice.check_voices_with(app, unknown_voice)
     warn_if_the_room_will_stay_quiet()
     voice.on_change(app, warn_if_the_room_will_stay_quiet)
 
@@ -147,7 +148,7 @@ async def make_speech(text: str, asked_for: str = "") -> remote.Speech:
     """Turn `text` into audio, by whichever synthesiser this deployment names."""
     # Chosen first, configured second: the environment says what this started
     # with, and picking another in the dashboard is how someone tries one.
-    configured = voice_settings.voice() or os.environ.get("TTS_VOICE", "").strip()
+    configured = _usable(voice_settings.voice() or os.environ.get("TTS_VOICE", "").strip())
     uri = remote.service_uri()
     if remote.names_a_service(uri):
         # No fallback to the default below: that name belongs to the synthesiser
@@ -240,13 +241,53 @@ async def _quiet_on_cleanup(_app: web.Application) -> None:
     await asyncio.gather(*pending, return_exceptions=True)
 
 
+def unknown_voice(name: str) -> str:
+    """Why `name` is not a voice this deployment can speak in, or "" when it may be.
+
+    Judged against the synthesiser's own list where there is one. A named
+    service's voices are its own and cannot be listed, so any name may be one of
+    them; and a list not loaded yet, or that could not be fetched, refuses nothing
+    rather than everything.
+    """
+    if not name or remote.names_a_service(remote.service_uri()):
+        return ""
+    if not _tts_state.available:
+        return (
+            f"{name!r} cannot be this deployment's voice: it has no synthesiser of its "
+            "own -- pip install 'wactorz[tts]', or name one with WACTORZ_TTS_URI"
+        )
+    if not _tts_state.voices or name in {v["name"] for v in _tts_state.voices}:
+        return ""
+    return f"this deployment's synthesiser has no voice {name!r}; GET /api/tts/voices lists them"
+
+
+#: The stored voices already said in the log to be ignored, so each is said once.
+_ignored_voices: set[str] = set()
+
+
+def _usable(configured: str) -> str:
+    """`configured`, or "" for the default when the synthesiser here does not have it.
+
+    For a voice stored before it could be checked -- a browser's own voice saved
+    as the deployment's, by a page that offered the wrong list. Sent anyway, it
+    would fail every reply; ignored, the deployment speaks in its default and says why.
+    """
+    problem = unknown_voice(configured)
+    if not problem:
+        return configured
+    if configured not in _ignored_voices:
+        _ignored_voices.add(configured)
+        logger.warning("[tts] Speaking in the default voice: %s", problem)
+    return ""
+
+
 def _reported_voice() -> str:
     """The voice this deployment speaks in, as far as the browser needs to know.
 
     Empty for a named service: its voices are its own, and naming the one this
     process would have used describes a synthesiser that is not being asked.
     """
-    configured = voice_settings.voice() or os.getenv("TTS_VOICE", "").strip()
+    configured = _usable(voice_settings.voice() or os.getenv("TTS_VOICE", "").strip())
     if remote.names_a_service(remote.service_uri()):
         return configured
     # Stripped and `or`-ed rather than given as a default argument: a default

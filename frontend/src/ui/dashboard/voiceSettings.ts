@@ -356,7 +356,9 @@ function buildVoicePicker(apiBase: string, onChanged: () => void): HTMLElement {
     name.className = "af-voice-term";
     name.textContent = "Voice";
 
-    const voices = tts.voices;
+    // The deployment's own, never this browser's: those are chosen in the audio
+    // popover, and one saved here would be sent to a synthesiser that has none.
+    const voices = tts.deploymentVoices;
     const select = voiceOptions(voices, ttsVoice());
 
     const current = ttsVoice();
@@ -483,7 +485,9 @@ export function buildVoiceSection(apiBase: string, onChanged: () => void = () =>
     if (sttMode() === "host") {
         section.appendChild(buildWakePicker(apiBase, onChanged));
     }
-    if (ttsMode() !== "off") {
+    // Only where the deployment itself speaks: on `browser` the browser's own
+    // voice is used, chosen per browser in the audio popover.
+    if (ttsMode() === "server" || ttsMode() === "host") {
         section.appendChild(buildVoicePicker(apiBase, onChanged));
     }
     section.appendChild(buildButtons(apiBase, onChanged));

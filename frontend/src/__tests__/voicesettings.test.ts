@@ -169,7 +169,7 @@ describe("what the settings view says about voice", () => {
     });
 
     const withVoices = (names: string[]): void => {
-        vi.spyOn(tts, "voices", "get").mockReturnValue(names.map(name => ({ name }) as never));
+        vi.spyOn(tts, "deploymentVoices", "get").mockReturnValue(names.map(name => ({ name }) as never));
     };
 
     it("sets the voice the deployment speaks in, not just this browser's", () => {

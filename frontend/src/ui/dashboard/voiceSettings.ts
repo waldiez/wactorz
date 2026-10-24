@@ -23,6 +23,7 @@
 import { sttMode, sttAvailable, sttLive, canRecognise } from "../../ext/stt";
 import { waking, wakeReady, wakePhrases } from "../../ext/wake";
 import { ttsMode, ttsAvailable, tts, ttsVoice } from "../../ext/tts";
+import { allows, ceilingSays, nothingToChoose, type BranchSetting } from "./voiceAllowed";
 import { toast } from "../ToastManager";
 
 /** How this deployment listens, said plainly. */
@@ -157,10 +158,33 @@ async function chooseBranch(setting: string, value: string, apiBase: string): Pr
     }
 }
 
+/** The select for one branch, with each branch past the ceiling disabled. */
+function branchSelect(
+    label: string,
+    setting: BranchSetting,
+    current: string,
+    branches: readonly string[],
+): HTMLSelectElement {
+    const select = document.createElement("select");
+    select.className = "af-audio-select";
+    select.setAttribute("aria-label", label);
+    for (const branch of branches) {
+        const option = document.createElement("option");
+        option.value = branch;
+        option.textContent = branch;
+        option.selected = branch === current;
+        // Disabled rather than left out, so the page shows what exists and which
+        // of it this deployment keeps out of a browser's reach.
+        option.disabled = !allows(setting, branch);
+        select.appendChild(option);
+    }
+    return select;
+}
+
 /** A select for one branch, which applies the moment it is changed. */
 function buildBranchPicker(
     label: string,
-    setting: string,
+    setting: BranchSetting,
     current: string,
     branches: readonly string[],
     says: string,
@@ -177,16 +201,7 @@ function buildBranchPicker(
     name.className = "af-voice-term";
     name.textContent = label;
 
-    const select = document.createElement("select");
-    select.className = "af-audio-select";
-    select.setAttribute("aria-label", label);
-    for (const branch of branches) {
-        const option = document.createElement("option");
-        option.value = branch;
-        option.textContent = branch;
-        option.selected = branch === current;
-        select.appendChild(option);
-    }
+    const select = branchSelect(label, setting, current, branches);
     select.addEventListener("change", () => {
         const wanted = select.value;
         select.disabled = true;
@@ -203,7 +218,16 @@ function buildBranchPicker(
 
     row.append(name, select);
     group.append(row, detailLine(says));
+    appendCeiling(group, setting, branches);
     return group;
+}
+
+/** Say under a picker why some of its branches cannot be chosen, if any cannot. */
+function appendCeiling(group: HTMLElement, setting: BranchSetting, branches: readonly string[]): void {
+    const limit = ceilingSays(setting, branches);
+    if (limit) {
+        group.appendChild(detailLine(limit));
+    }
 }
 
 /** What waking on a phrase does, said plainly. */
@@ -235,6 +259,7 @@ function onOrOff(): HTMLSelectElement {
         const option = document.createElement("option");
         option.value = choice;
         option.textContent = choice;
+        option.disabled = !allows("waking", choice);
         select.appendChild(option);
     }
     select.value = waking() ? "on" : "off";
@@ -275,6 +300,7 @@ function buildWakePicker(apiBase: string, onChanged: () => void): HTMLElement {
 
     row.append(name, select);
     group.append(row, detailLine(wakingSays()));
+    appendCeiling(group, "waking", ["off", "on"]);
     return group;
 }
 
@@ -413,7 +439,7 @@ function buildButtons(apiBase: string, onChanged: () => void): HTMLElement {
 
 /** The voice section, or nothing when this deployment neither listens nor speaks. */
 export function buildVoiceSection(apiBase: string, onChanged: () => void = () => {}): HTMLElement | null {
-    if (sttMode() === "off" && ttsMode() === "off") {
+    if (nothingToChoose({ listening: sttMode(), speaking: ttsMode() })) {
         // A section saying twice that nothing happens is worse than no section.
         return null;
     }

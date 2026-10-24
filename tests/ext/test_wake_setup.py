@@ -11,10 +11,9 @@ from typing import Any
 import pytest
 from aiohttp import web
 
-from wactorz import config
-from wactorz.core import voice_settings
 from wactorz.ext import stt, wake
 from wactorz.ext.stt import listener
+from wactorz.ext.voice import settings as voice_settings
 
 
 class _Loop:
@@ -49,7 +48,7 @@ def built_fixture(monkeypatch: pytest.MonkeyPatch) -> list[_Loop]:
     monkeypatch.setattr(listener, "_owner", None)
     # A model this deployment could load: the seam refuses to start without one,
     # and that refusal has a test of its own.
-    monkeypatch.setattr(config, "WAKE_MODEL_DIR", "/models/kws")
+    monkeypatch.setattr(wake, "MODEL_DIR", "/models/kws")
     return made
 
 
@@ -204,7 +203,7 @@ class TestWithoutAModel:
         # deployment half-configured -- and a loop that started would fail on
         # every retry instead of saying what is missing.
         _configured(monkeypatch, listening="host", waking="on")
-        monkeypatch.setattr(config, "WAKE_MODEL_DIR", "")
+        monkeypatch.setattr(wake, "MODEL_DIR", "")
         monkeypatch.setattr(wake, "_said_no_model", False)
         said: list[str] = []
         monkeypatch.setattr(wake.logger, "warning", lambda msg, *_a: said.append(msg))
@@ -250,8 +249,8 @@ class TestWhatTheBrowserIsTold:
         # The phrase is spoken aloud in a room by design, so it is not a secret.
         # Where this machine keeps its files is not the browser's business.
         monkeypatch.setattr(voice_settings, "waking", lambda: "on")
-        monkeypatch.setattr(config, "WAKE_MODEL_DIR", "/srv/models/kws")
-        monkeypatch.setattr(config, "WAKE_WORDS", ("hey waldiez",))
+        monkeypatch.setattr(wake, "MODEL_DIR", "/srv/models/kws")
+        monkeypatch.setattr(wake, "PHRASES", ("hey waldiez",))
 
         told = wake.public_config(web.Application())
 
@@ -262,6 +261,6 @@ class TestWhatTheBrowserIsTold:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Better than a switch that turns on and does nothing.
-        monkeypatch.setattr(config, "WAKE_MODEL_DIR", "")
+        monkeypatch.setattr(wake, "MODEL_DIR", "")
 
         assert wake.public_config(web.Application())["ready"] is False

@@ -27,8 +27,8 @@ from typing import Any
 
 from aiohttp import web
 
-from ... import config
-from ...core import voice_settings
+from .. import voice
+from ..voice import settings as voice_settings
 from . import remote, speaker, spoken
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ def setup(app: web.Application) -> None:
     app.router.add_post("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
     warn_if_the_room_will_stay_quiet()
+    voice.on_change(app, warn_if_the_room_will_stay_quiet)
 
 
 def warn_if_the_room_will_stay_quiet() -> None:

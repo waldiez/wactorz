@@ -23,10 +23,18 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from ...config import _env_int
+
 logger = logging.getLogger(__name__)
 
 #: What the models are trained at, and what the server assumes it is being sent.
 SAMPLE_RATE = 16000
+
+#: How long one live recognition from a browser may run, in seconds, before the
+#: server ends it, from ``WACTORZ_STT_LIVE_SECONDS``. Generous for an utterance,
+#: and a firm end for a microphone left open in a tab nobody is watching. 0 sets
+#: no limit.
+LIVE_SECONDS = _env_int("WACTORZ_STT_LIVE_SECONDS", 120)
 
 #: How much audio goes in one frame. The browser sends this much at a time, and
 #: a recording replayed through here is cut the same way so the recogniser sees

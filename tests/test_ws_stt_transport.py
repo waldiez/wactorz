@@ -16,15 +16,15 @@ from typing import Any
 import pytest
 
 from tests.waiting import until
-from wactorz import config
 from wactorz.ext.stt.streaming import Partial
+from wactorz.ext.voice import settings as voice_settings
 from wactorz.web import ws
 
 
 @pytest.fixture(autouse=True)
 def _on_the_server_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     """The branch a browser's live audio is served on; tests about another set their own."""
-    monkeypatch.setattr(config, "STT_MODE", "server")
+    monkeypatch.setattr(voice_settings, "STT_MODE", "server")
 
 
 class FakeSocket:
@@ -269,7 +269,7 @@ class TestWhichBranchListens:
     async def test_a_session_opens_on_the_server_branch_only(
         self, monkeypatch: pytest.MonkeyPatch, branch: str
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", branch)
+        monkeypatch.setattr(voice_settings, "STT_MODE", branch)
         opened: list[str] = []
         monkeypatch.setattr(ws, "service_uri", lambda: "ws://recogniser:6006/")
         monkeypatch.setattr(ws.streaming, "LiveTranscription", opened.append)
@@ -289,7 +289,7 @@ class TestALongSession:
     async def test_it_is_ended_and_the_browser_told_why(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(config, "STT_LIVE_SECONDS", 0.05)
+        monkeypatch.setattr(ws.streaming, "LIVE_SECONDS", 0.05)
         live = EndlessLive()
         use(monkeypatch, live)
         socket, listening = FakeSocket(), ws.Listening()

@@ -11,17 +11,36 @@ serves startup and a change made while running.
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 
-from ... import config
-from ...core import voice_settings
+from ...config import _unquote
+from .. import voice
 from ..stt import listener
+from ..voice import settings as voice_settings
 from . import loop
 
 logger = logging.getLogger(__name__)
+
+#: The phrases that wake it, from ``WACTORZ_WAKE_WORDS``, separated by commas.
+#:
+#: Given as words rather than a prepared model: the spotter converts them at
+#: startup, so an invented name costs no more than a common one. Short phrases
+#: are heard less reliably, so a name on its own is a poorer wake word than the
+#: same name with a word in front of it.
+PHRASES = tuple(
+    phrase.strip()
+    for phrase in _unquote(os.getenv("WACTORZ_WAKE_WORDS", "") or "hey waldiez").split(",")
+    if phrase.strip()
+)
+
+#: Where the keyword model lives, from ``WACTORZ_WAKE_MODEL``. Absent by default:
+#: it is weights, not code, and a deployment that does not wake should not be
+#: made to carry them.
+MODEL_DIR = _unquote(os.getenv("WACTORZ_WAKE_MODEL", "") or "")
 
 #: The loop that owns the microphone, while one does.
 _running: loop.WakeLoop | None = None
@@ -44,6 +63,9 @@ def setup(app: web.Application) -> None:
     """Start listening for the phrase if this deployment is set to."""
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
+    # A change decides whether the loop should be running, and so who holds the
+    # microphone.
+    voice.on_change(app, reconcile)
 
 
 async def _on_startup(_app: web.Application) -> None:
@@ -64,8 +86,8 @@ def public_config(_app: web.Application) -> dict[str, Any]:
     """
     return {
         "mode": voice_settings.waking(),
-        "ready": bool(config.WAKE_MODEL_DIR),
-        "phrases": list(config.WAKE_WORDS),
+        "ready": bool(MODEL_DIR),
+        "phrases": list(PHRASES),
     }
 
 
@@ -90,7 +112,7 @@ async def reconcile() -> None:
         await shutdown()
         return
 
-    if not config.WAKE_MODEL_DIR:
+    if not MODEL_DIR:
         # Once, not per settings change: the answer does not differ between two
         # of them, and a line repeated on every save buries the one that mattered.
         global _said_no_model
@@ -108,7 +130,7 @@ async def reconcile() -> None:
     def heard(clip: bytes) -> None:
         on_this_loop.call_soon_threadsafe(_route_from_the_room, clip)
 
-    _running = loop.WakeLoop(Path(config.WAKE_MODEL_DIR), list(config.WAKE_WORDS), heard)
+    _running = loop.WakeLoop(Path(MODEL_DIR), list(PHRASES), heard)
     # Claimed before it starts: whoever records on demand has to find an owner to
     # ask, and the window between starting and claiming is one where two callers
     # would both believe the device was theirs.

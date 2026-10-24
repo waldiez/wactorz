@@ -25,11 +25,11 @@ from typing import Any
 
 from aiohttp import BodyPartReader, web
 
-from ... import config
-from ...core import voice_settings
 from ...core.persistence import chat_turn_recorded
 from ...monitoring.log_redaction import redact
+from .. import voice
 from ..tts import speaker
+from ..voice import settings as voice_settings
 from . import listener, streaming
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,9 @@ def setup(app: web.Application) -> None:
     app.router.add_post("/api/stt", stt_handler)
     app.router.add_post("/api/stt/listen", listen_handler)
     warn_if_it_cannot_listen()
+    # Said again on a change: a deployment switched to `host` while running has
+    # heard nothing about the microphone it now needs.
+    voice.on_change(app, warn_if_it_cannot_listen)
 
 
 def listens_elsewhere(branch: str) -> str:
@@ -174,6 +177,9 @@ def public_config(_app: web.Application) -> dict[str, Any]:
     # know before it opens the microphone: the two branches capture differently
     # from the first frame, so this cannot be discovered by trying one.
     return {
+        # Which branch is offered: a bundle cannot know, and the microphone must
+        # appear only where it can work. "off" shows no microphone at all.
+        "mode": voice_settings.listening(),
         "available": recogniser_reachable(),
         "live": streaming.is_streaming_uri(service_uri()),
     }

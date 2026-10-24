@@ -15,7 +15,6 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
-from .. import config
 from ..core.persistence import chat_turn_recorded
 from ..ext.stt import listens_elsewhere, service_uri, streaming
 from ..monitoring.log_redaction import redact
@@ -518,10 +517,10 @@ class Listening:
         Takes the session as an argument rather than reading the attribute: the
         attribute is cleared when the turn ends, and this loop outlives that.
 
-        Bounded by `config.STT_LIVE_SECONDS`, so a microphone left open in a tab
+        Bounded by `streaming.LIVE_SECONDS`, so a microphone left open in a tab
         nobody is watching stops being heard instead of streaming for ever.
         """
-        limit = config.STT_LIVE_SECONDS or None
+        limit = streaming.LIVE_SECONDS or None
         try:
             await asyncio.wait_for(_relay(ws, session), limit)
         except asyncio.CancelledError:

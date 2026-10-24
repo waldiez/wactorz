@@ -23,17 +23,17 @@ from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..agents.main.commands import registry as main_command_registry
 from ..agents.main.commands.dispatch import Form
-
-# Which branch speaks is asked for each turn rather than bound here: it can be
-# changed while running, and a value read at import would answer for the one the
-# process started with.
-from ..core import voice_settings
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
 from ..core.task_text import reply_text, task_payload
 from ..core.turns import acting_as, turn_scope
 from ..ext import tts
+
+# Which branch speaks is asked for each turn rather than bound here: it can be
+# changed while running, and a value read at import would answer for the one the
+# process started with.
+from ..ext.voice import settings as voice_settings
 from ..monitoring import chat_metrics
 from ..orchestration import DASHBOARD
 from . import runtime, uploads

@@ -1,4 +1,8 @@
-"""Voice settings that can be changed while Wactorz is running.
+"""Which branch listens, speaks and wakes: as configured, and as chosen while running.
+
+``WACTORZ_STT``, ``WACTORZ_TTS`` and ``WACTORZ_WAKE`` are read here rather than
+by the extensions they steer, because they are one decision with one ceiling:
+the store keeps them in one record and ``POST /api/voice`` changes them together.
 
 The environment sets what a deployment starts as. Some of those choices are ones
 a person changes while using it -- which branch listens, which speaks, and in
@@ -20,15 +24,91 @@ including at whatever else is reachable from this machine. Where the services
 live stays with the machine they were configured on.
 """
 
-from __future__ import annotations
-
 import logging
+import os
+import warnings
 from typing import Any
 
-from .. import config
-from .persistence import get_db
+from ...config import _unquote
+from ...core.persistence import get_db
 
 logger = logging.getLogger(__name__)
+
+#: The speech-to-text branches, in the order they concede privacy.
+#:
+#: ``off``      no transcription; the browser hides the microphone.
+#: ``browser``  the client transcribes locally and sends only text.
+#: ``server``   the browser captures, the host transcribes.
+#: ``host``     the host captures from its own microphone and transcribes.
+#:
+#: ``server`` and ``host`` differ in who owns the microphone, which is what
+#: decides whether a secure context is needed: only browser capture calls
+#: ``getUserMedia``, so ``host`` is the branch that works over plain HTTP -- and
+#: the only one where the server hears the room.
+STT_MODES = ("off", "browser", "server", "host")
+
+#: How this deployment speaks, if it does.
+#:
+#: ``browser`` and ``server`` differ in where the speech is made, and so in
+#: whether the words leave this machine at all: the browser's own voice never
+#: sends them anywhere, while ``server`` hands them to whatever synthesises. That
+#: is a choice a deployment makes rather than one its installed packages make.
+#:
+#: ``host`` speaks through the server's own audio device rather than the
+#: listener's, which is the branch that answers into a room instead of into a
+#: page. Only replies to a turn someone started are read aloud, so a machine
+#: standing in a room does not narrate its own upkeep.
+TTS_MODES = ("off", "browser", "server", "host")
+
+#: Whether the machine listens for a phrase before a turn. Only meaningful on the
+#: ``host`` listening branch: it is the one that owns a microphone, and a wake
+#: word is how a room without a screen starts a turn.
+WAKE_MODES = ("off", "on")
+
+
+def _branch(variable: str, branches: tuple[str, ...], unset: str) -> str:
+    """The branch `variable` names, or `unset` when it names none or no real one."""
+    value = _unquote(os.getenv(variable, "") or "").lower()
+    if not value:
+        return unset
+    if value not in branches:
+        # Named rather than ignored: a typo here shows up as a microphone that
+        # never appears, which looks like a broken feature rather than a setting.
+        warnings.warn(
+            f"{variable}={value!r} is not one of {', '.join(branches)} — using {unset!r}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return unset
+    return value
+
+
+def _stt_mode() -> str:
+    """The configured listening branch, or ``off`` when unset or unrecognised."""
+    return _branch("WACTORZ_STT", STT_MODES, "off")
+
+
+def _tts_mode() -> str:
+    """The configured speaking branch, or ``server`` when unset.
+
+    Unset means speak if this deployment can, and let the browser cover it when
+    it cannot. Saying ``browser`` is how a deployment keeps the words on this
+    machine while still having a voice.
+    """
+    return _branch("WACTORZ_TTS", TTS_MODES, "server")
+
+
+def _wake_mode() -> str:
+    """Whether a phrase wakes this deployment, ``off`` when unset."""
+    return _branch("WACTORZ_WAKE", WAKE_MODES, "off")
+
+
+#: The configured branches: where a deployment starts, and the most a choice
+#: may reach. The browser learns them from ``/api/config`` rather than from how
+#: the bundle was built, so one wheel serves every deployment.
+STT_MODE = _stt_mode()
+TTS_MODE = _tts_mode()
+WAKE_MODE = _wake_mode()
 
 #: Where the overrides live, beside the other things the system remembers.
 _KEY = "_voice_settings"
@@ -36,9 +116,9 @@ _KEY = "_voice_settings"
 #: What may be set, each with its branches in order, from doing nothing to
 #: doing the most on this machine.
 SETTINGS: dict[str, tuple[str, ...]] = {
-    "listening": config.STT_MODES,
-    "speaking": config.TTS_MODES,
-    "waking": config.WAKE_MODES,
+    "listening": STT_MODES,
+    "speaking": TTS_MODES,
+    "waking": WAKE_MODES,
 }
 
 #: The variable that sets each one's ceiling, named in a refusal so the person
@@ -85,14 +165,10 @@ def waking() -> str:
 def ceiling(setting: str) -> str:
     """The most this deployment lets `setting` do: what its variable says.
 
-    Read from `config` on every call rather than bound at import, so it is the
-    value the process is running with and a test can pin it.
+    Read from this module on every call rather than bound into a table at
+    import, so a test can pin it.
     """
-    return {
-        "listening": config.STT_MODE,
-        "speaking": config.TTS_MODE,
-        "waking": config.WAKE_MODE,
-    }[setting]
+    return {"listening": STT_MODE, "speaking": TTS_MODE, "waking": WAKE_MODE}[setting]
 
 
 def allowed(setting: str) -> tuple[str, ...]:

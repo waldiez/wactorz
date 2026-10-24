@@ -25,8 +25,8 @@ from wyoming.asr import Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 
-from wactorz import config
 from wactorz.ext import stt
+from wactorz.ext.voice import settings as voice_settings
 from wactorz.web.app import build_app
 
 
@@ -70,7 +70,7 @@ class FakeClient:
 @pytest.fixture(autouse=True)
 def _on_the_server_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     """The branch a posted clip is served on; tests about another set their own."""
-    monkeypatch.setattr(config, "STT_MODE", "server")
+    monkeypatch.setattr(voice_settings, "STT_MODE", "server")
 
 
 @pytest.fixture(name="service")
@@ -317,7 +317,7 @@ class TestARecordingReadByAStreamingRecogniser:
 
 class TestWhatTheBrowserIsTold:
     async def test_both_halves_of_the_answer_survive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(config, "STT_MODE", "server")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "server")
 
         async with TestClient(TestServer(build_app())) as client:
             payload: dict[str, Any] = await (await client.get("/api/config")).json()
@@ -335,7 +335,7 @@ class TestWhichBranchIsServed:
     async def test_a_clip_is_read_on_the_server_branch_only(
         self, monkeypatch: pytest.MonkeyPatch, service: FakeClient, branch: str
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", branch)
+        monkeypatch.setattr(voice_settings, "STT_MODE", branch)
 
         status, body = await post_audio()
 
@@ -352,7 +352,7 @@ class TestABranchNothingServes:
     def test_a_configured_branch_with_no_client_is_reported(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", "browser")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "browser")
 
         with caplog.at_level("WARNING"):
             stt.setup(web.Application())
@@ -365,7 +365,7 @@ class TestABranchNothingServes:
     def test_the_branch_that_hears_the_room_says_what_it_is_missing(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", "host")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "host")
         monkeypatch.setattr(stt.listener, "available", lambda: False)
 
         with caplog.at_level("WARNING"):
@@ -378,7 +378,7 @@ class TestABranchNothingServes:
     def test_a_machine_that_can_hear_is_not_warned_at(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", "host")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
 
         with caplog.at_level("WARNING"):
@@ -390,7 +390,7 @@ class TestABranchNothingServes:
     def test_nothing_is_said_about_a_branch_that_behaves(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", mode)
+        monkeypatch.setattr(voice_settings, "STT_MODE", mode)
 
         with caplog.at_level("WARNING"):
             stt.setup(web.Application())

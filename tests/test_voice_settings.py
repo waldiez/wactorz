@@ -6,9 +6,10 @@ import json
 from typing import Any
 
 import pytest
+from aiohttp import web
 
-from wactorz.core import voice_settings
-from wactorz.web import api_system
+from wactorz.ext import stt, tts, voice, wake
+from wactorz.ext.voice import settings as voice_settings
 
 
 def _records_async(into: list[str], what: str) -> Any:
@@ -58,13 +59,13 @@ def _ceilings(monkeypatch: pytest.MonkeyPatch, **ceilings: str) -> None:
     """Configure each named setting's variable, which is also its ceiling."""
     names = {"listening": "STT_MODE", "speaking": "TTS_MODE", "waking": "WAKE_MODE"}
     for setting, value in ceilings.items():
-        monkeypatch.setattr(voice_settings.config, names[setting], value)
+        monkeypatch.setattr(voice_settings, names[setting], value)
 
 
 class TestWhatDecidesWhenNothingHasBeenChosen:
     def test_the_environment_does(self, monkeypatch: pytest.MonkeyPatch, store: _Store) -> None:
-        monkeypatch.setattr(voice_settings.config, "STT_MODE", "server")
-        monkeypatch.setattr(voice_settings.config, "TTS_MODE", "browser")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "server")
+        monkeypatch.setattr(voice_settings, "TTS_MODE", "browser")
 
         assert voice_settings.listening() == "server"
         assert voice_settings.speaking() == "browser"
@@ -72,7 +73,7 @@ class TestWhatDecidesWhenNothingHasBeenChosen:
     def test_and_still_does_without_a_store(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(voice_settings, "_stored", _REAL_STORED)
         monkeypatch.setattr(voice_settings, "get_db", lambda: None)
-        monkeypatch.setattr(voice_settings.config, "STT_MODE", "host")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "host")
 
         # An install with no database runs on its environment rather than failing.
         assert voice_settings.listening() == "host"
@@ -82,14 +83,14 @@ class TestChoosingAnother:
     def test_a_choice_outranks_the_environment(
         self, monkeypatch: pytest.MonkeyPatch, store: _Store
     ) -> None:
-        monkeypatch.setattr(voice_settings.config, "TTS_MODE", "server")
+        monkeypatch.setattr(voice_settings, "TTS_MODE", "server")
 
         voice_settings.choose("speaking", "browser")
 
         assert voice_settings.speaking() == "browser"
 
     def test_forgetting_hands_it_back(self, monkeypatch: pytest.MonkeyPatch, store: _Store) -> None:
-        monkeypatch.setattr(voice_settings.config, "TTS_MODE", "server")
+        monkeypatch.setattr(voice_settings, "TTS_MODE", "server")
         voice_settings.choose("speaking", "off")
 
         voice_settings.forget()
@@ -191,7 +192,7 @@ class TestWhatWasStoredByAnotherVersion:
     def test_a_branch_that_no_longer_exists_is_ignored(
         self, monkeypatch: pytest.MonkeyPatch, store: _Store
     ) -> None:
-        monkeypatch.setattr(voice_settings.config, "TTS_MODE", "server")
+        monkeypatch.setattr(voice_settings, "TTS_MODE", "server")
         store.held[voice_settings._KEY] = {"speaking": "telepathy"}
 
         # What is stored outlives the release that wrote it.
@@ -207,7 +208,7 @@ class TestWhatWasStoredByAnotherVersion:
 
         monkeypatch.setattr(voice_settings, "_stored", _REAL_STORED)
         monkeypatch.setattr(voice_settings, "get_db", lambda: _Broken())
-        monkeypatch.setattr(voice_settings.config, "STT_MODE", "server")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "server")
 
         assert voice_settings.listening() == "server"
         assert "the store is gone" in caplog.text
@@ -217,15 +218,18 @@ class TestChangingItOverTheWire:
     """`POST /api/voice` is what the message in a refusal points at."""
 
     @staticmethod
-    async def _post(body: Any) -> tuple[int, dict[str, Any]]:
+    async def _post(body: Any, app: web.Application | None = None) -> tuple[int, dict[str, Any]]:
         class _Request:
+            def __init__(self) -> None:
+                self.app = app if app is not None else web.Application()
+
             @staticmethod
             async def json() -> Any:
                 if isinstance(body, Exception):
                     raise body
                 return body
 
-        response = await api_system.voice_settings_handler(_Request())  # type: ignore[arg-type]
+        response = await voice.voice_settings_handler(_Request())  # type: ignore[arg-type]
         return response.status, json.loads(response.body or b"{}")  # type: ignore[arg-type]
 
     async def test_a_branch_can_be_changed(self, store: _Store) -> None:
@@ -277,7 +281,7 @@ class TestChangingItOverTheWire:
     async def test_everything_can_be_handed_back(
         self, monkeypatch: pytest.MonkeyPatch, store: _Store
     ) -> None:
-        monkeypatch.setattr(voice_settings.config, "TTS_MODE", "server")
+        monkeypatch.setattr(voice_settings, "TTS_MODE", "server")
         await self._post({"speaking": "off"})
 
         status, body = await self._post({"reset": True})
@@ -285,20 +289,15 @@ class TestChangingItOverTheWire:
         assert status == 200
         assert body["speaking"] == "server"
 
-    async def test_handing_everything_back_settles_the_wake_loop_too(
-        self, monkeypatch: pytest.MonkeyPatch, store: _Store
-    ) -> None:
+    async def test_handing_everything_back_settles_too(self, store: _Store) -> None:
         # Reset changes which branch is in force just as a named change does, so
-        # it decides whether the loop should be running and who holds the
-        # microphone. Returning early left it running against settings that no
-        # longer asked for it, contradicting the answer this very call returns.
+        # whatever reacts to a change -- the wake loop among them -- reacts to it.
+        app = web.Application()
         settled: list[str] = []
-        monkeypatch.setattr(api_system.wake, "reconcile", _records_async(settled, "reconciled"))
-        monkeypatch.setattr(
-            api_system, "_warn_about_the_new_branch", lambda: settled.append("warned")
-        )
+        voice.on_change(app, lambda: settled.append("warned"))
+        voice.on_change(app, _records_async(settled, "reconciled"))
 
-        status, _body = await self._post({"reset": True})
+        status, _body = await self._post({"reset": True}, app)
 
         assert status == 200
         assert settled == ["warned", "reconciled"]
@@ -328,27 +327,41 @@ class TestChangingItOverTheWire:
         assert "telepathy" in body["error"]
         assert voice_settings.speaking() != "off"
 
-    async def test_a_change_says_again_what_the_new_branch_needs(
+    async def test_a_change_reaches_every_extension_it_concerns(
         self, monkeypatch: pytest.MonkeyPatch, store: _Store
     ) -> None:
         # Startup spoke about the branch it started on. Someone switching to one
-        # that wants hardware has heard nothing about the hardware.
+        # that wants hardware has heard nothing about the hardware, and a wake
+        # loop has to start or stop to match.
         said: list[str] = []
-        monkeypatch.setattr(api_system.stt, "warn_if_it_cannot_listen", lambda: said.append("stt"))
-        monkeypatch.setattr(
-            api_system.tts, "warn_if_the_room_will_stay_quiet", lambda: said.append("tts")
-        )
+        monkeypatch.setattr(stt, "warn_if_it_cannot_listen", lambda: said.append("stt"))
+        monkeypatch.setattr(tts, "warn_if_the_room_will_stay_quiet", lambda: said.append("tts"))
+        monkeypatch.setattr(wake, "reconcile", _records_async(said, "wake"))
+        app = web.Application()
+        for extension in (stt, tts, wake):
+            extension.setup(app)
+        said.clear()  # what setup itself says at startup
 
-        await self._post({"listening": "host"})
+        await self._post({"listening": "host"}, app)
 
-        assert said == ["stt", "tts"]
+        assert said == ["stt", "tts", "wake"]
 
-    async def test_a_refused_change_says_nothing_new(
-        self, monkeypatch: pytest.MonkeyPatch, store: _Store
-    ) -> None:
+    async def test_a_refused_change_says_nothing_new(self, store: _Store) -> None:
+        app = web.Application()
         said: list[str] = []
-        monkeypatch.setattr(api_system.stt, "warn_if_it_cannot_listen", lambda: said.append("stt"))
+        voice.on_change(app, lambda: said.append("changed"))
 
-        await self._post({"listening": "telepathy"})
+        await self._post({"listening": "telepathy"}, app)
 
         assert not said
+
+
+class TestTellingTheBrowser:
+    def test_the_choices_go_out_under_the_extension_name(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, listening="browser", speaking="off", waking="off")
+
+        assert voice.public_config(web.Application()) == {
+            "allowed": {"listening": ["off", "browser"], "speaking": ["off"], "waking": ["off"]}
+        }

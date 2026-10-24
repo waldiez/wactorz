@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from wactorz import config
+from wactorz.ext.voice import settings as voice_settings
 from wactorz.web.app import build_app
 
 
@@ -19,13 +19,13 @@ class TestReadingTheSetting:
     def test_an_unset_variable_means_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WACTORZ_STT", raising=False)
 
-        assert config._stt_mode() == "off"
+        assert voice_settings._stt_mode() == "off"
 
-    @pytest.mark.parametrize("mode", config.STT_MODES)
+    @pytest.mark.parametrize("mode", voice_settings.STT_MODES)
     def test_every_branch_is_accepted(self, monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
         monkeypatch.setenv("WACTORZ_STT", mode)
 
-        assert config._stt_mode() == mode
+        assert voice_settings._stt_mode() == mode
 
     @pytest.mark.parametrize("written", ["HOST", " Server ", '"browser"'])
     def test_case_spacing_and_quotes_are_forgiven(
@@ -33,12 +33,12 @@ class TestReadingTheSetting:
     ) -> None:
         monkeypatch.setenv("WACTORZ_STT", written)
 
-        assert config._stt_mode() == written.strip().strip('"').lower()
+        assert voice_settings._stt_mode() == written.strip().strip('"').lower()
 
     def test_an_empty_value_means_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("WACTORZ_STT", "   ")
 
-        assert config._stt_mode() == "off"
+        assert voice_settings._stt_mode() == "off"
 
     def test_an_unknown_branch_is_named_not_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("WACTORZ_STT", "sever")
@@ -46,15 +46,15 @@ class TestReadingTheSetting:
         # Silence would present a typo as a feature that does not work: the
         # microphone never appears and nothing says why.
         with pytest.warns(RuntimeWarning, match="sever"):
-            assert config._stt_mode() == "off"
+            assert voice_settings._stt_mode() == "off"
 
 
 class TestTellingTheBrowser:
-    @pytest.mark.parametrize("mode", config.STT_MODES)
+    @pytest.mark.parametrize("mode", voice_settings.STT_MODES)
     async def test_the_configured_branch_is_reported(
         self, monkeypatch: pytest.MonkeyPatch, mode: str
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", mode)
+        monkeypatch.setattr(voice_settings, "STT_MODE", mode)
         app = build_app()
 
         async with TestClient(TestServer(app)) as client:
@@ -65,9 +65,9 @@ class TestTellingTheBrowser:
     async def test_what_settings_may_offer_is_reported_up_to_the_ceiling(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", "server")
-        monkeypatch.setattr(config, "TTS_MODE", "host")
-        monkeypatch.setattr(config, "WAKE_MODE", "off")
+        monkeypatch.setattr(voice_settings, "STT_MODE", "server")
+        monkeypatch.setattr(voice_settings, "TTS_MODE", "host")
+        monkeypatch.setattr(voice_settings, "WAKE_MODE", "off")
         app = build_app()
 
         async with TestClient(TestServer(app)) as client:

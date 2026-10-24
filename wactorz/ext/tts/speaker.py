@@ -258,7 +258,31 @@ def _decode(audio: bytes) -> tuple[bytes, int, int]:
     return bytes(decoded.samples), decoded.sample_rate, decoded.nchannels
 
 
-def _play_blocking(samples: bytes, rate: int, channels: int) -> None:
+def play_aside(samples: bytes, rate: int) -> None:
+    """Play 16-bit mono `samples` on a thread of their own, and return at once.
+
+    For a short sound that must not hold up what its caller does next -- the
+    wake loop goes on recording while the room hears it was heard. Not stopped
+    by `silence`, which is for speech: what it leaves set until the next reply
+    would otherwise keep this quiet. A machine with nothing to play through is
+    left alone, and a failure is logged and dropped: the sound is a courtesy,
+    and the turn goes on without it.
+    """
+    if not AUDIO:
+        return
+    threading.Thread(
+        target=_play_quietly, args=(samples, rate), name="wactorz-play-aside", daemon=True
+    ).start()
+
+
+def _play_quietly(samples: bytes, rate: int) -> None:
+    try:
+        _play_blocking(samples, rate, 1, stoppable=False)
+    except NoSpeakers as exc:
+        logger.debug("[tts] A short sound was not played: %s", exc)
+
+
+def _play_blocking(samples: bytes, rate: int, channels: int, *, stoppable: bool = True) -> None:
     """Write the samples to the default output and wait for the end.
 
     Written as raw bytes rather than through an array: that is the shape they
@@ -270,7 +294,7 @@ def _play_blocking(samples: bytes, rate: int, channels: int) -> None:
         stream = sounddevice.RawOutputStream(samplerate=rate, channels=channels, dtype="int16")
         with stream:
             for start in range(0, len(samples), step):
-                if _stopped.is_set():
+                if stoppable and _stopped.is_set():
                     return
                 stream.write(samples[start : start + step])
     except Exception as exc:  # pylint: disable=broad-exception-caught

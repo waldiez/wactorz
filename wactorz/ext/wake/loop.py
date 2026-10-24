@@ -58,11 +58,15 @@ class WakeLoop:
         phrases: list[str],
         on_turn: Callable[[bytes], None],
         threshold: float = spotter.THRESHOLD,
+        on_woken: Callable[[], None] | None = None,
     ) -> None:
         #: Called with one turn's WAV, **on the capture thread**. Anything that
         #: touches the event loop from here has to cross back deliberately --
         #: `loop.call_soon_threadsafe` -- because this is not running on it.
         self._on_turn = on_turn
+        #: Called the moment the phrase is heard, on the capture thread, before
+        #: the turn is recorded: it must return at once.
+        self._on_woken = on_woken
         self._model_dir = model_dir
         self._phrases = phrases
         self._threshold = threshold
@@ -208,6 +212,8 @@ class WakeLoop:
                     if not said:
                         continue
                     logger.info("[wake] Woken by %r", said)
+                    if self._on_woken is not None:
+                        self._on_woken()
                     pcm = listener.gather_turn(
                         stream, block_frames, detector, MAX_SECONDS, SILENCE_SECONDS
                     )

@@ -19,8 +19,11 @@ from wactorz.ext.voice import settings as voice_settings
 class _Loop:
     """Stands in for the loop that owns the microphone."""
 
-    def __init__(self, _model_dir: object, _phrases: object, on_turn: Any) -> None:
+    def __init__(
+        self, _model_dir: object, _phrases: object, on_turn: Any, on_woken: Any = None
+    ) -> None:
         self.on_turn = on_turn
+        self.on_woken = on_woken
         self.stopped = False
         self.ran = False
 
@@ -68,6 +71,19 @@ class TestWhetherItRunsAtAll:
             assert len(built) == 1
             # And it holds the device, which is how a turn on demand knows to ask.
             assert listener._owner is built[0]
+        finally:
+            await wake.shutdown()
+
+    @pytest.mark.parametrize(("setting", "sounds"), [(True, True), (False, False)])
+    async def test_the_room_hears_it_was_heard_unless_told_not_to(
+        self, monkeypatch: pytest.MonkeyPatch, built: list[_Loop], setting: bool, sounds: bool
+    ) -> None:
+        _configured(monkeypatch, listening="host", waking="on")
+        monkeypatch.setattr(wake, "SOUND", setting)
+
+        await wake.reconcile()
+        try:
+            assert (built[0].on_woken is wake.chime.chime) is sounds
         finally:
             await wake.shutdown()
 

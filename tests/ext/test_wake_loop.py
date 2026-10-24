@@ -158,6 +158,29 @@ class TestWakingOnThePhrase:
         assert gathered == [stream]
         assert turns and turns[0].startswith(b"RIFF")
 
+    async def test_the_room_hears_it_was_heard_before_the_turn_is_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _a_machine(monkeypatch, _Stream([b"\x10\x00" * 800]), ["HEY WALDIEZ"])
+        happened: list[str] = []
+        monkeypatch.setattr(
+            listener, "gather_turn", lambda *_a: happened.append("recorded") or b"\x01\x02"
+        )
+        ear = wake_loop.WakeLoop(
+            Path("/nowhere"),
+            ["hey waldiez"],
+            lambda _wav: None,
+            on_woken=lambda: happened.append("chimed"),
+        )
+
+        async def _stop_soon() -> None:
+            await asyncio.sleep(0.05)
+            ear.stop()
+
+        await asyncio.gather(asyncio.wait_for(ear.run(), timeout=2), _stop_soon())
+
+        assert happened[:2] == ["chimed", "recorded"]
+
     async def test_a_turn_nobody_spoke_in_is_not_handed_on(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

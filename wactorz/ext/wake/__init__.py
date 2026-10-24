@@ -21,7 +21,7 @@ from ...config import _unquote
 from .. import voice
 from ..stt import listener
 from ..voice import settings as voice_settings
-from . import loop
+from . import chime, loop
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,16 @@ PHRASES = tuple(
 #: it is weights, not code, and a deployment that does not wake should not be
 #: made to carry them.
 MODEL_DIR = _unquote(os.getenv("WACTORZ_WAKE_MODEL", "") or "")
+
+#: Whether the room hears a short sound when the phrase is heard, from
+#: ``WACTORZ_WAKE_SOUND``: on unless it says off. A machine with no speakers
+#: plays nothing either way.
+SOUND = _unquote(os.getenv("WACTORZ_WAKE_SOUND", "") or "").lower() not in (
+    "off",
+    "0",
+    "false",
+    "no",
+)
 
 #: The loop that owns the microphone, while one does.
 _running: loop.WakeLoop | None = None
@@ -130,7 +140,9 @@ async def reconcile() -> None:
     def heard(clip: bytes) -> None:
         on_this_loop.call_soon_threadsafe(_route_from_the_room, clip)
 
-    _running = loop.WakeLoop(Path(MODEL_DIR), list(PHRASES), heard)
+    _running = loop.WakeLoop(
+        Path(MODEL_DIR), list(PHRASES), heard, on_woken=chime.chime if SOUND else None
+    )
     # Claimed before it starts: whoever records on demand has to find an owner to
     # ask, and the window between starting and claiming is one where two callers
     # would both believe the device was theirs.

@@ -39,7 +39,7 @@ const CAPTURE_BLOCK = 2048;
 /** Where the audio-thread half is served from, beside the page that loads it. */
 const PROCESSOR_URL = "capture-worklet.js";
 
-type AudioContextCtor = new () => AudioContext;
+type AudioContextCtor = new (options?: AudioContextOptions) => AudioContext;
 
 function audioContext(): AudioContextCtor | undefined {
     const scope = window as { AudioContext?: AudioContextCtor; webkitAudioContext?: AudioContextCtor };
@@ -102,6 +102,37 @@ export class FrameCutter {
         last.set(this._pending);
         this._pending = new Float32Array(0);
         return [last];
+    }
+}
+
+/**
+ * A context for `stream`, at the recogniser's rate where the browser offers one,
+ * and the microphone connected to it.
+ *
+ * At that rate the browser converts the microphone's own rate itself, with a
+ * filter. Converting each block here instead is linear interpolation with no
+ * low-pass in front of it, which folds everything above 8 kHz back into the
+ * speech band. A browser that will not open a context at another rate, or not
+ * connect a microphone to one, gets a context at its own rate, and each block is
+ * converted here as before.
+ */
+function connectMicrophone(
+    Ctx: AudioContextCtor,
+    stream: MediaStream,
+): { context: AudioContext; source: MediaStreamAudioSourceNode } {
+    let atTarget: AudioContext | null = null;
+    try {
+        atTarget = new Ctx({ sampleRate: TARGET_RATE });
+        return { context: atTarget, source: atTarget.createMediaStreamSource(stream) };
+    } catch {
+        void atTarget?.close();
+    }
+    const context = new Ctx();
+    try {
+        return { context, source: context.createMediaStreamSource(stream) };
+    } catch (error) {
+        void context.close();
+        throw error;
     }
 }
 
@@ -170,7 +201,8 @@ export class LiveCapture {
             return;
         }
         this._stream = stream;
-        this._context = new Ctx();
+        const { context, source } = connectMicrophone(Ctx, stream);
+        this._context = context;
         if (!this._context.audioWorklet) {
             throw new Error("this browser cannot capture audio");
         }
@@ -186,7 +218,6 @@ export class LiveCapture {
             return;
         }
 
-        const source = this._context.createMediaStreamSource(this._stream);
         this._node = new AudioWorkletNode(this._context, "wactorz-capture", {
             numberOfInputs: 1,
             numberOfOutputs: 0,

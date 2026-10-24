@@ -91,7 +91,19 @@ describe("whether this browser can capture live", () => {
 });
 
 /** A microphone and audio pipeline, so the wiring can be driven without either. */
-function installAudio(sampleRate = 16000): {
+/** How the fake browser answers a context asked for at the recogniser's rate. */
+interface RateHandling {
+    /** Open the context at the rate asked for, rather than at the hardware's. */
+    honour?: boolean;
+    /** Refuse that rate: in the constructor, or when the microphone is connected. */
+    refuse?: "construct" | "connect";
+}
+
+function installAudio(
+    sampleRate = 16000,
+    rates: RateHandling = {},
+): {
+    contexts: () => { sampleRate: number; closed: boolean }[];
     modules: () => string[];
     breakWorklet: (failure: Error) => void;
     removeWorkletSupport: () => void;
@@ -135,8 +147,12 @@ function installAudio(sampleRate = 16000): {
     const speakers = {};
     const source = { connect: vi.fn() };
 
+    const made: FakeContext[] = [];
+
     class FakeContext {
         sampleRate = sampleRate;
+        closedHere = false;
+        askedFor: number | undefined;
         destination = speakers;
         audioWorklet: { addModule: (url: string) => Promise<void> } | undefined = {
             addModule: vi.fn(async (url: string) => {
@@ -150,17 +166,31 @@ function installAudio(sampleRate = 16000): {
             if (broken) {
                 throw new Error("no such device");
             }
+            if (this.askedFor !== undefined && rates.refuse === "connect") {
+                throw new Error("cannot connect AudioNodes from contexts with different sample rates");
+            }
             return source;
         }
 
         close() {
             closed = true;
+            this.closedHere = true;
         }
 
-        constructor() {
+        constructor(options?: { sampleRate?: number }) {
+            if (options?.sampleRate !== undefined) {
+                if (rates.refuse === "construct") {
+                    throw new Error("sample rate not supported");
+                }
+                this.askedFor = options.sampleRate;
+                if (rates.honour) {
+                    this.sampleRate = options.sampleRate;
+                }
+            }
             if (!worklets) {
                 this.audioWorklet = undefined;
             }
+            made.push(this);
         }
     }
 
@@ -170,6 +200,7 @@ function installAudio(sampleRate = 16000): {
     });
 
     return {
+        contexts: () => made.map(c => ({ sampleRate: c.sampleRate, closed: c.closedHere })),
         modules: () => added,
         breakWorklet: (failure: Error) => {
             workletFailure = failure;
@@ -217,6 +248,50 @@ describe("holding the microphone open", () => {
         // 4800 samples at 48 kHz is 100 ms, which is exactly one frame at 16 kHz.
         audio.emit(new Float32Array(4800));
 
+        expect(frames.length).toBe(1);
+        capture.stop();
+    });
+
+    it("asks for the recogniser's rate, so the browser converts with a filter", async () => {
+        const audio = installAudio(48000, { honour: true });
+        const capture = new LiveCapture();
+        const frames: ArrayBuffer[] = [];
+        await capture.start(f => frames.push(f));
+
+        // Already at 16 kHz: 1600 samples is one frame, with nothing converted here.
+        audio.emit(new Float32Array(1600));
+
+        expect(audio.contexts()).toEqual([{ sampleRate: 16000, closed: false }]);
+        expect(frames.length).toBe(1);
+        capture.stop();
+    });
+
+    it("converts each block itself where the microphone will not connect at that rate", async () => {
+        const audio = installAudio(48000, { honour: true, refuse: "connect" });
+        const capture = new LiveCapture();
+        const frames: ArrayBuffer[] = [];
+        await capture.start(f => frames.push(f));
+
+        audio.emit(new Float32Array(4800));
+
+        // The context it could not use is closed, not left holding the hardware.
+        expect(audio.contexts()).toEqual([
+            { sampleRate: 16000, closed: true },
+            { sampleRate: 48000, closed: false },
+        ]);
+        expect(frames.length).toBe(1);
+        capture.stop();
+    });
+
+    it("converts each block itself where the browser will not open a context at that rate", async () => {
+        const audio = installAudio(44100, { refuse: "construct" });
+        const capture = new LiveCapture();
+        const frames: ArrayBuffer[] = [];
+        await capture.start(f => frames.push(f));
+
+        audio.emit(new Float32Array(4410));
+
+        expect(audio.contexts()).toEqual([{ sampleRate: 44100, closed: false }]);
         expect(frames.length).toBe(1);
         capture.stop();
     });

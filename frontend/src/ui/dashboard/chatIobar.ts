@@ -453,7 +453,7 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     if (micOffered()) {
         bar.appendChild(buildMicBtn(deps, input));
     } else if (sttMode() === "host") {
-        bar.appendChild(buildRoomMicBtn());
+        bar.appendChild(buildRoomMicBtn(input));
     }
     if (uploadsEnabled()) {
         const { button, picker } = buildAttachBtn();

@@ -84,24 +84,42 @@ describe("the room's microphone in the chat box", () => {
         }
     });
 
-    it("asks the room to listen and act, and waits lit until it has", async () => {
+    it("puts what the room heard in the composer, without sending it", async () => {
         const room = aRoom({ heard: true, text: "what time is it" });
-        const btn = buildRoomMicBtn();
+        const input = document.createElement("textarea");
+        const btn = buildRoomMicBtn(input);
 
         btn.click();
 
+        // Heard only: what was said is read and corrected before it is sent,
+        // as with every other microphone here.
+        await vi.waitFor(() => expect(room.sent).toEqual([["/api/stt/listen", { act: false }]]));
         // The server decides when the speaker has finished; a second press
         // meanwhile would only queue a second turn behind the first.
-        await vi.waitFor(() => expect(room.sent).toEqual([["/api/stt/listen", { act: true }]]));
         expect(btn.disabled).toBe(true);
         expect(btn.getAttribute("aria-label")).toBe("Listening in the room…");
 
         room.release();
 
-        await vi.waitFor(() => expect(btn.disabled).toBe(false));
+        await vi.waitFor(() => expect(input.value).toBe("what time is it"));
+        expect(btn.disabled).toBe(false);
         expect(btn.getAttribute("aria-label")).toBe("Ask the room to listen");
-        // Heard: the turn reaches the chat the usual way, so nothing more is said here.
         expect(toast.show).not.toHaveBeenCalled();
+    });
+
+    it("adds to what is already written", async () => {
+        const room = aRoom({ heard: true, text: "in Athens" });
+        const input = document.createElement("textarea");
+        input.value = "what time is it";
+        const seen: string[] = [];
+        input.addEventListener("input", () => seen.push(input.value));
+
+        buildRoomMicBtn(input).click();
+        room.release();
+
+        await vi.waitFor(() => expect(input.value).toBe("what time is it in Athens"));
+        // The composer hears of it, as it would of typing.
+        expect(seen).toEqual(["what time is it in Athens"]);
     });
 
     it.each([
@@ -110,7 +128,7 @@ describe("the room's microphone in the chat box", () => {
         [{ error: "no microphone on this machine" }, false, "Could not listen"],
     ])("says why when there is no turn: %j", async (body, ok, title) => {
         const room = aRoom(body, ok);
-        const btn = buildRoomMicBtn();
+        const btn = buildRoomMicBtn(document.createElement("textarea"));
 
         btn.click();
         room.release();

@@ -6,9 +6,9 @@
  * Asking the machine's own microphone to listen, on the `host` branch.
  *
  * The server owns that microphone and decides when the speaker has finished,
- * so the page only asks and then hears back what happened. One request shape
- * for the chat box's button and for Settings' microphone check, which differ
- * only in whether what is heard is acted on.
+ * so the page only asks and then hears back what happened. The chat box's
+ * button and Settings' microphone check both ask with `act` off: what is heard
+ * comes back to the page, and only the wake word acts on it unseen.
  */
 
 /** How long to wait on one turn: the recording, and then reading it back. */

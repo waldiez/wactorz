@@ -459,6 +459,15 @@ finalises and posts `⏹ Stopped.` over the WebSocket.
 | `POST` | `/api/tts` | Turn `{"text": ..., "voice": ...}` into audio |
 | `POST` | `/api/stt` | Transcribe an uploaded clip |
 | `POST` | `/api/stt/listen` | Listen through this machine's microphone (`WACTORZ_STT=host` only) |
+| `POST` | `/api/voice` | Choose which branch listens, speaks and wakes, and the voice, while running |
+
+`POST /api/voice` takes any of `{"listening": ..., "speaking": ..., "waking": ...,
+"voice": ...}`, or `{"reset": true}` to hand every choice back to the
+environment, and answers with what is now in force and an `allowed` list for each
+branch setting. The environment is the ceiling: `WACTORZ_STT`, `WACTORZ_TTS` and
+`WACTORZ_WAKE` are the most each may be set to, in the order `off`, `browser`,
+`server`, `host` (`off`, `on` for waking), and a branch past it is refused with
+400 naming the variable. A request with one refused setting changes nothing.
 
 `POST /api/stt/listen` is the control the `host` branch has instead of a button:
 nobody is necessarily at a screen, so something has to ask it to listen. It takes

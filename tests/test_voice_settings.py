@@ -47,7 +47,18 @@ def store_fixture(monkeypatch: pytest.MonkeyPatch) -> _Store:
     # The suite-wide fixture stubs this so a developer's own choices cannot
     # decide unrelated tests; these are about the resolution itself.
     monkeypatch.setattr(voice_settings, "_stored", _REAL_STORED)
+    # Every branch within reach, so a test about choosing is decided by what it
+    # chooses rather than by this machine's environment. The ceiling's own tests
+    # lower it.
+    _ceilings(monkeypatch, listening="host", speaking="host", waking="on")
     return store
+
+
+def _ceilings(monkeypatch: pytest.MonkeyPatch, **ceilings: str) -> None:
+    """Configure each named setting's variable, which is also its ceiling."""
+    names = {"listening": "STT_MODE", "speaking": "TTS_MODE", "waking": "WAKE_MODE"}
+    for setting, value in ceilings.items():
+        monkeypatch.setattr(voice_settings.config, names[setting], value)
 
 
 class TestWhatDecidesWhenNothingHasBeenChosen:
@@ -118,6 +129,64 @@ class TestWhatIsRefused:
             voice_settings.choose("speaking", "off")
 
 
+class TestTheCeiling:
+    """The environment sets the most each branch may do; a choice stays within it."""
+
+    def test_the_branches_up_to_it_are_allowed_in_order(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, listening="server", speaking="browser", waking="off")
+
+        assert voice_settings.allowed("listening") == ("off", "browser", "server")
+        assert voice_settings.allowed("speaking") == ("off", "browser")
+        assert voice_settings.allowed("waking") == ("off",)
+
+    def test_a_branch_below_it_can_be_chosen(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, listening="server")
+
+        voice_settings.choose("listening", "browser")
+
+        assert voice_settings.listening() == "browser"
+
+    def test_a_branch_above_it_is_refused_naming_the_variable(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, listening="server")
+
+        # The room's microphone is the operator's to switch on, not a browser's.
+        with pytest.raises(ValueError, match=r"up to 'server' \(WACTORZ_STT\)"):
+            voice_settings.choose("listening", "host")
+        assert voice_settings._KEY not in store.held
+
+    def test_waking_cannot_be_turned_on_where_it_is_configured_off(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, waking="off")
+
+        assert "WACTORZ_WAKE" in voice_settings.refuses("waking", "on")
+
+    def test_a_choice_above_a_lowered_ceiling_gives_way_to_it(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        voice_settings.choose("speaking", "host")
+        _ceilings(monkeypatch, speaking="browser")
+
+        assert voice_settings.speaking() == "browser"
+
+    def test_and_comes_back_when_the_ceiling_is_raised_again(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        voice_settings.choose("speaking", "server")
+        _ceilings(monkeypatch, speaking="off")
+        assert voice_settings.speaking() == "off"
+
+        _ceilings(monkeypatch, speaking="host")
+
+        assert voice_settings.speaking() == "server"
+
+
 class TestWhatWasStoredByAnotherVersion:
     def test_a_branch_that_no_longer_exists_is_ignored(
         self, monkeypatch: pytest.MonkeyPatch, store: _Store
@@ -164,6 +233,32 @@ class TestChangingItOverTheWire:
 
         assert status == 200
         assert body["speaking"] == "off"
+
+    async def test_a_branch_above_the_ceiling_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, listening="browser", waking="off")
+
+        status, body = await self._post({"listening": "host", "waking": "on"})
+
+        assert status == 400
+        assert "WACTORZ_STT" in body["error"]
+        assert voice_settings.listening() == "browser"
+        assert voice_settings.waking() == "off"
+
+    async def test_the_answer_says_what_may_be_chosen(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        _ceilings(monkeypatch, listening="server", speaking="host", waking="off")
+
+        status, body = await self._post({"speaking": "off"})
+
+        assert status == 200
+        assert body["allowed"] == {
+            "listening": ["off", "browser", "server"],
+            "speaking": ["off", "browser", "server", "host"],
+            "waking": ["off"],
+        }
 
     async def test_a_branch_this_version_lacks_is_refused(self, store: _Store) -> None:
         status, body = await self._post({"speaking": "telepathy"})

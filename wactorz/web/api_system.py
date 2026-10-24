@@ -184,13 +184,19 @@ def _warn_about_the_new_branch() -> None:
 
 
 def _voice_now() -> dict[str, Any]:
-    """What the voice settings resolve to at this moment."""
+    """What the voice settings resolve to at this moment, and what they may be."""
     return {
         "listening": voice_settings.listening(),
         "speaking": voice_settings.speaking(),
         "waking": voice_settings.waking(),
         "voice": voice_settings.voice(),
+        "allowed": _voice_allowed(),
     }
+
+
+def _voice_allowed() -> dict[str, list[str]]:
+    """Each branch setting's choices here, up to the ceiling its variable sets."""
+    return {setting: list(voice_settings.allowed(setting)) for setting in voice_settings.SETTINGS}
 
 
 async def config_handler(request: web.Request) -> Response:
@@ -232,6 +238,11 @@ async def config_handler(request: web.Request) -> Response:
         # a bundle cannot know, and the microphone must appear only where it can
         # actually work. "off" means the browser shows no microphone at all.
         "stt": {"mode": voice_settings.listening()},
+        # What Settings may offer for each branch. The ceiling is the
+        # environment's, so the page shows what exists and which of it this
+        # deployment keeps out of a browser's reach, rather than offering a
+        # choice the server will refuse.
+        "voice": {"allowed": _voice_allowed()},
         # Whether this browser holds a session it could end, which is not the
         # same question as "is a key configured". Under Home Assistant ingress
         # the user was authenticated by HA and carries no session here, so a

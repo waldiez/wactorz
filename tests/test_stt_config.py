@@ -61,3 +61,22 @@ class TestTellingTheBrowser:
             payload: dict[str, Any] = await (await client.get("/api/config")).json()
 
         assert payload["stt"]["mode"] == mode
+
+    async def test_what_settings_may_offer_is_reported_up_to_the_ceiling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", "server")
+        monkeypatch.setattr(config, "TTS_MODE", "host")
+        monkeypatch.setattr(config, "WAKE_MODE", "off")
+        app = build_app()
+
+        async with TestClient(TestServer(app)) as client:
+            payload: dict[str, Any] = await (await client.get("/api/config")).json()
+
+        # Told rather than worked out in the page, so the dashboard never offers
+        # a branch the server is going to refuse.
+        assert payload["voice"]["allowed"] == {
+            "listening": ["off", "browser", "server"],
+            "speaking": ["off", "browser", "server", "host"],
+            "waking": ["off"],
+        }

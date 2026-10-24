@@ -297,41 +297,14 @@ async def listen_handler(request: web.Request) -> web.Response:
     not a check, and someone testing hardware should not have to pay a model to
     find out that the device is plugged in.
     """
-    act = True
-    if request.can_read_body:
-        try:
-            body = await request.json()
-        except Exception:  # pylint: disable=broad-exception-caught
-            # An unreadable body is not worth refusing over: the default is the
-            # behaviour every existing caller already gets.
-            body = {}
-        if isinstance(body, dict):
-            act = body.get("act", True) is not False
+    act = await _wants_to_act(request)
+    refused = _why_the_room_cannot_be_heard()
+    if refused is not None:
+        return refused
 
-    elsewhere = listens_elsewhere("host")
-    if elsewhere:
-        return web.json_response({"error": elsewhere}, status=503)
-    if not listener.available():
-        return web.json_response(
-            {"error": "no microphone on this machine — pip install 'wactorz[host]'"}, status=503
-        )
-    if speaker.is_speaking():
-        # The same room, one device answering into what the other is listening
-        # to. Recording now takes the reply as the next question, and a machine
-        # that asks itself does not stop, or stop spending.
-        return web.json_response({"text": "", "heard": False, "speaking": True})
-
-    try:
-        clip = await listener.listen()
-    except listener.NoMicrophone as exc:
-        return web.json_response({"error": str(exc)}, status=503)
-    except asyncio.TimeoutError:
-        # Spelled this way on purpose: the two are one object from 3.11 and
-        # separate on 3.10, which this still supports, and only this spelling
-        # catches what `wait_for` raises on both.
-        # The microphone stopped delivering. That is the same thing to whoever
-        # asked as one that never opened, and is not this request's failure.
-        return web.json_response({"error": "the microphone stopped delivering audio"}, status=503)
+    clip = await _record()
+    if isinstance(clip, web.Response):
+        return clip
 
     if not clip:
         # Silence is an answer: nobody spoke, and there is nothing to route.
@@ -346,6 +319,51 @@ async def listen_handler(request: web.Request) -> web.Response:
     if said and act:
         await _route_as_typed(said)
     return web.json_response({"text": said, "heard": bool(said), "acted": bool(said) and act})
+
+
+async def _wants_to_act(request: web.Request) -> bool:
+    """Whether the caller wants what is heard routed, rather than only heard."""
+    if not request.can_read_body:
+        return True
+    try:
+        body = await request.json()
+    except Exception:  # pylint: disable=broad-exception-caught
+        # An unreadable body is not worth refusing over: the default is the
+        # behaviour every existing caller already gets.
+        return True
+    return not (isinstance(body, dict) and body.get("act", True) is False)
+
+
+def _why_the_room_cannot_be_heard() -> web.Response | None:
+    """The answer to give instead of listening, or None when listening can go ahead."""
+    elsewhere = listens_elsewhere("host")
+    if elsewhere:
+        return web.json_response({"error": elsewhere}, status=503)
+    if not listener.available():
+        return web.json_response(
+            {"error": "no microphone on this machine — pip install 'wactorz[host]'"}, status=503
+        )
+    if speaker.is_speaking():
+        # The same room, one device answering into what the other is listening
+        # to. Recording now takes the reply as the next question, and a machine
+        # that asks itself does not stop, or stop spending.
+        return web.json_response({"text": "", "heard": False, "speaking": True})
+    return None
+
+
+async def _record() -> bytes | web.Response:
+    """One utterance from the room, or the answer to give when there is none to be had."""
+    try:
+        return await listener.listen()
+    except listener.NoMicrophone as exc:
+        return web.json_response({"error": str(exc)}, status=503)
+    except asyncio.TimeoutError:
+        # Spelled this way on purpose: the two are one object from 3.11 and
+        # separate on 3.10, which this still supports, and only this spelling
+        # catches what `wait_for` raises on both.
+        # The microphone stopped delivering. That is the same thing to whoever
+        # asked as one that never opened, and is not this request's failure.
+        return web.json_response({"error": "the microphone stopped delivering audio"}, status=503)
 
 
 async def route_heard_clip(clip: bytes, source: str) -> None:

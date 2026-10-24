@@ -171,7 +171,12 @@ all = [
     "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
-    "wactorz[voice]",
+    # Voice without waking on a phrase: `wake` brings sherpa-onnx and the
+    # onnxruntime inside it into every image and CI job, for a branch only a
+    # machine with its own microphone uses. `wactorz[voice]` still has it.
+    "wactorz[stt]",
+    "wactorz[tts]",
+    "wactorz[host]",
     "wactorz[cron]",
     "wactorz[data]",
 ]

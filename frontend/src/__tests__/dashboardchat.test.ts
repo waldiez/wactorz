@@ -260,6 +260,28 @@ describe("DashboardChat — resolveDefaultTarget", () => {
         expect(dc.chatTarget).toBe("main");
     });
 
+    it("shows the conversation it settles on when the chat opened before any agent arrived", () => {
+        // A fresh page lands on the chat it was left on, before the first
+        // agent has registered: the view is drawn for nobody, and the target
+        // the arriving agents give it must reach the header and thread too.
+        localStorage.setItem("wactorz-chat-target", "catalog");
+        const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => [] }));
+        globalThis.fetch = fetchSpy as unknown as typeof fetch;
+        const host = makeHost([]);
+        const dc = mount(host);
+        dc.afterMount();
+        const header = host.root.querySelector<HTMLElement>("#af-chat-pane-header")!;
+
+        host.agents.set("main", agent("main"));
+        host.agents.set("catalog", agent("catalog"));
+        dc.resolveDefaultTarget();
+
+        expect(dc.chatTarget).toBe("catalog");
+        expect(header.textContent).toContain("catalog");
+        expect(thread(host).textContent).not.toContain("with @ yet");
+        expect(fetchSpy).toHaveBeenCalled();
+    });
+
     it("keeps a target resolved earlier once the chat has been shown", () => {
         // Mounting is what marks the target as seen, and from there main
         // arriving late must not take the conversation over.

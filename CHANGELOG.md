@@ -50,6 +50,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A page opened on the chat shows the conversation it opens on.** Opening the dashboard on the chat -- a fresh run's sign-in link, or a refresh -- drew the chat before any agent had arrived, and when the agents did, the conversation it settled on was highlighted in the list but the chat itself kept showing nobody's, a bare `@` with no messages. It now shows that conversation, with its history.
+
 - **The stop button goes once a command typed in an agent's thread is answered.** A command such as `/agents` typed in the `catalog` thread is answered by main, under main's name, but the dashboard waited for a reply from `catalog`, so the stop button stayed up and Send stayed disabled for a minute after the answer had arrived. A command's turn now waits on main.
 
 - **Settings scrolls from the edge of the window.** The view was capped at a reading width and scrolled inside that width, so on a wide window its scrollbar sat in the middle of the page and the space beside it did not scroll. The cards keep their width; the view now spans the page.

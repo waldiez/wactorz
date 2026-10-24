@@ -807,7 +807,7 @@ sent all the same and starts when the node does; the chat says so.</p>
 <tr>
 <td><code>nodes/{name}/manifest</code></td>
 <td>← runner</td>
-<td>What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, the installed packages, and the library agents it can build (<code>agents</code>, by import path). Sent when the runner starts and after an install; cleared by <code>/nodes remove</code>.</td>
+<td>What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, the installed packages, the library agents it can build (<code>agents</code>, by import path), and whether it clears its agents' copies on a reset (<code>resets</code>). Sent when the runner starts and after an install; cleared by <code>/nodes remove</code>.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate</code></td>
@@ -833,6 +833,16 @@ sent all the same and starts when the node does; the chat says so.</p>
 <td><code>nodes/{name}/code_return</code></td>
 <td>← runner</td>
 <td>The program, quoting the token it was asked with.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/reset</code></td>
+<td>→ runner</td>
+<td>Clear one agent's chat, state or counters here, or every agent's, as main has cleared its own records. Payload: <code>{"scope": "chat" \| "state" \| "metrics", "agent": "..." or null, "request": "..."}</code>. Signed.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/reset_done</code></td>
+<td>← runner</td>
+<td>The reset done, quoting <code>request</code> and naming the agents it cleared (<code>"cleared": [...]</code>); a scope the node does not reach into is answered with none.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/reply/{id}</code></td>

@@ -288,6 +288,10 @@ filterwarnings = [
     # It comes from inside the binding rather than from anything here, so there is
     # nothing to migrate.
     "ignore:GLib.unix_signal_add_full is deprecated",
+    # wyoming imports the standard library's audioop while it exists and falls
+    # back to its own copy once it does not, so the warning names a removal it
+    # has already provided for.
+    "ignore:'audioop' is deprecated:DeprecationWarning",
 ]
 
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────

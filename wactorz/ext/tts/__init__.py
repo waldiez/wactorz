@@ -40,13 +40,15 @@ _speeches: set[asyncio.Task[None]] = set()
 
 
 class TTSState:  # pylint: disable=too-few-public-methods
-    """TTS capability and voice cache, mutated once at startup, read-only after."""
+    """TTS capability, and the voices there are to speak in once they are known."""
 
     def __init__(self) -> None:
         self.available: bool = False
         # https://github.com/rany2/edge-tts/blob/master/src/edge_tts/constants.py#L9
         self.default_voice: str = "en-US-EmmaMultilingualNeural"
         self.voices: list[dict[str, str]] | None = None
+        # A Wyoming synthesiser's own voices, by its address, once it has said them.
+        self.service_voices: dict[str, list[dict[str, str]]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +148,16 @@ def worth_saying(text: str) -> str:
 
 async def make_speech(text: str, asked_for: str = "") -> remote.Speech:
     """Turn `text` into audio, by whichever synthesiser this deployment names."""
-    # Chosen first, configured second: the environment says what this started
-    # with, and picking another in the dashboard is how someone tries one.
-    configured = _usable(voice_settings.voice() or os.environ.get("TTS_VOICE", "").strip())
     uri = remote.service_uri()
+    if remote.is_wyoming_uri(uri):
+        # Asked before any voice is judged, so the judging has its list to go by.
+        await _service_voices(uri)
+    # Chosen first, configured second: the environment says what this started
+    # with, and picking another in the dashboard is how someone tries one. A
+    # page's own choice is judged too: one made while the browser was speaking
+    # is a browser's voice, and still sent once the server speaks instead.
+    asked_for = _usable(asked_for)
+    configured = _usable(voice_settings.voice() or os.environ.get("TTS_VOICE", "").strip())
     if remote.names_a_service(uri):
         # No fallback to the default below: that name belongs to the synthesiser
         # this process would have used, and a service asked for a voice it has
@@ -244,19 +252,24 @@ async def _quiet_on_cleanup(_app: web.Application) -> None:
 def unknown_voice(name: str) -> str:
     """Why `name` is not a voice this deployment can speak in, or "" when it may be.
 
-    Judged against the synthesiser's own list where there is one. A named
-    service's voices are its own and cannot be listed, so any name may be one of
-    them; and a list not loaded yet, or that could not be fetched, refuses nothing
-    rather than everything.
+    Judged against the synthesiser's own list where there is one: this
+    process's, or what a Wyoming service described. An HTTP endpoint cannot say
+    what voices it has, so any name may be one of them; and a list not loaded
+    yet, or that could not be fetched, refuses nothing rather than everything.
     """
-    if not name or remote.names_a_service(remote.service_uri()):
+    uri = remote.service_uri()
+    if not name or remote.is_http_uri(uri):
         return ""
-    if not _tts_state.available:
+    if remote.is_wyoming_uri(uri):
+        known = _tts_state.service_voices.get(uri)
+    elif not _tts_state.available:
         return (
             f"{name!r} cannot be this deployment's voice: it has no synthesiser of its "
             "own -- pip install 'wactorz[tts]', or name one with WACTORZ_TTS_URI"
         )
-    if not _tts_state.voices or name in {v["name"] for v in _tts_state.voices}:
+    else:
+        known = _tts_state.voices
+    if not known or name in {v["name"] for v in known}:
         return ""
     return f"this deployment's synthesiser has no voice {name!r}; GET /api/tts/voices lists them"
 
@@ -350,17 +363,41 @@ async def _warm_tts_voices(_app: web.Application | None = None) -> None:
         _tts_state.voices = []
 
 
+async def _service_voices(uri: str) -> list[dict[str, str]]:
+    """The voices the Wyoming synthesiser at `uri` describes, asked once and kept.
+
+    Not kept when it cannot be asked: a synthesiser still starting has voices
+    all the same, and remembering it as having none would leave every name
+    unchecked until the next restart.
+    """
+    known = _tts_state.service_voices.get(uri)
+    if known is not None:
+        return known
+    try:
+        known = await remote.wyoming_voices(uri)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Down, refusing, or not a synthesiser at all: speaking will say which.
+        logger.warning("[tts] Could not ask the synthesiser for its voices: %s", exc)
+        return []
+    _tts_state.service_voices[uri] = known
+    return known
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
 async def tts_voices_handler(_request: web.Request) -> web.Response:
     """GET /api/tts/voices — the voices this deployment can speak in.
 
-    A named service answers with nothing rather than a guess: its voices are its
-    own, and the browser reads an empty list as "no choice to make here" and
-    speaks in whatever the service is configured for.
+    A Wyoming synthesiser is asked for its own. An HTTP endpoint has no way to
+    say, so it answers with nothing rather than a guess, and the browser reads
+    an empty list as "no choice to make here" and speaks in whatever the service
+    is configured for.
     """
-    if remote.names_a_service(remote.service_uri()):
+    uri = remote.service_uri()
+    if remote.is_wyoming_uri(uri):
+        return web.json_response(await _service_voices(uri))
+    if remote.is_http_uri(uri):
         return web.json_response([])
     if _tts_state.voices is None:
         await _warm_tts_voices()

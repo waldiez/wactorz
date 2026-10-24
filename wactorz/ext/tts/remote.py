@@ -33,6 +33,7 @@ try:  # optional dependency — the module must import without a synthesiser ins
     from wyoming.audio import AudioChunk, AudioStop
     from wyoming.client import AsyncClient
     from wyoming.error import Error
+    from wyoming.info import Describe, Info
     from wyoming.tts import Synthesize, SynthesizeVoice
 
     WYOMING = True
@@ -71,6 +72,11 @@ class SynthesisError(RuntimeError):
     def refused(cls, reason: object) -> SynthesisError:
         """The synthesiser answered with an error of its own."""
         return cls(f"synthesiser refused: {reason}")
+
+    @classmethod
+    def undescribed(cls) -> SynthesisError:
+        """The synthesiser closed the connection without saying what it has."""
+        return cls("synthesiser did not describe itself")
 
     @classmethod
     def silent(cls) -> SynthesisError:
@@ -143,11 +149,54 @@ async def _wyoming(uri: str, text: str, voice: str) -> Speech:
         await asyncio.wait_for(client.write_event(request.event()), TIMEOUT)
         return await asyncio.wait_for(_collect(client), TIMEOUT)
     finally:
-        # Bounded too, and its failures dropped: closing waits on a peer that
-        # may be the very thing that stopped answering, and the caller is owed
-        # the original failure rather than one from tidying up after it.
-        with contextlib.suppress(asyncio.TimeoutError, ConnectionError, OSError):
-            await asyncio.wait_for(client.disconnect(), CLOSE_TIMEOUT)
+        await _close(client)
+
+
+async def wyoming_voices(uri: str) -> list[dict[str, str]]:
+    """The voices the Wyoming synthesiser at `uri` says it has, as `/api/tts/voices` lists them.
+
+    Asked with the protocol's own ``describe``. A synthesiser may describe voices
+    it has yet to fetch, and fetch one the first time it is asked for it, so
+    every voice described is offered rather than only those already on its disk.
+    """
+    if not WYOMING:
+        raise SynthesisError.uninstalled()
+
+    client = AsyncClient.from_uri(uri)
+    await asyncio.wait_for(client.connect(), TIMEOUT)
+    try:
+        await asyncio.wait_for(client.write_event(Describe().event()), TIMEOUT)
+        info = await asyncio.wait_for(_described(client), TIMEOUT)
+    finally:
+        await _close(client)
+    # By name, so a voice two of its programs both describe is offered once.
+    voices = {voice.name: voice for program in info.tts for voice in program.voices}
+    return [
+        # No gender: the protocol does not describe one.
+        {"name": name, "locale": (voice.languages or [""])[0], "gender": ""}
+        for name, voice in sorted(voices.items())
+    ]
+
+
+async def _described(client: AsyncClient) -> Info:
+    """Read events until the synthesiser says what it has."""
+    while True:
+        event = await client.read_event()
+        if event is None:
+            raise SynthesisError.undescribed()
+        if Info.is_type(event.type):
+            return Info.from_event(event)
+
+
+async def _close(client: AsyncClient) -> None:
+    """Disconnect from a Wyoming peer.
+
+    Bounded too, and its failures dropped: closing waits on a peer that may be
+    the very thing that stopped answering, and the caller is owed the original
+    failure rather than one from tidying up after it.
+    """
+    with contextlib.suppress(asyncio.TimeoutError, ConnectionError, OSError):
+        await asyncio.wait_for(client.disconnect(), CLOSE_TIMEOUT)
 
 
 async def _collect(client: AsyncClient) -> Speech:

@@ -17,6 +17,7 @@ pytest.importorskip("wyoming")
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.error import Error
 from wyoming.event import async_read_event, async_write_event
+from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
 
 from wactorz.ext import tts
 from wactorz.ext.tts import remote
@@ -31,14 +32,19 @@ class FakeSynthesiser:
     fake that frames them itself can only prove the client agrees with the fake.
     """
 
-    def __init__(self, audio: bytes, refuse: str = "") -> None:
+    def __init__(self, audio: bytes, refuse: str = "", voices: tuple[str, ...] = ()) -> None:
         self.audio = audio
         self.refuse = refuse
+        self.voices = voices
         self.asked: dict[str, Any] | None = None
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Read the request, then answer it."""
         event = await async_read_event(reader)
+        if event is not None and Describe.is_type(event.type):
+            await async_write_event(self._info().event(), writer)
+            writer.close()
+            return
         if event is not None:
             self.asked = dict(event.data)
         if self.refuse:
@@ -50,6 +56,32 @@ class FakeSynthesiser:
             )
             await async_write_event(AudioStop().event(), writer)
         writer.close()
+
+    def _info(self) -> Info:
+        """What it says it has: one program, speaking each of its voices in en_GB."""
+        by = Attribution(name="test", url="")
+        return Info(
+            tts=[
+                TtsProgram(
+                    name="fake",
+                    attribution=by,
+                    installed=True,
+                    description=None,
+                    version=None,
+                    voices=[
+                        TtsVoice(
+                            name=name,
+                            attribution=by,
+                            installed=True,
+                            description=None,
+                            version=None,
+                            languages=["en_GB"],
+                        )
+                        for name in self.voices
+                    ],
+                )
+            ]
+        )
 
 
 @pytest.fixture(name="serve_http")
@@ -78,8 +110,10 @@ async def wyoming_fixture() -> AsyncIterator[Callable[[bytes], Any]]:
     """Run a fake Wyoming synthesiser and hand back its address."""
     servers: list[asyncio.AbstractServer] = []
 
-    async def start(audio: bytes, refuse: str = "") -> tuple[str, FakeSynthesiser]:
-        fake = FakeSynthesiser(audio, refuse=refuse)
+    async def start(
+        audio: bytes, refuse: str = "", voices: tuple[str, ...] = ()
+    ) -> tuple[str, FakeSynthesiser]:
+        fake = FakeSynthesiser(audio, refuse=refuse, voices=voices)
         server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
         servers.append(server)
         port = server.sockets[0].getsockname()[1]
@@ -294,18 +328,105 @@ class TestWhatTheDeploymentOffers:
 
         assert tts.synthesiser_available() is False
 
-    async def test_a_named_service_offers_no_voice_list(
+    async def test_an_http_endpoint_offers_no_voice_list(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
+        monkeypatch.setenv("WACTORZ_TTS_URI", "http://speech.lan/speak")
 
         response = await tts.tts_voices_handler(_request=None)  # type: ignore[arg-type]
 
-        # Its voices are its own. An empty list is the browser's cue that there
-        # is no choice to make here, rather than a list that failed to load.
+        # It has no way to say what it has. An empty list is the browser's cue
+        # that there is no choice to make here, rather than a list that failed.
         body = response.body
         assert isinstance(body, bytes)
         assert not json.loads(body)
+
+
+class TestTheVoicesOfAWyomingService:
+    """A Wyoming synthesiser says what voices it has, so only those are offered or sent."""
+
+    @pytest.fixture(autouse=True)
+    def _nothing_known_yet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(tts._tts_state, "service_voices", {})
+        monkeypatch.setattr(tts, "_ignored_voices", set())
+
+    async def test_are_the_ones_it_describes(
+        self, monkeypatch: pytest.MonkeyPatch, wyoming: Callable[..., Any]
+    ) -> None:
+        uri, _fake = await wyoming(b"", voices=("en_US-lessac-medium", "en_GB-alba-medium"))
+        monkeypatch.setenv("WACTORZ_TTS_URI", uri)
+
+        response = await tts.tts_voices_handler(_request=None)  # type: ignore[arg-type]
+
+        body = response.body
+        assert isinstance(body, bytes)
+        assert json.loads(body) == [
+            {"name": "en_GB-alba-medium", "locale": "en_GB", "gender": ""},
+            {"name": "en_US-lessac-medium", "locale": "en_GB", "gender": ""},
+        ]
+
+    async def test_one_it_does_not_have_is_not_sent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        wyoming: Callable[..., Any],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        uri, fake = await wyoming(b"\x00\x01" * 100, voices=("en_US-lessac-medium",))
+        monkeypatch.setenv("WACTORZ_TTS_URI", uri)
+        # A browser's voice, saved as the deployment's by a page that offered the wrong list.
+        monkeypatch.setattr(tts.voice_settings, "voice", lambda: "Google UK English Female")
+
+        with caplog.at_level("WARNING"):
+            await tts.make_speech("hello")
+
+        # Asked for none, the service speaks in the voice it was started with,
+        # where the name would have had it refuse every reply.
+        assert fake.asked is not None
+        assert "voice" not in fake.asked
+        assert "Google UK English Female" in caplog.text
+
+    async def test_a_page_s_own_browser_voice_is_not_sent_either(
+        self, monkeypatch: pytest.MonkeyPatch, wyoming: Callable[..., Any]
+    ) -> None:
+        uri, fake = await wyoming(b"\x00\x01" * 100, voices=("en_US-lessac-medium",))
+        monkeypatch.setenv("WACTORZ_TTS_URI", uri)
+        monkeypatch.setattr(tts.voice_settings, "voice", lambda: "")
+
+        await tts.make_speech("hello", asked_for="Google UK English Female")
+
+        assert fake.asked is not None
+        assert "voice" not in fake.asked
+
+    async def test_one_it_has_is_sent(
+        self, monkeypatch: pytest.MonkeyPatch, wyoming: Callable[..., Any]
+    ) -> None:
+        uri, fake = await wyoming(b"\x00\x01" * 100, voices=("en_GB-alba-medium",))
+        monkeypatch.setenv("WACTORZ_TTS_URI", uri)
+        monkeypatch.setattr(tts.voice_settings, "voice", lambda: "en_GB-alba-medium")
+
+        await tts.make_speech("hello")
+
+        assert fake.asked is not None
+        assert fake.asked["voice"]["name"] == "en_GB-alba-medium"
+
+    async def test_one_that_cannot_be_asked_is_asked_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asked: list[str] = []
+
+        async def _down(uri: str) -> list[dict[str, str]]:
+            asked.append(uri)
+            raise ConnectionRefusedError
+
+        monkeypatch.setattr(tts.remote, "wyoming_voices", _down)
+
+        assert await tts._service_voices("tcp://piper:10200") == []
+        assert await tts._service_voices("tcp://piper:10200") == []
+
+        # Still starting, not voiceless: remembered as having none, it would
+        # leave every name unchecked until the next restart.
+        assert asked == ["tcp://piper:10200", "tcp://piper:10200"]
+        assert tts.unknown_voice("Google UK English Female") == ""
 
 
 class TestWhichBranchSpeaks:
@@ -498,7 +619,13 @@ class TestChoosingAVoiceFromTheDashboard:
         monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
         monkeypatch.setenv("TTS_VOICE", "en_GB-alba-medium")
         monkeypatch.setattr(tts.voice_settings, "voice", lambda: "en_US-amy-low")
+        monkeypatch.setattr(tts._tts_state, "service_voices", {})
         asked: list[str] = []
+
+        async def _voices(_uri: str) -> list[dict[str, str]]:
+            return [{"name": "en_US-amy-low", "locale": "en_US", "gender": ""}]
+
+        monkeypatch.setattr(tts.remote, "wyoming_voices", _voices)
 
         async def _synthesise(_uri: str, _text: str, voice: str) -> object:
             asked.append(voice)

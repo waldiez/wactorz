@@ -96,15 +96,31 @@ class TestAVoiceTheSynthesiserDoesNotHave:
 
         assert tts.unknown_voice("Anything") == ""
 
-    def test_a_named_service_may_have_any_voice(
+    def test_an_http_endpoint_may_have_any_voice(
+        self, monkeypatch: pytest.MonkeyPatch, tts_state: Any
+    ) -> None:
+
+        self._voices(tts_state, monkeypatch, ["en-GB-SoniaNeural"])
+        monkeypatch.setenv("WACTORZ_TTS_URI", "http://speech.lan/speak")
+
+        # It cannot say what voices it has, so none can be ruled out.
+        assert tts.unknown_voice("en_US-lessac-medium") == ""
+
+    def test_a_wyoming_service_is_judged_by_what_it_described(
         self, monkeypatch: pytest.MonkeyPatch, tts_state: Any
     ) -> None:
 
         self._voices(tts_state, monkeypatch, ["en-GB-SoniaNeural"])
         monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
+        monkeypatch.setattr(
+            tts_state,
+            "service_voices",
+            {"tcp://piper:10200": [{"name": "en_US-lessac-medium", "locale": "", "gender": ""}]},
+        )
 
-        # Its voices are its own and cannot be listed here.
+        # Its own list, not this process's.
         assert tts.unknown_voice("en_US-lessac-medium") == ""
+        assert "en-GB-SoniaNeural" in tts.unknown_voice("en-GB-SoniaNeural")
 
     def test_with_no_synthesiser_there_is_no_voice_to_choose(
         self, monkeypatch: pytest.MonkeyPatch, tts_state: Any

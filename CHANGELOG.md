@@ -52,6 +52,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The stop button goes once a command typed in an agent's thread is answered.** A command such as `/agents` typed in the `catalog` thread is answered by main, under main's name, but the dashboard waited for a reply from `catalog`, so the stop button stayed up and Send stayed disabled for a minute after the answer had arrived. A command's turn now waits on main.
 
+- **Settings scrolls from the edge of the window.** The view was capped at a reading width and scrolled inside that width, so on a wide window its scrollbar sat in the middle of the page and the space beside it did not scroll. The cards keep their width; the view now spans the page.
+
 - **Server speech works again.** Microsoft's read-aloud service, which edge-tts speaks to, began refusing the edge-tts release the lock took, so every reply meant to be spoken failed with `403` and the browser fell back to its own voice. `wactorz[tts]` now needs edge-tts 7.3.1 or later, which it accepts, so an install that already had an older one is upgraded rather than kept.
 
 - **`/agents` with anything after it works in the dashboard's chat.** `/agents restart <name>`, `/agents stop <name>`, `/agents delete <name>` and `/agents <keyword>` were answered by the server's own list of running agents, so the agent was not restarted, stopped or deleted, and the list was not filtered. Main answers them now, as it does on the other channels; `/stop` and `/delete` already worked. Where nothing else answers `/agents` (the minimal profile, or an orchestrator of your own that does not), the dashboard still lists the running agents.

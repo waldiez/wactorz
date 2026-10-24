@@ -24,6 +24,8 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.main.actor import MainActor
+from wactorz.core.persistence import WactorzDB
+from wactorz.reset import reset_chat
 from wactorz.web import api_reset, cost, runtime
 
 
@@ -868,18 +870,43 @@ class ResetUploadsTest(unittest.TestCase):
 
             self.assertEqual(list(uploads.iterdir()), [])
 
-    def test_one_agent_leaves_them_alone(self):
-        from wactorz.reset import reset_chat
+    @staticmethod
+    def _stored(uploads: Path, file_id: str) -> None:
+        (uploads / file_id).write_bytes(b"\x89PNG\r\n\x1a\n")
+        (uploads / f"{file_id}.json").write_text('{"name":"shot.png"}', encoding="utf-8")
 
-        # An upload records the file's name, type and size — never who attached
-        # it — so there is no way to select one agent's files. Deleting all of
-        # them here would take another agent's attachments with it.
+    def test_one_agent_takes_the_files_only_its_thread_named(self):
+        # A row is filed under its thread whoever attached the file, so the rows
+        # are what say whose files are whose.
+        mine, shared, unsent = "a" * 32, "b" * 32, "c" * 32
         with tempfile.TemporaryDirectory() as tmp:
             uploads = self._seed(tmp)
+            self._stored(uploads, shared)
+            self._stored(uploads, unsent)
+            db_path = str(Path(tmp) / "wactorz.db")
+            db = WactorzDB(db_path)
+            db.write_chat_log(1.0, "counter", "user", "look", attachments=[{"id": mine}])
+            db.write_chat_log(2.0, "counter", "user", "and", attachments=[{"id": shared}])
+            db.write_chat_log(3.0, "main", "user", "this too", attachments=[{"id": shared}])
+            db.close()
 
-            reset_chat(agent_name="main", db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+            reset_chat(agent_name="counter", db_path=db_path, state_dir=tmp)
 
-            self.assertEqual(len(list(uploads.iterdir())), 2)
+            # The one main's thread still shows stays, and so does one no turn
+            # has sent yet: it may be in a message still being written.
+            left = sorted(p.name for p in uploads.iterdir())
+            self.assertEqual(left, [shared, f"{shared}.json", unsent, f"{unsent}.json"])
+
+    def test_a_name_in_a_row_cannot_reach_outside_the_directory(self):
+        from wactorz.web import uploads as upload_store
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "keep.txt"
+            outside.write_text("mine")
+            (Path(tmp) / "uploads").mkdir()
+
+            self.assertEqual(upload_store.discard({"../keep.txt"}, state_dir=tmp), 0)
+            self.assertTrue(outside.exists())
 
     def test_a_state_dir_with_no_uploads_is_not_created(self):
         from wactorz.reset import reset_uploads

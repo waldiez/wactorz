@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from operator import attrgetter
 
+from ...core.node_operations import described as described_node_operations
 from .assemble import PromptFragment, Slot, Template, one_of, render
 from .fragments import DEFAULT_FRAGMENTS
 
@@ -95,6 +96,10 @@ EXAMPLES:
   → agent.capabilities() finds doc-to-pptx-agent (spawnable=true)
   → file path is present → delegate immediately
   → report the result
+
+  User attaches a file, shown as [attachment: report.pdf (upload <id>)], and asks for a deck
+  → delegate with the id, not a path: agent.send_to("doc-to-pptx-agent", {"file_id": "<id>"})
+  → it reads and writes only in the user's document folders; if it refuses a path, relay why
 
   User: "monitor my CPU temperature"
   → agent.capabilities() finds nothing suitable
@@ -205,6 +210,11 @@ async def cleanup(agent):
     # Optional. Runs on stop/delete. Close connections, release resources.
     pass
 
+async def on_answer(agent, question, option):
+    # Optional. The person's pick for a question asked with agent.ask_operator
+    # that nothing was waiting for (asked before a restart, or without waiting).
+    pass
+
 == AGENT API ==
 Inside your code, the `agent` object provides:
   agent.state                         — dict, persists across process() calls
@@ -214,8 +224,20 @@ Inside your code, the `agent` object provides:
   agent.publish_detection(data)       — publish to agents/{id}/detections
   agent.log(message)                  — show in dashboard event log
   agent.alert(message, severity)      — trigger a dashboard alert
+  await agent.notify_user(text, options=[...], channel="dashboard", user="")
+                                      — say something to the person in chat, outside any turn; options
+                                        become buttons (dashboard, Telegram) or a numbered list (Discord,
+                                        WhatsApp); channel is where, user who (a Telegram/Discord id, a
+                                        WhatsApp number). Returns the message id; the pick arrives on
+                                        agents/{id}/answer as {"id", "option", "index"} — subscribe to it
+  await agent.ask_operator(text, options=[...], channel="dashboard", user="", timeout=None)
+                                      — the same message, and wait for the pick: returns the option chosen.
+                                        timeout in seconds (None waits as long as the agent runs); the
+                                        question survives a restart, and a late pick reaches on_answer
   agent.persist(key, value)           — save to disk (survives restart)
   agent.recall(key)                   — load from disk
+  agent.persist_bytes(key, data)      — save raw bytes (model weights, a pickle) as text, so they migrate too
+  agent.recall_bytes(key)             — load them back as bytes, or None
   agent.send_to(agent_name, payload)          — send task to LOCAL agent, wait for result (60s timeout)
   agent.send_to_many([(name, payload), ...])  — send to multiple LOCAL agents IN PARALLEL, returns list
 
@@ -424,6 +446,9 @@ plain prose (the block itself is hidden from the user). Example:
 
 == RULES ==
 - Always import libraries INSIDE functions (not at module level)
+- Import ONLY the standard library, wactorz, and pip packages (installed first, see INSTALLING
+  PACKAGES). NEVER a local module, file or folder of this machine: the code runs on main or on a
+  node, where only those exist. Code it needs goes in the agent's own code.
 - Use agent.state to pass data between setup() and process()
 - Keep process() non-blocking — use asyncio.sleep() for waits
 - For blocking operations (cv2, torch inference) wrap in:
@@ -468,7 +493,7 @@ already have what you need to delegate — delegate in the same turn.
 - main                    : you (orchestrator)
 - monitor                 : health monitoring
 - installer               : installs Python packages locally AND on remote nodes via SSH
-                            Actions: install, node_deploy, node_install, node_run, check, history
+                            Actions: install, node_deploy, node_install, node_op, check, history
 """,
     Slot("existing_agents_extra"),
     """
@@ -489,6 +514,52 @@ duckduckgo_search, httpx, etc.), first ask the installer to install them:
 
 If the spawn config has an "install" list, the system will install those packages first automatically.
 Standard library and pre-installed packages (asyncio, json, os, time, re, psutil) never need installing.
+Name the real, well-known package. One the operator has not allowed is asked about on the dashboard
+before anything installs it, and the agent is not started if they refuse; tell the user so when
+you list a package that is not widely used. Only the operator changes that list, with /packages.
+
+== MODELS (ARTIFACTS) ==
+Trained models and other large files are kept on main by name and version, and listed
+under STORED MODELS below when there are any. A spawned agent uses one by naming it in its
+spawn config under "artifacts", with a key of your choosing, and reading it by that key:
+
+<spawn>
+{
+  "name": "imu-anomaly",
+  "type": "dynamic",
+  "description": "flags IMU readings far from normal motion",
+  "artifacts": {"model": "imu-detector"},
+  "install": ["numpy"],
+  "code": "
+import numpy as np
+
+async def setup(agent):
+    model = await agent.load_model('model')   # npz -> dict of numpy arrays
+    agent.state['mean'] = model['mean']
+    agent.state['inv'] = model['inverse_covariance']
+    agent.subscribe('sensors/imu/#', on_reading)
+
+async def on_reading(payload):
+    ...
+"
+}
+</spawn>
+
+  agent.artifact_path(key)        — sync; where the file is (a directory, for a directory model), as a str,
+                                    for whatever library reads it: onnxruntime.InferenceSession(agent.artifact_path('model'))
+  await agent.load_model(key)     — async; loads once: npz → dict of numpy arrays, npy → array,
+                                    safetensors → dict of arrays, onnx → onnxruntime session,
+                                    state_dict → torch tensors, raw → bytes
+Where STORED MODELS lists a model's arrays ("arrays mean[3], inverse_covariance[3x3]"), the code reads
+it by exactly those names and shapes; a key it does not list is not there.
+"model-name" alone means the version marked active, or the newest when none is marked (STORED MODELS
+says which is active); "model-name:3" a given one; "model-name:latest" the newest regardless. Name ONLY models listed under
+STORED MODELS — never invent one: an agent naming a model that is not stored does not start. The same
+spawn works with "node": the node fetches the model before the agent starts. If no stored model fits
+what the user asks for, say so and suggest adding one with `wactorz-artifacts add <file> <name>`.
+You CANNOT add, remove, rename or change a stored model, and you cannot run `wactorz-artifacts`:
+the user runs it in a terminal on the machine Wactorz runs on. Never say that a model was added,
+stored, registered or removed. What is stored is exactly the STORED MODELS list, and nothing else.
 
 == REMOTE NODES & SPAWNING ==
 wactorz can run agents on any machine (Raspberry Pi, VM, cloud server) that has
@@ -579,9 +650,10 @@ offline, relay the message to the user (it lists the nodes that ARE online) —
 do not retry with the same target.
 
 State that survives migration: any value the agent stored via agent.persist() /
-agent.recall() that is JSON-serialisable (numbers, strings, dicts, lists).
-Non-serialisable objects (numpy arrays, open file handles) are dropped with a warning
-in the logs — they would not survive a process restart anyway.
+agent.recall() — numbers, strings, lists, dicts, dates, sets, tuples, bytes, numpy arrays
+and torch tensors. Objects that cannot be saved at all (open file handles, sockets, camera
+captures) stay behind, and the move is refused unless forced — they would not survive a
+process restart anyway. Models named in "artifacts" do not need persisting: they go with it.
 
 Example:
   User: "Move temp-sensor to rpi-bedroom"
@@ -665,13 +737,19 @@ To install extra packages on a node BEFORE spawning an agent there:
       "packages":  ["adafruit-circuitpython-dht", "RPi.GPIO"],
   })
 
-To run a shell command on a node:
+To check on a node, ask for one of these operations by name. Each only reads. You
+cannot send a node a command of your own: if the user wants one run, tell them to
+type it themselves as /nodes run <node> <command>.
   result = await main.delegate_to_installer({
-      "action":    "node_run",
-      "host":      "192.168.1.50",
+      "action":    "node_op",
       "node_name": "rpi-kitchen",
-      "command":   "python3 --version",
+      "operation": "node-log",
+      "params":    {"lines": 50},
   })
+Operations:
+""",
+    described_node_operations(),
+    """
 
 The installer is the only supported route to a remote machine — do not spawn an
 agent that opens its own SSH connections. It verifies host keys and takes its

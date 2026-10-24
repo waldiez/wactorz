@@ -78,13 +78,13 @@ class _Agent:
     def run_in_background(self, coro: Coroutine[Any, Any, Any]) -> None:
         self.background.append(coro)
 
-    def query_ts(self, *, hours: float, entity_id: str, field: str | None, limit: int) -> Any:
+    async def query_ts(self, *, hours: float, entity_id: str, field: str | None, limit: int) -> Any:
         self.ts_queries.append({"hours": hours, "entity_id": entity_id, "field": field})
         if self.fail_query is not None:
             raise self.fail_query
         return self.ts_rows.get(entity_id, [])
 
-    def query_ha_states(self, *, hours: float, limit: int) -> Any:
+    async def query_ha_states(self, *, hours: float, limit: int) -> Any:
         if self.fail_ha is not None:
             raise self.fail_ha
         return self.ha_rows

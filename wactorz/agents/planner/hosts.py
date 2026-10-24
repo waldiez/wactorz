@@ -18,7 +18,7 @@ from ..mixins.host import SpawnHost
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
-    from ..mixins.spawning import SpawnPlaceholder
+    from ..mixins.spawning import PlacedOnNode, SpawnPlaceholder
     from ..prompts.assemble import PromptFragment
 
 
@@ -67,7 +67,11 @@ class ExecutionHost(PlannerHost, Protocol):
 class PipelineHost(ExecutionHost, Protocol):
     """The pipeline path drives both of the other mixins."""
 
-    async def _spawn_agent(self, config: dict[str, Any]) -> Actor | SpawnPlaceholder | None: ...
+    async def _spawn_agent(
+        self, config: dict[str, Any]
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None: ...
+
+    def _running_on_a_node(self, name: str) -> str: ...
 
     async def _delegate(
         self, agent_name: str, task: str, timeout: float = 60.0
@@ -80,3 +84,5 @@ class PipelineHost(ExecutionHost, Protocol):
     async def _resolve_data_references(self, task: str) -> tuple[str, str]: ...
 
     async def _sample_live_topics(self, bus: Any) -> list[str]: ...
+
+    async def _sample_named_topics(self, task: str) -> list[str]: ...

@@ -19,7 +19,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
-from wactorz.web import chat, runtime, ws
+from wactorz.web import answers, chat, runtime, ws
 
 
 class _Registry:
@@ -236,3 +236,24 @@ class TestAFailingSocket:
             ("assistant", "kept"),
         ]
         assert runtime.ws_clients == set()
+
+
+class TestAnswers:
+    async def test_a_refused_answer_is_said_on_the_socket_by_the_gateway(
+        self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _refuse(_data: dict[str, Any]) -> str:
+            return "That question is already answered."
+
+        monkeypatch.setattr(answers, "answer_from_dashboard", _refuse)
+
+        async with client.ws_connect("/ws") as socket:
+            await socket.send_str(json.dumps({"type": "answer", "id": "q1", "option": "a"}))
+            frames = await _frames_until(socket, "chat")
+            await _wait_for_rows(db, 1)
+
+        assert frames[-1]["content"] == "[error] That question is already answered."
+        assert frames[-1]["from"] == runtime.IO_GATEWAY_ID
+        assert [(r["role"], r["content"]) for r in db.rows] == [
+            ("assistant", "[error] That question is already answered."),
+        ]

@@ -5,6 +5,9 @@
 import { describe, it, expect } from "vitest";
 import { renderMarkdown } from "../ui/markdown";
 
+/** How long a test that builds a large DOM on purpose may take. Generous: it only bounds a failure. */
+const SLOW_TEST_MS = 30_000;
+
 /** Render `src` into a detached div and return it for querying. */
 function render(src: string): HTMLDivElement {
     const div = document.createElement("div");
@@ -168,13 +171,19 @@ describe("renderMarkdown", () => {
         expect(el.textContent).toBe("a | b | c");
     });
 
-    it("keeps inline formatting on long messages (iteration bound scales with length)", () => {
-        // More inline tokens than the old fixed 10000-iteration cap, which used
-        // to render the tail as plain text instead of <em>.
-        const n = 12000;
-        const el = render("*a*".repeat(n));
-        expect(el.querySelectorAll("em")).toHaveLength(n);
-    });
+    it(
+        "keeps inline formatting on long messages (iteration bound scales with length)",
+        () => {
+            // More inline tokens than a fixed cap of 10000 iterations would allow:
+            // a bound that did not grow with the text would leave the tail as
+            // plain text instead of <em>.
+            const n = 12000;
+            const el = render("*a*".repeat(n));
+            expect(el.querySelectorAll("em")).toHaveLength(n);
+        },
+        // A large document on purpose; a loaded runner builds it slowly.
+        SLOW_TEST_MS,
+    );
 });
 
 describe("renderMarkdown images", () => {

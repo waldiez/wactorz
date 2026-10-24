@@ -21,6 +21,7 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import { attachLiveSocket, type LiveSocket } from "../ext/stt";
 import type { ChatInput } from "../ui/dashboard/chatInput";
+import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
 import type { SpeechToText } from "../ext/stt";
 import { toast } from "../ui/ToastManager";
 
@@ -74,7 +75,12 @@ function installAudio(): void {
 
 function mount(): HTMLElement {
     const deps: IobarDeps = {
-        chatInput: { onChange: vi.fn(), onKeydown: vi.fn(), closePanel: vi.fn() } as unknown as ChatInput,
+        chatInput: {
+            onChange: vi.fn(),
+            onKeydown: vi.fn(),
+            closePanel: vi.fn(),
+            commands: new CommandCompletion(new CommandCatalog(async () => [])),
+        } as unknown as ChatInput,
         stt: { recording: false } as unknown as SpeechToText,
         target: () => "main",
         setTarget: vi.fn(),

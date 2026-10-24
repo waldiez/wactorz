@@ -33,6 +33,38 @@ _LOCAL_MODELS: dict[tuple[str, str, str, str], Any] = {}
 _MODEL_LOCK = threading.Lock()
 
 
+class STTError(RuntimeError):
+    """A speech-to-text backend that cannot run here."""
+
+    @classmethod
+    def no_faster_whisper(cls) -> STTError:
+        return cls("faster-whisper is not installed; run: pip install faster-whisper")
+
+    @classmethod
+    def no_whisper(cls) -> STTError:
+        return cls("whisper is not installed; run: pip install openai-whisper")
+
+    @classmethod
+    def no_openai_key(cls) -> STTError:
+        return cls("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
+
+    @classmethod
+    def no_openai(cls) -> STTError:
+        return cls("openai is not installed; run: pip install 'wactorz[openai]'")
+
+
+class STTInputError(ValueError):
+    """A backend name, or audio, that speech-to-text cannot take."""
+
+    @classmethod
+    def unknown_backend(cls, raw_backend: Any, choices: str) -> STTInputError:
+        return cls(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
+
+    @classmethod
+    def empty_wav(cls) -> STTInputError:
+        return cls("WAV payload is empty")
+
+
 @dataclass(frozen=True)
 class STTConfig:
     """Resolved backend settings for one transcription request."""
@@ -66,7 +98,7 @@ class STTConfig:
         backend = _BACKEND_ALIASES.get(raw_backend, raw_backend)
         if backend not in _DEFAULT_MODELS:
             choices = ", ".join(sorted(_DEFAULT_MODELS))
-            raise ValueError(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
+            raise STTInputError.unknown_backend(raw_backend, choices)
         model = str(
             payload.get("stt_model") or environ.get("REACHY_STT_MODEL") or _DEFAULT_MODELS[backend]
         ).strip()
@@ -135,9 +167,7 @@ class FasterWhisperBackend:
                     WhisperModel,
                 )
             except ImportError as exc:
-                raise RuntimeError(
-                    "faster-whisper is not installed; run: pip install faster-whisper"
-                ) from exc
+                raise STTError.no_faster_whisper() from exc
             key = ("faster-whisper", config.model, config.device, config.compute_type)
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
@@ -200,9 +230,7 @@ class WhisperBackend:
             try:
                 import whisper  # pyright: ignore[reportMissingImports]  # optional backend
             except ImportError as exc:
-                raise RuntimeError(
-                    "whisper is not installed; run: pip install openai-whisper"
-                ) from exc
+                raise STTError.no_whisper() from exc
             key = ("whisper", config.model, config.device, config.compute_type)
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
@@ -231,13 +259,11 @@ class OpenAIBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
+            raise STTError.no_openai_key()
         try:
             from openai import AsyncOpenAI  # pyright: ignore[reportMissingImports]  # optional
         except ImportError as exc:
-            raise RuntimeError(
-                "openai is not installed; run: pip install 'wactorz[openai]'"
-            ) from exc
+            raise STTError.no_openai() from exc
         client = AsyncOpenAI(api_key=api_key)
         file_arg = ("reachy.wav", wav_bytes, "audio/wav")
         kwargs: dict[str, Any] = {"file": file_arg, "model": config.model}
@@ -260,7 +286,7 @@ async def transcribe_wav(
 ) -> Transcription:
     """Transcribe WAV bytes with the backend selected by payload/environment."""
     if not wav_bytes:
-        raise ValueError("WAV payload is empty")
+        raise STTInputError.empty_wav()
     config = STTConfig.resolve(payload)
     result = await _BACKENDS[config.backend].transcribe(wav_bytes, config)
     if isinstance(result, _BackendResult):

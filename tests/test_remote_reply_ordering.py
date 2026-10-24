@@ -63,7 +63,7 @@ def main_fixture(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 class TestTheReplyChannel:
     async def test_it_subscribes_before_the_caller_publishes(self, main: Any) -> None:
-        async with main.delegation._reply_topic() as (topic, _future):
+        async with main.delegation._reply_topic("rpi") as (topic, _future):
             await main._mqtt_publish("agents/by-name/rpi/task", {"_reply_topic": topic})
 
         assert [step.split()[0] for step in main.order] == ["subscribe", "publish"]
@@ -71,13 +71,13 @@ class TestTheReplyChannel:
     async def test_the_topic_it_yields_is_the_one_it_subscribed(self, main: Any) -> None:
         # Or the reply lands somewhere nobody is listening, which is the same
         # failure wearing a different shape.
-        async with main.delegation._reply_topic() as (topic, _future):
+        async with main.delegation._reply_topic("rpi") as (topic, _future):
             pass
 
         assert main.order == [f"subscribe {topic}"]
 
     async def test_a_reply_that_arrives_resolves_the_caller(self, main: Any) -> None:
-        async with main.delegation._reply_topic() as (_topic, future):
+        async with main.delegation._reply_topic("rpi") as (_topic, future):
             future.set_result({"result": "done"})
 
             assert await asyncio.wait_for(future, timeout=1) == {"result": "done"}
@@ -85,7 +85,7 @@ class TestTheReplyChannel:
     async def test_the_topic_is_forgotten_afterwards(self, main: Any) -> None:
         # It is keyed per call, so leaving them behind grows the dict for the
         # life of the process.
-        async with main.delegation._reply_topic() as (topic, _future):
+        async with main.delegation._reply_topic("rpi") as (topic, _future):
             assert topic in main._result_futures
 
         assert topic not in main._result_futures
@@ -103,7 +103,7 @@ class TestTheReplyChannel:
 
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _hangs)
 
-        async with main.delegation._reply_topic() as (topic, future):
+        async with main.delegation._reply_topic("rpi") as (topic, future):
             assert topic  # reached at all, rather than blocking until the timeout
 
         # The listener puts the connection error on the future, and in the real

@@ -16,6 +16,8 @@ import pytest
 
 from wactorz.agents.function_agent import spec_of
 from wactorz.agents.llm.providers.fake import FakeProvider
+from wactorz.core.artifacts import ArtifactStore
+from wactorz.core.paths import resolve_state_dir
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
@@ -434,6 +436,61 @@ class TestTheAG2Example:
         assert result is not None
         assert result["text"] == "Version two."
         assert result["turns"] == 4, "write, critique, rewrite, approve"
+
+
+class TestTheImuModel:
+    """`train.py` keeps the model on main; the detector names it and loads it as arrays."""
+
+    @staticmethod
+    def _imported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> types.ModuleType:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        # Another example's `model` or `agent` may be imported already, under the same name.
+        for name in ("model", "agent"):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+        train = importlib.import_module("train")
+        monkeypatch.delitem(sys.modules, "train")
+        monkeypatch.setattr(train, "MODEL_FILE", tmp_path / "imu_model.npz")
+        return train
+
+    def test_training_stores_a_new_version_each_time(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("numpy")
+        train = self._imported(monkeypatch, tmp_path)
+        state = tmp_path / "state"
+
+        first = train.train(state)
+        train.main(["--state-dir", str(state)])
+
+        store = ArtifactStore.in_state_dir(state)
+        assert first.reference == "imu-detector:1"
+        assert [a.version for a in store.versions("imu-detector")] == [1, 2]
+        assert first.format == "npz" and not first.runs_code
+
+    async def test_the_detector_flags_a_jolt_and_not_rest(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("numpy")
+        train = self._imported(monkeypatch, tmp_path)
+        train.train(resolve_state_dir())
+        detect = importlib.import_module("agent").detect
+        spec = spec_of(detect)
+        assert spec is not None and spec.models == {"model": "imu-detector"}
+        me = spec.build(persistence_dir=str(tmp_path / "agents"))
+
+        jolt = await detect({"ax": 9.0, "ay": -7.5, "az": 1.0}, me)
+        rest = await detect({"ax": 0.1, "ay": 0.0, "az": 1.0}, me)
+
+        assert jolt is not None and jolt["score"] > 20
+        assert rest is None
+        assert me.recall("anomalies_total") == 1
+
+    def test_the_scripts_keep_state_beside_them(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called = TestTheImuRunScript._recorded_run(monkeypatch)
+
+        _load("imu_anomaly", "run").main([])
+
+        assert Path(called["state_dir"]) == EXAMPLES / "imu_anomaly" / "state"
 
 
 class TestTheImuRunScript:

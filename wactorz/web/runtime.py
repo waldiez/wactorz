@@ -29,6 +29,8 @@ MQTT_TOPICS = [
     "agents/#",
     "system/#",
     "nodes/#",
+    # Where each model's pointers stand, retained by main: models/<name>/<pointer>.
+    "models/+/+",
     "homeassistant/state_changes/#",
 ]
 

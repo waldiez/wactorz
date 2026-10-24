@@ -1,12 +1,11 @@
-"""The one value in the generated deck script that is not JSON-encoded.
+"""The deck's palette, which the model chooses from the *document's* own content.
 
-`theme_colors` is interpolated raw, inside single quotes, into JavaScript that
-`node` executes — and the model chooses it from the *document's* own content. So
-a crafted document could close the quote and append statements. Every other
-value in that script goes through `json.dumps`; these five did not.
+So a crafted document decides what `theme_colors` holds. The deck is built in
+Python and no colour is ever run, but each one still becomes six hex digits or
+the default, so a bad palette costs the deck its colours and never the
+conversion.
 """
 
-import re
 from typing import Any
 
 import pytest
@@ -17,7 +16,7 @@ from tests.programs import program_namespace
 # helpers are reachable only the way the framework reaches them.
 _agent = program_namespace("doc_to_pptx_agent.py")
 _hex_color = _agent["_hex_color"]
-_build_js = _agent["_build_js"]
+_palette = _agent["_palette"]
 
 BREAKOUT = "x'}); require('child_process').execSync('id'); ({a:'"
 
@@ -52,34 +51,22 @@ class TestWhatCountsAsAColour:
         assert _hex_color(BREAKOUT, "1E2761") == "1E2761"
 
 
-class TestTheGeneratedScript:
-    @staticmethod
-    def _script(colors: dict[str, Any]) -> str:
-        outline = {
-            "title": "T",
-            "theme_colors": colors,
-            # `index` and `layout` are what `_build_js` reads off each slide.
-            "slides": [{"index": 0, "layout": "title", "title": "S", "bullets": ["b"]}],
-        }
-        return _build_js(outline, {}, "/dev/null/out.pptx")
-
-    def test_a_hostile_palette_injects_nothing(self) -> None:
-        js = self._script(
-            dict.fromkeys(("bg_dark", "bg_light", "accent", "text_dark", "text_light"), BREAKOUT)
+class TestThePalette:
+    def test_a_hostile_palette_becomes_the_default(self) -> None:
+        hostile = dict.fromkeys(
+            ("bg_dark", "bg_light", "accent", "text_dark", "text_light"), BREAKOUT
         )
 
-        assert "child_process" not in js
-        assert "execSync" not in js
+        assert _palette({"theme_colors": hostile}) == _palette({})
 
-    def test_every_colour_in_the_script_is_six_hex_digits(self) -> None:
-        # The real invariant: whatever the model sent, what lands in the script
-        # can only ever be a colour.
-        js = self._script({"accent": BREAKOUT, "bg_dark": "#nope", "text_light": "ABCDEF"})
+    def test_every_colour_is_six_hex_digits(self) -> None:
+        palette = _palette({"theme_colors": {"accent": BREAKOUT, "bg_dark": "#nope"}})
 
-        for found in re.findall(r"color:'([^']*)'", js):
-            assert re.fullmatch(r"[0-9A-Fa-f]{6}", found), found
+        assert all(len(c) == 6 and int(c, 16) >= 0 for c in palette.values())
 
-    def test_a_valid_palette_still_reaches_the_script(self) -> None:
-        js = self._script({"accent": "AABBCC"})
+    def test_a_valid_colour_is_kept(self) -> None:
+        assert _palette({"theme_colors": {"accent": "AABBCC"}})["accent"] == "AABBCC"
 
-        assert "AABBCC" in js
+    @pytest.mark.parametrize("colors", [None, "dark", ["1E2761"]])
+    def test_a_palette_that_is_not_one_is_the_default(self, colors: Any) -> None:
+        assert _palette({"theme_colors": colors}) == _palette({})

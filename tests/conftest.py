@@ -19,6 +19,7 @@ from wactorz.agents import llm_agent
 from wactorz.core import mqtt, voice_settings
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
+from wactorz.node import state as node_state
 from wactorz.web import runtime as web_runtime
 
 
@@ -289,3 +290,16 @@ def _no_leaked_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(web_runtime, "deleted_agent_ids", [])
     monkeypatch.setattr(web_runtime, "hard_resetting", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_node_state_writes() -> Iterator[None]:
+    """Write what a test left queued for a node's state files before the next starts.
+
+    A node writes every agent's state file through one writer for the process,
+    a moment after each save. A test that stops a node's agents queues their
+    last save there, and without this it lands during whichever test runs next
+    on that worker: one that counts the writes it makes then counts a stranger's.
+    """
+    yield
+    node_state.flush_states()

@@ -74,6 +74,13 @@ async def safe_invoke(cb: Any, payload: Any, actor: Any, warned: list[bool]) -> 
             raise
 
 
+class ConcurrencyError(ValueError):
+    """A number of workers for a topic that is not one."""
+
+    def __init__(self, concurrency: int) -> None:
+        super().__init__(f"concurrency must be at least 1, got {concurrency}")
+
+
 class Binding:
     """One topic filter, its callback, and the queue that serialises it.
 
@@ -92,7 +99,7 @@ class Binding:
 
     def __init__(self, topic: str, callback: Any, maxsize: int, concurrency: int = 1) -> None:
         if concurrency < 1:
-            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
+            raise ConcurrencyError(concurrency)
         self.topic = topic
         self.callback = callback
         self.concurrency = concurrency

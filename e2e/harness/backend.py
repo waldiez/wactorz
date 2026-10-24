@@ -43,6 +43,8 @@ LEFT_EMPTY = (
     "MQTT_TLS_CA",
     "MQTT_TLS_CHECK_HOSTNAME",
     "WACTORZ_LOG_FORMAT",
+    "WACTORZ_MODEL_CODE_NODE",
+    "WACTORZ_MODEL_CODE_ON_MAIN",
     # Voice: on `host` the backend would speak every reply through this
     # machine's speakers and hold each turn open until it had, and the other
     # branches reach services this suite does not run.
@@ -138,15 +140,18 @@ class Backend:
             ) from None
         return time.monotonic() - started
 
-    def restart(self) -> None:
-        """Stop the process and start it again, on the same state, ports and settings.
+    def restart(self, extra: Mapping[str, str] | None = None) -> None:
+        """Stop the process and start it again, on the same state and ports.
+
+        The same settings, with ``extra`` on top: a journey that changes a
+        setting does so the way an operator would, by restarting with it.
 
         This object goes on standing for the application: what holds it does
         not have to be told there is a new process behind it.
         """
         assert self.run is not None
         self.kill()
-        again = start(self.run, script=self.script)
+        again = start(self.run, script=self.script, extra=extra)
         self.process = again.process
 
     def kill(self) -> None:

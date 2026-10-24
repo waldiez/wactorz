@@ -20,6 +20,7 @@ from ...config import (
 )
 from ...core.actor import Actor, Message, MessageType
 from ...core.node_signing import node_control_properties
+from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
 from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
@@ -28,9 +29,12 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
+from .artifact_service import ArtifactService
+from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
+from .commands.info import terminal_command, terminal_command_reply
 from .delegation import DelegationManager
 from .lifecycle import LifecycleService
 from .llm_bridge import LLMBridge
@@ -38,6 +42,7 @@ from .manifests import ManifestRegistry
 from .memory import MemoryMixin
 from .migration import Migration
 from .nodes import NodeManager
+from .placement import PlacedOnNode, Placement
 from .planning import PlanningMixin, starts_with_bypass
 from .routing import RoutingMixin
 from .spawns import SpawnService
@@ -159,10 +164,21 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
+        self.artifact_service = ArtifactService(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
+        self.placement = Placement(self)
         self.delegation = DelegationManager(self)
         self.lifecycle = LifecycleService(self)
+
+    async def dashboard_answer(self, answer: Answer) -> None:
+        """A press on the dashboard for a question main asked, handed over in this process.
+
+        Main's questions are permissions -- whether code the model wrote may run
+        here -- so their answers are taken from the web server, never from the
+        broker (see :class:`~wactorz.core.outbound.TakesDashboardAnswers`).
+        """
+        await self.placement.dashboard_answer(answer)
 
     def _current_interface_source(self) -> str:
         """Return the task-local interface excluded from delegation this turn."""
@@ -272,6 +288,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Follow agents that repaired themselves on a node, so the registry
         # holds the program they actually run
         self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
+        # Send nodes the models their agents name, when they ask for them
+        self._tasks.append(asyncio.create_task(self.artifact_service.listener()))
+        # Say on models/<name>/active and /shadow where each model's pointers stand
+        self._tasks.append(asyncio.create_task(self.artifact_service.pointer_watcher()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
@@ -310,9 +330,22 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         await self.lifecycle._clear_agent_manifest(name, actor_id)
 
-    async def agent_withdrew(self, actor_id: str, name: str = "") -> None:
-        """An agent took its manifest back. Owned by `self.lifecycle`."""
-        await self.lifecycle.agent_withdrew(actor_id, name)
+    async def agent_withdrew(self, actor_id: str, name: str = "") -> bool:
+        """An agent took its manifest back; whether that stands. Owned by `self.lifecycle`."""
+        return await self.lifecycle.agent_withdrew(actor_id, name)
+
+    def node_reported(self, node: str) -> None:
+        """A node's heartbeat arrived: the first from the model-code node moves the model's agents.
+
+        In the background, as a move takes a round trip to the node and back,
+        and the heartbeat listener must not wait for it.
+        """
+        if self.placement.claim_rehoming(node):
+            self._tasks.append(asyncio.create_task(self.placement.rehome(node)))
+
+    async def settle_withdrawals(self, node: str, running: set[str]) -> None:
+        """Decide the withdrawals held for ``node``. Owned by `self.lifecycle`."""
+        await self.lifecycle.settle_withdrawals(node, running)
 
     def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         self.lifecycle._record_agent_deletion(name, reason)
@@ -346,11 +379,39 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Route interface tasks through the full orchestrator without blocking replies."""
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         if payload.get("_via_interface"):
+            if not self._speaks_for_a_person(msg):
+                logger.warning(
+                    "[%s] Refused a person's turn from %s: not an interface main trusts",
+                    self.name,
+                    msg.sender_id,
+                )
+                await self._reply_to_task(
+                    msg,
+                    {
+                        "error": "only an interface main trusts may pass on a person's message; "
+                        "send the task without _via_interface to have it answered"
+                    },
+                )
+                return
             self.run_detached(
                 self._handle_interface_request(payload, msg), name="interface-request"
             )
             return
         await super()._handle_task(msg)
+
+    def _speaks_for_a_person(self, msg: Message) -> bool:
+        """Whether ``msg``'s sender may hand main a person's turn (``_via_interface``).
+
+        That turn runs slash commands and acts on the spawn and delegate blocks
+        in the reply, as a message the operator typed does, so it is taken only
+        from a catalogue agent in this process still running the catalogue's
+        own program: one the project wrote. Code the model wrote, a catalogue
+        agent running a repair, and an agent the model configured, such as a
+        rule whose task action sends a body of its choosing, could otherwise
+        type ``/nodes run`` or ``/packages allow`` as the operator.
+        """
+        sender = self._registry.get(msg.sender_id) if self._registry else None
+        return getattr(sender, "_trusted", False) is True
 
     async def _handle_interface_request(self, payload: dict[str, Any], msg: Message) -> None:
         """Process one interface turn and reply on its correlation address."""
@@ -514,6 +575,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if excess > 0:
             del self._pending_notifications[:excess]
 
+    def _withdraw_notifications(self, about: str) -> None:
+        """Drop the queued notices about ``about`` that are no longer true.
+
+        A notice says what it is about in its ``about`` field. It waits for the
+        next chat reply, and what it said may have stopped being so meanwhile.
+        """
+        self._pending_notifications[:] = [
+            n for n in self._pending_notifications if n.get("about") != about
+        ]
+
     def _drain_notifications(self) -> str:
         """Pop queued monitor notifications as a formatted prefix string."""
         if not self._pending_notifications:
@@ -581,6 +652,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # ── Direct API intercepts — handle without LLM round-trip ──────────
         stripped = text.strip().rstrip("()")
 
+        # A Wactorz program typed into chat runs nowhere; said so here, before a
+        # model can claim it ran.
+        terminal = await terminal_command_reply(text)
+        if terminal is not None:
+            await self._record_external_exchange(text, terminal, ts_user=ts_user)
+            return note_prefix + terminal
+
         # ── Commands ────────────────────────────────────────────────────────
         # Every command lives in the registry; registration order is dispatch
         # order, so a command answers where the chain this replaced answered it.
@@ -640,6 +718,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Refresh the system prompt with live registry + facts before any LLM call.
         # This ensures the LLM never answers from a stale view of which agents exist.
+        await self._refresh_stored_models()
         self._rebuild_system_prompt()
 
         # Belt-and-braces: also inject the live agent list as a prefix on the
@@ -738,6 +817,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
             await self._record_external_exchange(text, reply, ts_user=ts_user)
             return note_prefix + reply
+        terminal = await terminal_command_reply(stripped)
+        if terminal is not None:
+            await self._record_external_exchange(text, terminal, ts_user=ts_user)
+            return note_prefix + terminal
 
         # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
         intent = await self._classify_intent(text)
@@ -768,6 +851,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return note_prefix + response
 
         # OTHER: converse, but run no action executors.
+        await self._refresh_stored_models()
         self._rebuild_system_prompt()
         prefixed_text = self._prefix_with_live_context(text)
         response = await self.chat(prefixed_text)
@@ -832,10 +916,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # All slash-commands and direct API intercepts are handled by process_user_input
         # Route them there to avoid duplicating all that logic here
         _stripped = text.strip().rstrip("()")
-        _is_command = _stripped.startswith(("/", "@")) or _stripped in (
-            "list_nodes",
-            "main.list_nodes",
-            "rules",
+        _is_command = (
+            _stripped.startswith(("/", "@"))
+            or _stripped in ("list_nodes", "main.list_nodes", "rules")
+            or terminal_command(_stripped) is not None
         )
         if _is_command:
             # /deploy streams its progress as it goes (the name lookup, the
@@ -888,19 +972,30 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Refresh the system prompt with live registry + facts before any LLM call.
         # This ensures the LLM never answers from a stale view of which agents exist.
+        await self._refresh_stored_models()
         self._rebuild_system_prompt()
 
         # Belt-and-braces: inject live agent list as a prefix on the user message.
         # Same as the non-streaming path — see _prefix_with_live_context for why.
         prefixed_text = self._prefix_with_live_context(text)
 
-        # Stream the LLM response chunk by chunk
+        # Stream the LLM response chunk by chunk. The action blocks in it run
+        # below, once the reply is whole, so the user is sent the text around them.
         full_chunks = []
+        shown_chunks = []
+        blocks = ActionBlockFilter()
         async for chunk in self.chat_stream(prefixed_text, attachments):
             if isinstance(chunk, dict):
                 break  # usage dict — discard, already tracked inside chat_stream
             full_chunks.append(chunk)
-            yield chunk
+            shown = blocks.feed(chunk)
+            if shown:
+                shown_chunks.append(shown)
+                yield shown
+        rest = blocks.flush()
+        if rest:
+            shown_chunks.append(rest)
+            yield rest
 
         # Replace the prefixed user message in history with the clean original
         # so future turns aren't polluted with stale prefixes.
@@ -909,7 +1004,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         full_response = "".join(full_chunks)
         # Everything the user is sent, for the chat log: the stream above, then
         # whatever is appended to it below.
-        sent = [full_response]
+        sent = ["".join(shown_chunks)]
 
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
@@ -918,8 +1013,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         _, deleted, missing = await self._process_delete_commands(full_response)
 
         # Execute structured <delegate>{...}</delegate> blocks first (preferred
-        # form). The raw block was already streamed to the user above, so append
-        # each result as an additional chunk — same approach as @mention results.
+        # form). The stream above left the block out, so append each result as
+        # an additional chunk — same approach as @mention results.
         full_response, _delegate_results = await self._process_delegate_commands(full_response)
         for _r in _delegate_results:
             extra = "\n" + _r
@@ -1022,14 +1117,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
-    ) -> Actor | SpawnPlaceholder | None:
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         return await self.spawns._spawn_from_config(config, save, from_registry=from_registry)
 
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
         return self.spawns._inject_llm_bridge_code(config)
 
-    async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
-        await self.spawns._spawn_remote(config, node, save)
+    async def _spawn_remote(
+        self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+    ) -> bool:
+        return await self.spawns._spawn_remote(config, node, save, restoring=restoring)
 
     def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
         """Sign whatever main addresses to a node's control topics.
@@ -1113,9 +1210,21 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Why ``node_name`` cannot take an agent from this server, or None."""
         return self.nodes.version_mismatch(node_name)
 
+    def _node_refuses_tasks(self, node_name: str) -> str | None:
+        """Why main would hear nothing an agent on ``node_name`` says, or None."""
+        return self.nodes.refuses_tasks(node_name)
+
     def _online_node_names(self) -> list[str]:
         """Names of all nodes currently considered online."""
         return self.nodes.online_names()
+
+    def _node_targets(self, node_name: str) -> list[str]:
+        """The library agents ``node_name`` says it can build, by import path."""
+        return self.nodes.targets_of(node_name)
+
+    def _node_takes_bundles(self, node_name: str) -> bool:
+        """Whether ``node_name`` builds a library agent from code sent with its spawn."""
+        return self.nodes.takes_bundles(node_name)
 
     def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
@@ -1321,6 +1430,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         target = self._registry.find_by_name(target_name)
         if target:
             await self.send(target.actor_id, command)
+
+    def _node_last_listing(self, name: str) -> str:
+        """The node whose latest heartbeat lists ``name``, recent or not, or ""."""
+        return self.nodes.last_listed_on(name)
 
     def _node_running_agent(self, name: str) -> str:
         """The live remote node running ``name``, or "" if none claims it.

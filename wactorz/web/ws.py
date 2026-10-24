@@ -18,7 +18,7 @@ from aiohttp import WSMsgType, web
 from ..core.persistence import chat_turn_recorded
 from ..ext.stt import service_uri, streaming
 from ..monitoring.log_redaction import redact
-from . import chat, events, lifecycle, origins, runtime, uploads
+from . import answers, chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 #: The conversation, on the console. Its own name rather than this module's:
@@ -290,6 +290,13 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                     elif msg_type == "command":
                         await handle_command(data)
+
+                    elif msg_type == "answer":
+                        problem = await answers.answer_from_dashboard(data)
+                        if problem:
+                            await TurnReplies(ws, runtime.IO_GATEWAY_ID, _persist_chat).reply(
+                                f"[error] {problem}"
+                            )
 
                     elif msg_type == "stt_start":
                         await listening.start(ws)

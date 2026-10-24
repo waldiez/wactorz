@@ -397,3 +397,17 @@ class TestBypassMarkers:
         assert _strip_dryrun_bypass("pipeline! build a pipeline! thing") == (
             "build a pipeline! thing"
         )
+
+
+def test_a_proposal_names_a_prompt_only_agent_as_llm():
+    plan = {
+        "plan_id": "p1",
+        "task": "forecast",
+        "envelope": {
+            "plan": [{"name": "forecaster", "spawn_config": {"system_prompt": "Forecast."}}]
+        },
+    }
+
+    text = host()._format_plan_proposal(plan)
+
+    assert "**1. forecaster** (llm)" in text

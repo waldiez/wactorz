@@ -81,7 +81,7 @@ export class WSClient {
     private _onDisconnected: ConnectionHandler | null = null;
     private _onMqttStatus: MqttStatusHandler | null = null;
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to demo. */
+    /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to disconnected. */
     private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private _reconnectDelay = 1_000;
     /** Fires the liveness check; null whenever no socket is being watched. */

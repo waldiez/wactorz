@@ -65,6 +65,13 @@ class _Host:
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         self.events.append(("notice", notice["message"]))
 
+    def node_reported(self, node: str) -> None:
+        return None
+
+    async def settle_withdrawals(self, node: str, running: set[str]) -> None:
+        # No withdrawal is held in these tests.
+        pass
+
 
 def _nodes(host: _Host) -> NodeManager:
     return NodeManager(cast("NodeHost", host), ManifestRegistry(cast("Any", host)))

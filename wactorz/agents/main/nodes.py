@@ -17,9 +17,12 @@ import asyncio
 import json
 import logging
 import time
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from ..._version import __version__
+from ...config import NODE_SIGNING
 from ...core.actor import derive_actor_id
 from ...core.compatibility import compatible
 from ...core.mqtt import (
@@ -29,9 +32,12 @@ from ...core.mqtt import (
     mqtt_client,
     reconnect_wait,
     session_kwargs,
+    user_properties,
 )
+from ...core.node_publications import Stamp, admit, signed_stamp
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
+from .voices import speaks_for
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +63,14 @@ VANISH_MISS_THRESHOLD = 3
 #: a node's absence — deciding its agents are gone waits considerably longer, so
 #: a brief network gap costs a grey dot rather than a deletion.
 ONLINE_WINDOW_S = 30.0
+
+#: Told of each heartbeat main takes, with the node and what main took from it.
+HeartbeatWatcher = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+#: How many runs of one node's runner to remember the newest heartbeat of. A
+#: heartbeat from a run forgotten is taken as a new run's; a node restarts far
+#: less often than this many times while main runs.
+RUNS_REMEMBERED = 16
 
 #: The least time between two republishes of one node's desired state prompted by
 #: what its heartbeats say about signing. A node reporting failures on every
@@ -129,6 +143,11 @@ def _runner_restarted(record: dict[str, Any], before: dict[str, Any]) -> bool:
     return False
 
 
+def _unsigned_notice(node_name: str) -> str:
+    """What the chat notice saying ``node_name`` does not sign is about, to withdraw it by."""
+    return f"unsigned-node:{node_name}"
+
+
 def remote_actor_id(agent_name: str) -> str:
     """The actor id a remote agent has, derived from its name.
 
@@ -167,6 +186,14 @@ class NodeManager:
         #: quiet does not send its manifest again when it comes back -- the
         #: broker delivers a retained message on subscribing, not on reconnects.
         self.node_manifests: dict[str, dict[str, Any]] = {}
+        #: node -> run id -> the count of the newest signed heartbeat from that run,
+        #: so each heartbeat is taken once. See `wactorz.core.node_publications`.
+        self.heartbeat_counts: dict[str, OrderedDict[str, int]] = {}
+        #: Nodes already said in chat to be sending unsigned heartbeats.
+        self.unsigned_reported: set[str] = set()
+        #: Told of every heartbeat taken, as main took it: the dashboard shows a
+        #: node from this, never from the broker, where anyone may publish one.
+        self.watchers: list[HeartbeatWatcher] = []
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Every known node, with its age resolved to an `online` flag.
@@ -287,6 +314,16 @@ class NodeManager:
             for agent in info.get("agents", [])
         }
 
+    def last_listed_on(self, name: str) -> str:
+        """The node whose latest heartbeat lists ``name``, recent or not, or "".
+
+        Unlike `running_agent`, a quiet node still answers until main forgets
+        it: what it last said stands until it says something else.
+        """
+        return next(
+            (node for node, info in self.known.items() if name in info.get("agents", [])), ""
+        )
+
     @staticmethod
     def _is_fresh(info: dict[str, Any], now: float) -> bool:
         """Whether a heartbeat is recent enough to count.
@@ -329,7 +366,9 @@ class NodeManager:
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
-                        await self.receive_node_message(str(message.topic), message.payload)
+                        await self.receive_node_message(
+                            str(message.topic), message.payload, user_properties(message)
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -350,8 +389,15 @@ class NodeManager:
                     )
                 await asyncio.sleep(reconnect_wait(RECONNECT_DELAY_S))
 
-    async def receive_node_message(self, topic: str, payload: bytes | None) -> None:
-        """Route one message from a node to whichever half handles it."""
+    async def receive_node_message(
+        self, topic: str, payload: bytes | None, properties: Mapping[str, str] | None = None
+    ) -> None:
+        """Route one message from a node to whichever half handles it.
+
+        ``properties`` are the user properties it arrived with, which carry the
+        node's signature; None for a message that did not come off the broker,
+        which has nothing to check.
+        """
         if topic.endswith("/manifest") and not payload:
             # The retained manifest cleared: the node was removed.
             parts = topic.split("/")
@@ -367,13 +413,94 @@ class NodeManager:
         parts = topic.split("/")
         if len(parts) < 3:
             return
-        node_name = parts[1]
+        await self._route(parts[1], topic, payload or b"", properties, data)
+
+    async def _route(
+        self,
+        node_name: str,
+        topic: str,
+        payload: bytes,
+        properties: Mapping[str, str] | None,
+        data: dict[str, Any],
+    ) -> None:
+        """Hand a decoded message to its half, once its signature says it is the node's."""
         if topic.endswith("/heartbeat"):
-            await self.receive_heartbeat(node_name, data)
-        elif topic.endswith("/migrate_result"):
+            signed = self._heartbeat_signed(node_name, topic, payload, properties)
+            if signed is not None:
+                await self.receive_heartbeat(node_name, data, signed=signed)
+            return
+        if properties is not None and not admit(
+            node_name, topic, payload, properties, "a node report"
+        ):
+            return
+        if topic.endswith("/migrate_result"):
             self.report_migration(data)
         elif topic.endswith("/manifest"):
             self.receive_manifest(node_name, data)
+
+    def _heartbeat_signed(
+        self, node_name: str, topic: str, payload: bytes, properties: Mapping[str, str] | None
+    ) -> bool | None:
+        """Whether a heartbeat is signed by its node; None for one already taken, to be dropped."""
+        if properties is None:
+            return True
+        stamp = signed_stamp(node_name, topic, payload, properties)
+        if stamp is None:
+            return False
+        if not self._first_sight(node_name, stamp):
+            logger.debug("[main] Ignoring a heartbeat from %r seen before", node_name)
+            return None
+        return True
+
+    def _first_sight(self, node_name: str, stamp: Stamp) -> bool:
+        """Whether a signed heartbeat is newer than any seen from its run, remembering it if so.
+
+        A heartbeat from a run not seen before is taken: a node restarting starts
+        a run, and main has no clock of the node's to order runs by.
+        """
+        runs = self.heartbeat_counts.setdefault(node_name, OrderedDict())
+        if stamp.count <= runs.get(stamp.run, 0):
+            return False
+        runs[stamp.run] = stamp.count
+        runs.move_to_end(stamp.run)
+        while len(runs) > RUNS_REMEMBERED:
+            runs.popitem(last=False)
+        return True
+
+    def speaks_for(self, node_name: str, agent_name: str) -> bool:
+        """Whether a message from ``node_name`` may speak for ``agent_name``: see `voices`."""
+        return self.host is None or speaks_for(self.host, node_name, agent_name)
+
+    def node_for(self, agent_name: str) -> str:
+        """The node a task for ``agent_name`` goes to, or "" when none has it.
+
+        One whose latest heartbeat lists the agent and that may speak for it:
+        a node listing an agent main places elsewhere is not sent its tasks.
+        """
+        return next(
+            (
+                node
+                for node, info in self.known.items()
+                if agent_name in info.get("agents", []) and self.speaks_for(node, agent_name)
+            ),
+            "",
+        )
+
+    def refuses_tasks(self, node_name: str) -> str | None:
+        """Why no task should go to ``node_name``, when its replies would be refused anyway.
+
+        A node whose heartbeats are unsigned is one deployed before nodes signed
+        what they publish, and under ``enforce`` main takes no reply from it: a
+        task sent there could only time out, so it is not sent, and the caller
+        says why at once.
+        """
+        record = self.known.get(node_name) or {}
+        if NODE_SIGNING != "enforce" or record.get("signed", True):
+            return None
+        return (
+            f"node '{node_name}' does not sign what it publishes, so main takes no reply "
+            f"from it (WACTORZ_NODE_SIGNING=enforce). Deploy it again: /deploy {node_name}"
+        )
 
     def receive_manifest(self, node_name: str, data: dict[str, Any]) -> None:
         """Take what a node says its machine is.
@@ -388,15 +515,60 @@ class NodeManager:
             return
         self.node_manifests[node_name] = data
 
+    def targets_of(self, node_name: str) -> list[str]:
+        """The library agents `node_name` says it can build, by import path.
+
+        From its manifest; none from a node that has not sent one, or one
+        from a release that did not report them. A module agent is placed on
+        a node only when this names its target.
+        """
+        manifest = self.node_manifests.get(node_name) or {}
+        agents = manifest.get("agents")
+        if not isinstance(agents, list):
+            return []
+        return [str(target) for target in agents if isinstance(target, str)]
+
+    def takes_bundles(self, node_name: str) -> bool:
+        """Whether `node_name` builds a library agent from code sent with its spawn.
+
+        From its manifest, which says so; a node from a release before bundles
+        does not, and is sent none.
+        """
+        manifest = self.node_manifests.get(node_name) or {}
+        return manifest.get("code_bundles") is True
+
     def forget(self, node_name: str) -> None:
         """Forget a node altogether, as removing it does: its heartbeat and its machine."""
         self.known.pop(node_name, None)
         self.node_manifests.pop(node_name, None)
+        self.heartbeat_counts.pop(node_name, None)
+        self.unsigned_reported.discard(node_name)
 
-    async def receive_heartbeat(self, node_name: str, data: dict[str, Any]) -> None:
-        """Take one heartbeat: prune what vanished, record the node, fill gaps."""
-        agents = data.get("agents", [])
+    async def receive_heartbeat(
+        self, node_name: str, data: dict[str, Any], *, signed: bool = True
+    ) -> None:
+        """Take one heartbeat: prune what vanished, record the node, fill gaps.
+
+        One that is not ``signed`` with the node's key is, under ``enforce``,
+        evidence that the node is up and nothing more: see `_take_unsigned`.
+        """
         before = self.known.get(node_name)
+        if not signed:
+            if self.heartbeat_counts.get(node_name):
+                # This node has signed its heartbeats since main started, and a
+                # runner does not stop signing: something else wrote this one.
+                logger.debug("[main] Ignoring an unsigned heartbeat for %r", node_name)
+                return
+            self._say_unsigned(node_name)
+            if NODE_SIGNING == "enforce":
+                self._take_unsigned(node_name, data, before)
+                await self._tell_watchers(
+                    node_name, {**data, "agents": self.known[node_name]["agents"]}
+                )
+                return
+        if signed:
+            self._now_signed(node_name)
+        agents = data.get("agents", [])
         previous = set((before or {}).get("agents", []))
         await self._prune_vanished(node_name, set(agents), previous)
         self.known[node_name] = {
@@ -423,11 +595,94 @@ class NodeManager:
             # crashes. A heartbeat without it comes from a runner older than
             # slow retry, which reports none.
             "slow_retry": _as_names(data.get("slow_retry")),
+            # Whether the node signs what it publishes; see `refuses_tasks`.
+            "signed": signed,
         }
+        if host := self.host:
+            # After `known` is updated: a held withdrawal is decided by this
+            # heartbeat, not by the one that made it wait.
+            await host.settle_withdrawals(node_name, set(agents))
+            host.node_reported(node_name)
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)
         await self.follow_signing(node_name, self.known[node_name], before)
         self.follow_restarts(node_name, self.known[node_name], before)
+        await self._tell_watchers(node_name, data)
+
+    async def _tell_watchers(self, node_name: str, taken: dict[str, Any]) -> None:
+        """Hand a heartbeat, as main took it, to whatever watches the node table.
+
+        A watcher that fails is logged and the rest are still told: what shows
+        a node must not stop main recording it.
+        """
+        for watcher in list(self.watchers):
+            try:
+                await watcher(node_name, taken)
+            except Exception:
+                logger.exception("[main] A node watcher failed on %r's heartbeat", node_name)
+
+    def _take_unsigned(
+        self, node_name: str, data: dict[str, Any], before: dict[str, Any] | None
+    ) -> None:
+        """Record an unsigned heartbeat as a sign of life, and believe nothing else in it.
+
+        Refusing it outright would read as the node going silent, and main gives
+        up on a silent node's agents and deletes them, so a node that needs
+        deploying again would lose its agents for want of a signature. Taken
+        whole, it would let anything that can publish there say which agents
+        the node runs, and have the others pruned. So the node stays online and
+        its agents stay as main last knew them, until it is deployed again.
+        """
+        record = dict(before or {})
+        record.update(
+            {
+                "last_seen": time.time(),
+                "agents": list(record.get("agents", [])),
+                "version": data.get("version"),
+                "runtime": data.get("runtime") or DEFAULT_NODE_RUNTIME,
+                "signing": data.get("signing") or "off",
+                "signed": False,
+            }
+        )
+        self.known[node_name] = record
+
+    def _say_unsigned(self, node_name: str) -> None:
+        """Say in chat, once per node, that its heartbeats are unsigned and what main does about it."""
+        host = self.host
+        if host is None or node_name in self.unsigned_reported:
+            return
+        self.unsigned_reported.add(node_name)
+        if NODE_SIGNING == "enforce":
+            outcome = (
+                "so main ignores what it says about its agents and takes no reply, manifest "
+                "or report from it (WACTORZ_NODE_SIGNING=enforce)"
+            )
+        else:
+            outcome = "and main takes them anyway because WACTORZ_NODE_SIGNING=warn"
+        logger.warning("[main] Node %r sends unsigned heartbeats, %s", node_name, outcome)
+        host._queue_notification(
+            {
+                "severity": "warning",
+                "about": _unsigned_notice(node_name),
+                "message": (
+                    f"Node '{node_name}' does not sign what it publishes, {outcome}. It was "
+                    f"deployed before nodes signed their messages. Deploy it again: "
+                    f"/deploy {node_name}"
+                ),
+            }
+        )
+
+    def _now_signed(self, node_name: str) -> None:
+        """A node said to be unsigned has signed: what was said is no longer so.
+
+        A notice still queued is dropped, since it would reach the chat after
+        the deploy that made it untrue. One already shown was true when it was.
+        """
+        if node_name not in self.unsigned_reported:
+            return
+        self.unsigned_reported.discard(node_name)
+        if self.host is not None:
+            self.host._withdraw_notifications(_unsigned_notice(node_name))
 
     def follow_restarts(
         self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None
@@ -746,6 +1001,8 @@ class NodeManager:
             # Drop the node from our tracking. If it comes back, the
             # heartbeat listener will re-add it as a fresh entry.
             self.known.pop(node_name, None)
+            # A withdrawal held for the node's word is decided: it will not speak again.
+            await host.settle_withdrawals(node_name, set())
             if lost:
                 host._queue_notification(
                     {

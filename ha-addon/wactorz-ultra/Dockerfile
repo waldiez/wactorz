@@ -38,6 +38,12 @@ RUN groupadd --system --gid 1000 wactorz \
     && useradd --system --uid 1000 --gid wactorz --no-create-home \
         --home-dir /data/state/home --shell /usr/sbin/nologin wactorz
 
+# The user the sandbox node runs as, when sandbox_node is on: code the model
+# writes runs there, and none of the add-on's data is open to it.
+RUN groupadd --system --gid 1001 wactorz-sandbox \
+    && useradd --system --uid 1001 --gid wactorz-sandbox --no-create-home \
+        --home-dir /data/sandbox/home --shell /usr/sbin/nologin wactorz-sandbox
+
 # The virtualenv is that user's, built by it from the start: agents install
 # packages into it at runtime, and a virtualenv has no per-user directory to
 # send those to instead. Built as the user rather than handed over afterwards,

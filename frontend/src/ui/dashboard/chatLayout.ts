@@ -10,7 +10,7 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel } from "./agentState";
-import { button, el, named } from "../dom";
+import { button, el, live, named, testId } from "../dom";
 
 /** The sidebar shell: a filter box above the (separately rendered) agent list. */
 export function buildChatSidebar(filter: string, onFilter: (value: string) => void): HTMLElement {
@@ -26,7 +26,9 @@ export function buildChatSidebar(filter: string, onFilter: (value: string) => vo
     searchWrap.appendChild(searchInput);
     sidebar.appendChild(searchWrap);
 
-    const agentList = el("div", "af-chat-agent-list");
+    const agentList = testId(el("div", "af-chat-agent-list"), "chat-agent-list");
+    agentList.setAttribute("role", "group");
+    agentList.setAttribute("aria-label", "Agents to chat with");
     agentList.id = "af-chat-agent-list";
     sidebar.appendChild(agentList);
     return sidebar;
@@ -39,7 +41,8 @@ export function buildChatPane(): HTMLElement {
     const paneHdr = el("div", "af-chat-pane-header");
     paneHdr.id = "af-chat-pane-header";
 
-    const thread = el("div", "af-chat-thread");
+    // The pane's header says whose conversation it is; new messages are read out.
+    const thread = live(el("div", "af-chat-thread"), "log", "Conversation");
     thread.id = "af-chat-thread";
 
     pane.append(paneHdr, thread);
@@ -69,7 +72,7 @@ export function renderPaneHeader(
         dot.style.background = stateColor(agent.state);
         hdr.appendChild(dot);
     }
-    hdr.appendChild(el("span", "af-chat-pane-title", `@${target}`));
+    hdr.appendChild(testId(el("span", "af-chat-pane-title", `@${target}`), "chat-title"));
     if (agent) {
         hdr.appendChild(el("span", "af-chat-pane-state", stateLabel(agent.state)));
     }

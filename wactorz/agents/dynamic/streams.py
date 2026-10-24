@@ -207,7 +207,7 @@ class StreamsMixin(_Host):
             "observed_samples": contract.observed_samples if contract else {},
             "timestamp": time.time(),
         }
-        await actor._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
+        await actor._send_manifest(manifest)
 
     async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any | None:
         """Wait for one MQTT message on topic and return its parsed payload.

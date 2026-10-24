@@ -280,7 +280,10 @@ class TestANodeReceivingAnAgent:
         )
 
         assert runner.get("collector") is None
-        assert not [t for t in runner.topics if t.endswith("/spawn_ack")]
+        # Answered with a refusal, never a confirmation: main puts the agent
+        # back on its source at once.
+        (answer,) = [p for t, p, _ in runner.published if t.endswith("/spawn_ack")]
+        assert "did not arrive" in answer["refused"]
 
 
 class TestANodeHandingAnAgentBack:

@@ -1,7 +1,12 @@
-"""A fake IMU: normal readings with an abnormal one now and then."""
+"""A fake IMU: normal readings with an abnormal one now and then.
+
+Publishes to the broker ``MQTT_HOST``:``MQTT_PORT`` names, ``localhost:1883``
+when neither is set, as the system itself does.
+"""
 
 import asyncio
 import json
+import os
 import sys
 
 import aiomqtt
@@ -15,7 +20,9 @@ if sys.platform == "win32":
 
 async def main() -> None:
     rng = np.random.default_rng()
-    async with aiomqtt.Client("localhost", 1883) as client:
+    host = os.environ.get("MQTT_HOST") or "localhost"
+    port = int(os.environ.get("MQTT_PORT") or 1883)
+    async with aiomqtt.Client(host, port) as client:
         for i in range(200):
             if i % 25 == 24:
                 reading = {"ax": 9.0, "ay": -7.5, "az": 1.0}  # a jolt

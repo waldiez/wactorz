@@ -6,7 +6,7 @@
  * Shared agent-state helpers for the dashboard: messageability rules, state
  * colour/label mapping and relative-time formatting.
  */
-import type { AgentState } from "../../types/agent";
+import type { AgentState, ChatMessage } from "../../types/agent";
 import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
 
 /** Heartbeat age (ms) after which a remote node / agent is treated as stale:
@@ -49,6 +49,28 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
         return false;
     }
     return !agent.protected;
+}
+
+/** The names of the agents with a question still waiting for an answer in `messages`. */
+export function askingAgents(messages: ChatMessage[]): Set<string> {
+    return new Set(
+        messages
+            .filter(m => m.from !== "user" && (m.options?.length ?? 0) > 0 && m.answer === undefined)
+            .map(m => m.from),
+    );
+}
+
+/**
+ * Whether the user may open this agent's thread: any agent they may message,
+ * and one that may not be messaged while it is asking them something
+ * (`asking` holds the names of agents with a question still open), so its
+ * question can be answered there.
+ */
+export function canOpenThread(
+    agent: { name: string; protected?: boolean },
+    asking: ReadonlySet<string>,
+): boolean {
+    return canDirectMessage(agent) || asking.has(agent.name);
 }
 
 /**

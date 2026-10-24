@@ -23,14 +23,13 @@ from typing import Any, cast
 
 import pytest
 
-from wactorz.agents import installer_agent
 from wactorz.agents.installer_agent import InstallerAgent
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.hosts import NodeHost
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import SIGNING_REPUBLISH_INTERVAL_S, NodeManager
 from wactorz.config import DeployTarget
-from wactorz.core import node_signing
+from wactorz.core import node_env, node_signing
 from wactorz.core.actor import Actor, Message
 from wactorz.core.mqtt import publish_properties
 from wactorz.core.mqtt_publisher import MQTTPublisher
@@ -547,7 +546,7 @@ class TestDeployDeliversTheKey:
     async def test_the_nodes_env_carries_its_key_start_and_mode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(installer_agent, "NODE_SIGNING", "enforce")
+        monkeypatch.setattr(node_env, "NODE_SIGNING", "enforce")
         agent = InstallerAgent.__new__(InstallerAgent)
         agent.name = "installer"
         sftp = _Sftp()

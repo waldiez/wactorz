@@ -62,6 +62,10 @@ imports it. Which shape yours is decides two of the boxes below.
 - [ ] Cleaned up in a `destroy()` method (remove event listeners)
 - [ ] Instantiated in the matching numbered section of `main.ts` (see its header map)
 - [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
+- [ ] What a person acts on or reads has a role and a name (see [Finding elements](#finding-elements))
+- [ ] A new view needs nothing for its address: `src/router.ts` gives every view `#/<key>`, an
+      extension's included. A view with levels of its own (`#/models/hvac/versions/7`) reads them
+      from `Route.path` in `ui/dashboard/viewRoutes.ts`, and reports where it is with `af-view-changed`
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)
@@ -120,6 +124,33 @@ handlers in its eight numbered sections. It is **covered** by `src/__tests__/mai
   cover (a tag computed at runtime, `<template>`, `<style>`)
 - No `innerHTML` with user-controlled strings (XSS); icon markup from the icon registry is the exception
 - Use CSS classes for state (`.active`, `.hidden`) rather than inline styles where possible
+- Give assistive technology what it reads with the helpers in `src/ui/dom.ts` rather than
+  `setAttribute` by hand: `labelled`, `dialog`, `live`, `list` / `listItem`, `clickable`,
+  `expanded`, `pressed`, `focusables`
+
+### Finding elements
+
+Tests find an element the way a person using a screen reader does: by its role and the name
+read out for it — `getByRole("button", { name: "Stop weather" })` in the end-to-end harness,
+`byRole(root, "button", "Stop weather")` from `src/__tests__/queries.ts` in a unit test. So a
+locator that works is also a check that the element is accessible.
+
+Where an element has no such name (a card's state line, a message's sender, the parts of a
+toast), mark it with `testId(node, "…")` from `src/ui/dom.ts`. The ids are listed in
+`src/ui/testIds.ts`, and `testids.test.ts` checks that list against what
+`e2e/harness/browser.py` looks for, in both directions. Never find an element by class: classes
+belong to the styles and move with them.
+
+### Accessibility checks
+
+`axe.test.ts` runs [axe](https://github.com/dequelabs/axe-core) on every view of the dashboard
+as the page builds it, and the end-to-end suite runs it again in a real browser, where colour
+contrast is judged too; the journeys also walk each view with Tab and fail where focus does not
+show. A serious or critical finding fails either. One that has to stay for now goes in
+`e2e/harness/axe-accepted.json` with its reason.
+
+Colours for text come from the tokens in `src/styles/base.css`: `--af-text-dim` is the dimmest
+text that keeps 4.5:1 on the dashboard's backgrounds, so nothing dimmer is used for words.
 
 **Events**
 

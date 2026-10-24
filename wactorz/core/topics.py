@@ -18,6 +18,24 @@ FORBIDDEN_IN_TOPIC = ("+", "#", "\x00")
 #: The longest topic MQTT can carry: its length travels as a two-byte field.
 MAX_TOPIC_BYTES = 65535
 
+#: The ``agents/<id>/<leaf>`` topics an agent may leave retained, cleared when it
+#: is deleted -- by main, by the server and by a node alike, so none of them
+#: leaves a trace the others clear. ``questions`` is the agent's question book
+#: (`wactorz.core.questions`).
+RETAINED_AGENT_LEAVES = (
+    "status",
+    "heartbeat",
+    "metrics",
+    "logs",
+    "spawned",
+    "manifest",
+    "errors",
+    "detections",
+    "results",
+    "completed",
+    "questions",
+)
+
 
 def publish_topic_error(topic: str) -> str | None:
     """Why ``topic`` cannot be published, or None if it can.

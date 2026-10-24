@@ -24,13 +24,17 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The app image's base, the tool images CI runs (.github/tools/Dockerfile),
+  # The app image's base, the tool images CI runs (ci/tools/Dockerfile),
   # the machine the end-to-end suite deploys a node to (e2e/stack/node/Dockerfile),
   # and the add-ons' bases (ha-addon/bases/Dockerfile). A new dated build of a base
   # changes that file alone; a new line (another Python or OS release) must also
   # reach each add-on's build.yaml and Dockerfile default, and a test says which.
+  #
+  # None of these may live under .github/: GitHub lets only the github-actions
+  # ecosystem change files there, so one bump in such a directory makes it
+  # refuse the whole grouped pull request.
   - package-ecosystem: docker
-    directories: ["/", "/.github/tools", "/ha-addon/bases", "/e2e/stack/node"]
+    directories: ["/", "/ci/tools", "/ha-addon/bases", "/e2e/stack/node"]
     target-branch: dev
     schedule:
       interval: weekly

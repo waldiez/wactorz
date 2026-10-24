@@ -170,6 +170,23 @@ class TestATurnFromOutsideTheDashboard:
         assert "".join(sent) == "hi there\n✅ lamp-agent: on"
         assert _rows(db) == [("main", "user", "hello"), ("main", "assistant", "".join(sent))]
 
+    async def test_streamed_without_its_action_blocks_which_still_run(self, db: WactorzDB) -> None:
+        reply = 'Starting it.\n<spawn>{"name": "x"}</spawn>\nThen <delete>{"name": "y"}</delete>.'
+        m = _main(reply=reply)
+        ran: list[str] = []
+
+        async def _spawn_blocks(response: str) -> tuple[str, list[Any]]:
+            ran.append(response)
+            return response, []
+
+        m._process_spawn_commands = _spawn_blocks
+
+        sent = [c async for c in m.process_user_input_stream("hello") if isinstance(c, str)]
+
+        assert "".join(sent) == "Starting it.\n\nThen ."
+        assert ran == [reply]
+        assert _rows(db) == [("main", "user", "hello"), ("main", "assistant", "".join(sent))]
+
 
 class TestADashboardTurn:
     async def test_is_left_to_the_dashboard(self, db: WactorzDB) -> None:

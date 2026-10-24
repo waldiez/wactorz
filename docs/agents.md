@@ -129,7 +129,7 @@ Tracks heartbeat timestamps from every registered actor. If an actor's last hear
 | **name** | `installer` |
 | **restarts** | 3 |
 
-Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. Also handles remote node deployment via SSH (`node_deploy`, `node_install`, `node_run` actions), for machines listed in `DEPLOY_TARGETS` — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
+Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. A package not on the list of packages installed without asking (the catalogue's, the examples', `WACTORZ_PIP_ALLOW`, and what the operator has allowed with `/packages allow` or the dashboard) is asked about on the dashboard first, and not installed if the operator refuses or does not answer. Also handles remote nodes over SSH (`node_deploy`, `node_install`, `node_op` — a named read-only operation — and `node_run` — a command typed as `/nodes run`), for machines listed in `DEPLOY_TARGETS`, and takes those only from main — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
 
 ```
 @installer {"action": "install", "packages": ["httpx", "aiomqtt"]}
@@ -429,6 +429,8 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `async def process(agent)` | Every `poll_interval` seconds | For periodic work. Timeout: 120s per call. Only started after `setup()` returns (or immediately if no setup). |
 | `async def handle_task(agent, payload)` | On every inbound TASK message | Must return a dict. Timeout: 60s per call. Used for command/response interactions. |
 
+> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
+
 #### Agent API (`agent` object inside generated code)
 
 | Method | Sync/Async | Description |
@@ -440,13 +442,16 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `await agent.alert(message, level)` | async | Publish an alert (`info`, `warning`, `error`) |
 | `agent.persist(key, value)` | **sync** | Write a value (routes to SQLite/memory/Pickle based on key) |
 | `agent.recall(key)` | **sync** | Read a persisted value |
+| `agent.artifact_path(key)` | **sync** | Where the artifact the spawn names as `key` is on this host — `"artifacts": {"model": "imu-detector:3"}` in the spawn, then `onnxruntime.InferenceSession(agent.artifact_path("model"))`. A file, or for a directory artifact the directory it unpacks to; a `str`. `KeyError` naming the keys the spawn gave for any other |
+| `await agent.load_model(key)` | async | The artifact named `key`, loaded once: a dict of numpy arrays for `npz` and `safetensors`, an array for `npy`, an `onnxruntime.InferenceSession` for `onnx`, tensors for a `state_dict`, bytes for `raw`. A pickle, joblib file or whole torch module only with `allow_code=True` |
+| `agent.artifacts` | — | Each artifact the spawn names: name, version, format, size and path |
 | `agent.state` | — | In-memory dict (not persisted) |
 | `agent.window(topic, seconds)` | **sync** | Create a sliding time window over an MQTT topic stream |
 | `agent.declare_contract(...)` | **sync** | Register a TopicBus contract for auto-wiring |
-| `agent.query_ts(hours, field, ...)` | **sync** | Query historical sensor data from SQLite |
-| `agent.query_detections(hours, ...)` | **sync** | Query historical YOLO detections from SQLite |
-| `agent.query_ha_states(hours, ...)` | **sync** | Query historical HA state changes from SQLite |
-| `agent.ts_stats()` | **sync** | Row counts for all time-series tables |
+| `await agent.query_ts(hours, field, ...)` | async | Query historical sensor data from main's SQLite |
+| `await agent.query_detections(hours, ...)` | async | Query historical YOLO detections from main's SQLite |
+| `await agent.query_ha_states(hours, ...)` | async | Query historical HA state changes from main's SQLite |
+| `await agent.ts_stats()` | async | Row counts for all time-series tables |
 | `agent.agents()` | **sync** | List all currently running agents |
 | `agent.topics(keyword)` | **sync** | List known MQTT topics |
 
@@ -457,18 +462,25 @@ Any dynamic agent can query historical data collected by the TimeSeriesCollector
 ```python
 async def handle_task(agent, payload):
     # Get last 24h of temperature readings
-    rows = agent.query_ts(hours=24, field='temp')
+    rows = await agent.query_ts(hours=24, field='temp')
 
     # Get as pandas DataFrame for ML training
-    df = agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
+    df = await agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
 
     # Query YOLO detections
-    df = agent.query_detections(hours=12, class_name='person', as_dataframe=True)
+    df = await agent.query_detections(hours=12, class_name='person', as_dataframe=True)
 
     # Check available data volume
-    stats = agent.ts_stats()
+    stats = await agent.ts_stats()
     # {'sensor_readings': 145230, 'detections': 8920, ...}
 ```
+
+The history lives in main's database. On a node, a query reads it from main
+over the broker, a page at a time, so there it must be awaited; written with
+`await`, the same code runs on main and on a node. On main the call without
+`await` works too, as it always has. On a node that form fails as soon as
+its result is used, and the error says to add `await`. If main does not answer
+a read, the agent gets no rows (`None` for a DataFrame) and the node logs why.
 
 #### Code safety
 

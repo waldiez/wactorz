@@ -23,6 +23,7 @@ from ..config import CONFIG, deploy_name_error
 from ..core.mqtt_tls import client_context, tls_enabled
 from ..core.state_lock import StateInUseError
 from ..monitoring.log_setup import setup_console_logging
+from . import local_setup
 from .runner import NodeRunner
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,14 @@ def configure_logging(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Entry point for the ``wactorz-node`` console script."""
-    args = get_args(sys.argv[1:] if argv is None else argv)
+    """Entry point for the ``wactorz-node`` console script.
+
+    ``wactorz-node setup-local ...`` is the one-time, root-run setup of a node on
+    this machine (:mod:`.local_setup`); anything else starts a node.
+    """
+    given = sys.argv[1:] if argv is None else argv
+    if given[:1] == ["setup-local"]:
+        sys.exit(local_setup.main(given[1:]))
+    args = get_args(given)
     configure_logging(args)
     run(args)

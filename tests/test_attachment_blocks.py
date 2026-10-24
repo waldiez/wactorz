@@ -18,7 +18,10 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
 PDF = b"%PDF-1.7\n" + b"\x00" * 40
 
 
-def _ref(mime: str, size: int = 10, name: str = "file", file_id: str = "a" * 32) -> dict[str, Any]:
+ID = "a" * 32
+
+
+def _ref(mime: str, size: int = 10, name: str = "file", file_id: str = ID) -> dict[str, Any]:
     return {"id": file_id, "name": name, "mime": mime, "size": size}
 
 
@@ -32,7 +35,7 @@ class TestWhatTheModelCanRead:
 
         # Named first: without it the model cannot answer "what does shot.png
         # show", and there is nothing to flatten for a provider taking text only.
-        assert blocks[0] == {"type": "text", "text": "[attachment: shot.png]"}
+        assert blocks[0] == {"type": "text", "text": f"[attachment: shot.png (upload {ID})]"}
         assert blocks[1]["type"] == "image"
         assert blocks[1]["source"]["media_type"] == "image/png"
 
@@ -132,6 +135,21 @@ class TestOrdering:
         assert "one" in blocks[0]["text"]
         assert "two" in blocks[2]["text"]
 
+    def test_a_file_too_large_to_send_is_still_named_by_its_id(self) -> None:
+        """The model cannot read it, but an agent can: the id is how it is handed on."""
+        too_big = _ref("application/pdf", size=attachments.MAX_INLINE_BYTES + 1, name="big.pdf")
+
+        [note] = attachments.to_blocks([too_big], _reader(PDF))
+
+        assert note["text"].startswith(f"[attachment: big.pdf (upload {ID}) —")
+
+    def test_a_reference_without_an_id_is_named_alone(self) -> None:
+        [note, _image] = attachments.to_blocks(
+            [_ref("image/png", name="shot.png", file_id="")], _reader(PNG)
+        )
+
+        assert note["text"] == "[attachment: shot.png]"
+
     def test_nothing_attached_is_no_blocks(self) -> None:
         assert attachments.to_blocks([], _reader(PNG)) == []
 
@@ -142,7 +160,7 @@ class TestFlattening:
     def test_an_image_is_named_rather_than_dropped(self) -> None:
         blocks = attachments.to_blocks([_ref("image/png", name="shot.png")], _reader(PNG))
 
-        assert attachments.flatten(blocks) == "[attachment: shot.png]"
+        assert attachments.flatten(blocks) == f"[attachment: shot.png (upload {ID})]"
 
     def test_no_base64_survives_flattening(self) -> None:
         # The reason this exists: a provider flattening content with `str()`

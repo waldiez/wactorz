@@ -9,6 +9,7 @@ import { readingsFrom } from "../agents/nodeReadings";
 import type {
     AgentState,
     AlertPayload,
+    AnswerPayload,
     ChatMessage,
     HeartbeatPayload,
     HostStats,
@@ -29,6 +30,8 @@ export interface ServerEvents {
     alert: AlertPayload;
     spawn: SpawnPayload;
     chat: ChatMessage;
+    /** A person answered a question an agent asked, on some channel. */
+    answer: AnswerPayload;
     "qa-flag": QaFlagPayload;
     /** LLM cost + token + message count metrics from an agent. */
     metrics: MetricsPayload;
@@ -104,7 +107,7 @@ export class ServerEventRouter {
         });
     }
 
-    /** Fixed-shape agent topics: `agents/{id}/{heartbeat|status|alert|chat|spawn}`. */
+    /** Fixed-shape agent topics: `agents/{id}/{heartbeat|status|alert|chat|answer|spawn}`. */
     private _routeAgentEvent(topic: string, payload: unknown): boolean {
         if (/^agents\/.+\/heartbeat$/.test(topic)) {
             this.emit("heartbeat", normaliseHeartbeat(payload));
@@ -113,7 +116,9 @@ export class ServerEventRouter {
         } else if (/^agents\/.+\/alert$/.test(topic)) {
             this.emit("alert", normaliseAlert(payload));
         } else if (/^agents\/.+\/chat$/.test(topic)) {
-            this.emit("chat", normaliseChat(payload));
+            this.emit("chat", normaliseChat(payload, agentIdOf(topic)));
+        } else if (/^agents\/.+\/answer$/.test(topic)) {
+            this.emit("answer", normaliseAnswer(payload, agentIdOf(topic)));
         } else if (/^agents\/.+\/spawn$/.test(topic)) {
             this.emit("spawn", normaliseSpawn(payload));
         } else {
@@ -312,8 +317,36 @@ export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
     return out;
 }
 
-/** Normalise a raw chat payload; defaults `to` to "user" and synthesises an id when absent. */
-export function normaliseChat(p: unknown): ChatMessage {
+/** The `{id}` of an `agents/{id}/...` topic. */
+function agentIdOf(topic: string): string {
+    return topic.split("/")[1] ?? "";
+}
+
+/** The options a chat frame offers, as strings; none when the field is absent or not a list. */
+function optionsOf(raw: unknown): string[] | undefined {
+    if (!Array.isArray(raw)) {
+        return undefined;
+    }
+    const options = raw.map(o => str(o).trim()).filter(o => o !== "");
+    return options.length ? options : undefined;
+}
+
+/** What a chat frame says about the question it asks: who asked, the options,
+ *  and the channel it also went to. Each only when the frame carries it. */
+function questionFields(o: RawObj, agentId: string): Pick<ChatMessage, "agentId" | "options" | "channel"> {
+    const options = optionsOf(o["options"]);
+    const channel = optStr(o["channel"]);
+    return {
+        ...(agentId && { agentId }),
+        ...(options !== undefined && { options }),
+        ...(channel !== undefined && channel !== "dashboard" && { channel }),
+    };
+}
+
+/** Normalise a raw chat payload; defaults `to` to "user" and synthesises an id when absent.
+ *  `agentId` is the sender's id from the topic the frame arrived on, which an
+ *  answer to the frame's options has to name. */
+export function normaliseChat(p: unknown, agentId = ""): ChatMessage {
     const o = asObj(p);
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
     const source = optStr(o["source"]);
@@ -330,6 +363,20 @@ export function normaliseChat(p: unknown): ChatMessage {
         ...(surface !== undefined && { surface }),
         ...(surfaceLabel !== undefined && { surfaceLabel }),
         ...(brain !== undefined && { brain }),
+        ...questionFields(o, agentId),
+    };
+}
+
+/** Normalise a raw answer payload from `agents/{id}/answer`. */
+export function normaliseAnswer(p: unknown, agentId = ""): AnswerPayload {
+    const o = asObj(p);
+    return {
+        id: str(o["id"]),
+        agentId: agentId || str(o["agentId"] ?? o["agent_id"]),
+        option: str(o["option"]),
+        index: num(o["index"]) ?? 0,
+        channel: str(o["channel"]) || "dashboard",
+        timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
     };
 }
 

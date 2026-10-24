@@ -22,8 +22,11 @@ from .actor import (
     DEFAULT_ASK_TIMEOUT_S,
     Actor,
     ActorState,
+    AskError,
     Message,
     MessageType,
+    NoAnswerError,
+    NotFoundError,
     SupervisorStrategy,
     ask_payload,
     reply_value,
@@ -41,6 +44,13 @@ class ProtectedActorCollision(RuntimeError):
     actor and must not go on to start it, and a spawn that quietly did nothing
     would be indistinguishable from one that worked.
     """
+
+    def __init__(self, actor: Actor, existing: Actor) -> None:
+        super().__init__(
+            f"'{actor.name}' resolves to the same actor id as the running "
+            f"protected actor '{existing.name}' ({actor.actor_id[:8]}); "
+            "registering it would stop the original. Use a different name."
+        )
 
 
 # ── Supervision spec ──────────────────────────────────────────────────────────
@@ -128,11 +138,7 @@ class ActorRegistry:
                     # original. The orchestrator would go down and the spawn
                     # would report success. Callers reach this by any route, so
                     # the refusal belongs here rather than only at the spawn path.
-                    raise ProtectedActorCollision(
-                        f"'{actor.name}' resolves to the same actor id as the running "
-                        f"protected actor '{existing.name}' ({actor.actor_id[:8]}); "
-                        f"registering it would stop the original. Use a different name."
-                    )
+                    raise ProtectedActorCollision(actor, existing)
                 # Same deterministic actor_id (uuid5 of name) is being re-registered.
                 # The old instance's tasks (message loop, heartbeat loop, aiomqtt
                 # subscribe listeners spawned from setup()) are STILL RUNNING.
@@ -217,7 +223,7 @@ class ActorRegistry:
         """
         actor = self.find_by_name(target)
         if actor is None:
-            raise LookupError(f"no agent named {target!r} is running")
+            raise NotFoundError.agent(target)
         task_id = f"ask_{uuid.uuid4().hex[:12]}"
         async with self.reply_slot() as (slot_id, future):
             msg = Message(
@@ -227,13 +233,11 @@ class ActorRegistry:
                 payload=ask_payload(payload, task_id=task_id, reply_to=slot_id),
             )
             if not await actor.receive(msg):
-                raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+                raise AskError.mailbox_full(target)
             try:
                 reply = await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:
-                raise asyncio.TimeoutError(
-                    f"{target!r} did not answer within {timeout:g}s"
-                ) from None
+                raise NoAnswerError.from_agent(target, timeout) from None
         return reply_value(reply, task_id=task_id, target=target)
 
     @contextlib.asynccontextmanager

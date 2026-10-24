@@ -70,7 +70,7 @@ stt       = [
     "wyoming>=1.10.0",
 ]
 tts       = [
-    "edge-tts>=6.1.9",
+    "edge-tts>=7.3.1",
     "wyoming>=1.10.0",
 ]
 # Speakers and a microphone on the machine running Wactorz, for the branches

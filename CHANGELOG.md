@@ -52,6 +52,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Server speech works again.** Microsoft's read-aloud service, which edge-tts speaks to, began refusing the edge-tts release the lock took, so every reply meant to be spoken failed with `403` and the browser fell back to its own voice. `wactorz[tts]` now needs edge-tts 7.3.1 or later, which it accepts, so an install that already had an older one is upgraded rather than kept.
+
 - **Two chat turns at once each keep their own answer.** The turns one dashboard tab sends run at the same time, and they shared one reply buffer: a turn that ended while another was still streaming closed that one's stream on the page, and filed its text in the chat log under its own name. A slow agent made this rare; an answer read aloud through the machine's own speakers, which keeps its turn open until it has been said, made it the usual case. Each turn now answers through its own replies.
 
 - **`/agents` with anything after it works in the dashboard's chat.** `/agents restart <name>`, `/agents stop <name>`, `/agents delete <name>` and `/agents <keyword>` were answered by the server's own list of running agents, so the agent was not restarted, stopped or deleted, and the list was not filtered. Main answers them now, as it does on the other channels; `/stop` and `/delete` already worked. Where nothing else answers `/agents` (the minimal profile, or an orchestrator of your own that does not), the dashboard still lists the running agents.

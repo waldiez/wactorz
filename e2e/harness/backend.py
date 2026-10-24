@@ -46,8 +46,8 @@ LEFT_EMPTY = (
     "WACTORZ_MODEL_CODE_NODE",
     "WACTORZ_MODEL_CODE_ON_MAIN",
     # Voice: on `host` the backend would speak every reply through this
-    # machine's speakers and hold each turn open until it had, and the other
-    # branches reach services this suite does not run.
+    # machine's speakers, and the other branches reach services this suite does
+    # not run.
     "WACTORZ_STT",
     "WACTORZ_STT_URI",
     "WACTORZ_TTS",

@@ -33,6 +33,11 @@ from . import remote, speaker, spoken
 
 logger = logging.getLogger(__name__)
 
+#: Speech for turns that have already answered, while it is being made or
+#: played. Held so a task nothing else refers to is not collected mid-sentence,
+#: and so stopping can reach speech that has not started yet.
+_speeches: set[asyncio.Task[None]] = set()
+
 
 class TTSState:  # pylint: disable=too-few-public-methods
     """TTS capability and voice cache, mutated once at startup, read-only after."""
@@ -70,6 +75,7 @@ def setup(app: web.Application) -> None:
     app.router.add_get("/api/tts/voices", tts_voices_handler)
     app.router.add_post("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
+    app.on_cleanup.append(_quiet_on_cleanup)
     warn_if_the_room_will_stay_quiet()
     voice.on_change(app, warn_if_the_room_will_stay_quiet)
 
@@ -152,8 +158,9 @@ async def make_speech(text: str, asked_for: str = "") -> remote.Speech:
 
     voice = asked_for or configured or _tts_state.default_voice
     # Bounded like every other synthesiser: this one is reached over the network
-    # too, and it is on the path of a whole turn now that the machine can answer
-    # out loud -- a stream that stops arriving would hold that turn open.
+    # too, and it is on the path of every reply said out loud -- a stream that
+    # stops arriving would keep the room counted as spoken to, and its
+    # microphone shut.
     return await asyncio.wait_for(_made_here(text, voice), remote.TIMEOUT)
 
 
@@ -191,9 +198,46 @@ async def speak_here(text: str) -> None:
         logger.warning("[tts] Could not speak here: %s", exc)
 
 
+def speak_later(text: str) -> None:
+    """Say `text` through this machine's speakers, without the turn waiting for it.
+
+    The reply has reached whoever asked as soon as it is sent; holding the turn
+    open while the room hears it would hold the request that carried it, for as
+    long as the sentence takes to say. Replies still come out one at a time, in
+    the order they were given, behind the playback lock.
+
+    Counted as speaking from this call rather than from when the task first
+    runs, so a turn that starts listening in between does not hear the reply
+    begin. Released when the task is done however it ends -- a task cancelled
+    before it starts never runs its own code, so a release inside it would be
+    skipped and the room's microphone held shut for good.
+    """
+    if not text.strip():
+        return
+    intent = speaker.intend()
+    task = asyncio.create_task(speak_here(text))
+    _speeches.add(task)
+    task.add_done_callback(_speeches.discard)
+    task.add_done_callback(lambda _done: intent.release())
+
+
 def stop_speaking() -> None:
-    """Stop anything being said out loud, for a turn someone cancelled."""
+    """Stop anything being said out loud, for a turn someone cancelled.
+
+    Speech not yet started is cancelled as well as the sentence playing: a
+    reply waiting for the speakers would otherwise begin the moment the stopped
+    one ended, after the interface had said everything stopped.
+    """
+    for task in list(_speeches):
+        task.cancel()
     speaker.silence()
+
+
+async def _quiet_on_cleanup(_app: web.Application) -> None:
+    """Stop and wait out the speech still pending when the server stops."""
+    pending = list(_speeches)
+    stop_speaking()
+    await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _reported_voice() -> str:

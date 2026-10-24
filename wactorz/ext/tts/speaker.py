@@ -128,12 +128,40 @@ def about_to_speak() -> Iterator[None]:
     Counted rather than flagged: two turns can be in flight, and the first to
     finish must not declare the room quiet while the second is still speaking.
     """
-    global _intending
-    _intending += 1
+    intent = intend()
     try:
         yield
     finally:
-        _intending -= 1
+        intent.release()
+
+
+class Intent:
+    """One turn counted as speaking, until it is released. See `intend`."""
+
+    def __init__(self) -> None:
+        self._held = True
+
+    def release(self) -> None:
+        """Stop counting this turn. Releasing twice releases once.
+
+        So a caller that reaches its release by two paths cannot declare the
+        room quiet while another turn is still speaking.
+        """
+        global _intending
+        if self._held:
+            self._held = False
+            _intending -= 1
+
+
+def intend() -> Intent:
+    """Count one turn as speaking until the returned intent is released.
+
+    For speech that outlives the code deciding to make it, where a ``with``
+    block cannot span the gap.
+    """
+    global _intending
+    _intending += 1
+    return Intent()
 
 
 def silence() -> None:
@@ -169,7 +197,8 @@ async def play(audio: bytes) -> None:
     Off the event loop, because playback lasts as long as the speech does and
     the loop has a dashboard to keep answering in the meantime. Waits for any
     speech already going out, then bounded by how long this audio should take:
-    a device that stops accepting samples otherwise holds the turn for ever.
+    a device that stops accepting samples otherwise holds the speakers for
+    ever, and every reply waiting behind them.
     """
     if not AUDIO:
         raise NoSpeakers.uninstalled()

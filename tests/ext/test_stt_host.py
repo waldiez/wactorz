@@ -667,10 +667,7 @@ class TestOneUtterancePerTurn:
         spoken: list[str] = []
         monkeypatch.setattr(chat_module.voice_settings, "speaking", lambda: "host")
 
-        async def say(text: str) -> None:
-            spoken.append(text)
-
-        monkeypatch.setattr(chat_module.tts, "speak_here", say)
+        monkeypatch.setattr(chat_module.tts, "speak_later", spoken.append)
 
         reply, chunk, end = chat_module._also_spoken_here(
             _nothing_said(), _nothing_said(), _nothing_ended()

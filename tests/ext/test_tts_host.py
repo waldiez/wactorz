@@ -266,10 +266,7 @@ class TestWhichTurnsAreSpokenAloud:
     def _host(monkeypatch: pytest.MonkeyPatch, spoken: list[str]) -> None:
         monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
-        async def say(text: str) -> None:
-            spoken.append(text)
-
-        monkeypatch.setattr(chat.tts, "speak_here", say)
+        monkeypatch.setattr(chat.tts, "speak_later", spoken.append)
 
     async def test_a_streamed_answer_is_spoken_once_whole(
         self, monkeypatch: pytest.MonkeyPatch
@@ -355,10 +352,7 @@ class TestATurnActuallyReachesTheSpeakers:
         spoken: list[str] = []
         monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
-        async def say(text: str) -> None:
-            spoken.append(text)
-
-        monkeypatch.setattr(chat.tts, "speak_here", say)
+        monkeypatch.setattr(chat.tts, "speak_later", spoken.append)
         replies: list[Any] = []
 
         # Driven through `route_chat` rather than the wrapper, so that removing
@@ -374,10 +368,7 @@ class TestATurnActuallyReachesTheSpeakers:
         spoken: list[str] = []
         monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
-        async def say(text: str) -> None:
-            spoken.append(text)
-
-        monkeypatch.setattr(chat.tts, "speak_here", say)
+        monkeypatch.setattr(chat.tts, "speak_later", spoken.append)
         replies: list[Any] = []
 
         async def chunk(_text: str) -> None:
@@ -400,10 +391,7 @@ class TestATurnActuallyReachesTheSpeakers:
         spoken: list[str] = []
         monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
-        async def say(text: str) -> None:
-            spoken.append(text)
-
-        monkeypatch.setattr(chat.tts, "speak_here", say)
+        monkeypatch.setattr(chat.tts, "speak_later", spoken.append)
 
         reply, chunk, end = chat._also_spoken_here(_collect([]), _collect([]), _ending())
         assert chunk is not None and end is not None
@@ -417,10 +405,7 @@ class TestATurnActuallyReachesTheSpeakers:
         spoken: list[str] = []
         monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "server")
 
-        async def say(text: str) -> None:
-            spoken.append(text)
-
-        monkeypatch.setattr(chat.tts, "speak_here", say)
+        monkeypatch.setattr(chat.tts, "speak_later", spoken.append)
 
         await chat.route_chat("/help", _collect([]))
 

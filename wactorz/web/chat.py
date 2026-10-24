@@ -385,7 +385,7 @@ def _also_spoken_here(reply_fn, stream_fn, stream_end_fn):
         # A turn can end with nothing to say -- a command that only acted, or a
         # reply that timed out -- and silence is the right answer to that.
         if text:
-            await tts.speak_here(text)
+            tts.speak_later(text)
 
     async def gathering_chunk(chunk: str) -> None:
         said.append(chunk)
@@ -399,7 +399,7 @@ def _also_spoken_here(reply_fn, stream_fn, stream_end_fn):
         # Only what streamed. A turn answered whole has already been spoken by
         # the reply above, and saying it again here would say it twice.
         if whole:
-            await tts.speak_here(whole)
+            tts.speak_later(whole)
 
     # Every callback, not only the streaming ones: a slash command and an agent
     # that answers in one piece both reply through `reply_fn` even when the

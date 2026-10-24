@@ -1,35 +1,16 @@
-"""
-test_supervision.py — Wactorz Supervisor stress test
-=====================================================
+"""The supervisor's crash detection: a FAILED state, an error storm, heartbeat silence.
 
-Tests all three crash-detection modes added in the supervision overhaul.
-Needs NO MQTT broker, NO LLM, NO database.  Run with:
-
-    python test_supervision.py
-
-Expected output (in order):
-    [PASS] Test 1 — FAILED state detected and restarted
-    [PASS] Test 2 — Error storm detected and restarted
-    [PASS] Test 3 — Heartbeat silence detected and restarted
-    [PASS] Test 4 — Intentional stop NOT restarted
-    [PASS] Test 5 — Intentional delete NOT restarted
-    [PASS] Test 5b — release() unlinks even a FAILED actor
-    [PASS] Test 6 — Repeated crashes slow restarts down (no tight loop, no giving up)
-
-Each test is isolated and prints a clear PASS / FAIL line.
+And what it leaves alone: an actor stopped or deleted on purpose. Needs no
+broker, no LLM and no database.
 """
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
 import asyncio
 import logging
-import sys
 import time
 from collections.abc import Callable
 from typing import Any
-
-PASS = "\033[32m[PASS]\033[0m"
-FAIL = "\033[31m[FAIL]\033[0m"
 
 # ── Silence framework noise so test output is readable ──────────────────────
 logging.basicConfig(
@@ -97,21 +78,8 @@ async def settle(sup: Supervisor, cycles: int = 4) -> None:
 
 
 def result(label: str, ok: bool) -> None:
-    """Print the PASS/FAIL line *and* assert, so pytest can see a failure.
-
-    Printing alone is why this file used to pass no matter what the supervisor
-    did: `_any_failed` is only consulted by the __main__ runner below, which
-    pytest never calls. Mirrors `assert_eq` in test_supervisor.py.
-    """
-    tag = PASS if ok else FAIL
-    print(f"  {tag}  {label}")
-    if not ok:
-        # Keep the standalone runner's "report everything" behaviour (see main).
-        result._any_failed = True
+    """Assert ``ok``, with ``label`` as what failed."""
     assert ok, label
-
-
-result._any_failed = False
 
 
 # ── Minimal actor base that skips MQTT entirely ───────────────────────────────
@@ -148,7 +116,6 @@ class _TestActor(Actor):
 
 
 async def test1_failed_state() -> None:
-    print("\nTest 1 — FAILED state detected and restarted")
 
     spawn_count = {"n": 0}
 
@@ -184,7 +151,6 @@ async def test1_failed_state() -> None:
 
 
 async def test2_error_storm() -> None:
-    print("\nTest 2 — Error storm detected and restarted")
 
     spawn_count = {"n": 0}
 
@@ -218,7 +184,6 @@ async def test2_error_storm() -> None:
 
 
 async def test3_heartbeat_silence() -> None:
-    print("\nTest 3 — Heartbeat silence detected and restarted")
 
     spawn_count = {"n": 0}
 
@@ -256,7 +221,6 @@ async def test3_heartbeat_silence() -> None:
 
 
 async def test4_intentional_stop() -> None:
-    print("\nTest 4 — Intentional stop NOT restarted")
 
     spawn_count = {"n": 0}
 
@@ -295,7 +259,6 @@ async def test4_intentional_stop() -> None:
 
 
 async def test5_intentional_delete() -> None:
-    print("\nTest 5 — Intentional delete NOT restarted")
 
     spawn_count = {"n": 0}
 
@@ -342,7 +305,6 @@ async def test5b_release_alone_unlinks() -> None:
     disabled entirely. This one leaves the actor FAILED, which the
     state guard does *not* skip, so only the retired flag can prevent a restart.
     """
-    print("\nTest 5b — release() unlinks even a FAILED actor")
 
     spawn_count = {"n": 0}
 
@@ -381,7 +343,6 @@ async def test5b_release_alone_unlinks() -> None:
 
 
 async def test6_repeated_crashes() -> None:
-    print("\nTest 6 — Repeated crashes slow restarts down (no tight loop, no giving up)")
 
     spawn_count = {"n": 0}
 
@@ -429,42 +390,3 @@ async def test6_repeated_crashes() -> None:
         "No quick spawns once slowed",
         count_after_pause == count_at_slowdown,
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Runner
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-async def main() -> None:
-    print("=" * 60)
-    print("  Wactorz Supervisor Test Suite")
-    print("=" * 60)
-
-    for test in (
-        test1_failed_state,
-        test2_error_storm,
-        test3_heartbeat_silence,
-        test4_intentional_stop,
-        test5_intentional_delete,
-        test5b_release_alone_unlinks,
-        test6_repeated_crashes,
-    ):
-        # result() asserts now, so catch here to keep this runner's documented
-        # "run them all, report at the end" behaviour. pytest isolates them itself.
-        try:
-            await test()
-        except AssertionError:
-            result._any_failed = True
-
-    print()
-    if result._any_failed:
-        print("  ❌  Some tests FAILED — see above.")
-        sys.exit(1)
-    else:
-        print("  ✅  All tests passed.")
-        sys.exit(0)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

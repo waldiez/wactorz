@@ -15,6 +15,7 @@ import type { Attachment, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import type { ConnState } from "./ui/dashboard/types";
 import type { TTSVoice } from "./ext/tts/types";
+import type { Route } from "./router";
 
 /** Detail payload for each application event, keyed by event name. `void` = no detail. */
 export interface AppEventMap {
@@ -28,6 +29,10 @@ export interface AppEventMap {
     "af-stream-chunk": { chunk: string; from: string };
     "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
+    /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
+    "af-answer-option": { id: string; agentId: string; option: string; index: number };
+    /** A question was answered, here or on another channel: show the pick, take the buttons off. */
+    "af-answered": { id: string; option: string };
     /** Everything was wiped; `survivors` are the ids of the agents still running. */
     "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have
@@ -40,9 +45,15 @@ export interface AppEventMap {
      *  entries: they arrive off the socket and are validated where they are
      *  turned into rows, not here. */
     "af-app-log": { entries: unknown[] };
+    /** The address changed (Back, a link, a typed hash): open what it names. */
+    "af-route": Route;
+    /** The dashboard opened a view, or another conversation in the chat: the address follows. */
+    "af-view-changed": Route;
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;
+    /** Someone stopped the turn: stop saying it, in either voice. */
+    "tts-stop": void;
 }
 
 /** Dispatch an application event; the detail argument is required iff the map entry isn't `void`. */

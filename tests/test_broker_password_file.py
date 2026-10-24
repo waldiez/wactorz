@@ -101,7 +101,7 @@ def _compose_broker(name: str) -> str:
 
 
 def _tested_broker() -> str:
-    text = (ROOT / ".github" / "tools" / "Dockerfile").read_text(encoding="utf-8")
+    text = (ROOT / "ci" / "tools" / "Dockerfile").read_text(encoding="utf-8")
     found = re.search(rf"^FROM {_BROKER_IMAGE} AS mosquitto$", text, re.MULTILINE)
     assert found is not None, "the tools Dockerfile pins mosquitto by tag and digest"
     return found.group(1)
@@ -114,5 +114,5 @@ def test_compose_runs_the_broker_the_broker_tests_run(name: str) -> None:
     # on another release would be running a list nothing had tried on it.
     assert _compose_broker(name) == _tested_broker(), (
         f"Dependabot moved one of them: give {name}'s mosquitto and the `AS mosquitto` "
-        "line in .github/tools/Dockerfile the same image, then run `make test-broker`"
+        "line in ci/tools/Dockerfile the same image, then run `make test-broker`"
     )

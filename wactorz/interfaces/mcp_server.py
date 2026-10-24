@@ -40,12 +40,18 @@ from wactorz.core.integrations.google_calendar_mcp import (
     GoogleCalendarMcpClient,
 )
 
+
+class McpMissingError(SystemExit):
+    """The server cannot start without the mcp package."""
+
+    def __init__(self) -> None:
+        super().__init__("The 'mcp' package is required. Install with: pip install wactorz[mcp]")
+
+
 try:
     from mcp.server.fastmcp import FastMCP
 except ImportError as exc:
-    raise SystemExit(
-        "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
-    ) from exc
+    raise McpMissingError() from exc
 
 logger = logging.getLogger(__name__)
 

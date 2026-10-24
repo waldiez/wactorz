@@ -16,6 +16,7 @@ import {
     alertKind,
     alertFeedItem,
     chatFeedItem,
+    answerFeedItem,
     stoppedFeedItem,
     qaFlagFeedItem,
     logMessage,
@@ -121,6 +122,44 @@ describe("buildNameIndex", () => {
     it("prefers agentName when name is absent", () => {
         const items: LogFeedItem[] = [{ type: "spawned", agent_id: "uuid-3", agentName: "Kitchen" }];
         expect(buildNameIndex(items).get("uuid-3")).toBe("Kitchen");
+    });
+});
+
+describe("mapLogFeedItem — an answer", () => {
+    it("shows the pick as the person's chat row", () => {
+        const item: LogFeedItem = {
+            type: "answer",
+            agent_id: "uuid-1",
+            name: "hvac",
+            option: "yes",
+            timestamp: 5,
+        };
+        expect(mapLogFeedItem(item)).toEqual({
+            type: "chat",
+            label: "✓ yes",
+            agentName: "hvac",
+            timestamp: 5000,
+            role: "user",
+        });
+    });
+
+    it("drops one with nothing picked", () => {
+        expect(mapLogFeedItem({ type: "answer", agent_id: "uuid-1", timestamp: 5 })).toBeNull();
+    });
+});
+
+describe("answerFeedItem", () => {
+    it("names the pick and where it was made", () => {
+        expect(
+            answerFeedItem({
+                id: "q1",
+                agentId: "a1",
+                option: "yes",
+                index: 0,
+                channel: "telegram",
+                timestampMs: 7,
+            }),
+        ).toEqual({ type: "chat", label: "✓ yes (telegram)", agentName: "a1", timestamp: 7, role: "user" });
     });
 });
 
@@ -325,15 +364,29 @@ describe("live MQTT event feed builders", () => {
     });
 
     it("nodeHeartbeatFeedItem pluralises the agent count", () => {
-        expect(nodeHeartbeatFeedItem({ node: "n", agents: ["x"] } as NodeHeartbeatPayload, 1).label).toBe(
-            "node online · 1 agent",
-        );
-        expect(
-            nodeHeartbeatFeedItem({ node: "n", agents: ["x", "y"] } as NodeHeartbeatPayload, 1).label,
-        ).toBe("node online · 2 agents");
-        expect(nodeHeartbeatFeedItem({ node: "n", agents: [] } as NodeHeartbeatPayload, 1).label).toBe(
-            "node online · 0 agents",
-        );
+        const label = (agents: string[]) =>
+            nodeHeartbeatFeedItem({ node: "n", agents } as NodeHeartbeatPayload, true, 1).label;
+
+        expect(label(["x"])).toBe("node online · 1 agent");
+        expect(label(["x", "y"])).toBe("node online · 2 agents");
+        expect(label([])).toBe("node online · 0 agents");
+    });
+
+    it("nodeHeartbeatFeedItem makes a node coming online news, and every report after a heartbeat", () => {
+        const payload = { node: "rpi", agents: ["flic"] } as NodeHeartbeatPayload;
+
+        expect(nodeHeartbeatFeedItem(payload, true, 1)).toEqual({
+            type: "health",
+            label: "node online · 1 agent",
+            agentName: "rpi",
+            timestamp: 1,
+        });
+        expect(nodeHeartbeatFeedItem(payload, false, 2)).toEqual({
+            type: "heartbeat",
+            label: "heartbeat · 1 agent",
+            agentName: "rpi",
+            timestamp: 2,
+        });
     });
 });
 

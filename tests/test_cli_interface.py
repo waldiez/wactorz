@@ -15,6 +15,7 @@ own modules, so these run on a checkout installed with `[dev]` alone.
 
 import asyncio
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -22,6 +23,7 @@ import pytest
 from wactorz.agents.main import MainActor
 from wactorz.core.registry import ActorRegistry
 from wactorz.core.turns import current_agent, current_turn
+from wactorz.interfaces.chat import cli as cli_module
 from wactorz.interfaces.chat.cli import CLIInterface
 from wactorz.orchestration import MainOrchestrator
 
@@ -283,6 +285,24 @@ class TestDeployPkg:
 
         assert "[error]" in out
         assert not actor.installer_calls
+
+    async def test_typing_the_packages_allows_them_before_they_are_installed(
+        self,
+        actor: _MainActor,
+        drive: Any,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The operator named them, so the installer is not to ask the operator again.
+        target = SimpleNamespace(name="rpi", host="10.0.0.5")
+        monkeypatch.setattr(cli_module, "deploy_target", lambda _n: target)
+
+        await drive(_cli(actor), ["/deploy-pkg rpi wactorz-unlisted-probe"], capsys)
+
+        assert [(c["action"], c["packages"]) for c in actor.installer_calls] == [
+            ("packages_allow", ["wactorz-unlisted-probe"]),
+            ("node_install", ["wactorz-unlisted-probe"]),
+        ]
 
 
 class TestDeploy:

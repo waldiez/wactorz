@@ -5,12 +5,15 @@
 /* ── Settings view ────────────────────────────────────────────── */
 .af-settings {
   padding: 24px 28px;
-  max-width: 680px;
   display: flex;
   flex-direction: column;
   gap: 28px;
   overflow-y: auto;
   height: 100%;
+}
+.af-settings > * {
+  box-sizing: border-box;
+  max-width: 680px;
 }
 .af-settings-title {
   font-size: 16px;
@@ -54,43 +57,17 @@
 .af-settings-field .af-cfg-input {
   flex: 1;
 }
-.af-settings-origin {
-  font-size: 11px;
-  flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.2);
-  transition: color 0.15s;
-}
-.af-settings-origin.set {
-  color: #34d399;
-}
 .af-settings-actions {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-top: 2px;
 }
-.af-settings-msg {
-  font-size: 11px;
-}
 .af-settings-note {
   font-size: 11px;
   color: #fbbf24;
   margin: 4px 0 0;
 }
-.af-settings-eye {
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0 4px;
-  font-size: 14px;
-  line-height: 1;
-  color: #9ca3af;
-  flex-shrink: 0;
-}
-.af-settings-eye:hover {
-  color: #e5e7eb;
-}
-
 .af-cfg-input {
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.14);

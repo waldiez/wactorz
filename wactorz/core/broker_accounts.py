@@ -22,9 +22,10 @@ add-on's embedded broker), and it is an allow-list. A node account may use:
   manifests, tasks by name and their replies -- except ``agents/+/commands``,
   which stops server-side agents (a node's own are stopped through its own
   ``nodes/<name>/stop``);
-- ``main/llm_request`` and ``main/reply/#``, to write only: it asks main's model
-  and answers the tasks main sends, and reads neither, so it cannot watch what
-  other nodes answer or learn a reply topic to forge into;
+- ``main/llm_request``, ``main/history_request`` and ``main/reply/#``, to write
+  only: it asks main's model, reads main's stored history, and answers the tasks
+  main sends, and reads none of them, so it cannot watch what other nodes answer
+  or learn a reply topic to forge into;
 - the data topics agents use by convention (`NODE_TOPICS`), and whatever
   ``WACTORZ_NODE_TOPICS`` adds. Agent code picks its own topics, so one outside
   these is refused by the broker, silently, until its prefix is added: that is
@@ -245,8 +246,9 @@ def acl_text(
             "# What every host's agents share, except the commands that stop the server's.\n"
             "topic readwrite agents/#\n"
             "topic deny agents/+/commands\n"
-            "# Asking main's model and answering main's tasks: written, never read.\n"
+            "# Asking main's model and history, and answering main's tasks: written, never read.\n"
             "topic write main/llm_request\n"
+            "topic write main/history_request\n"
             "topic write main/reply/#\n"
             "# Data its agents publish and read.\n"
             f"{data}"

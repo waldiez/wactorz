@@ -7,6 +7,9 @@ whichever machine the agent moves to — and the two machines need not be runnin
 the same Python. JSON is what survives that trip, and what can be read back by a
 node that was redeployed from a newer release.
 
+A date, a set, a tuple or a dict keyed by numbers is written in a marked form
+that is read back into the value itself (see `wactorz.core.state_codec`).
+
 The same trade-off is why a migration drops what it cannot serialise rather than
 failing: a counter, a calibration value or a threshold travels, and a cv2 capture
 does not survive a process restart either way.
@@ -26,6 +29,7 @@ from typing import Any
 from ..core.blobs import Blobs, is_marker, marker_for
 from ..core.deferred_write import LARGE_STATE_BYTES, DeferredWriter
 from ..core.paths import agent_state_dir
+from ..core.state_codec import decode_state
 from ..core.state_snapshot import json_safe
 
 logger = logging.getLogger(__name__)
@@ -221,6 +225,7 @@ class JsonState:
         logger.info("[%s] Loaded persistent state.", self._name)
         if not isinstance(loaded, dict):
             return {}
+        loaded = decode_state(loaded)
         if self._blobs is None:
             return loaded
         return self._unpack(self._blobs, loaded)

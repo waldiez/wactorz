@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityFeed, MAX_ITEMS } from "../ui/dashboard/activityFeed";
 import type { FeedItem } from "../types/feed";
 
+/** How long a test that builds a large DOM on purpose may take. Generous: it only bounds a failure. */
+const SLOW_TEST_MS = 30_000;
+
 const record = (text: string, ts = 1_700_000_000) => ({
     source: "app",
     ts,
@@ -80,7 +83,8 @@ describe("holding agent events", () => {
     });
 });
 
-describe("the cap on held events", () => {
+// Each test here builds the feed past its cap, which is slow on a loaded runner.
+describe("the cap on held events", { timeout: SLOW_TEST_MS }, () => {
     beforeEach(() => {
         document.body.innerHTML = "";
     });

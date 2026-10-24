@@ -30,8 +30,8 @@ through main: one node is not trusted to run code on another.
 
 import asyncio
 import hashlib
-import json
 import logging
+import os
 import re
 import struct
 import time
@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from .blobs import BLOB_MARK, encoder_for, encoder_named
+from .state_codec import NotJson, json_form
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +119,8 @@ def wait_for(total_bytes: int) -> float:
 
 def _is_json(value: Any) -> bool:
     try:
-        json.dumps(value)
-    except (TypeError, ValueError):
+        json_form(value)
+    except NotJson:
         return False
     return True
 
@@ -141,8 +142,8 @@ def cannot_travel(values: Mapping[str, Any], *, code_allowed: bool) -> list[str]
 
 
 def json_part(values: Mapping[str, Any]) -> dict[str, Any]:
-    """The values of ``values`` that travel as JSON, without the blobs and the rest."""
-    return {key: value for key, value in values.items() if _is_json(value)}
+    """The values of ``values`` that travel as JSON, as they are written, without the blobs and the rest."""
+    return {key: json_form(value) for key, value in values.items() if _is_json(value)}
 
 
 @dataclass
@@ -170,7 +171,7 @@ def pack(values: Mapping[str, Any], *, code_allowed: bool) -> Packed:
     packed = Packed()
     for key, value in values.items():
         if _is_json(value):
-            packed.state[key] = value
+            packed.state[key] = json_form(value)
             continue
         encoder = encoder_for(value)
         if encoder is None or (encoder.runs_code and not code_allowed):
@@ -268,6 +269,23 @@ async def send(
         topic = topic_for(sha)
         for chunk in chunks(data):
             await publish(topic, chunk)
+
+
+async def send_file(path: Path, topic: str, publish: Publish) -> None:
+    """Publish the file at ``path`` in chunks on ``topic``, reading one chunk at a time.
+
+    For a file too large to hold whole, such as a model: what is in memory at
+    once is one chunk, whatever the size of the file.
+    """
+    file = await asyncio.to_thread(path.open, "rb")
+    try:
+        size = await asyncio.to_thread(lambda: os.fstat(file.fileno()).st_size)
+        count = max(1, -(-size // CHUNK_BYTES))
+        for index in range(count):
+            part = await asyncio.to_thread(file.read, CHUNK_BYTES)
+            await publish(topic, _HEADER.pack(index, count) + part)
+    finally:
+        file.close()
 
 
 # ── Receiving ─────────────────────────────────────────────────────────────────

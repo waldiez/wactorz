@@ -89,16 +89,4 @@ export function listenForPicks(feed: HTMLElement, narrow: Narrow): void {
         },
         true,
     );
-    // Enter or Space on a pick is the button's own click; the row must not
-    // also take the key as its cue to open.
-    feed.addEventListener(
-        "keydown",
-        e => {
-            const onPick = (e.target as HTMLElement | null)?.closest(".af-feed-pick");
-            if (onPick && (e.key === "Enter" || e.key === " ")) {
-                e.stopPropagation();
-            }
-        },
-        true,
-    );
 }

@@ -260,7 +260,7 @@ class GmailMcpClient(GoogleMcpClient):
     async def _rest_get_thread(self, arguments: dict) -> str:
         thread_id = arguments.get("threadId") or arguments.get("id") or arguments.get("thread_id")
         if not thread_id:
-            raise GoogleRestError("Missing thread id")
+            raise GoogleRestError.missing_id("thread")
         status, data = await self._rest_request(
             "GET",
             f"/users/me/threads/{quote(str(thread_id), safe='')}",

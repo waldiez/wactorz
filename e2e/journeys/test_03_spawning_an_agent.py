@@ -15,11 +15,11 @@ def test_main_starts_the_agent_it_was_asked_for(
 ) -> None:
     dashboard.say("please start a greeter", to="main")
 
-    # What the model wrote, the block that asks for the agent included, and
+    # What the model wrote, without the block that asks for the agent, and
     # then main's own account of what it did with it.
     dashboard.expect_like(
         "main",
-        r"I'll set that up\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"I'll set that up\.\n+"
         r"ℹ️ Spawned 'greeter' — will auto-restore on restart",
     )
     dashboard.wait_for_card("greeter")
@@ -51,7 +51,7 @@ def test_an_agent_that_ends_itself_leaves_the_dashboard_once(
     dashboard.say("start a finisher here", to="main")
     dashboard.expect_like(
         "main",
-        r"Starting it\.\n<spawn>\n\{.*\}\n</spawn>\n\n"
+        r"Starting it\.\n+"
         r"ℹ️ Spawned 'finisher' — will auto-restore on restart",
     )
     dashboard.watch_card("finisher")
@@ -83,7 +83,7 @@ def test_a_one_shot_schedule_leaves_the_dashboard_once_it_is_done(
     # A once-schedule ends itself from a task of its own after it is done. It may
     # be gone before the page draws it; whatever was drawn must go and stay gone.
     dashboard.say("start a reminder here", to="main")
-    dashboard.expect_like("main", r"(?s)Setting it\.\n<spawn>\n\{.*\}\n</spawn>.*")
+    dashboard.expect_like("main", r"(?s)Setting it\..*")
     dashboard.watch_card("reminder")
 
     waiting.until(

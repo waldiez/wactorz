@@ -19,6 +19,7 @@ ask the detector directly and to list what is registered.
 import argparse
 
 from agent import detect
+from model import STATE_DIR
 
 import wactorz
 
@@ -42,7 +43,7 @@ def main(argv: list[str] | None = None) -> None:
         web=True,
         minimal=not args.with_main,
         llm=args.llm,
-        state_dir="./state",
+        state_dir=STATE_DIR,
     )
 
 

@@ -27,11 +27,12 @@ from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
-from ..prompts.planner_prompts import decompose_prompt
+from ..prompts.planner_prompts import NODE_PLACEMENT_RULES, decompose_prompt
 from .cache import PLAN_CACHE_KEY, select_cached_plan, with_plan_cached
 from .context import ContextMixin
 from .detection import is_pipeline_request
 from .execution import ExecutionMixin
+from .nodes import nodes_section
 from .parsing import extract_json_array, loads_lenient, task_hash
 from .pipeline import PipelineMixin
 from .validation import validate_pipeline_code
@@ -503,9 +504,12 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # ── Gather live topic samples for schema context ──────────────────
         topic_schema_ctx = await self._topic_schema_context()
 
+        main = find_main_actor(self._registry) if self._registry else None
         prompt = decompose_prompt(self._prompt_fragments).format(
             workers_desc=workers_desc,
             topic_schema_ctx=topic_schema_ctx,
+            nodes_ctx=f"\nNODES (the machines an agent can run on):\n{nodes_section(main)}\n\n"
+            f"{NODE_PLACEMENT_RULES}\n",
             task=task,
         )
 

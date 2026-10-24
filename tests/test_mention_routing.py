@@ -23,6 +23,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.delegation import DelegationManager
 from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
 
@@ -85,9 +86,12 @@ class _ReplyTopic:
         self._answer = answer
         self._times_out = times_out
         self.opened = 0
+        #: The node each reply channel was opened for, whose answer it takes.
+        self.nodes: list[str] = []
 
-    def __call__(self) -> "_ReplyTopic":
+    def __call__(self, node: str) -> "_ReplyTopic":
         self.opened += 1
+        self.nodes.append(node)
         return self
 
     async def __aenter__(self) -> tuple[str, Any]:
@@ -120,6 +124,7 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.migration = Migration(main, main.nodes)
         main.spawns = SpawnService(main)
         main.delegation = DelegationManager(main)
         main.lifecycle = LifecycleService(main)
@@ -127,6 +132,7 @@ class _Main:
         main._known_nodes = dict(nodes or {})
         main._conversation_history = []
         setattr(main, "_registry", _Registry(running, catalogue, appears_after_spawn))
+        setattr(main, "_get_spawn_registry", dict)
 
         self.delegated: list[tuple[str, str]] = []
         self.published: list[tuple[str, Any]] = []

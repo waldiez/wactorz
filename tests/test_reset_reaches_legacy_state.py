@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from wactorz import reset as _reset
+from wactorz.core import agent_reset
 from wactorz.core.actor import Actor
-from wactorz.web import api_reset
 
 CHAT = "conversation_history"
 TURNS = [{"role": "user", "content": "turn on the living room light"}]
@@ -59,7 +59,7 @@ class TestAFactoryResetClearsTheLegacyCopy:
         actor = _actor_with_legacy_state(tmp_path, conversation_history=TURNS)
         assert actor.recall(CHAT) == TURNS  # the state before the wipe
 
-        api_reset.forget_legacy_state(actor)
+        agent_reset.forget_legacy_state(actor)
 
         assert actor.recall(CHAT, []) == []
 
@@ -69,7 +69,7 @@ class TestAFactoryResetClearsTheLegacyCopy:
         # persist writes the file back from that dict.
         actor = _actor_with_legacy_state(tmp_path, conversation_history=TURNS, _user_facts={"a": 1})
 
-        api_reset.forget_legacy_state(actor)
+        agent_reset.forget_legacy_state(actor)
 
         assert not actor._persistent_state
 
@@ -79,14 +79,14 @@ class TestAFactoryResetClearsTheLegacyCopy:
         actor = _actor_with_legacy_state(tmp_path)
         del actor._persistent_state
 
-        api_reset.forget_legacy_state(actor)  # must not raise
+        agent_reset.forget_legacy_state(actor)  # must not raise
 
 
 class TestAChatResetClearsOnlyTheChatKeys:
     def test_it_drops_the_conversation(self, tmp_path: Path) -> None:
         actor = _actor_with_legacy_state(tmp_path, conversation_history=TURNS)
 
-        api_reset.forget_legacy_state(actor, api_reset.CHAT_STATE_KEYS)
+        agent_reset.forget_legacy_state(actor, agent_reset.CHAT_STATE_KEYS)
 
         assert actor.recall(CHAT, []) == []
 
@@ -95,7 +95,7 @@ class TestAChatResetClearsOnlyTheChatKeys:
         # nothing else, so anything else in the legacy dict has to survive.
         actor = _actor_with_legacy_state(tmp_path, conversation_history=TURNS, _user_facts={"a": 1})
 
-        api_reset.forget_legacy_state(actor, api_reset.CHAT_STATE_KEYS)
+        agent_reset.forget_legacy_state(actor, agent_reset.CHAT_STATE_KEYS)
 
         assert actor._persistent_state == {"_user_facts": {"a": 1}}
 

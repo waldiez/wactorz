@@ -133,6 +133,14 @@ class GoogleMcpConfig:
 class GoogleRestError(Exception):
     """A Google REST API call returned an error status."""
 
+    @classmethod
+    def missing_id(cls, what: str) -> GoogleRestError:
+        return cls(f"Missing {what} id")
+
+    @classmethod
+    def not_authenticated(cls, label: str) -> GoogleRestError:
+        return cls(f"Not authenticated for Google {label}")
+
 
 def format_mcp_content(result: Any) -> str:
     if getattr(result, "structuredContent", None) is not None:
@@ -282,11 +290,16 @@ def _make_callback_handler(config: GoogleMcpConfig):
     return _wait_for_oauth_callback
 
 
+class NeedsLoginError(RuntimeError):
+    """A Google MCP that has no token yet, asked for one where nobody can consent."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__(f"{label} MCP needs interactive authorization; run login() once first")
+
+
 def _make_noninteractive_handler(config: GoogleMcpConfig):
     async def _handler(*_args, **_kwargs):
-        raise RuntimeError(
-            f"{config.label} MCP needs interactive authorization; run login() once first"
-        )
+        raise NeedsLoginError(config.label)
 
     return _handler
 
@@ -608,7 +621,7 @@ class GoogleMcpClient:
     ) -> tuple[int, dict[str, Any]]:
         token = self._access_token()
         if not token:
-            raise GoogleRestError(f"Not authenticated for Google {self.config.label}")
+            raise GoogleRestError.not_authenticated(self.config.label)
         url = path if path.startswith("http") else f"{self.config.api_base}{path}"
         status, data = await self._http(method, url, token, params, json_body)
         if status == 401:

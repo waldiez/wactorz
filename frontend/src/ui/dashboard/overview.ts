@@ -18,7 +18,7 @@ import {
     type StatCardData,
     type AgentAction,
 } from "./cards";
-import { el } from "../dom";
+import { el, list, listItem, testId } from "../dom";
 import { buildNodeCard, type NodeTrend } from "./nodeCard";
 import type { Point } from "./trend";
 import type { TrendKind } from "./trendPanel";
@@ -43,6 +43,13 @@ export interface OverviewHost {
     nodeTrend(name: string): NodeTrend | undefined;
     /** Open the history of an agent or a node. */
     onOpenTrend(kind: TrendKind, name: string): void;
+}
+
+/** A panel's heading and the line beside it that says where its data comes from. */
+function panelHead(title: string, source: string): HTMLElement {
+    const head = el("div", "af-panel-head");
+    head.append(el("h3", "", title), el("span", "", source));
+    return head;
 }
 
 export class OverviewView {
@@ -169,10 +176,11 @@ export class OverviewView {
      * all dynamic text is set via `textContent` — never interpolated into HTML.
      */
     private _buildNodeItem(name: string, meta: string, online: boolean): HTMLElement {
-        const item = el("div", "af-node-item");
+        const item = listItem(testId(el("div", "af-node-item"), "node"), name);
+        item.dataset["node"] = name;
 
         const info = el("div");
-        info.append(el("div", "af-node-name", name), el("div", "af-node-meta", meta));
+        info.append(el("div", "af-node-name", name), testId(el("div", "af-node-meta", meta), "node-agents"));
 
         const pill = el(
             "span",
@@ -186,8 +194,8 @@ export class OverviewView {
 
     private _buildWactorPanel(): HTMLElement {
         const wp = el("section", "af-panel");
-        wp.innerHTML = `<div class="af-panel-head"><h3>Wactorz</h3><span>actor model · MQTT pub-sub</span></div>`;
-        const grid = el("div", "af-cards-grid");
+        wp.appendChild(panelHead("Wactorz", "actor model · MQTT pub-sub"));
+        const grid = list(el("div", "af-cards-grid"), "Agents");
         grid.id = "af-wactor-cards";
         sortAgents(this.host.agents.values()).forEach(agent => grid.appendChild(this._buildCard(agent)));
         wp.appendChild(grid);
@@ -196,8 +204,8 @@ export class OverviewView {
 
     private _buildNodesPanel(): HTMLElement {
         const np = el("section", "af-panel");
-        np.innerHTML = `<div class="af-panel-head"><h3>Nodes</h3><span>from heartbeat telemetry</span></div>`;
-        const nodeList = el("div", "af-node-list");
+        np.appendChild(panelHead("Nodes", "from heartbeat telemetry"));
+        const nodeList = list(el("div", "af-node-list"), "Nodes");
         nodeList.id = "af-node-list";
         np.appendChild(nodeList);
         this.renderNodes(nodeList);

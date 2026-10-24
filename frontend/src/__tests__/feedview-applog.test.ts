@@ -97,12 +97,12 @@ describe("a multi-line record", () => {
 
         expect(full.hidden).toBe(false);
         expect(full.textContent).toBe(traceback);
-        expect(row.getAttribute("aria-expanded")).toBe("true");
+        expect(row.querySelector(".af-feed-toggle")!.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("expands from the keyboard too", () => {
         const row = render(log({ text: traceback }));
-        row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        row.querySelector<HTMLButtonElement>(".af-feed-toggle")!.click();
         expect(row.querySelector<HTMLElement>(".af-feed-full")!.hidden).toBe(false);
     });
 

@@ -17,6 +17,7 @@ import wactorz
 from wactorz.agents.main.actor import MainActor
 from wactorz.core import compatibility, node_signing
 from wactorz.core.cancellation import cancel_until_done
+from wactorz.web import node_reset
 
 from .conftest import WAIT_S, FastNode, until
 
@@ -103,6 +104,26 @@ class TestATaskComesBackAnswered:
 
         assert reply is not None
         assert reply.get("result") == "echo:ping"
+
+
+class TestAResetReachesTheNode:
+    async def test_the_node_forgets_an_agents_conversation_and_says_so(
+        self, main: MainActor, node: FastNode
+    ) -> None:
+        # Main clears its own records; the conversation an agent here holds is
+        # the node's to clear, over a signed command, answered under the node's key.
+        await _spawned(main, node)
+        hosted = node.get("echo")
+        assert hosted is not None
+        hosted.persist("conversation_history", [{"role": "user", "content": "hello"}])
+        await until(
+            lambda: main.nodes.takes_resets(node.node_name), "main reading that the node resets"
+        )
+
+        outcome = await node_reset.reset_on_nodes(main, "chat", "echo", {node.node_name: {"echo"}})
+
+        assert outcome == {node.node_name: "cleared"}
+        assert hosted.recall("conversation_history") is None
 
 
 class TestANodeThatRestarts:

@@ -35,6 +35,7 @@ from wactorz.agents.installer_agent import (
 )
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.config import CONFIG, DeployTarget
+from wactorz.core import node_env
 
 
 class FakeConn:
@@ -147,11 +148,10 @@ class _Attempts:
 
 
 def _server_broker(monkeypatch: pytest.MonkeyPatch, username: str, password: str) -> None:
-    monkeypatch.setattr(
-        installer_agent,
-        "CONFIG",
-        replace(CONFIG, mqtt_host="10.0.0.1", mqtt_username=username, mqtt_password=password),
-    )
+    # Both: the installer reads where the broker is, node_env which account a node gets.
+    server = replace(CONFIG, mqtt_host="10.0.0.1", mqtt_username=username, mqtt_password=password)
+    for module in (installer_agent, node_env):
+        monkeypatch.setattr(module, "CONFIG", server)
 
 
 class TestTheAccountFromTheServer:
@@ -254,13 +254,18 @@ class TestTheOneConnectionTheCheckOpens:
                 CONFIG, mqtt_host="10.0.0.1", mqtt_port=1884, mqtt_username="", mqtt_password=""
             ),
         )
-        monkeypatch.setattr(
-            installer_agent,
-            "CONFIG",
-            replace(
-                CONFIG, mqtt_host="10.0.0.1", mqtt_port=1884, mqtt_username="", mqtt_password=""
-            ),
-        )
+        for module in (installer_agent, node_env):
+            monkeypatch.setattr(
+                module,
+                "CONFIG",
+                replace(
+                    CONFIG,
+                    mqtt_host="10.0.0.1",
+                    mqtt_port=1884,
+                    mqtt_username="",
+                    mqtt_password="",
+                ),
+            )
         client = _Client()
         monkeypatch.setattr("aiomqtt.Client", client)
 

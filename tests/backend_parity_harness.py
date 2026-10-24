@@ -210,9 +210,9 @@ def main() -> int:
     if args.assert_expected:
         expected = _expected_payload(fixture_path)
         if actual != expected:
-            print(json.dumps({"expected": expected, "actual": actual}, indent=2, sort_keys=True))
+            print(json.dumps({"expected": expected, "actual": actual}, indent=2, sort_keys=True))  # noqa: T201  # a command's output
             return 1
-    print(json.dumps(actual, indent=2, sort_keys=True))
+    print(json.dumps(actual, indent=2, sort_keys=True))  # noqa: T201  # a command's output
     return 0
 
 

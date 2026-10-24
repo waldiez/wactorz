@@ -3,7 +3,8 @@
 Scopes
 ------
 chat        chat_log rows + conversation_history / history_summary kv entries,
-            and the stored attachments too unless one agent was named
+            and the stored attachments: every one, or for one agent those
+            only its thread referred to
 state       per-agent pickle file (state/<name>/state.pkl)
 metrics     cost and message-count kv entries, and the metrics history
 spawns      the spawn registry main restores agents from
@@ -22,6 +23,7 @@ import sys
 from pathlib import Path
 
 from wactorz.core.paths import resolve_state_dir
+from wactorz.web.uploads import UPLOADS_DIRNAME, discard
 
 logger = logging.getLogger(__name__)
 
@@ -64,19 +66,12 @@ def _pickle_store(state_dir: str | None = None):
 
 
 def reset_uploads(state_dir: str | None = None) -> None:
-    """Delete every stored chat attachment.
-
-    Only ever called for a whole-system wipe. An upload records the file's name,
-    type and size and nothing about who attached it, so there is no way to
-    select one agent's files — and no way to keep them straight if some rows
-    survive.
+    """Delete every stored chat attachment, for a clear of every thread.
 
     Leaving them behind is worse than it sounds: the rows referencing them are
     what has just been deleted, so afterwards nothing can tell which bytes are
     still live, including someone reading the directory by hand.
     """
-    from wactorz.web.uploads import UPLOADS_DIRNAME
-
     # Not `upload_dir()`: that creates the directory, and a wipe must not bring
     # a state directory into being on a machine that has none.
     base = Path(state_dir or _DEFAULT_STATE) / UPLOADS_DIRNAME
@@ -99,12 +94,16 @@ def reset_chat(
 ) -> None:
     """Clear chat_log and conversation kv entries (optionally for one agent).
 
-    A full clear takes the stored attachments with it — every reference to them
-    lives in the rows being deleted. Clearing one agent leaves them, because an
-    upload does not record which agent it was sent to.
+    The stored attachments go with the rows that sent them. A row is filed
+    under its thread whoever attached the file, the person or the agent, so one
+    agent's files are those its rows name and no other thread's row does; a
+    full clear takes them all.
     """
     with _db(db_path) as db:
+        # Read before the rows go: afterwards nothing says which files they named.
+        named = db.chat_attachment_ids(agent_name) if agent_name else set()
         rows = db.clear_chat_log(agent_name)
+        orphaned = named - db.chat_attachment_ids()
         logger.info(
             "[reset] chat_log: deleted %d rows%s",
             rows,
@@ -120,7 +119,10 @@ def reset_chat(
         f" for {agent_name!r}" if agent_name else " (all agents)",
     )
     _strip_chat_from_pickles(agent_name, state_dir)
-    if not agent_name:
+    if agent_name:
+        gone = discard(orphaned, state_dir)
+        logger.info("[reset] uploads: deleted %d files for %r", gone, agent_name)
+    else:
         reset_uploads(state_dir)
 
 

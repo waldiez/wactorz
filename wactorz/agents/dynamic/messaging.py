@@ -5,10 +5,12 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
+from ...core.node_publications import admit
 from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -124,12 +126,55 @@ class MessagingMixin(_Host):
             },
         )
 
-    async def notify_user(self, text: str, **extra: Any) -> None:
-        """Push a user-facing chat message to the chat panel (see Actor.notify_user).
+    async def notify_user(
+        self,
+        text: str,
+        *,
+        options: Sequence[str] = (),
+        channel: str = "dashboard",
+        user: str = "",
+        **extra: Any,
+    ) -> str:
+        """Say ``text`` to the person, and return the message's id (see Actor.notify_user).
+
         Use this — not log() or alert() — when the user should see the message in
         chat, e.g. when a long task finishes or an autonomous agent has news.
+        ``options`` offers a choice, shown as buttons or a numbered list; the
+        pick comes back on ``agents/<id>/answer`` naming the id returned.
+        ``channel`` ("dashboard", "telegram", "discord", "whatsapp") says where,
+        and ``user`` who to reach there.
         """
-        await self._actor.notify_user(text, **extra)
+        return await self._actor.notify_user(
+            text, options=options, channel=channel, user=user, **extra
+        )
+
+    async def ask_operator(
+        self,
+        text: str,
+        *,
+        options: Sequence[str],
+        channel: str = "dashboard",
+        user: str = "",
+        timeout: float | None = None,
+    ) -> str:
+        """Ask the person ``text`` with ``options`` and return the one picked (see Actor.ask_operator).
+
+        Waits for the pick, up to ``timeout`` seconds (None: as long as the
+        agent runs). A question outlives a restart; an answer that arrives
+        when nothing waits goes to the program's ``on_answer(agent, question,
+        option)`` if it defines one.
+        """
+        return await self._actor.ask_operator(
+            text, options=options, channel=channel, user=user, timeout=timeout
+        )
+
+    async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
+        """The option picked for an earlier question, waiting up to ``timeout`` seconds."""
+        return await self._actor.wait_for_answer(question_id, timeout=timeout)
+
+    def open_questions(self) -> list[dict[str, Any]]:
+        """The questions still waiting for an answer, oldest first, as dicts (SYNC, no await)."""
+        return [q.to_dict() for q in self._actor.open_questions()]
 
     async def _send_to_remote(
         self, agent_name: str, payload: Any, timeout: float
@@ -139,10 +184,10 @@ class MessagingMixin(_Host):
         remote_node = None
         main = find_main_actor(registry)
         if main:
-            for node_name, nd in main._known_nodes.items():
-                if agent_name in nd.get("agents", []):
-                    remote_node = node_name
-                    break
+            remote_node = main.nodes.node_for(agent_name) or None
+            refusal = main.nodes.refuses_tasks(remote_node) if remote_node else None
+            if refusal:
+                return {"error": refusal}
 
         if not remote_node and not self._actor._node:
             logger.warning(
@@ -186,7 +231,13 @@ class MessagingMixin(_Host):
         subscribed = asyncio.Event()
         reply_task = asyncio.create_task(
             await_remote_reply(
-                future, reply_topic, self._actor, agent_name, timeout, subscribed=subscribed
+                future,
+                reply_topic,
+                self._actor,
+                agent_name,
+                timeout,
+                subscribed=subscribed,
+                node=remote_node,
             )
         )
         try:
@@ -305,23 +356,32 @@ async def await_remote_reply(
     timeout: float,
     *,
     subscribed: asyncio.Event | None = None,
+    node: str | None = None,
 ) -> dict[str, Any] | None:
     """Wait for a remote agent's reply, cleaning up the pending future either way.
 
     ``subscribed`` is set once the reply topic is subscribed, so the caller can
     publish the task only then -- and set as well if that never happens, so the
     caller is not left waiting on a subscription that is not coming.
+
+    ``node`` is the node the task went to, when the caller is main and knows
+    it: the reply is then the first message signed by that node, since any node
+    can publish on the topic. On a node there is no key to check one with, and
+    the first message is the reply.
     """
     try:
         broker = getattr(actor, "_mqtt_broker", "localhost")
         port = getattr(actor, "_mqtt_port", 1883)
-        async with mqtt_client(broker, port) as client:
+        async with mqtt_client(broker, port, **v5_kwargs()) as client:
             await client.subscribe(reply_topic)
             if subscribed is not None:
                 subscribed.set()
             async for msg in client.messages:
+                raw = bytes(msg.payload or b"")
+                if node and not admit(node, reply_topic, raw, user_properties(msg), "a reply"):
+                    continue
                 try:
-                    data = json.loads(msg.payload.decode())
+                    data = json.loads(raw.decode())
                     if not future.done():
                         future.set_result(data)
                 except Exception as exc:

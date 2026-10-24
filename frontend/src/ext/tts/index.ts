@@ -11,6 +11,7 @@
  */
 
 import { registerConfigEntry } from "../../config/serverConfig";
+import { listen } from "../../events";
 import { tts } from "./TTSManager";
 
 export { tts, TTSManager } from "./TTSManager";
@@ -37,6 +38,9 @@ export interface TTSConfig {
  */
 export function register(config: TTSConfig): void {
     tts.setApiBase(config.apiBase);
+    // A stopped turn stops its voice too: the page saying it stopped while it
+    // goes on reading the answer aloud disagrees with itself.
+    listen("tts-stop", () => tts.stopSpeaking());
     if (config.available) {
         void tts.init();
     }

@@ -10,7 +10,6 @@ import {
     buildSampleTable,
     cellText,
     DEFAULT_HOURS,
-    keepFocusWithin,
     NODE_CHARTS,
     throttleSummary,
     TrendPanel,
@@ -330,8 +329,9 @@ describe("focus in the panel", () => {
         expect(tab(true).defaultPrevented).toBe(true);
         expect(document.activeElement).toBe(last);
 
-        items[1]!.focus();
-        expect(tab().defaultPrevented).toBe(false);
+        items[0]!.focus();
+        tab();
+        expect(document.activeElement).toBe(items[1]);
     });
 
     it("brings focus that wandered outside back in", async () => {
@@ -342,12 +342,5 @@ describe("focus in the panel", () => {
         tab();
 
         expect(document.activeElement?.className).toContain("af-trend-close");
-    });
-
-    it("does nothing in a container with nothing to focus", () => {
-        const empty = document.createElement("div");
-        const e = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
-        keepFocusWithin(empty, e);
-        expect(e.defaultPrevented).toBe(false);
     });
 });

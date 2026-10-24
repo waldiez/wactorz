@@ -11,6 +11,25 @@
   padding: 0;
 }
 
+/* ── Colour tokens ──────────────────────────────────────────────────── */
+:root {
+  /* Secondary text: times, hints, small labels, placeholders. The dimmest white
+     that keeps 4.5:1 (WCAG AA) on the page's and the panels' dark backgrounds,
+     so nothing dimmer is used for text. */
+  --af-text-dim: rgba(255, 255, 255, 0.5);
+  /* The ring around whatever has keyboard focus. */
+  --af-focus: #38bdf8;
+}
+
+/* Text fields mark focus with a ring as well as their border colour: a border
+   that turns a darker blue is hard to see on this background. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--af-focus);
+  outline-offset: 1px;
+}
+
 /* ── Base ───────────────────────────────────────────────────────────── */
 html,
 body {

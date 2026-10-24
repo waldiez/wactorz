@@ -5,6 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildIobar, TURN_IDLE_TIMEOUT_MS, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
+import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
+import { byRole } from "./queries";
 import type { SpeechToText } from "../io/SpeechToText";
 import { emit } from "../events";
 import type { ChatMessage } from "../types/agent";
@@ -26,7 +28,12 @@ function streamEndFrom(from: string): void {
 
 function makeDeps(over: Partial<IobarDeps> = {}): IobarDeps {
     return {
-        chatInput: { onChange: vi.fn(), onKeydown: vi.fn(), closePanel: vi.fn() } as unknown as ChatInput,
+        chatInput: {
+            onChange: vi.fn(),
+            onKeydown: vi.fn(),
+            closePanel: vi.fn(),
+            commands: new CommandCompletion(new CommandCatalog(async () => [])),
+        } as unknown as ChatInput,
         stt: {} as SpeechToText,
         target: () => "main",
         setTarget: vi.fn(),
@@ -62,6 +69,16 @@ describe("buildIobar", () => {
         const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
         expect(stop.style.display).toBe("none");
         expect(deps.populateSelect).toHaveBeenCalled();
+    });
+
+    it("places the command list beside the box and ties the box to it", () => {
+        const bar = mount(makeDeps());
+        const input = bar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        const list = byRole(bar, "listbox", "Commands");
+
+        expect(list.parentElement).toBe(input.parentElement);
+        expect(input.getAttribute("aria-controls")).toBe(list.id);
+        expect(bar.querySelector(".af-input-hint")!.textContent).toContain("/ commands");
     });
 
     it("the icon-only send and stop buttons expose an accessible name", () => {
@@ -161,6 +178,19 @@ describe("buildIobar", () => {
             expect(send.disabled).toBe(false);
         });
 
+        it("waits on main for a command typed in another agent's thread", () => {
+            const bar = mount(makeDeps());
+            const send = bar.querySelector<HTMLButtonElement>(".af-send-btn")!;
+            const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
+
+            emit("af-send-message", { content: "/agents", target: "catalog", attachments: [] });
+            // Main answers a command wherever it was typed, under its own name.
+            chatFrom("main");
+
+            expect(send.disabled).toBe(false);
+            expect(stop.style.display).toBe("none");
+        });
+
         it("tracks the target of the newest turn, not the first", () => {
             const bar = mount(makeDeps());
             const send = bar.querySelector<HTMLButtonElement>(".af-send-btn")!;
@@ -182,7 +212,7 @@ describe("buildIobar", () => {
             const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
 
             sendTo("main");
-            emit("af-connection-status", { status: "demo" });
+            emit("af-connection-status", { status: "disconnected" });
 
             expect(send.disabled).toBe(false);
             expect(stop.style.display).toBe("none");

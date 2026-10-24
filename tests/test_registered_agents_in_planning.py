@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import pickle
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,6 +25,8 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.planner.agent import PlannerAgent
 from wactorz.agents.planner.pipeline import registered_agents_section
 from wactorz.core.actor import Actor, ActorState
+from wactorz.core.artifacts import ArtifactStore
+from wactorz.core.paths import resolve_state_dir
 from wactorz.core.registry import ActorRegistry
 from wactorz.web import chat, runtime
 
@@ -47,11 +48,12 @@ def _restore_runtime() -> Iterator[None]:
 
 
 @pytest.fixture(name="imu")
-def imu_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Any, Path]:
-    """The IMU example's agent module, and a model trained on resting readings.
+def imu_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
+    """The IMU example's agent module, with a model trained on resting readings stored.
 
     The example is a folder of plain files that import each other by name, so
     it is imported the way its own scripts are: with its folder on the path.
+    The model is kept where the agent looks for it, in the state directory.
     """
     monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
     for name in ("model", "agent"):
@@ -61,9 +63,10 @@ def imu_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Any, P
 
     rng = np.random.default_rng(0)
     resting = rng.normal(loc=(0.0, 0.0, 9.8), scale=0.05, size=(500, 3))
-    model_path = tmp_path / "imu_model.pkl"
-    model_path.write_bytes(pickle.dumps(model_module.MahalanobisModel.fit(resting)))
-    return module, model_path
+    model_path = tmp_path / "imu_model.npz"
+    np.savez(model_path, **model_module.fit(resting))
+    ArtifactStore.in_state_dir(resolve_state_dir()).add(model_path, model_module.MODEL_NAME)
+    return module
 
 
 def _spec(fn: Any) -> AgentSpec:
@@ -158,9 +161,9 @@ class TestThePlanner:
         return planner
 
     async def test_a_registered_detector_is_proposed_as_the_first_step(
-        self, tmp_path: Path, imu: tuple[Any, Path]
+        self, tmp_path: Path, imu: Any
     ) -> None:
-        module, _ = imu
+        module = imu
         plugin = plugins.register(module.detect)
         detector = {"name": "imu-anomaly", "type": "module", "target": plugin.target}
         plan = [
@@ -194,13 +197,11 @@ class TestThePlanner:
         assert "═══ NOTIFICATION URLS ═══" in prompt
 
     async def test_a_running_detector_is_shown_as_a_live_source(
-        self, tmp_path: Path, imu: tuple[Any, Path]
+        self, tmp_path: Path, imu: Any
     ) -> None:
-        module, model_path = imu
+        module = imu
         plugins.register(module.detect)
-        running = _spec(module.detect).build(
-            persistence_dir=str(tmp_path), options={"model": str(model_path)}
-        )
+        running = _spec(module.detect).build(persistence_dir=str(tmp_path))
         planner = self._planner(tmp_path, [], _Registry(running))
 
         await planner._decompose_pipeline("notify me on anomalies", [])
@@ -275,12 +276,10 @@ class TestFromChat:
         return replies
 
     async def test_the_detector_answers_a_json_reading_with_its_score(
-        self, tmp_path: Path, imu: tuple[Any, Path]
+        self, tmp_path: Path, imu: Any
     ) -> None:
-        module, model_path = imu
-        detector = _spec(module.detect).build(
-            persistence_dir=str(tmp_path), options={"model": str(model_path)}
-        )
+        module = imu
+        detector = _spec(module.detect).build(persistence_dir=str(tmp_path))
         detector.state = ActorState.RUNNING
         runtime.registry = await _registered(detector)
 
@@ -291,13 +290,9 @@ class TestFromChat:
         assert answer["score"] > 20
         assert answer["reading"] == {"ax": 9, "ay": 0, "az": 1}
 
-    async def test_a_resting_reading_is_not_an_anomaly(
-        self, tmp_path: Path, imu: tuple[Any, Path]
-    ) -> None:
-        module, model_path = imu
-        detector = _spec(module.detect).build(
-            persistence_dir=str(tmp_path), options={"model": str(model_path)}
-        )
+    async def test_a_resting_reading_is_not_an_anomaly(self, tmp_path: Path, imu: Any) -> None:
+        module = imu
+        detector = _spec(module.detect).build(persistence_dir=str(tmp_path))
         detector.state = ActorState.RUNNING
         runtime.registry = await _registered(detector)
 

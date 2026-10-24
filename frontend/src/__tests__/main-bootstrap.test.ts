@@ -15,10 +15,13 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { emit } from "../events";
 import { toast } from "../ui/ToastManager";
+import type { FeedItem } from "../types/feed";
 
 // Registries the mocked transport + router populate as main.ts wires them up.
 const mockRouter: Record<string, (...a: any[]) => void> = {};
 const mockWs: Record<string, (...a: any[]) => void> = {};
+// Every frame main.ts sent over the mocked transport with sendRaw.
+const mockSent: unknown[] = [];
 // A single known agent so `getAgents().find(...)` resolves in the metrics path.
 const mockStoreAgents = [{ id: "a", name: "A", state: "running", protected: false }];
 // The store main.ts builds, so a test can see what reached it.
@@ -67,7 +70,10 @@ vi.mock("../io/WSClient", () => ({
         onStreamEnd = vi.fn();
         connect = vi.fn();
         disconnect = vi.fn();
-        sendRaw = vi.fn();
+        sendRaw = vi.fn((frame: unknown) => {
+            mockSent.push(frame);
+            return true;
+        });
     },
 }));
 
@@ -105,7 +111,7 @@ vi.mock("../agents/AgentStore", () => ({
 }));
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
-vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 
 describe("main.ts bootstrap", () => {
@@ -144,6 +150,7 @@ describe("main.ts bootstrap", () => {
             "node-heartbeat",
             "host-stats",
             "raw",
+            "answer",
         ]) {
             expect(typeof mockRouter[ev]).toBe("function");
         }
@@ -209,8 +216,8 @@ describe("main.ts bootstrap", () => {
         wsHandler("mqttStatus")(true); // both up → live: prunes + seeds
         wsHandler("mqttStatus")(true); // unchanged → recompute early-returns
         wsHandler("connected")(); // unchanged → seeded guard holds
-        wsHandler("mqttStatus")(false); // broker down → demo
-        wsHandler("disconnected")(); // /ws down → stays demo
+        wsHandler("mqttStatus")(false); // broker down → disconnected
+        wsHandler("disconnected")(); // /ws down → stays disconnected
         expect(true).toBe(true);
     });
 
@@ -225,6 +232,21 @@ describe("main.ts bootstrap", () => {
         routerHandler("host-stats")({ cpu: 1, memUsedMb: 2, memTotalMb: 3 }); // has stats
         routerHandler("host-stats")({}); // nothing → skip
         expect(true).toBe(true);
+    });
+
+    it("puts a node coming online on the feed, and its next report with the heartbeats", () => {
+        const pushed: FeedItem[] = [];
+        const record = (e: Event) => pushed.push((e as CustomEvent<{ item: FeedItem }>).detail.item);
+        document.addEventListener("af-feed-push", record);
+
+        routerHandler("node-heartbeat")({ node: "a-new-node", agents: ["flic"] });
+        routerHandler("node-heartbeat")({ node: "a-new-node", agents: ["flic"] });
+        document.removeEventListener("af-feed-push", record);
+
+        expect(pushed.map(i => [i.type, i.label])).toEqual([
+            ["health", "node online · 1 agent"],
+            ["heartbeat", "heartbeat · 1 agent"],
+        ]);
     });
 
     it("routes HA raw events through the feed (and ignores non-HA topics)", () => {
@@ -252,6 +274,43 @@ describe("main.ts bootstrap", () => {
         ]);
         wsHandler("logFeed")([{ type: "log", agent_id: "a", message: "m2", timestamp: 3 }]); // initialized branch
         expect(true).toBe(true);
+    });
+
+    it("sends a pressed option to the agent, and closes the question on an answer", () => {
+        const answered: unknown[] = [];
+        const seen = (e: Event): void => {
+            answered.push((e as CustomEvent).detail);
+        };
+        document.addEventListener("af-answered", seen);
+        mockSent.length = 0;
+        try {
+            emit("af-answer-option", { id: "q1", agentId: "a", option: "yes", index: 0 });
+            routerHandler("answer")({ id: "q1", agentId: "a", option: "yes", index: 0, channel: "telegram" });
+        } finally {
+            document.removeEventListener("af-answered", seen);
+        }
+        expect(mockSent).toEqual([{ type: "answer", agent_id: "a", id: "q1", option: "yes", index: 0 }]);
+        expect(answered).toEqual([{ id: "q1", option: "yes" }]);
+    });
+
+    it("a question stays up as a toast with its options, until it is answered", () => {
+        vi.mocked(toast.show).mockClear();
+        vi.mocked(toast.close).mockClear();
+        routerHandler("chat")({
+            id: "q2",
+            from: "installer",
+            to: "user",
+            content: "Install?",
+            timestampMs: 1,
+            agentId: "i",
+            options: ["Install", "Refuse"],
+        });
+        const shown = vi.mocked(toast.show).mock.calls[0]![0];
+        expect(shown.sticky).toBe(true);
+        expect(shown.actions!.map(a => a.label)).toEqual(["Install", "Refuse"]);
+
+        routerHandler("answer")({ id: "q2", agentId: "i", option: "Refuse", index: 1, channel: "dashboard" });
+        expect(toast.close).toHaveBeenCalledWith("q2");
     });
 
     it("handles the app-event listeners", () => {

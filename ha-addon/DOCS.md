@@ -46,6 +46,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `node_accounts` | `false` | Give each deployed node its own broker account instead of sharing this addon's. On automatically with `mosquitto_embedded`; with the official Mosquitto addon it writes a `logins:` block for you to paste. See [An account per node](#an-account-per-node). |
+| `sandbox_node` | `false` | Run a node of the add-on's own, as a second user, where code the model writes runs instead of beside the add-on's secrets. Needs `node_accounts` or `mosquitto_embedded`. See [A sandbox for code the model writes](#a-sandbox-for-code-the-model-writes). |
 | `node_topics` | *(empty)* | Extra data topics every node's agents may use on the embedded broker, beyond `custom/`, `sensors/`, `home/`, `schedule/` and reading `homeassistant/state_changes/`. Comma-separated topic filters; `read:` before one makes it read-only, e.g. `zigbee2mqtt/#, read:weather/#`. |
 | `broker_accounts` | *(empty)* | Other accounts on the embedded broker that keep all of it once a node is deployed, comma-separated. An account not named there, other than this addon's own, then has no access. |
 | `node_signing` | `enforce` | What a deployed node does with a command that is not signed for it: `enforce` refuses it, `warn` acts on it and tells you in chat. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
@@ -83,6 +84,29 @@ Wactorz runs code that a model wrote, so the addon keeps it to its own data.
 - **Everything Wactorz keeps is under `/data`**, which is private to the addon and survives updates: its state, its home directory, and the Python packages agents install at runtime.
 
 An agent that used to write into `/config` or `/share` — a snapshot into `/config/www`, say — can no longer do so. Have it keep the file in its own state instead, or publish it over MQTT.
+
+### A sandbox for code the model writes
+
+Running as an ordinary user keeps the code away from the rest of Home Assistant,
+but not from the addon's own secrets: the model's API key, Home Assistant's
+token and your nodes' SSH keys are all in the addon. With `sandbox_node: true`
+the addon also runs a node of its own, under a second user, and code the model
+writes runs there instead.
+
+- The node, `sandbox`, runs as the user `wactorz-sandbox`. Its environment holds
+  only what `/deploy` gives any node: its name, the broker, its signing key and
+  its broker account.
+- Everything else in `/data` is closed to it. The addon's state, options and API
+  key are readable by their owners alone, and the node keeps its own state and
+  installed packages in `/data/sandbox`.
+- It needs a broker account of its own. Use the embedded broker, or turn
+  `node_accounts` on and paste the `sandbox` login from
+  `/share/wactorz/mosquitto-logins.yaml` into the Mosquitto add-on. Without
+  one, the addon says so in its log and leaves model-written code where it was.
+- An agent that runs the addon's own classes stays in the addon: LLM agents,
+  rules, schedules and catalogue agents. Agents restored after a restart stay
+  where they were placed. A spawn the model writes that asks for the addon
+  itself waits for your yes in the panel.
 
 ## Remote edge nodes
 

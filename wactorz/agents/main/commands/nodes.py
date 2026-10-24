@@ -5,7 +5,9 @@ installs software on a machine over SSH. None of them is undone by running the
 opposite afterwards, which is why each says what it is about to affect.
 """
 
+from ....core.node_operations import COMMAND_TIMEOUT_S
 from .dispatch import CommandContext, command
+from .groups import NODES
 
 
 @command(
@@ -13,6 +15,13 @@ from .dispatch import CommandContext, command
     exact=("/deploy",),
     prefixes=("/deploy ",),
     summary="deploy a remote Wactorz node",
+    group=NODES,
+    forms=(
+        (
+            "/deploy <node>",
+            "deploy a node from DEPLOY_TARGETS; bare, list them (SSH credentials come from the environment, not chat)",
+        ),
+    ),
 )
 async def deploy_node(ctx: CommandContext, argument: str) -> str:
     """Deploy a remote Wactorz node."""
@@ -27,6 +36,8 @@ async def deploy_node(ctx: CommandContext, argument: str) -> str:
     "/nodes remove",
     prefixes=("/nodes remove ",),
     summary="stop all agents on a node and remove it",
+    group=NODES,
+    forms=(("/nodes remove <node>", "stop all agents on a node and remove it"),),
 )
 async def remove_node(ctx: CommandContext, argument: str) -> str:
     """Stop all agents on a node and remove it."""
@@ -53,9 +64,42 @@ async def remove_node(ctx: CommandContext, argument: str) -> str:
 
 
 @command(
+    "/nodes run",
+    prefixes=("/nodes run ",),
+    summary="run a shell command on a node over SSH, as typed",
+    group=NODES,
+    forms=(("/nodes run <node> <command>", "run a shell command on a node over SSH, as typed"),),
+)
+async def run_on_node(ctx: CommandContext, argument: str) -> str:
+    """Run a shell command on a node, over SSH with its deploy target's credentials.
+
+    The one way free text reaches a node's shell, and it is the operator's: a
+    slash command is read from what was typed, never from a reply the model
+    wrote, and the social channels refuse them. The model asks for a named
+    operation instead (`wactorz.core.node_operations`).
+    """
+    parts = argument.split(maxsplit=1)
+    node_name = parts[0] if parts else ""
+    command = parts[1].strip() if len(parts) > 1 else ""
+    if not node_name or not command:
+        return "Usage: /nodes run <node-name> <command>"
+    result = await ctx.actor.delegate_to_installer(
+        {"action": "node_run", "node_name": node_name, "command": command},
+        timeout=COMMAND_TIMEOUT_S + 30,
+    )
+    if result.get("error") and not result.get("output"):
+        return f"Could not run it on '{node_name}': {result['error']}"
+    status = "exit 0" if result.get("success") else f"exit {result.get('exit_code', '?')}"
+    output = str(result.get("output") or "").rstrip() or "(no output)"
+    return f"{node_name} $ {command}  [{status}]\n{output}"
+
+
+@command(
     "/nodes restart",
     prefixes=("/nodes restart ",),
     summary="restart the runner process on a node",
+    group=NODES,
+    forms=(("/nodes restart <node>", "restart the runner process on a node"),),
 )
 async def restart_node(ctx: CommandContext, argument: str) -> str:
     """Restart the runner process on a node."""
@@ -76,6 +120,8 @@ async def restart_node(ctx: CommandContext, argument: str) -> str:
     "/nodes shutdown",
     prefixes=("/nodes shutdown ",),
     summary="stop all agents and shut down a node",
+    group=NODES,
+    forms=(("/nodes shutdown <node>", "stop all agents and shut down a node"),),
 )
 async def shutdown_node(ctx: CommandContext, argument: str) -> str:
     """Stop all agents and shut down a node."""

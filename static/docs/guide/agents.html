@@ -371,7 +371,7 @@
 </tr>
 </tbody>
 </table>
-<p>Runs <code>pip install</code> in a subprocess on request. Called automatically by <code>CatalogAgent</code> before spawning a recipe that declares an <code>"install": [...]</code> list. Also handles remote node deployment via SSH (<code>node_deploy</code>, <code>node_install</code>, <code>node_run</code> actions), for machines listed in <code>DEPLOY_TARGETS</code> — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.</p>
+<p>Runs <code>pip install</code> in a subprocess on request. Called automatically by <code>CatalogAgent</code> before spawning a recipe that declares an <code>"install": [...]</code> list. A package not on the list of packages installed without asking (the catalogue's, the examples', <code>WACTORZ_PIP_ALLOW</code>, and what the operator has allowed with <code>/packages allow</code> or the dashboard) is asked about on the dashboard first, and not installed if the operator refuses or does not answer. Also handles remote nodes over SSH (<code>node_deploy</code>, <code>node_install</code>, <code>node_op</code> — a named read-only operation — and <code>node_run</code> — a command typed as <code>/nodes run</code>), for machines listed in <code>DEPLOY_TARGETS</code>, and takes those only from main — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.</p>
 <div class="highlight"><pre><span></span><code><span class="err">@</span><span class="nx">installer</span><span class="w"> </span><span class="p">{</span><span class="s">"action"</span><span class="p">:</span><span class="w"> </span><span class="s">"install"</span><span class="p">,</span><span class="w"> </span><span class="s">"packages"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s">"httpx"</span><span class="p">,</span><span class="w"> </span><span class="s">"aiomqtt"</span><span class="p">]}</span>
 </code></pre></div>
 
@@ -832,6 +832,9 @@
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p><strong>A task's payload is untrusted input.</strong> On main, any agent may send one; on a node, any node on the broker may, by name (<code>agents/by-name/&lt;name&gt;/task</code>); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what <code>handle_task</code> acts on, and never run, install or fetch what a payload names without checking it.</p>
+</blockquote>
 <h4 id="agent-api-agent-object-inside-generated-code">Agent API (<code>agent</code> object inside generated code)</h4>
 <table>
 <thead>
@@ -878,6 +881,21 @@
 <td>Read a persisted value</td>
 </tr>
 <tr>
+<td><code>agent.artifact_path(key)</code></td>
+<td><strong>sync</strong></td>
+<td>Where the artifact the spawn names as <code>key</code> is on this host — <code>"artifacts": {"model": "imu-detector:3"}</code> in the spawn, then <code>onnxruntime.InferenceSession(agent.artifact_path("model"))</code>. A file, or for a directory artifact the directory it unpacks to; a <code>str</code>. <code>KeyError</code> naming the keys the spawn gave for any other</td>
+</tr>
+<tr>
+<td><code>await agent.load_model(key)</code></td>
+<td>async</td>
+<td>The artifact named <code>key</code>, loaded once: a dict of numpy arrays for <code>npz</code> and <code>safetensors</code>, an array for <code>npy</code>, an <code>onnxruntime.InferenceSession</code> for <code>onnx</code>, tensors for a <code>state_dict</code>, bytes for <code>raw</code>. A pickle, joblib file or whole torch module only with <code>allow_code=True</code></td>
+</tr>
+<tr>
+<td><code>agent.artifacts</code></td>
+<td>—</td>
+<td>Each artifact the spawn names: name, version, format, size and path</td>
+</tr>
+<tr>
 <td><code>agent.state</code></td>
 <td>—</td>
 <td>In-memory dict (not persisted)</td>
@@ -893,23 +911,23 @@
 <td>Register a TopicBus contract for auto-wiring</td>
 </tr>
 <tr>
-<td><code>agent.query_ts(hours, field, ...)</code></td>
-<td><strong>sync</strong></td>
-<td>Query historical sensor data from SQLite</td>
+<td><code>await agent.query_ts(hours, field, ...)</code></td>
+<td>async</td>
+<td>Query historical sensor data from main's SQLite</td>
 </tr>
 <tr>
-<td><code>agent.query_detections(hours, ...)</code></td>
-<td><strong>sync</strong></td>
-<td>Query historical YOLO detections from SQLite</td>
+<td><code>await agent.query_detections(hours, ...)</code></td>
+<td>async</td>
+<td>Query historical YOLO detections from main's SQLite</td>
 </tr>
 <tr>
-<td><code>agent.query_ha_states(hours, ...)</code></td>
-<td><strong>sync</strong></td>
-<td>Query historical HA state changes from SQLite</td>
+<td><code>await agent.query_ha_states(hours, ...)</code></td>
+<td>async</td>
+<td>Query historical HA state changes from main's SQLite</td>
 </tr>
 <tr>
-<td><code>agent.ts_stats()</code></td>
-<td><strong>sync</strong></td>
+<td><code>await agent.ts_stats()</code></td>
+<td>async</td>
 <td>Row counts for all time-series tables</td>
 </tr>
 <tr>
@@ -928,19 +946,25 @@
 <p>Any dynamic agent can query historical data collected by the TimeSeriesCollector:</p>
 <div class="highlight"><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_task</span><span class="p">(</span><span class="n">agent</span><span class="p">,</span> <span class="n">payload</span><span class="p">):</span>
     <span class="c1"># Get last 24h of temperature readings</span>
-    <span class="n">rows</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">query_ts</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">field</span><span class="o">=</span><span class="s1">'temp'</span><span class="p">)</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">query_ts</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">field</span><span class="o">=</span><span class="s1">'temp'</span><span class="p">)</span>
 
     <span class="c1"># Get as pandas DataFrame for ML training</span>
-    <span class="n">df</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">query_ts</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">168</span><span class="p">,</span> <span class="n">entity_id</span><span class="o">=</span><span class="s1">'sensor.kitchen_temp'</span><span class="p">,</span> <span class="n">as_dataframe</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">query_ts</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">168</span><span class="p">,</span> <span class="n">entity_id</span><span class="o">=</span><span class="s1">'sensor.kitchen_temp'</span><span class="p">,</span> <span class="n">as_dataframe</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="c1"># Query YOLO detections</span>
-    <span class="n">df</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">query_detections</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span> <span class="n">class_name</span><span class="o">=</span><span class="s1">'person'</span><span class="p">,</span> <span class="n">as_dataframe</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">query_detections</span><span class="p">(</span><span class="n">hours</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span> <span class="n">class_name</span><span class="o">=</span><span class="s1">'person'</span><span class="p">,</span> <span class="n">as_dataframe</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
     <span class="c1"># Check available data volume</span>
-    <span class="n">stats</span> <span class="o">=</span> <span class="n">agent</span><span class="o">.</span><span class="n">ts_stats</span><span class="p">()</span>
+    <span class="n">stats</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">ts_stats</span><span class="p">()</span>
     <span class="c1"># {'sensor_readings': 145230, 'detections': 8920, ...}</span>
 </code></pre></div>
 
+<p>The history lives in main's database. On a node, a query reads it from main
+over the broker, a page at a time, so there it must be awaited; written with
+<code>await</code>, the same code runs on main and on a node. On main the call without
+<code>await</code> works too, as it always has. On a node that form fails as soon as
+its result is used, and the error says to add <code>await</code>. If main does not answer
+a read, the agent gets no rows (<code>None</code> for a DataFrame) and the node logs why.</p>
 <h4 id="code-safety">Code safety</h4>
 <p>LLM-generated agents go through a 5-layer defense:</p>
 <ol>

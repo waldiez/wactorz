@@ -222,7 +222,6 @@
   color: #e0e8ff;
 }
 .af-audio-select:focus {
-  outline: none;
   border-color: rgba(37, 99, 235, 0.5);
 }
 .af-audio-divider {

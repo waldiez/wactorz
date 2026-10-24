@@ -239,7 +239,8 @@ describe("one reply heard at a time", () => {
     it("a stopped turn stops its voice, through the bus", async () => {
         const server = heldServer();
         const { mod } = await speaking();
-        mod.register({ apiBase: "", available: false });
+        // Available: the server is what speaks here, so it is its voice that is stopped.
+        mod.register({ apiBase: "", available: true });
         // The shared instance is the one the page speaks through; it read "on" from storage.
         expect(mod.tts.ttsEnabled).toBe(true);
 

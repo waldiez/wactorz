@@ -50,6 +50,8 @@ export interface AppEventMap {
     /** The dashboard opened a view, or another conversation in the chat: the address follows. */
     "af-view-changed": Route;
     "tts-voices-loaded": { voices: TTSVoice[] };
+    /** The branch this deployment speaks through, once the server has said. */
+    "tts-mode-known": { speaks: boolean };
     "tts-audio-start": void;
     "tts-audio-end": void;
     /** Someone stopped the turn: stop saying it, in either voice. */

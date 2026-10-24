@@ -13,6 +13,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
+from ..ext import collect_public_config
 from . import cost, origins, probes, runtime
 from .metrics import known_nodes
 
@@ -118,7 +119,6 @@ async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from .. import __version__, config
     from ..config import CONFIG
-    from ..ext import collect_public_config
 
     # The /ws proxy is served by *this* server, so point the frontend at the
     # monitor's actual port (WS_PORT), not a hardcoded one.
@@ -159,8 +159,16 @@ async def config_handler(request: web.Request) -> Response:
         "ws_url": ws_url,
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),
-    # namespaced by extension name.
-    payload.update(collect_public_config(request.app))
+    # namespaced by extension name. Merged into an existing key rather than
+    # replacing it: an extension named after something core already reports would
+    # otherwise delete core's fields on its way in, silently and only in the
+    # deployments that have it installed.
+    for key, value in collect_public_config(request.app).items():
+        existing = payload.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            existing.update(value)
+        else:
+            payload[key] = value
     return web.json_response(payload)
 
 

@@ -34,7 +34,7 @@ updates:
   # ecosystem change files there, so one bump in such a directory makes it
   # refuse the whole grouped pull request.
   - package-ecosystem: docker
-    directories: ["/", "/ci/tools", "/ha-addon/bases", "/e2e/stack/node"]
+    directories: ["/", "/ci/tools", "/ha-addon/bases", "/e2e/stack/node", "/infra/voice/stt"]
     target-branch: dev
     schedule:
       interval: weekly
@@ -50,8 +50,9 @@ updates:
       # is done by hand, with the CI matrix and the lockfile.
       #
       # By name, so it reaches only the official `python` image, which among
-      # these directories is the app Dockerfile's alone: the add-on bases are
-      # Home Assistant's images under other names, and are proposed as before.
+      # these directories the app Dockerfile and the recogniser's use: the
+      # add-on bases are Home Assistant's images under other names, and are
+      # proposed as before.
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 

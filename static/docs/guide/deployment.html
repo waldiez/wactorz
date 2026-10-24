@@ -260,6 +260,24 @@ one-time sign-in link in <code>docker compose logs wactorz-python</code>. Set <c
 <td>—</td>
 <td>none: it dials the broker</td>
 </tr>
+<tr>
+<td><code>voice</code></td>
+<td>voice-stt (Whisper)</td>
+<td><code>tcp://voice-stt:10300</code></td>
+<td><code>127.0.0.1:10300</code></td>
+</tr>
+<tr>
+<td><code>voice</code></td>
+<td>voice-tts (Piper)</td>
+<td><code>tcp://voice-tts:10200</code></td>
+<td><code>127.0.0.1:10200</code></td>
+</tr>
+<tr>
+<td><code>voice-live</code></td>
+<td>voice-stt-live (sherpa-onnx streaming)</td>
+<td><code>ws://voice-stt-live:6006</code></td>
+<td><code>127.0.0.1:6006</code></td>
+</tr>
 </tbody>
 </table>
 <p>Every port except the broker's TLS one is published to this host only. Reach the

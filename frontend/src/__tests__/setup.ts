@@ -47,10 +47,14 @@ class MockAudioContext {
 }
 (globalThis as any).AudioContext = MockAudioContext;
 
-// Stub speechSynthesis
+// Stub speechSynthesis, with what the page reads of a real one: a browser with
+// no voices of its own, which says when that changes.
 (globalThis as any).speechSynthesis = {
     speak: vi.fn(),
     cancel: vi.fn(),
+    getVoices: () => [],
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
 };
 
 // Stub SpeechSynthesisUtterance

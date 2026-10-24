@@ -41,7 +41,10 @@ The `[all]` extra installs everything except the heavier stacks, `ml` and `visio
 | `wactorz[whatsapp]` | `twilio` | `--interface whatsapp` |
 | `wactorz[telegram]` | `python-telegram-bot` | `--interface telegram` |
 | `wactorz[mcp]` | `mcp` | MCP-compatible clients |
-| `wactorz[tts]` | `edge-tts` | text-to-speech support |
+| `wactorz[stt]` | `wyoming` | recognising speech, through a Wyoming recogniser |
+| `wactorz[tts]` | `edge-tts`, `wyoming` | making speech, here or through a Wyoming synthesiser |
+| `wactorz[host]` | `sounddevice`, `miniaudio` | listening and speaking through this machine's own sound device |
+| `wactorz[voice]` | all three of the above | the whole voice loop |
 | `wactorz[cron]` | `croniter` | cron-expression schedules |
 | `wactorz[data]` | `pandas` | query results as a DataFrame |
 | `wactorz[vision]` | `opencv-python` | camera capture in generated code |

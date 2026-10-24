@@ -200,6 +200,27 @@ describe("buildChatMessageEl", () => {
     });
 });
 
+describe("a turn a room started", () => {
+    it("is told apart from one somebody typed", () => {
+        // The machine hears a phrase and starts a turn nobody was at a screen
+        // for. In the log it would otherwise be indistinguishable from a typed
+        // one, which is the wrong record of what happened.
+        const spoken = buildChatMessageEl(
+            msg({
+                from: "user",
+                to: "main",
+                source: "voice",
+                surface: "wake word",
+                surfaceLabel: "wake word",
+            }),
+        );
+        const typed = buildChatMessageEl(msg({ from: "user", to: "main" }));
+
+        expect(spoken.querySelector(".af-chat-msg-from")!.textContent).toContain("via wake word");
+        expect(typed.querySelector(".af-chat-msg-from")!.textContent).not.toContain("via");
+    });
+});
+
 describe("buildChatMessageEl — a question with options", () => {
     beforeEach(() => {
         document.body.innerHTML = "";

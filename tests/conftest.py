@@ -19,6 +19,8 @@ from wactorz.agents import llm_agent
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
+from wactorz.ext.stt import vad as stt_vad
+from wactorz.ext.voice import settings as voice_settings
 from wactorz.node import state as node_state
 from wactorz.web import runtime as web_runtime
 
@@ -79,6 +81,38 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     the default.
     """
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_voice_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore the voice settings from the developer's environment or `.env`.
+
+    Four of them, and all four are set by anyone trying the feature — which is
+    the likeliest reason a machine has them at all. The addresses are read when
+    they are used; the branches are read once, at import, so they are put back on
+    the module rather than in the environment.
+
+    A configured service reports itself available and brings its own voices, and
+    a branch other than the default answers 503 where a test expected audio, so
+    each of these turns tests elsewhere into failures nowhere near the diff. CI
+    has no `.env` and never sees any of it: green there, broken only for whoever
+    is working on the feature.
+
+    Tests that want a branch or a service set one explicitly and win, because
+    this only replaces what was picked up from outside.
+    """
+    monkeypatch.delenv("WACTORZ_STT_URI", raising=False)
+    monkeypatch.delenv("WACTORZ_TTS_URI", raising=False)
+    monkeypatch.setattr(voice_settings, "STT_MODE", "off")
+    monkeypatch.setattr(voice_settings, "TTS_MODE", "server")
+    monkeypatch.setattr(voice_settings, "WAKE_MODE", "off")
+    # A model named in the developer's .env would have every listening test
+    # try Silero; a test that wants it names one.
+    monkeypatch.setattr(stt_vad, "MODEL", "")
+    # And whatever was chosen at runtime, which now outranks the environment: a
+    # branch picked once from the dashboard is remembered in the developer's own
+    # store, and would decide tests that never mentioned it.
+    monkeypatch.setattr(voice_settings, "_stored", dict)
 
 
 #: The settings that put broker connections on TLS.

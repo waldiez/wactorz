@@ -7,7 +7,7 @@ import { buildIobar, TURN_IDLE_TIMEOUT_MS, type IobarDeps } from "../ui/dashboar
 import type { ChatInput } from "../ui/dashboard/chatInput";
 import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
 import { byRole } from "./queries";
-import type { SpeechToText } from "../io/SpeechToText";
+import type { SpeechToText } from "../ext/stt";
 import { emit } from "../events";
 import type { ChatMessage } from "../types/agent";
 

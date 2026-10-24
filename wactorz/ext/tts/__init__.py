@@ -1,11 +1,25 @@
-"""TTS extension — server-side text-to-speech via edge-tts.
+"""TTS extension — server-side text-to-speech.
 
-Optional dependency: ``pip install wactorz[tts]`` (installs edge-tts).
-If edge-tts is not installed the extension still loads — routes return 503
-and ``public_config()`` reports ``available: false`` so the frontend falls
-back to browser Web Speech API.
+Where the speech is made depends on ``WACTORZ_TTS_URI``. Unset, it is made here
+by edge-tts (``pip install wactorz[tts]``). Set, it is made by the service that
+address names: an HTTP endpoint, which needs nothing beyond what the server
+already has, or a Wyoming synthesiser over ``tcp://``, which is spoken to with
+``wactorz[tts]``, which carries it.
+
+``WACTORZ_TTS`` says who does the speaking. ``server`` makes the audio here and
+sends it to the browser to play; ``browser`` leaves it to the browser's own
+voice, so the text never goes anywhere; ``host`` makes it here and plays it
+through this machine's own speakers, answering into a room rather than a page;
+``off`` says nothing at all.
+
+If no backend can be reached the extension still loads: the routes answer 503
+and ``public_config()`` reports ``available: false``, so the browser falls back
+to the Web Speech API rather than going quiet.
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
 import os
 import re
@@ -13,17 +27,28 @@ from typing import Any
 
 from aiohttp import web
 
+from .. import voice
+from ..voice import settings as voice_settings
+from . import remote, speaker, spoken
+
 logger = logging.getLogger(__name__)
+
+#: Speech for turns that have already answered, while it is being made or
+#: played. Held so a task nothing else refers to is not collected mid-sentence,
+#: and so stopping can reach speech that has not started yet.
+_speeches: set[asyncio.Task[None]] = set()
 
 
 class TTSState:  # pylint: disable=too-few-public-methods
-    """TTS capability and voice cache, mutated once at startup, read-only after."""
+    """TTS capability, and the voices there are to speak in once they are known."""
 
     def __init__(self) -> None:
         self.available: bool = False
         # https://github.com/rany2/edge-tts/blob/master/src/edge_tts/constants.py#L9
         self.default_voice: str = "en-US-EmmaMultilingualNeural"
         self.voices: list[dict[str, str]] | None = None
+        # A Wyoming synthesiser's own voices, by its address, once it has said them.
+        self.service_voices: dict[str, list[dict[str, str]]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -52,19 +77,271 @@ def setup(app: web.Application) -> None:
     app.router.add_get("/api/tts/voices", tts_voices_handler)
     app.router.add_post("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
+    app.on_cleanup.append(_quiet_on_cleanup)
+    voice.check_voices_with(app, unknown_voice)
+    warn_if_the_room_will_stay_quiet()
+    voice.on_change(app, warn_if_the_room_will_stay_quiet)
+
+
+def warn_if_the_room_will_stay_quiet() -> None:
+    """Say at startup what would otherwise be found a turn at a time.
+
+    ``host`` answers out loud and nowhere else, so a deployment that cannot do
+    it is silent rather than broken-looking: no error reaches the person who
+    asked, because their answer arrived on screen exactly as it should. Said
+    once here rather than as a warning after every turn.
+    """
+    if voice_settings.speaking() != "host":
+        return
+    if not speaker.available():
+        logger.warning(
+            "[tts] WACTORZ_TTS=host, but this machine has no sound device to speak "
+            "through — pip install 'wactorz[host]', or choose another branch"
+        )
+    # Only a Wyoming synthesiser is certain to answer in something playable
+    # without a decoder: it speaks in raw samples, which are given a WAV header
+    # on the way back. The in-process one answers in MP3, and an HTTP endpoint
+    # answers in whatever it likes -- so neither can be assumed safe here.
+    if not speaker.can_play("audio/mpeg") and not remote.is_wyoming_uri(remote.service_uri()):
+        logger.warning(
+            "[tts] WACTORZ_TTS=host can only play WAV without a decoder, and what this "
+            "deployment synthesises may not be — pip install 'wactorz[host]'"
+        )
+
+
+def synthesiser_available() -> bool:
+    """Whether this deployment will make speech here for the browser to play.
+
+    False for every branch but ``server``: ``off`` wants silence, and ``browser``
+    wants its own voice, so answering yes would send the text somewhere the
+    chosen branch says it must not go.
+    """
+    if voice_settings.speaking() != "server":
+        return False
+    uri = remote.service_uri()
+    # Taken at its word rather than probed: the browser asks this on every page
+    # load, and a synthesiser is allowed to be asleep until something needs
+    # speaking. What it is spoken to with still has to be installed, though --
+    # an HTTP one needs nothing beyond what the server already has, and a
+    # Wyoming one needs the optional dependency.
+    if remote.is_http_uri(uri):
+        return True
+    if remote.is_wyoming_uri(uri):
+        return remote.WYOMING
+    return _tts_state.available
+
+
+def worth_saying(text: str) -> str:
+    """Trim `text` to what is worth reading aloud, and write it as it is said.
+
+    Code read out loud is noise, and a synthesiser charged by the character has
+    no business with a thousand-line answer. Mirrors the same trimming in
+    `TTSManager.ts`, which applies it to the branches the browser speaks.
+
+    Measurements are spelled out here rather than there: a browser's own voice
+    and a hosted service both normalise what they are given, and a self-hosted
+    synthesiser reads the characters -- so "21 °C" comes out with no degrees in
+    it, and "5 m/s" comes out with a "slash".
+    """
+    return spoken.speakable(re.sub(r"```[\s\S]*?```", "code block", text)[:300])
+
+
+async def make_speech(text: str, asked_for: str = "") -> remote.Speech:
+    """Turn `text` into audio, by whichever synthesiser this deployment names."""
+    uri = remote.service_uri()
+    if remote.is_wyoming_uri(uri):
+        # Asked before any voice is judged, so the judging has its list to go by.
+        await _service_voices(uri)
+    # Chosen first, configured second: the environment says what this started
+    # with, and picking another in the dashboard is how someone tries one. A
+    # page's own choice is judged too: one made while the browser was speaking
+    # is a browser's voice, and still sent once the server speaks instead.
+    asked_for = _usable(asked_for)
+    configured = _usable(voice_settings.voice() or os.environ.get("TTS_VOICE", "").strip())
+    if remote.names_a_service(uri):
+        # No fallback to the default below: that name belongs to the synthesiser
+        # this process would have used, and a service asked for a voice it has
+        # never heard of refuses the whole request. Sending none is how it is
+        # asked for the one it is configured with.
+        return await remote.synthesise(uri, text, asked_for or configured)
+
+    voice = asked_for or configured or _tts_state.default_voice
+    # Bounded like every other synthesiser: this one is reached over the network
+    # too, and it is on the path of every reply said out loud -- a stream that
+    # stops arriving would keep the room counted as spoken to, and its
+    # microphone shut.
+    return await asyncio.wait_for(_made_here(text, voice), remote.TIMEOUT)
+
+
+async def _made_here(text: str, voice: str) -> remote.Speech:
+    """Synthesise in this process, with the optional dependency that does it."""
+    communicate = edge_tts.Communicate(text, voice)
+    chunks: list[bytes] = []
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            data = chunk.get("data")
+            if data:
+                chunks.append(data)
+    return remote.Speech(audio=b"".join(chunks), content_type="audio/mpeg")
+
+
+async def speak_here(text: str) -> None:
+    """Say `text` through this machine's own speakers.
+
+    For ``WACTORZ_TTS=host``, where the answer comes out of the room rather than
+    a page. Failures are logged and swallowed: the reply has already reached
+    whoever asked for it, and a silent machine is a worse answer than a quiet
+    one but not a reason to fail the turn.
+    """
+    if not text.strip():
+        return
+    spoken = worth_saying(text)
+    try:
+        # Around the making as well as the playing: until the audio exists there
+        # is nothing holding the playback lock, and a turn that started listening
+        # in that window would hear this reply begin and answer it.
+        with speaker.about_to_speak():
+            made = await make_speech(spoken)
+            await speaker.play(made.audio)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("[tts] Could not speak here: %s", exc)
+
+
+def speak_later(text: str) -> None:
+    """Say `text` through this machine's speakers, without the turn waiting for it.
+
+    The reply has reached whoever asked as soon as it is sent; holding the turn
+    open while the room hears it would hold the request that carried it, for as
+    long as the sentence takes to say. Replies still come out one at a time, in
+    the order they were given, behind the playback lock.
+
+    Counted as speaking from this call rather than from when the task first
+    runs, so a turn that starts listening in between does not hear the reply
+    begin. Released when the task is done however it ends -- a task cancelled
+    before it starts never runs its own code, so a release inside it would be
+    skipped and the room's microphone held shut for good.
+    """
+    if not text.strip():
+        return
+    intent = speaker.intend()
+    task = asyncio.create_task(speak_here(text))
+    _speeches.add(task)
+    task.add_done_callback(_speeches.discard)
+    task.add_done_callback(lambda _done: intent.release())
+
+
+def stop_speaking() -> None:
+    """Stop anything being said out loud, for a turn someone cancelled.
+
+    Speech not yet started is cancelled as well as the sentence playing: a
+    reply waiting for the speakers would otherwise begin the moment the stopped
+    one ended, after the interface had said everything stopped.
+    """
+    for task in list(_speeches):
+        task.cancel()
+    speaker.silence()
+
+
+async def _quiet_on_cleanup(_app: web.Application) -> None:
+    """Stop and wait out the speech still pending when the server stops."""
+    pending = list(_speeches)
+    stop_speaking()
+    await asyncio.gather(*pending, return_exceptions=True)
+
+
+def unknown_voice(name: str) -> str:
+    """Why `name` is not a voice this deployment can speak in, or "" when it may be.
+
+    Judged against the synthesiser's own list where there is one: this
+    process's, or what a Wyoming service described. An HTTP endpoint cannot say
+    what voices it has, so any name may be one of them; and a list not loaded
+    yet, or that could not be fetched, refuses nothing rather than everything.
+    """
+    uri = remote.service_uri()
+    if not name or remote.is_http_uri(uri):
+        return ""
+    if remote.is_wyoming_uri(uri):
+        known = _tts_state.service_voices.get(uri)
+    elif not _tts_state.available:
+        return (
+            f"{name!r} cannot be this deployment's voice: it has no synthesiser of its "
+            "own -- pip install 'wactorz[tts]', or name one with WACTORZ_TTS_URI"
+        )
+    else:
+        known = _tts_state.voices
+    if not known or name in {v["name"] for v in known}:
+        return ""
+    return f"this deployment's synthesiser has no voice {name!r}; GET /api/tts/voices lists them"
+
+
+#: The stored voices already said in the log to be ignored, so each is said once.
+_ignored_voices: set[str] = set()
+
+
+def _usable(configured: str) -> str:
+    """`configured`, or "" for the default when the synthesiser here does not have it.
+
+    For a voice stored before it could be checked -- a browser's own voice saved
+    as the deployment's, by a page that offered the wrong list. Sent anyway, it
+    would fail every reply; ignored, the deployment speaks in its default and says why.
+    """
+    problem = unknown_voice(configured)
+    if not problem:
+        return configured
+    if configured not in _ignored_voices:
+        _ignored_voices.add(configured)
+        logger.warning("[tts] Speaking in the default voice: %s", problem)
+    return ""
+
+
+def _reported_voice() -> str:
+    """The voice this deployment speaks in, as far as the browser needs to know.
+
+    Empty for a named service: its voices are its own, and naming the one this
+    process would have used describes a synthesiser that is not being asked.
+    """
+    configured = _usable(voice_settings.voice() or os.getenv("TTS_VOICE", "").strip())
+    if remote.names_a_service(remote.service_uri()):
+        return configured
+    # Stripped and `or`-ed rather than given as a default argument: a default
+    # applies only when the name is absent, and `.env.template` tells you to
+    # leave this one empty for it. `load_dotenv` then supplies "", which reached
+    # the synthesiser and was refused, so the documented setup produced no speech
+    # at all. Whitespace goes the same way, because a `.env` line keeps trailing
+    # spaces more often than anyone means it to.
+    return configured or _tts_state.default_voice
+
+
+def _why_silent() -> str:
+    """Why this deployment will not speak, in terms of what to change.
+
+    Named exactly rather than listed: the reasons ask for different things, and
+    a message offering all of them points at the wrong one every time but once.
+    The address itself is never quoted -- the browser is told what to fix, not
+    where this deployment's network keeps its services.
+    """
+    if voice_settings.speaking() == "host":
+        return "this deployment speaks through its own speakers (WACTORZ_TTS=host)"
+    if voice_settings.speaking() != "server":
+        return (
+            f"this deployment speaks through '{voice_settings.speaking()}', not here "
+            "— change it in Settings, or set WACTORZ_TTS=server"
+        )
+    uri = remote.service_uri()
+    if remote.is_wyoming_uri(uri) and not remote.WYOMING:
+        return "WACTORZ_TTS_URI names a Wyoming synthesiser — pip install 'wactorz[tts]'"
+    return "no synthesiser: set WACTORZ_TTS_URI, or pip install 'wactorz[tts]'"
 
 
 def public_config(_app: web.Application) -> dict[str, Any]:
     """Non-secret TTS config for the browser."""
+    # The address is deliberately absent, as it is for recognition: the browser
+    # never speaks to the synthesiser, and where it lives is a fact about the
+    # network this deployment sits on.
     return {
-        "available": _tts_state.available,
-        # Stripped and `or`-ed rather than given as a default argument: a
-        # default applies only when the name is absent, and `.env.template`
-        # tells you to leave this one empty for it. `load_dotenv` then supplies
-        # "", which reached the synthesiser and was refused, so the documented
-        # setup produced no speech at all. Whitespace goes the same way, because
-        # a `.env` line keeps trailing spaces more often than anyone means it to.
-        "voice": os.getenv("TTS_VOICE", "").strip() or _tts_state.default_voice,
+        "mode": voice_settings.speaking(),
+        "available": synthesiser_available(),
+        "voice": _reported_voice(),
     }
 
 
@@ -86,21 +363,53 @@ async def _warm_tts_voices(_app: web.Application | None = None) -> None:
         _tts_state.voices = []
 
 
+async def _service_voices(uri: str) -> list[dict[str, str]]:
+    """The voices the Wyoming synthesiser at `uri` describes, asked once and kept.
+
+    Not kept when it cannot be asked: a synthesiser still starting has voices
+    all the same, and remembering it as having none would leave every name
+    unchecked until the next restart.
+    """
+    known = _tts_state.service_voices.get(uri)
+    if known is not None:
+        return known
+    try:
+        known = await remote.wyoming_voices(uri)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Down, refusing, or not a synthesiser at all: speaking will say which.
+        logger.warning("[tts] Could not ask the synthesiser for its voices: %s", exc)
+        return []
+    _tts_state.service_voices[uri] = known
+    return known
+
+
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
 async def tts_voices_handler(_request: web.Request) -> web.Response:
-    """GET /api/tts/voices — list available edge-tts voices."""
+    """GET /api/tts/voices — the voices this deployment can speak in.
+
+    A Wyoming synthesiser is asked for its own. An HTTP endpoint has no way to
+    say, so it answers with nothing rather than a guess, and the browser reads
+    an empty list as "no choice to make here" and speaks in whatever the service
+    is configured for.
+    """
+    uri = remote.service_uri()
+    if remote.is_wyoming_uri(uri):
+        return web.json_response(await _service_voices(uri))
+    if remote.is_http_uri(uri):
+        return web.json_response([])
     if _tts_state.voices is None:
         await _warm_tts_voices()
     return web.json_response(_tts_state.voices or [])
 
 
 async def tts_handler(request: web.Request) -> web.Response:
-    """POST /api/tts {"text": ..., "voice": ...} — synthesize speech via edge-tts.
+    """POST /api/tts {"text": ..., "voice": ...} — speak the text.
 
-    Returns audio/mpeg. 503 if edge-tts is not installed so the frontend
-    falls back to the Web Speech API transparently.
+    Where the speech is made follows ``WACTORZ_TTS_URI``; the audio comes back
+    under whatever type that produced. 503 when this deployment will not speak,
+    so the browser falls back to the Web Speech API transparently.
 
     POST rather than GET because this route does work: each call synthesizes
     audio through an outbound service. A GET is assumed to be a read, and any
@@ -109,11 +418,8 @@ async def tts_handler(request: web.Request) -> web.Response:
     Origin check relies on. A POST carries a body, so it cannot be triggered
     that way.
     """
-    if not _tts_state.available:
-        return web.Response(
-            status=503,
-            text="edge-tts not installed — pip install 'wactorz[tts]'",
-        )
+    if not synthesiser_available():
+        return web.Response(status=503, text=_why_silent())
 
     try:
         body = await request.json()
@@ -126,23 +432,15 @@ async def tts_handler(request: web.Request) -> web.Response:
     if not text:
         return web.Response(status=400, text="text is required")
 
-    # Mirror TTSManager.ts: strip code blocks, cap at 300 chars.
-    text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
+    text = worth_saying(text)
 
-    default_voice = os.environ.get("TTS_VOICE", "").strip() or _tts_state.default_voice
-    voice = str(body.get("voice") or "") or default_voice
+    asked_for = str(body.get("voice") or "").strip()
 
     try:
-        communicate = edge_tts.Communicate(text, voice)
-        chunks: list[bytes] = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                data = chunk.get("data")
-                if data:
-                    chunks.append(data)
+        spoken = await make_speech(text, asked_for)
         return web.Response(
-            body=b"".join(chunks),
-            content_type="audio/mpeg",
+            body=spoken.audio,
+            content_type=spoken.content_type,
             headers={"Cache-Control": "no-store"},
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught

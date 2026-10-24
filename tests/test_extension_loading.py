@@ -195,6 +195,12 @@ def _entry_points(monkeypatch: pytest.MonkeyPatch, *entries: _EntryPoint) -> Non
     monkeypatch.setattr(ext, "_entry_point_names", {})
 
 
+def _built_ins(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The names of the extensions wactorz ships, found with no package installed."""
+    _entry_points(monkeypatch)
+    return [ext._short_name(m) for m in ext.discover(refresh=True)]
+
+
 class TestExtensionsFromOtherPackages:
     def test_an_installed_package_is_loaded_after_the_built_ins_under_its_entry_point_name(
         self, monkeypatch: pytest.MonkeyPatch
@@ -202,12 +208,13 @@ class TestExtensionsFromOtherPackages:
         mlops = _external(
             "wactorz_mlops.ext", setup=_setup_ok, public_config=lambda _app: {"designer": 1}
         )
+        built_ins = _built_ins(monkeypatch)
         _entry_points(monkeypatch, _EntryPoint("mlops", "wactorz_mlops.ext", mlops))
 
         found = ext.discover(refresh=True)
 
         assert found[-1] is mlops
-        assert [ext._short_name(m) for m in found[:-1]] == ["tts"]
+        assert [ext._short_name(m) for m in found[:-1]] == built_ins
         assert ext._short_name(mlops) == "mlops"
         app = web.Application()
         ext.setup_all(app)
@@ -231,6 +238,7 @@ class TestExtensionsFromOtherPackages:
     def test_a_broken_or_hookless_entry_point_is_skipped_and_said(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
+        built_ins = _built_ins(monkeypatch)
         _entry_points(
             monkeypatch,
             _EntryPoint("broken", "nope.ext", error=ImportError("no module named nope")),
@@ -241,7 +249,8 @@ class TestExtensionsFromOtherPackages:
         with caplog.at_level("WARNING"):
             found = ext.discover(refresh=True)
 
-        assert [ext._short_name(m) for m in found] == ["tts", "fine"]
+        assert built_ins
+        assert [ext._short_name(m) for m in found] == [*built_ins, "fine"]
         assert "broken = nope.ext: no module named nope" in caplog.text
         assert "mute = quiet.ext: it has no setup(app)" in caplog.text
 

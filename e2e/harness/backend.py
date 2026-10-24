@@ -45,6 +45,19 @@ LEFT_EMPTY = (
     "WACTORZ_LOG_FORMAT",
     "WACTORZ_MODEL_CODE_NODE",
     "WACTORZ_MODEL_CODE_ON_MAIN",
+    # Voice: on `host` the backend would speak every reply through this
+    # machine's speakers, and the other branches reach services this suite does
+    # not run.
+    "WACTORZ_STT",
+    "WACTORZ_STT_URI",
+    "WACTORZ_TTS",
+    "WACTORZ_TTS_URI",
+    "WACTORZ_WAKE",
+    "WACTORZ_WAKE_WORDS",
+    "WACTORZ_WAKE_MODEL",
+    "WACTORZ_VAD_MODEL",
+    "WACTORZ_WAKE_SOUND",
+    "TTS_VOICE",
 )
 
 #: The line `_print_ready_banner` puts on stdout once everything is actually up.

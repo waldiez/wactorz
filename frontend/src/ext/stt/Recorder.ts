@@ -3,23 +3,14 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Backend-backed speech-to-text.
+ * Microphone capture for the branches that record in the browser.
  *
- * Records microphone audio with MediaRecorder + getUserMedia (supported
- * wherever audio capture is allowed) and POSTs it to the server's STT endpoint,
- * so the actual recognition happens server-side.
+ * Recording is MediaRecorder + getUserMedia, which is available wherever audio
+ * capture is allowed at all. What it produces is converted to WAV before it is
+ * sent, because the recogniser reads PCM and the server carries no codec.
  */
 
-/**
- * Whether the mic button is shown. Off by default, and `/api/stt` does not
- * exist yet — this is a switch for developing the feature, not a per-deploy
- * option. While off, the mic button is not rendered at all.
- *
- * Build-time for that reason alone. Once the endpoint lands this becomes a
- * question only the server can answer, and it should move to `/api/config`
- * beside `uploads.enabled` rather than stay in the bundle.
- */
-export const STT_ENABLED = import.meta.env["VITE_STT_ENABLED"] === "true";
+import { toWav } from "./wav";
 
 export class SpeechToText {
     private recorder: MediaRecorder | null = null;
@@ -80,10 +71,14 @@ export class SpeechToText {
         return blob ? this.transcribe(blob) : "";
     }
 
-    /** POST recorded audio to the backend STT endpoint for transcription. */
+    /** POST recorded audio to the recognition endpoint and return the transcript. */
     async transcribe(blob: Blob): Promise<string> {
+        // Converted here rather than sent as recorded: the endpoint reads PCM,
+        // and decoding WebM server-side would put a codec between the feature
+        // and working at all.
+        const wav = await toWav(blob);
         const body = new FormData();
-        body.append("audio", blob, "speech.webm");
+        body.append("audio", wav, "speech.wav");
         const res = await fetch(`${this.apiBase}/api/stt`, { method: "POST", body });
         if (!res.ok) {
             throw new Error(`STT failed (${res.status})`);

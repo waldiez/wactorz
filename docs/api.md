@@ -453,12 +453,40 @@ finalises and posts `⏹ Stopped.` over the WebSocket.
 
 ---
 
-### TTS
+### Speech
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/tts/voices` | List available voices |
-| `GET` | `/api/tts` | Synthesize speech (`?text=...&voice=...`) |
+| `GET` | `/api/tts/voices` | The voices there are to choose between, which may be none |
+| `POST` | `/api/tts` | Turn `{"text": ..., "voice": ...}` into audio |
+| `POST` | `/api/stt` | Transcribe an uploaded clip (`WACTORZ_STT=server` only) |
+| `POST` | `/api/stt/listen` | Listen through this machine's microphone (`WACTORZ_STT=host` only) |
+| `POST` | `/api/voice` | Choose which branch listens, speaks and wakes, and the voice, while running |
+
+`POST /api/voice` takes any of `{"listening": ..., "speaking": ..., "waking": ...,
+"voice": ...}`, or `{"reset": true}` to hand every choice back to the
+environment, and answers with what is now in force and an `allowed` list for each
+branch setting. The environment is the ceiling: `WACTORZ_STT`, `WACTORZ_TTS` and
+`WACTORZ_WAKE` are the most each may be set to, in the order `off`, `browser`,
+`server`, `host` (`off`, `on` for waking), and a branch past it is refused with
+400 naming the variable. A request with one refused setting changes nothing.
+
+`POST /api/stt/listen` is the control the `host` branch has instead of a button:
+nobody is necessarily at a screen, so something has to ask it to listen. It takes
+no body, records until whoever is speaking stops, and answers
+`{"text": ..., "heard": true|false}`. What it heard is routed as though typed, so
+an `@mention` reaches the agent it names and anything else reaches main, and both
+the question and the answer are written to the chat log.
+
+**It holds the request while it listens.** A turn can run to twenty seconds of
+recording and then as long again to transcribe, so a caller wants a client
+timeout of a couple of minutes rather than the usual few seconds. Two callers
+asking at once are served one after another -- one microphone, one turn.
+
+It answers `{"heard": false, "speaking": true}` without recording while the
+machine is talking, so a room where `WACTORZ_TTS=host` as well does not hear its
+own reply and answer it. A caller polling in a loop should treat that as "try
+again shortly" rather than as silence.
 
 ---
 
@@ -527,6 +555,13 @@ After connection the server streams every MQTT message as a JSON object. Field n
 ```
 
 The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
+
+**Live recognition** runs over the same socket on the `server` branch with a
+`ws://` recogniser. The browser sends `{"type": "stt_start"}`, then the audio as
+binary frames, then `{"type": "stt_stop"}`; the server answers with
+`stt_partial` and `stt_final` frames (`{text, segment}`) as words are heard. On
+any other branch, or after `WACTORZ_STT_LIVE_SECONDS`, it sends `stt_error` with
+a `message` saying why, and the session is over.
 
 ---
 

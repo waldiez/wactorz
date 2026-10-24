@@ -70,6 +70,9 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | `python` | alertmanager | `alertmanager:9093` | `127.0.0.1:9093` |
 | `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
 | `sandbox` | wactorz-sandbox | — | none: it dials the broker |
+| `voice` | voice-stt (Whisper) | `tcp://voice-stt:10300` | `127.0.0.1:10300` |
+| `voice` | voice-tts (Piper) | `tcp://voice-tts:10200` | `127.0.0.1:10200` |
+| `voice-live` | voice-stt-live (sherpa-onnx streaming) | `ws://voice-stt-live:6006` | `127.0.0.1:6006` |
 
 Every port except the broker's TLS one is published to this host only. Reach the
 dashboard and the API from elsewhere through a TLS proxy; `HA_EXTERNAL_BIND=0.0.0.0`

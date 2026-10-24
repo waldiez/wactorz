@@ -312,7 +312,10 @@ lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs
 # Advisories the audit passes over, each with the reason. Pillow fixes these in
 # 13.0, which needs Python 3.11, so the lock keeps 12.3 for Python 3.10 alone and
 # no fixed release exists there; every other Python, the images included, locks
-# 13. Remove them when Python 3.10 is dropped or Pillow ships a fix for it.
+# 13. The last five are the same case: two more for Pillow 12.3, then three for
+# filelock, fixed in 4.2.1, which needs 3.11 too, so 3.10 keeps the 4.0 line
+# (only torch, an optional dependency, pulls it in). Remove them when Python 3.10
+# is dropped or a fix reaches it.
 AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
 	GHSA-q45j-58j2-45rg GHSA-462x-pgg6-55fp GHSA-8g5g-8vmr-9782 \
 	GHSA-c6hw-5grf-ff96 GHSA-p4wg-p73j-c528 GHSA-pchr-8j38-3x4p \
@@ -325,7 +328,9 @@ AUDIT_IGNORE := GHSA-65qm-jvmh-6pqg GHSA-vx6w-vv9f-6gvg GHSA-58r4-6rv3-gfh8 \
 	GHSA-7mwm-ghpf-9vrm GHSA-4rm8-3hmm-39fg GHSA-9v9v-9qvf-h2hj \
 	GHSA-g4qv-2jxx-769h GHSA-p8hx-v2p6-rp84 GHSA-3j72-p6qg-6xp7 \
 	GHSA-g842-9rc4-69pw GHSA-78g4-xqwv-q3g8 GHSA-24rc-8hj2-v98c \
-	GHSA-g7cr-3p24-7wf7 GHSA-mrfp-p49p-3hf2 GHSA-v9pv-5gc8-w2m6
+	GHSA-g7cr-3p24-7wf7 GHSA-mrfp-p49p-3hf2 GHSA-v9pv-5gc8-w2m6 \
+	GHSA-654x-cwwv-5j9c GHSA-5x8w-8jj5-q52h \
+	GHSA-v4x8-3wr5-3wq8 GHSA-9vhv-jxww-xfm5 GHSA-567q-5qvw-pf92
 
 audit: ## Known vulnerabilities in the locked dependencies (needs uv)
 	$(require-uv)

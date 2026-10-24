@@ -16,6 +16,7 @@ import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
 import { el, iconButton, named } from "../dom";
+import { MAIN_AGENT } from "../../agents/naming";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
 export function composerPlaceholder(target: string): string {
@@ -137,12 +138,9 @@ export const TURN_IDLE_TIMEOUT_MS = 60_000;
  * transport dropping out of `live`, and a silence timeout as the backstop for a
  * terminating frame that is simply lost on a connection that still looks fine.
  */
-/** The agent a command's reply comes from, as the server attributes it. */
-const COMMAND_ANSWERER = "main";
-
 /** Who will answer what was sent to `target`: main for a command, else `target`. */
 function answererOf(content: string | undefined, target: string | undefined): string | undefined {
-    return content?.startsWith("/") ? COMMAND_ANSWERER : target;
+    return content?.startsWith("/") ? MAIN_AGENT : target;
 }
 
 function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): void {

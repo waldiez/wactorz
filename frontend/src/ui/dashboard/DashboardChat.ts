@@ -10,7 +10,7 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import { askingAgents, canDirectMessage, canOpenThread, messageableNames } from "./agentState";
+import { askingAgents, canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
@@ -21,10 +21,10 @@ import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import {
     markAnswered,
-    preferredChatTarget,
     replacementTarget,
     resolveSendTarget,
     sendBlockedReason,
+    settlingTarget,
     stripLeadingMention,
     voiceThreadTarget,
 } from "./chatRouting";
@@ -467,25 +467,19 @@ export class DashboardChat {
      * shown nothing.
      */
     resolveDefaultTarget(): void {
+        const before = this.chatTarget;
         const agents = [...this.host.agents.values()];
-        const remembered = rememberedConversation();
-        if (!this.chatTarget) {
-            this.chatTarget = preferredChatTarget(agents, remembered);
-            return;
-        }
-        const wanted = remembered ?? MAIN_AGENT;
-        if (this._targetSettled || wanted === this.chatTarget) {
-            return;
-        }
-        // Only ever an upgrade of a fallback that still stands. A target that
-        // has gone belongs to dropTargetIfGone, which moves the user and says
-        // so; stepping aside here would move them off it in silence.
-        const current = agents.find(a => a.name === this.chatTarget);
-        if (!current || !canDirectMessage(current)) {
-            return;
-        }
-        if (agents.some(a => a.name === wanted && canDirectMessage(a))) {
-            this.chatTarget = wanted;
+        this.chatTarget = settlingTarget(agents, before, rememberedConversation(), this._targetSettled);
+        // Only for a chat already on screen: one still being built is drawn,
+        // and its history loaded, once it is attached (`afterMount`).
+        if (this.chatTarget !== before && this.root.querySelector("#af-chat-pane-header")) {
+            // A fresh page lands on the chat before any agent has arrived,
+            // showing nobody's conversation, and the target filled in afterwards
+            // has to reach the header and thread too. Not claimed: it is what
+            // the page chose, not what the user did.
+            this._refreshForTarget();
+            this._syncPaneVisibility();
+            void this.loadHistory(this.chatTarget);
         }
     }
 

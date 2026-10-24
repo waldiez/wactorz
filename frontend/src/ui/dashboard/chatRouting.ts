@@ -143,6 +143,36 @@ export function preferredChatTarget(agents: AgentInfo[], remembered: string | nu
 }
 
 /**
+ * The conversation to have open, given the one open now (`current`, "" for none).
+ *
+ * None yet: the preferred one. One the page fell back on, before it has been
+ * shown (`settled` false): the remembered one, or main, once that has arrived.
+ * Anything else stays as it is.
+ */
+export function settlingTarget(
+    agents: AgentInfo[],
+    current: string,
+    remembered: string | null,
+    settled: boolean,
+): string {
+    if (!current) {
+        return preferredChatTarget(agents, remembered);
+    }
+    const wanted = remembered ?? MAIN_AGENT;
+    if (settled || wanted === current) {
+        return current;
+    }
+    // Only ever an upgrade of a fallback that still stands. A target that has
+    // gone belongs to dropTargetIfGone, which moves the user and says so;
+    // stepping aside here would move them off it in silence.
+    const open = agents.find(a => a.name === current);
+    if (!open || !canDirectMessage(open)) {
+        return current;
+    }
+    return agents.some(a => a.name === wanted && canDirectMessage(a)) ? wanted : current;
+}
+
+/**
  * `messages` with the question `id` marked answered by `option`, and that message.
  *
  * Null when no question with that id is held: an answer to a question this

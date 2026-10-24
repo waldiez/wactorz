@@ -52,6 +52,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The stop button goes once a command typed in an agent's thread is answered.** A command such as `/agents` typed in the `catalog` thread is answered by main, under main's name, but the dashboard waited for a reply from `catalog`, so the stop button stayed up and Send stayed disabled for a minute after the answer had arrived. A command's turn now waits on main.
+
+- **Settings scrolls from the edge of the window.** The view was capped at a reading width and scrolled inside that width, so on a wide window its scrollbar sat in the middle of the page and the space beside it did not scroll. The cards keep their width; the view now spans the page.
+
 - **Server speech works again.** Microsoft's read-aloud service, which edge-tts speaks to, began refusing the edge-tts release the lock took, so every reply meant to be spoken failed with `403` and the browser fell back to its own voice. `wactorz[tts]` now needs edge-tts 7.3.1 or later, which it accepts, so an install that already had an older one is upgraded rather than kept.
 
 - **Two chat turns at once each keep their own answer.** The turns one dashboard tab sends run at the same time, and they shared one reply buffer: a turn that ended while another was still streaming closed that one's stream on the page, and filed its text in the chat log under its own name. A slow agent made this rare; an answer read aloud through the machine's own speakers, which keeps its turn open until it has been said, made it the usual case. Each turn now answers through its own replies.

@@ -178,6 +178,19 @@ describe("buildIobar", () => {
             expect(send.disabled).toBe(false);
         });
 
+        it("waits on main for a command typed in another agent's thread", () => {
+            const bar = mount(makeDeps());
+            const send = bar.querySelector<HTMLButtonElement>(".af-send-btn")!;
+            const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
+
+            emit("af-send-message", { content: "/agents", target: "catalog", attachments: [] });
+            // Main answers a command wherever it was typed, under its own name.
+            chatFrom("main");
+
+            expect(send.disabled).toBe(false);
+            expect(stop.style.display).toBe("none");
+        });
+
         it("tracks the target of the newest turn, not the first", () => {
             const bar = mount(makeDeps());
             const send = bar.querySelector<HTMLButtonElement>(".af-send-btn")!;

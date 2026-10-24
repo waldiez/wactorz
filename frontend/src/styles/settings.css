@@ -5,12 +5,15 @@
 /* ── Settings view ────────────────────────────────────────────── */
 .af-settings {
   padding: 24px 28px;
-  max-width: 680px;
   display: flex;
   flex-direction: column;
   gap: 28px;
   overflow-y: auto;
   height: 100%;
+}
+.af-settings > * {
+  box-sizing: border-box;
+  max-width: 680px;
 }
 .af-settings-title {
   font-size: 16px;

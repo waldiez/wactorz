@@ -44,6 +44,20 @@ class TooLarge(Exception):
     """The clip outgrew the limit while being read."""
 
 
+class NoAudioPartError(LookupError):
+    """Raised when a posted body carries no part named ``audio``."""
+
+    def __init__(self) -> None:
+        super().__init__("no audio part")
+
+
+class NoTranscriptError(RuntimeError):
+    """Raised when a recogniser hangs up before it has said what it heard."""
+
+    def __init__(self) -> None:
+        super().__init__("the recogniser closed the connection without transcribing")
+
+
 #: Largest clip accepted, counted while reading rather than trusting a header.
 #: A minute of 16-bit 16 kHz mono is about 2 MB, so this bounds an utterance
 #: generously while still refusing a stream that never ends.
@@ -192,7 +206,7 @@ async def _exchange(
     while True:
         event = await client.read_event()
         if event is None:
-            raise RuntimeError("the recogniser closed the connection without transcribing")
+            raise NoTranscriptError
         if Transcript.is_type(event.type):
             # Stripped: recognisers conventionally lead with a space, and the
             # caller appends this to whatever the composer already holds.
@@ -444,7 +458,7 @@ async def _read_audio(request: web.Request) -> bytes:
             if len(collected) > MAX_AUDIO_BYTES:
                 raise TooLarge
         return bytes(collected)
-    raise LookupError("no audio part")
+    raise NoAudioPartError
 
 
 async def stt_handler(request: web.Request) -> web.Response:
@@ -469,7 +483,7 @@ async def stt_handler(request: web.Request) -> web.Response:
         raw = await _read_audio(request)
     except TooLarge:
         return web.json_response({"error": f"larger than {MAX_AUDIO_BYTES} bytes"}, status=413)
-    except LookupError:
+    except NoAudioPartError:
         return web.json_response({"error": "expected an audio part"}, status=400)
 
     if not raw:

@@ -35,6 +35,13 @@ SETTINGS: dict[str, tuple[str, ...]] = {
 }
 
 
+class NoStoreError(RuntimeError):
+    """Raised when a choice is made where nothing can remember it."""
+
+    def __init__(self) -> None:
+        super().__init__("this deployment has no store to remember settings in")
+
+
 def _stored() -> dict[str, Any]:
     """Whatever has been chosen so far, or nothing."""
     db = get_db()
@@ -118,5 +125,5 @@ def _write(settings: dict[str, Any]) -> None:
     """Store the chosen settings, or say why they will not be remembered."""
     db = get_db()
     if db is None:
-        raise RuntimeError("this deployment has no store to remember settings in")
+        raise NoStoreError
     db.kv_set("_system", _KEY, settings)

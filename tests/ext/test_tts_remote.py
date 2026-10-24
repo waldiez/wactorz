@@ -177,6 +177,18 @@ class TestSpeakingThroughAWyomingService:
             await remote.synthesise(uri, "hello", "")
 
 
+class TestWithoutTheProtocolInstalled:
+    async def test_a_wyoming_address_says_what_to_install(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(remote, "WYOMING", False)
+
+        # Said before connecting: without the library there is nothing to
+        # speak the protocol with, whatever is listening at the address.
+        with pytest.raises(remote.SynthesisError, match=r"pip install 'wactorz\[tts\]'"):
+            await remote.synthesise("tcp://127.0.0.1:1", "hello", "")
+
+
 class TestASynthesiserThatStops:
     """A service that goes quiet must not take the request with it."""
 

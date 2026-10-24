@@ -55,6 +55,39 @@ WAV = "audio/wav"
 MAX_AUDIO = 10 * 1024 * 1024
 
 
+class SynthesisError(RuntimeError):
+    """Raised when a synthesiser does not answer with something to play.
+
+    One class for every way it can fail, so a caller that speaks a reply catches
+    one thing; the reasons are named here rather than at each raise.
+    """
+
+    @classmethod
+    def uninstalled(cls) -> SynthesisError:
+        """The optional dependency that speaks Wyoming is absent."""
+        return cls("wyoming not installed — pip install 'wactorz[tts]'")
+
+    @classmethod
+    def refused(cls, reason: object) -> SynthesisError:
+        """The synthesiser answered with an error of its own."""
+        return cls(f"synthesiser refused: {reason}")
+
+    @classmethod
+    def silent(cls) -> SynthesisError:
+        """The synthesiser finished without sending any samples."""
+        return cls("synthesiser returned no audio")
+
+    @classmethod
+    def answered(cls, status: int) -> SynthesisError:
+        """An HTTP synthesiser answered with an error status."""
+        return cls(f"synthesiser answered {status}")
+
+    @classmethod
+    def too_long(cls) -> SynthesisError:
+        """An HTTP synthesiser kept sending past the ceiling."""
+        return cls("synthesiser answered with more audio than one turn can need")
+
+
 @dataclass(frozen=True)
 class Speech:
     """Synthesised audio, and what it is."""
@@ -98,7 +131,7 @@ async def _wyoming(uri: str, text: str, voice: str) -> Speech:
     that a hand-rolled reader is liable to mistake for the first.
     """
     if not WYOMING:
-        raise RuntimeError("wyoming not installed — pip install 'wactorz[tts]'")
+        raise SynthesisError.uninstalled()
 
     request = Synthesize(text=text)
     if voice:
@@ -129,7 +162,7 @@ async def _collect(client: AsyncClient) -> Speech:
             break
         if Error.is_type(event.type):
             failure = Error.from_event(event)
-            raise RuntimeError(f"synthesiser refused: {failure.text or failure.code}")
+            raise SynthesisError.refused(failure.text or failure.code)
         if AudioChunk.is_type(event.type):
             chunk = AudioChunk.from_event(event)
             rate, width, channels = chunk.rate, chunk.width, chunk.channels
@@ -141,7 +174,7 @@ async def _collect(client: AsyncClient) -> Speech:
     # rather than reporting that it failed.
     pcm = b"".join(chunks)
     if not pcm:
-        raise RuntimeError("synthesiser returned no audio")
+        raise SynthesisError.silent()
     return Speech(audio=_as_wav(pcm, rate, width, channels), content_type=WAV)
 
 
@@ -172,12 +205,12 @@ async def _http(uri: str, text: str, voice: str) -> Speech:
         session.post(uri, json=body) as resp,
     ):
         if resp.status >= 400:
-            raise RuntimeError(f"synthesiser answered {resp.status}")
+            raise SynthesisError.answered(resp.status)
         content_type = resp.headers.get("Content-Type", WAV)
         # Read to a ceiling rather than to the end: this is an address an
         # operator gave, but a wrong one can answer with a stream that never
         # stops, and that must cost a refusal rather than this process.
         audio = await resp.content.read(MAX_AUDIO + 1)
     if len(audio) > MAX_AUDIO:
-        raise RuntimeError("synthesiser answered with more audio than one turn can need")
+        raise SynthesisError.too_long()
     return Speech(audio=audio, content_type=content_type)

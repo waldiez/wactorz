@@ -73,7 +73,36 @@ _intending = 0
 
 
 class NoSpeakers(RuntimeError):
-    """Raised when this machine cannot play audio."""
+    """Raised when this machine cannot play audio.
+
+    The reasons are named here rather than written at each raise, as
+    ``listener.NoMicrophone`` names the ones for listening.
+    """
+
+    @classmethod
+    def uninstalled(cls) -> NoSpeakers:
+        """The optional dependency that opens a device is absent."""
+        return cls("sounddevice not installed — pip install 'wactorz[host]'")
+
+    @classmethod
+    def stalled(cls) -> NoSpeakers:
+        """The device stopped taking samples and the speech ran out of time."""
+        return cls("the sound device stopped accepting audio")
+
+    @classmethod
+    def needs_miniaudio(cls) -> NoSpeakers:
+        """The audio is not a 16-bit WAV, and nothing else can decode it here."""
+        return cls("only 16-bit WAV can be played without miniaudio — pip install 'wactorz[host]'")
+
+    @classmethod
+    def undecodable(cls, exc: object) -> NoSpeakers:
+        """The decoder was there and could not read this audio."""
+        return cls(f"cannot decode this audio: {exc}")
+
+    @classmethod
+    def failed(cls, exc: object) -> NoSpeakers:
+        """The device refused while the samples were being written."""
+        return cls(f"playback failed: {exc}")
 
 
 def is_speaking() -> bool:
@@ -143,7 +172,7 @@ async def play(audio: bytes) -> None:
     a device that stops accepting samples otherwise holds the turn for ever.
     """
     if not AUDIO:
-        raise NoSpeakers("sounddevice not installed — pip install 'wactorz[host]'")
+        raise NoSpeakers.uninstalled()
     samples, rate, channels = _decode(audio)
     seconds = len(samples) / (rate * channels * 2)
     async with _speaking:
@@ -164,7 +193,7 @@ async def play(audio: bytes) -> None:
             # The thread is left to finish on its own: it is blocked inside
             # portaudio, where there is nothing to cancel it with. Saying so
             # matters more than pretending the room went quiet.
-            raise NoSpeakers("the sound device stopped accepting audio") from exc
+            raise NoSpeakers.stalled() from exc
 
 
 def can_play(content_type: str) -> bool:
@@ -192,13 +221,11 @@ def _decode(audio: bytes) -> tuple[bytes, int, int]:
         pass  # not a WAV at all, which miniaudio may still know what to do with
 
     if not DECODES:
-        raise NoSpeakers(
-            "only 16-bit WAV can be played without miniaudio — pip install 'wactorz[host]'"
-        )
+        raise NoSpeakers.needs_miniaudio()
     try:
         decoded = miniaudio.decode(audio, output_format=miniaudio.SampleFormat.SIGNED16)
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        raise NoSpeakers(f"cannot decode this audio: {exc}") from exc
+        raise NoSpeakers.undecodable(exc) from exc
     return bytes(decoded.samples), decoded.sample_rate, decoded.nchannels
 
 
@@ -218,4 +245,4 @@ def _play_blocking(samples: bytes, rate: int, channels: int) -> None:
                     return
                 stream.write(samples[start : start + step])
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        raise NoSpeakers(f"playback failed: {exc}") from exc
+        raise NoSpeakers.failed(exc) from exc

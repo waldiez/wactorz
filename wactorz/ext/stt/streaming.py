@@ -91,6 +91,13 @@ def is_streaming_uri(uri: str) -> bool:
     return urlparse(uri).scheme in ("ws", "wss")
 
 
+class NoSessionError(RuntimeError):
+    """Raised when audio is sent, or readings asked for, before a session opens."""
+
+    def __init__(self) -> None:
+        super().__init__("no open session")
+
+
 class StreamingSession:
     """One live recognition, from the first frame of audio to the last word."""
 
@@ -128,7 +135,7 @@ class StreamingSession:
     async def feed(self, pcm: bytes) -> None:
         """Send one frame of 32-bit float PCM at `SAMPLE_RATE`."""
         if self._ws is None:
-            raise RuntimeError("no open session")
+            raise NoSessionError
         await self._ws.send_bytes(pcm)
 
     async def finish(self) -> None:
@@ -143,7 +150,7 @@ class StreamingSession:
         server reports an endpoint by starting to number the next one.
         """
         if self._ws is None:
-            raise RuntimeError("no open session")
+            raise NoSessionError
         latest: Partial | None = None
         async for message in self._ws:
             if message.type is not aiohttp.WSMsgType.TEXT:

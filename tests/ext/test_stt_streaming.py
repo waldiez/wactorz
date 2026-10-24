@@ -19,6 +19,7 @@ from wactorz.ext.stt.streaming import (
     DONE,
     MAX_PENDING_FRAMES,
     LiveTranscription,
+    NoSessionError,
     Partial,
     StreamingSession,
     is_streaming_uri,
@@ -182,6 +183,17 @@ class TestWhenTheRecogniserIsNotThere:
     async def test_connecting_fails_rather_than_hanging(self) -> None:
         with pytest.raises(Exception):
             async with StreamingSession("ws://127.0.0.1:1/"):
+                pass
+
+
+class TestBeforeASessionOpens:
+    async def test_audio_is_refused_rather_than_dropped(self) -> None:
+        with pytest.raises(NoSessionError, match="no open session"):
+            await StreamingSession("ws://127.0.0.1:1/").feed(b"\x00" * 8)
+
+    async def test_there_are_no_readings_to_wait_for(self) -> None:
+        with pytest.raises(NoSessionError, match="no open session"):
+            async for _reading in StreamingSession("ws://127.0.0.1:1/").readings():
                 pass
 
 

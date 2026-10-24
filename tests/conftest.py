@@ -19,6 +19,7 @@ from wactorz.agents import llm_agent
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
+from wactorz.ext.stt import vad as stt_vad
 from wactorz.ext.voice import settings as voice_settings
 from wactorz.node import state as node_state
 from wactorz.web import runtime as web_runtime
@@ -105,6 +106,9 @@ def _no_ambient_voice_services(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(voice_settings, "STT_MODE", "off")
     monkeypatch.setattr(voice_settings, "TTS_MODE", "server")
     monkeypatch.setattr(voice_settings, "WAKE_MODE", "off")
+    # A model named in the developer's .env would have every listening test
+    # try Silero; a test that wants it names one.
+    monkeypatch.setattr(stt_vad, "MODEL", "")
     # And whatever was chosen at runtime, which now outranks the environment: a
     # branch picked once from the dashboard is remembered in the developer's own
     # store, and would decide tests that never mentioned it.

@@ -16,7 +16,7 @@ from aiohttp import web
 
 from wactorz.core.persistence import chat_turn_recorded
 from wactorz.ext import stt
-from wactorz.ext.stt import listener, streaming
+from wactorz.ext.stt import listener, streaming, vad
 
 
 def tone(seconds: float, level: float, rate: int = listener.RATE) -> bytes:
@@ -35,23 +35,23 @@ class TestHowLoudSomethingIs:
     """The measure the whole branch's endpointing rests on."""
 
     def test_silence_measures_as_nothing(self) -> None:
-        assert listener.loudness(b"\x00\x00" * 100) == 0.0
+        assert vad.loudness(b"\x00\x00" * 100) == 0.0
 
     def test_a_loud_block_measures_near_full_scale(self) -> None:
-        assert listener.loudness(tone(0.05, 0.9)) > 0.5
+        assert vad.loudness(tone(0.05, 0.9)) > 0.5
 
     def test_a_quiet_block_is_still_measured(self) -> None:
         # A laptop microphone is quieter than most people expect; a measure that
         # rounded this to nothing would make the branch deaf.
-        assert 0 < listener.loudness(tone(0.05, 0.005)) < 0.01
+        assert 0 < vad.loudness(tone(0.05, 0.005)) < 0.01
 
     def test_an_odd_trailing_byte_does_not_break_it(self) -> None:
         # A block is 16-bit samples; a stray byte must not raise where a caller
         # is only asking how loud something was.
-        assert listener.loudness(b"\x00\x00\x01") >= 0.0
+        assert vad.loudness(b"\x00\x00\x01") >= 0.0
 
     def test_nothing_at_all_is_not_a_division(self) -> None:
-        assert listener.loudness(b"") == 0.0
+        assert vad.loudness(b"") == 0.0
 
 
 class TestWhetherThisMachineCanListen:
@@ -112,7 +112,7 @@ class TestDecidingWhenSomeoneHasFinished:
     """There is no button on this branch, so the silence has to end the turn."""
 
     async def test_it_stops_when_the_talking_stops(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        floor = int(listener.FLOOR_SECONDS / listener.BLOCK_SECONDS)
+        floor = int(vad.FLOOR_SECONDS / listener.BLOCK_SECONDS)
         a_room(monkeypatch, quiet(floor) + speech(10) + quiet(200))
 
         clip = await listener.listen(max_seconds=10.0, silence_seconds=0.3)
@@ -133,7 +133,7 @@ class TestDecidingWhenSomeoneHasFinished:
     async def test_the_opening_silence_does_not_end_the_turn(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        floor = int(listener.FLOOR_SECONDS / listener.BLOCK_SECONDS)
+        floor = int(vad.FLOOR_SECONDS / listener.BLOCK_SECONDS)
         # Someone taking a breath before speaking: ending on this silence would
         # cut them off before they started.
         a_room(monkeypatch, quiet(floor) + quiet(20) + speech(10) + quiet(200))
@@ -145,7 +145,7 @@ class TestDecidingWhenSomeoneHasFinished:
     async def test_it_gives_up_on_someone_who_never_stops(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        floor = int(listener.FLOOR_SECONDS / listener.BLOCK_SECONDS)
+        floor = int(vad.FLOOR_SECONDS / listener.BLOCK_SECONDS)
         a_room(monkeypatch, quiet(floor) + speech(10_000))
 
         clip = await listener.listen(max_seconds=1.0, silence_seconds=0.3)
@@ -157,7 +157,7 @@ class TestDecidingWhenSomeoneHasFinished:
     async def test_a_loud_room_does_not_hear_itself_talking(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        floor = int(listener.FLOOR_SECONDS / listener.BLOCK_SECONDS)
+        floor = int(vad.FLOOR_SECONDS / listener.BLOCK_SECONDS)
         # A fan, a fridge, a desk near a road: steady and well above silence.
         hum = [tone(listener.BLOCK_SECONDS, 0.02) for _ in range(floor + 200)]
         a_room(monkeypatch, hum)

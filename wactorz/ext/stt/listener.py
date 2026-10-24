@@ -4,10 +4,9 @@ The other branches are handed audio a browser captured, which means a person
 chose to send it. This one hears the room, so it has to decide for itself when
 someone has finished speaking: there is no button to let go of.
 
-That decision is made on loudness against the room's own noise floor rather than
-a fixed number. A quiet laptop microphone and a desk beside a fan differ by more
-than any constant would survive, and a threshold set too high hears nothing at
-all while reporting no error.
+Whether anyone is speaking is `vad`'s to say: Silero VAD where its model is
+configured, loudness against the room's own noise otherwise. How long a silence
+ends the turn is decided here.
 
 Audio is gathered and then transcribed, rather than streamed as it arrives.
 Nobody is watching words appear on this branch -- the machine answers aloud when
@@ -16,12 +15,13 @@ the sentence is done -- so the simpler shape is worth more than the latency.
 
 from __future__ import annotations
 
-import array
 import asyncio
 import io
 import logging
 import wave
 from typing import Any
+
+from . import vad
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +43,6 @@ RATE = 16000
 
 #: How much audio is examined at a time when deciding whether anyone is talking.
 BLOCK_SECONDS = 0.05
-
-#: How long the room is listened to before anything is said, to learn its floor.
-FLOOR_SECONDS = 0.4
-
-#: How far above the room's own noise a block must be to count as speech. Low
-#: enough for a laptop microphone, which is quieter than most people expect.
-OVER_FLOOR = 2.5
-
-#: The quietest a block can be and still count, however silent the room is. Stops
-#: a perfectly quiet room from making its own hiss into speech.
-FLOOR_MINIMUM = 0.002
 
 #: How long a silence ends the turn, and how long one turn may run regardless.
 SILENCE_SECONDS = 1.2
@@ -140,16 +129,6 @@ def available() -> bool:
     return _found
 
 
-def loudness(block: bytes) -> float:
-    """How loud one block of 16-bit samples is, as a fraction of full scale."""
-    samples = array.array("h")
-    samples.frombytes(block[: len(block) - len(block) % 2])
-    if not samples:
-        return 0.0
-    total = sum(float(s) * float(s) for s in samples)
-    return (total / len(samples)) ** 0.5 / 32768.0
-
-
 async def listen(
     max_seconds: float = MAX_SECONDS, silence_seconds: float = SILENCE_SECONDS
 ) -> bytes:
@@ -191,20 +170,15 @@ def _listen_blocking(max_seconds: float, silence_seconds: float) -> bytes:
         raise NoMicrophone.would_not_open(exc) from exc
 
     with stream:
-        floor = room_floor(stream, block_frames)
-        pcm = gather_turn(stream, block_frames, threshold_over(floor), max_seconds, silence_seconds)
+        detector = vad.for_stream(stream, block_frames, BLOCK_SECONDS, RATE)
+        pcm = gather_turn(stream, block_frames, detector, max_seconds, silence_seconds)
     return as_wav(pcm) if pcm else b""
-
-
-def threshold_over(floor: float) -> float:
-    """How loud a block must be to count as speech in a room this noisy."""
-    return max(floor * OVER_FLOOR, FLOOR_MINIMUM)
 
 
 def gather_turn(
     stream: Any,
     block_frames: int,
-    threshold: float,
+    detector: vad.SpeechDetector,
     max_seconds: float,
     silence_seconds: float,
 ) -> bytes:
@@ -223,7 +197,7 @@ def gather_turn(
     for _ in range(int(max_seconds / BLOCK_SECONDS)):
         block = bytes(stream.read(block_frames)[0])
         spoken.append(block)
-        if loudness(block) >= threshold:
+        if detector.is_speech(block):
             heard_anything = True
             quiet_for = 0.0
             continue
@@ -240,15 +214,6 @@ def gather_turn(
     seconds = sum(len(b) for b in spoken) / (RATE * 2)
     logger.info("[stt] Heard %.1fs from the room", seconds)
     return b"".join(spoken)
-
-
-def room_floor(stream: object, block_frames: int) -> float:
-    """Measure the room's own noise, so the threshold suits where it is."""
-    levels = [
-        loudness(bytes(stream.read(block_frames)[0]))  # type: ignore[attr-defined]
-        for _ in range(max(1, int(FLOOR_SECONDS / BLOCK_SECONDS)))
-    ]
-    return sum(levels) / len(levels)
 
 
 def as_wav(pcm: bytes) -> bytes:

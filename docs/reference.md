@@ -1340,6 +1340,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `WACTORZ_WAKE` | `on` to wait for a spoken phrase before a turn; `off` (default). Only meaningful with `WACTORZ_STT=host`, needs `wactorz[wake]` and a keyword model. Left `off`, Settings cannot turn it on |
 | `WACTORZ_WAKE_WORDS` | The phrases that wake it, separated by commas (default `hey waldiez`). Converted at startup, so an invented name costs no more than a common one; a name with a word in front of it is heard more reliably than the name alone |
 | `WACTORZ_WAKE_MODEL` | Where the keyword model lives. Unset by default: it is weights rather than code, fetched by a deployment that wakes |
+| `WACTORZ_VAD_MODEL` | Silero VAD's model (`silero_vad.onnx`, about 650 KB, from sherpa-onnx's `asr-models` release), for the `host` branch to tell speech from noise; needs `wactorz[vad]`. Unset by default: speech is then told by loudness against the room's noise floor, which keeps following the room. A model that is missing or will not load is said once in the log, and loudness used |
 
 ---
 

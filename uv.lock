@@ -6187,6 +6187,10 @@ tts = [
     { name = "edge-tts" },
     { name = "wyoming" },
 ]
+vad = [
+    { name = "sherpa-onnx" },
+    { name = "sherpa-onnx-core", marker = "platform_machine != 'armv7l'" },
+]
 vision = [
     { name = "opencv-python", version = "4.11.0.86", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and sys_platform == 'darwin'" },
     { name = "opencv-python", version = "5.0.0.93", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or sys_platform != 'darwin'" },
@@ -6270,8 +6274,10 @@ requires-dist = [
     { name = "python-telegram-bot", marker = "extra == 'telegram'", specifier = ">=21.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
+    { name = "sherpa-onnx", marker = "extra == 'vad'", specifier = ">=1.13.0" },
     { name = "sherpa-onnx", marker = "extra == 'voice'", specifier = ">=1.13.0" },
     { name = "sherpa-onnx", marker = "extra == 'wake'", specifier = ">=1.13.0" },
+    { name = "sherpa-onnx-core", marker = "platform_machine != 'armv7l' and extra == 'vad'", specifier = ">=1.13.0" },
     { name = "sherpa-onnx-core", marker = "platform_machine != 'armv7l' and extra == 'voice'", specifier = ">=1.13.0" },
     { name = "sherpa-onnx-core", marker = "platform_machine != 'armv7l' and extra == 'wake'", specifier = ">=1.13.0" },
     { name = "sounddevice", marker = "extra == 'all'", specifier = ">=0.5.0" },
@@ -6294,7 +6300,7 @@ requires-dist = [
     { name = "wyoming", marker = "extra == 'tts'", specifier = ">=1.10.0" },
     { name = "wyoming", marker = "extra == 'voice'", specifier = ">=1.10.0" },
 ]
-provides-extras = ["ag2", "all", "anthropic", "cron", "data", "dev", "discord", "docs", "e2e", "flic", "google", "host", "langgraph", "mcp", "ml", "openai", "stt", "telegram", "tts", "vision", "voice", "wake", "whatsapp"]
+provides-extras = ["ag2", "all", "anthropic", "cron", "data", "dev", "discord", "docs", "e2e", "flic", "google", "host", "langgraph", "mcp", "ml", "openai", "stt", "telegram", "tts", "vad", "vision", "voice", "wake", "whatsapp"]
 
 [[package]]
 name = "watchdog"

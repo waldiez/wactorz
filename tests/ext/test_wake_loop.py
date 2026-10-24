@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from wactorz.ext.stt import listener
+from wactorz.ext.stt import listener, vad
 from wactorz.ext.wake import loop as wake_loop
 from wactorz.ext.wake import spotter
 
@@ -67,7 +67,7 @@ def _a_machine(
 
     monkeypatch.setattr(listener, "AUDIO", True)
     monkeypatch.setattr(listener, "sounddevice", _Device)
-    monkeypatch.setattr(listener, "room_floor", lambda *_a: 0.0)
+    monkeypatch.setattr(vad, "room_floor", lambda *_a: 0.0)
     monkeypatch.setattr(spotter, "Spotter", _Ear)
 
 

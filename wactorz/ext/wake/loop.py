@@ -13,14 +13,13 @@ who need it most are the ones whose wake word is not being heard, and they canno
 tell the microphone, the model and the phrase apart by saying the phrase.
 """
 
-import array
 import asyncio
 import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from ..stt import listener
+from ..stt import listener, vad
 from . import spotter
 
 logger = logging.getLogger(__name__)
@@ -43,13 +42,6 @@ RETRY_SECONDS = 30.0
 #: Short: this is how long after a check finishes that the room stops being deaf,
 #: and the wait costs nothing while nothing is happening.
 RESUME_POLL_SECONDS = 0.05
-
-
-def as_floats(pcm: bytes) -> list[float]:
-    """The 16-bit samples the device gives, as the floats the model reads."""
-    samples = array.array("h")
-    samples.frombytes(pcm[: len(pcm) - len(pcm) % 2])
-    return [s / 32768.0 for s in samples]
 
 
 class WakeLoop:
@@ -203,16 +195,21 @@ class WakeLoop:
             with stream:
                 self._device_free.clear()
                 logger.info("[wake] Listening for %s", " / ".join(self._phrases))
-                floor = listener.room_floor(stream, block_frames)
-                threshold = listener.threshold_over(floor)
+                detector = vad.for_stream(
+                    stream, block_frames, listener.BLOCK_SECONDS, listener.RATE
+                )
                 while not self._stop.is_set() and not self._yield_asked.is_set():
                     block = bytes(stream.read(block_frames)[0])
-                    said = ear.hears(as_floats(block))
+                    # Every block, woken or not: the floor follows the room
+                    # while nobody speaks, and Silero is mid-listen when the
+                    # phrase ends and the sentence begins.
+                    detector.is_speech(block)
+                    said = ear.hears(vad.as_floats(block))
                     if not said:
                         continue
                     logger.info("[wake] Woken by %r", said)
                     pcm = listener.gather_turn(
-                        stream, block_frames, threshold, MAX_SECONDS, SILENCE_SECONDS
+                        stream, block_frames, detector, MAX_SECONDS, SILENCE_SECONDS
                     )
                     if pcm:
                         self._on_turn(listener.as_wav(pcm))

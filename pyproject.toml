@@ -62,7 +62,7 @@ whatsapp  = ["twilio>=9.10.4"]
 # reaches only what is named here): the two are built against each other.
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "torchvision>=0.15.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-tts       = ["edge-tts>=6.1.9"]
+tts       = ["edge-tts>=7.3.1"]
 cron      = ["croniter>=2.0.0"]
 # Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
 # no Bluetooth adapter has nothing to install it for.

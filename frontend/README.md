@@ -119,6 +119,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |
 | `tts-audio-start` | TTSManager → AmbientManager | _(none)_ |
 | `tts-audio-end` | TTSManager → AmbientManager | _(none)_ |
+| `tts-stop` | DashboardChat → TTSManager | _(none)_ (the turn was stopped) |
 
 ## Server events consumed
 

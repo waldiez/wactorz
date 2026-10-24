@@ -29,6 +29,7 @@ CONTROL_HANDLERS = [
     ("restart_agent", "_on_restart_agent"),
     ("list", "_on_list"),
     ("code_request", "_on_code_request"),
+    ("reset", "_on_reset"),
 ]
 
 
@@ -201,6 +202,7 @@ class TestTheControlConnection:
             "nodes/rpi/migrate",
             "nodes/rpi/list",
             "nodes/rpi/code_request",
+            "nodes/rpi/reset",
             "nodes/rpi/reply/#",
             "nodes/rpi/blob/+",
             "agents/by-name/+/task",

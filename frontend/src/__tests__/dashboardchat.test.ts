@@ -686,6 +686,25 @@ describe("DashboardChat — stop, attachments, external events", () => {
         fetchSpy.mockRestore();
     });
 
+    it("stops the answer being read aloud too, before the server is asked", () => {
+        const dc = mount(makeHost()) as any;
+        const order: string[] = [];
+        const stopped = () => order.push("tts-stop");
+        document.addEventListener("tts-stop", stopped);
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+            order.push("fetch");
+            return Promise.resolve({ ok: true } as unknown as Response);
+        });
+        try {
+            dc._stopGeneration();
+        } finally {
+            document.removeEventListener("tts-stop", stopped);
+            fetchSpy.mockRestore();
+        }
+        // First, so an unreachable backend still leaves the page quiet.
+        expect(order).toEqual(["tts-stop", "fetch"]);
+    });
+
     it("says so when stop cannot reach the backend", async () => {
         const dc = mount(makeHost()) as any;
         vi.mocked(toast.show).mockClear();

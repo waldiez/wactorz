@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agents.function_agent import FunctionAgent
+from ..core import agent_reset
 from ..core.actor import Actor, ReplyError, ask_through, forbidden
 from ..core.state_codec import decode_state
 from .state import JsonState, agent_state, flush_states
@@ -145,6 +146,20 @@ class NodeHosted(_Base):
         except OSError:
             logger.debug("[%s] Left %s in place", self.name, self._persistence_dir)
         return removed
+
+    def reset(self, scope: str) -> None:
+        """Clear one of `agent_reset.LIVE_SCOPES` from this agent: in memory, and in its file.
+
+        The node keeps the only copy of an agent's memory here, so a reset main
+        makes of its own records leaves this one standing unless the node makes
+        it too. A reset of the whole state removes the file, as a delete does; the
+        others write the file again without what they cleared.
+        """
+        if scope == "state":
+            self.delete_state()
+            return
+        agent_reset.reset_live(self, scope)
+        self._state_file.save(self._persistent_state)
 
     # ── Identity ──────────────────────────────────────────────────────────────
 

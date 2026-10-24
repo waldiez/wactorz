@@ -505,15 +505,22 @@ class WactorzDB:
         return cur.rowcount
 
     @_serialised
-    def chat_attachment_ids(self) -> set[str]:
+    def chat_attachment_ids(self, agent_name: str | None = None) -> set[str]:
         """Every upload id a kept chat turn refers to: what the upload sweep must keep.
 
+        With `agent_name`, only the turns in that agent's thread: what a reset of
+        that thread may take with it, less whatever another thread still names.
         A row whose attachments cannot be read counts as naming none, as it does
         everywhere else a row is read.
         """
         ids: set[str] = set()
-        rows = self.conn.execute(
+        query = (
             "SELECT attachments FROM chat_log WHERE attachments IS NOT NULL AND attachments != ''"
+        )
+        rows = (
+            self.conn.execute(f"{query} AND agent_name=?", (agent_name,))
+            if agent_name
+            else self.conn.execute(query)
         )
         for (raw,) in rows:
             for item in _with_attachments({"attachments": raw})["attachments"]:

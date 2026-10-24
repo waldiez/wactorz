@@ -284,3 +284,56 @@ class TestDetectionIsUnchanged:
         failures, _ = await supervisor._detect_failures()
         assert failures == [("w", spec)]
         assert "error storm" in (supervisor._failure_reason(spec) or "")
+
+
+class TestStartingAfresh:
+    """A reset of what an actor keeps restarts it, so what it read at start goes too."""
+
+    async def test_it_is_stopped_before_its_state_is_cleared_and_started_new(
+        self, supervisor: Supervisor
+    ) -> None:
+        happened: list[str] = []
+        supervisor.supervise("worker", lambda: _Worker(name="worker"), restart_delay=0)
+        spec = supervisor._specs["worker"]
+        old = await supervisor._spawn_actor("worker", spec)
+        spec.actor = old
+
+        def between() -> None:
+            # A stop writes what is pending, so clearing before it would be undone.
+            happened.append(f"cleared while the old one was {old.state.value}")
+
+        assert await supervisor.restart_afresh("worker", between) is True
+
+        assert happened == [f"cleared while the old one was {ActorState.STOPPED.value}"]
+        assert spec.actor is not None and spec.actor is not old
+        assert spec.actor.state == ActorState.RUNNING
+        # Asked for, not a crash: no restart counted, and no slowing down.
+        assert (spec.restarts, spec.crash_streak, spec.retired) == (0, 0, False)
+        await spec.actor.stop()
+
+    async def test_a_name_not_running_is_left_alone(self, supervisor: Supervisor) -> None:
+        called: list[str] = []
+
+        assert await supervisor.restart_afresh("absent", lambda: called.append("x")) is False
+        assert called == []
+
+    async def test_a_start_that_fails_is_left_to_the_watch_loop(
+        self, supervisor: Supervisor
+    ) -> None:
+        built = {"n": 0}
+
+        def factory() -> Actor:
+            built["n"] += 1
+            if built["n"] == 2:
+                raise RuntimeError("dependency not ready")
+            return _Worker(name="flaky")
+
+        supervisor.supervise("flaky", factory, restart_delay=0)
+        spec = supervisor._specs["flaky"]
+        spec.actor = await supervisor._spawn_actor("flaky", spec)
+
+        assert await supervisor.restart_afresh("flaky", lambda: None) is True
+
+        # Live, with no actor: what the next poll reads as one to start.
+        assert spec.actor is None
+        assert spec.retired is False

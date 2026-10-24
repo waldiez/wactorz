@@ -16,6 +16,10 @@
  * the session.
  *
  * Persistence: toggle state and selected voice are stored in localStorage.
+ *
+ * One reply is heard at a time. New speech stops whatever is playing, and a
+ * reply whose audio arrives after newer speech started, or after a stop, is
+ * dropped rather than played over it.
  */
 
 import { safeStorage } from "../../safeStorage";
@@ -34,6 +38,13 @@ export class TTSManager {
     private _serverAvailable: boolean | null = null;
     private _mode: "off" | "browser" | "server" | "host" = "server";
     private _voices: TTSVoice[] = [];
+    /** What is playing from the server, while something is. */
+    private _source: AudioBufferSourceNode | null = null;
+    /** Moves on whenever speech starts or stops, so audio fetched for older speech
+     *  can tell it has been overtaken by the time it arrives. */
+    private _generation = 0;
+    /** Whether the ambient sound has been told to duck and not yet told to stop. */
+    private _ducked = false;
     /** API base — empty for plain web, ingress prefix behind HA.
      *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
     private _apiBase = "";
@@ -182,14 +193,52 @@ export class TTSManager {
         return this._beepEnabled;
     }
 
-    /** Toggle spoken TTS (persisted), cancelling any in-progress speech when turning off; returns the new state. */
+    /** Toggle spoken TTS (persisted), stopping any speech when turning off; returns the new state. */
     toggleTTS(): boolean {
         this._ttsEnabled = !this._ttsEnabled;
         safeStorage.set(LS_TTS, this._ttsEnabled ? "1" : "0");
         if (!this._ttsEnabled) {
-            window.speechSynthesis?.cancel();
+            this.stopSpeaking();
         }
         return this._ttsEnabled;
+    }
+
+    /**
+     * Stop whatever is being said, from either voice, and anything still on its
+     * way from the server. For speech turned off, and for a turn someone stopped:
+     * the interface says it stopped, and a page still talking disagrees with it.
+     */
+    stopSpeaking(): void {
+        this._halt();
+        this._unduck(this._generation);
+    }
+
+    /** Stop what is playing and overtake what is in flight, leaving the ambient sound as it is. */
+    private _halt(): void {
+        this._generation += 1;
+        const playing = this._source;
+        this._source = null;
+        try {
+            playing?.stop();
+        } catch {
+            // Already ended: nothing left to stop.
+        }
+        window.speechSynthesis?.cancel();
+    }
+
+    private _duck(): void {
+        if (!this._ducked) {
+            this._ducked = true;
+            emit("tts-audio-start");
+        }
+    }
+
+    /** Let the ambient sound back up, if the speech that ducked it is still the latest. */
+    private _unduck(generation: number): void {
+        if (generation === this._generation && this._ducked) {
+            this._ducked = false;
+            emit("tts-audio-end");
+        }
     }
 
     /** Call on incoming agent message. Beeps and/or speaks depending on settings. */
@@ -246,6 +295,9 @@ export class TTSManager {
         if (this._mode === "off" || this._mode === "host") {
             return;
         }
+        // Stopped, not queued behind: a reply that waits for the one before it
+        // to finish is heard long after the message it belongs to.
+        this._halt();
         const excerpt = text.replace(/```[\s\S]*?```/g, "code block").slice(0, 300);
         // `browser` is a deployment saying the words stay on this machine, so it
         // is never a fallback here -- it is the whole instruction.
@@ -261,10 +313,13 @@ export class TTSManager {
     }
 
     private _speakServer(text: string): void {
-        // Emit audio-start so AmbientManager ducks; every return path must emit
-        // audio-end or ambient stays ducked.
-        emit("tts-audio-start");
-        const unduck = () => emit("tts-audio-end");
+        // Duck the ambient sound; every return path must unduck, or it stays
+        // down. Unducking answers only for the latest speech, so a reply that
+        // was overtaken cannot bring the sound back up under the one after it.
+        this._duck();
+        const mine = this._generation;
+        const unduck = () => this._unduck(mine);
+        const overtaken = () => mine !== this._generation;
         // Only when there is a list it came from: with a named synthesiser the
         // stored name is one this browser was offered by some other deployment,
         // and sending it asks for a voice the service has never heard of.
@@ -282,7 +337,7 @@ export class TTSManager {
                 if (res.status === 503 || res.status === 404) {
                     this._serverAvailable = false;
                     unduck();
-                    this._speakBrowser(text);
+                    this._fallBack(text, mine);
                     return null;
                 }
                 if (!res.ok) {
@@ -293,34 +348,50 @@ export class TTSManager {
                 return res.arrayBuffer();
             })
             .then(buf => {
-                if (!buf) {
+                if (!buf || overtaken()) {
                     return;
                 }
                 // Decode + play through AudioContext (already unlocked by beep gesture)
                 const ctx = this._ctx();
                 if (!ctx) {
                     unduck();
-                    this._speakBrowser(text);
+                    this._fallBack(text, mine);
                     return;
                 }
                 ctx.decodeAudioData(buf)
                     .then(decoded => {
+                        if (overtaken()) {
+                            return;
+                        }
                         const src = ctx.createBufferSource();
                         src.buffer = decoded;
                         src.connect(ctx.destination);
-                        src.onended = unduck;
+                        src.onended = () => {
+                            if (this._source === src) {
+                                this._source = null;
+                            }
+                            unduck();
+                        };
+                        this._source = src;
                         src.start();
                     })
                     .catch(() => {
                         unduck();
-                        this._speakBrowser(text);
+                        this._fallBack(text, mine);
                     });
             })
             .catch(() => {
                 this._serverAvailable = false;
                 unduck();
-                this._speakBrowser(text);
+                this._fallBack(text, mine);
             });
+    }
+
+    /** Say it in the browser's own voice instead, unless newer speech or a stop came first. */
+    private _fallBack(text: string, generation: number): void {
+        if (generation === this._generation) {
+            this._speakBrowser(text);
+        }
     }
 
     private _speakBrowser(text: string): void {

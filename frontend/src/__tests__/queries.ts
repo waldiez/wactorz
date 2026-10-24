@@ -8,7 +8,8 @@
  *
  * A small subset of the rules a browser applies, enough for the markup this
  * dashboard builds: an explicit `role`, or the implicit role of the few tags it
- * uses; a name from `aria-label`, else from the text inside.
+ * uses; a name from `aria-label`, else from the label of an input, else from
+ * the text inside.
  */
 import type { TestId } from "../ui/testIds";
 
@@ -21,14 +22,36 @@ const IMPLICIT_ROLES: Record<string, string> = {
     A: "link",
 };
 
+/** The roles an `<input>` takes from its type, for the types this dashboard uses. */
+const INPUT_ROLES: Record<string, string> = {
+    radio: "radio",
+    checkbox: "checkbox",
+};
+
 /** The element's role: its `role` attribute, else what its tag implies. */
 export function roleOf(node: Element): string {
-    return node.getAttribute("role") ?? IMPLICIT_ROLES[node.tagName] ?? "";
+    const explicit = node.getAttribute("role");
+    if (explicit) {
+        return explicit;
+    }
+    if (node instanceof HTMLInputElement) {
+        return INPUT_ROLES[node.type] ?? "textbox";
+    }
+    return IMPLICIT_ROLES[node.tagName] ?? "";
 }
 
-/** The element's accessible name: its `aria-label`, else its text. */
+/** The element's accessible name: its `aria-label`, else its label for an input, else its text. */
 export function nameOf(node: Element): string {
-    return (node.getAttribute("aria-label") ?? node.textContent ?? "").trim();
+    const label = node.getAttribute("aria-label");
+    if (label !== null) {
+        return label.trim();
+    }
+    if (node instanceof HTMLInputElement) {
+        const labelled =
+            node.closest("label") ?? (node.id ? document.querySelector(`label[for="${node.id}"]`) : null);
+        return (labelled?.textContent ?? "").trim();
+    }
+    return (node.textContent ?? "").trim();
 }
 
 /** Every element under `root` with `role`, and with exactly `name` when one is given. */

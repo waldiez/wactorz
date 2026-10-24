@@ -54,6 +54,8 @@ export interface AppEventMap {
     "tts-mode-known": { speaks: boolean };
     "tts-audio-start": void;
     "tts-audio-end": void;
+    /** Someone stopped the turn: stop saying it, in either voice. */
+    "tts-stop": void;
 }
 
 /** Dispatch an application event; the detail argument is required iff the map entry isn't `void`. */

@@ -377,6 +377,9 @@ export class DashboardChat {
      *  the chat reply path); failure is not — an unreachable backend is exactly
      *  when the user reaches for Stop. */
     private async _stopGeneration(): Promise<void> {
+        // Before the request: the answer already read aloud stops now, whether
+        // or not the server is there to cancel the rest of it.
+        emit("tts-stop");
         await postOrWarn(`${window.__WACTORZ_INGRESS_PATH ?? ""}/api/chat/stop`, { method: "POST" }, "stop");
     }
 

@@ -13,6 +13,7 @@
 import { emit } from "../../events";
 import { registerConfigEntry } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
+import { listen } from "../../events";
 import { tts } from "./TTSManager";
 
 export { tts, TTSManager } from "./TTSManager";
@@ -87,5 +88,8 @@ export function register(config: TTSConfig): void {
     // reports, and a synthesiser with one fixed voice offers no list to infer it
     // from. `init` still runs when it does not, to find this browser's voices.
     tts.setServerAvailable(config.available);
+    // A stopped turn stops its voice too: the page saying it stopped while it
+    // goes on reading the answer aloud disagrees with itself.
+    listen("tts-stop", () => tts.stopSpeaking());
     void tts.init();
 }

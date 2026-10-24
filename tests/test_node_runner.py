@@ -8,6 +8,7 @@ plumbing under it.
 
 import asyncio
 import inspect
+import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,18 @@ from wactorz.node.state import flush_states
 
 CODE = "async def process(agent):\n    pass\n"
 REPAIRED = "async def process(agent):\n    pass  # repaired by the LLM\n"
+
+#: Counts what it is sent, keeping the count in memory and in its state.
+COUNTING = """
+async def setup(agent):
+    agent.state["seen"] = int(agent.recall("seen") or 0)
+
+
+async def handle_task(agent, payload):
+    agent.state["seen"] += 1
+    agent.persist("seen", agent.state["seen"])
+    return {"result": agent.state["seen"]}
+"""
 
 
 class RecordingRunner(NodeRunner):
@@ -433,6 +446,150 @@ class TestTellingMainAboutARepair:
         )
 
         assert not [t for t in runner.topics if t.endswith("/code_return")]
+
+
+async def _set_up(agent: NodeAgent) -> None:
+    """Wait for a counting program's `setup()` to have read its count."""
+    await until(lambda: "seen" in agent._api.state, f"{agent.name}'s setup() to have run")
+
+
+class TestResetting:
+    """Main's reset clears main's records; an agent here keeps its own copy until the node clears it."""
+
+    @staticmethod
+    async def _reset(runner: RecordingRunner, scope: str, agent: str | None = None) -> Any:
+        await runner._on_reset(
+            "nodes/rpi/reset",
+            {"scope": scope, "agent": agent, "request": "req-1"},
+            _Message(),
+        )
+
+        def answers() -> list[Any]:
+            return [p for t, p, _r in runner.published if t == "nodes/rpi/reset_done"]
+
+        # Carried out off the subscriber loop, so the answer comes a moment later.
+        await until(answers, "the node to answer the reset")
+        assert len(answers()) == 1, answers()
+        return answers()[0]
+
+    @staticmethod
+    def _file(agent: NodeHosted) -> dict[str, Any]:
+        flush_states()
+        return json.loads(agent._state_file.path.read_text())
+
+    async def test_a_chat_reset_forgets_the_conversation_and_keeps_the_rest(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("conversation_history", [{"role": "user", "content": "hello"}])
+        agent.persist("count", 3)
+
+        answer = await self._reset(runner, "chat", "collector")
+
+        assert answer["request"] == "req-1"
+        assert answer["cleared"] == ["collector"]
+        assert agent.recall("conversation_history") is None
+        assert agent.recall("count") == 3
+        # The file too: a restart reads it, and would bring the conversation back.
+        assert "conversation_history" not in json.dumps(self._file(agent))
+        assert "count" in json.dumps(self._file(agent))
+
+    async def test_a_state_reset_removes_the_file(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("count", 3)
+        flush_states()
+        assert agent._state_file.path.exists()
+
+        await self._reset(runner, "state", "collector")
+        flush_states()
+
+        assert agent.recall("count") is None
+        assert not agent._state_file.path.exists()
+
+    async def test_a_state_reset_starts_the_agent_again_with_nothing_kept(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The count is in memory as well as in the file: deleting only the file
+        # leaves the agent counting on, and its next persist writes it back. It
+        # came here by migration, so its config carries the state it arrived with.
+        await runner.spawn_agent(
+            {"name": "counter", "code": COUNTING, "_initial_state": {"seen": 4}}
+        )
+        before = runner.get("counter")
+        assert before is not None
+        await _set_up(before)
+        assert (await before.run_task({}))["result"] == 5
+
+        answer = await self._reset(runner, "state", "counter")
+
+        after = runner.get("counter")
+        assert after is not None and after is not before
+        assert answer["cleared"] == ["counter"]
+        await _set_up(after)
+        assert (await after.run_task({}))["result"] == 1
+
+    async def test_an_agent_that_does_not_start_again_is_not_reported_cleared(
+        self, runner: RecordingRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+
+        async def refuse(_config: dict[str, Any]) -> None:
+            return None  # the spawn did not bring it back
+
+        monkeypatch.setattr(runner, "spawn_agent", refuse)
+
+        answer = await self._reset(runner, "state", "collector")
+
+        # Main would otherwise report a reset done for an agent that is gone.
+        assert answer["cleared"] == []
+
+    async def test_a_metrics_reset_zeroes_what_the_next_heartbeat_reports(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.metrics.messages_processed = 7
+        agent.persist("_messages_processed", 7)
+
+        await self._reset(runner, "metrics", "collector")
+
+        assert agent.metrics.messages_processed == 0
+        assert agent.recall("_messages_processed") is None
+
+    async def test_without_an_agent_every_agent_here_is_reset(
+        self, runner: RecordingRunner
+    ) -> None:
+        for name in ("collector", "counter"):
+            await runner.spawn_agent({"name": name, "code": CODE})
+            hosted = runner.get(name)
+            assert hosted is not None
+            hosted.persist("conversation_history", ["hi"])
+
+        answer = await self._reset(runner, "chat")
+
+        assert answer["cleared"] == ["collector", "counter"]
+
+    async def test_an_agent_not_here_or_a_scope_it_does_not_reach_is_still_answered(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Main waits on the answer to report the reset whole; silence would read
+        # as a node that did not hear.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+
+        assert (await self._reset(runner, "chat", "elsewhere"))["cleared"] == []
+        runner.published.clear()
+        assert (await self._reset(runner, "spawns", "collector"))["cleared"] == []
+
+    async def test_the_manifest_says_this_node_resets(self, runner: RecordingRunner) -> None:
+        await runner._publish_manifest()
+
+        manifest = next(p for t, p, _r in runner.published if t == "nodes/rpi/manifest")
+        assert manifest["resets"] is True
 
 
 class TestStopping:

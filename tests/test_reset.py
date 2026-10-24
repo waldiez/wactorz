@@ -504,6 +504,12 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
         mocks = await self._call_with_mocks("all")
         mocks["reset_all"].assert_called_once()
 
+    async def test_all_scope_wipes_everything_whatever_agent_is_named(self):
+        # Every agent is stopped whatever is named, so the records go for all of
+        # them too: wiping one agent's would leave a half-wiped install.
+        mocks = await self._call_with_mocks("all", agent="counter")
+        mocks["reset_all"].assert_called_once_with(None)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. reset_spawns clears the AUTHORITATIVE kv-backed registry

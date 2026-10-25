@@ -168,3 +168,37 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
 CREATE INDEX IF NOT EXISTS idx_node_history_ts      ON node_metrics_history (ts);
 CREATE INDEX IF NOT EXISTS idx_node_history_node_ts ON node_metrics_history (node, ts);
 """
+
+# The model loop's record of what it saw, was told, decided and did, and how it
+# turned out: one graph, nodes joined by edges from cause to effect. See
+# docs/design/labels-and-provenance.md. Kept as its own block because a
+# migration creates the same tables in a database made before them.
+PROVENANCE_SQL = """
+CREATE TABLE IF NOT EXISTS prov_nodes (
+    id        TEXT PRIMARY KEY,        -- minted by whoever writes the node
+    kind      TEXT NOT NULL,           -- label, question, decision, action, ...
+    ts        REAL NOT NULL,           -- the event time the node is about, or its start
+    ts_end    REAL,                    -- where it ends, NULL for a moment or an open window
+    recorded  REAL NOT NULL,           -- when it was written
+    status    TEXT NOT NULL,           -- valid, superseded, done, undone, ...
+    source    TEXT DEFAULT '',         -- the topic, entity or model it concerns
+    actor     TEXT DEFAULT '',         -- operator, dashboard, rule:<name>, agent:<name>
+    node      TEXT DEFAULT '',         -- the wactorz node that wrote it, empty for main
+    payload   TEXT NOT NULL DEFAULT '{}'  -- JSON: what the kind needs
+);
+
+CREATE INDEX IF NOT EXISTS idx_prov_kind_source_ts ON prov_nodes (kind, source, ts);
+CREATE INDEX IF NOT EXISTS idx_prov_recorded       ON prov_nodes (recorded);
+
+CREATE TABLE IF NOT EXISTS prov_edges (
+    src       TEXT NOT NULL,           -- the cause
+    dst       TEXT NOT NULL,           -- the effect
+    relation  TEXT NOT NULL,
+    recorded  REAL NOT NULL,
+    PRIMARY KEY (src, dst, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prov_edges_dst ON prov_edges (dst);
+"""
+
+SCHEMA_SQL += PROVENANCE_SQL

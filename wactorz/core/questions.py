@@ -61,7 +61,9 @@ class Question:
     picked, None until then; ``answer_channel`` says where it was picked, and
     ``answer_note`` what the person added to it, if anything. ``fallen_back``
     is set once a question sent on a chat channel was shown again on the
-    dashboard for want of an answer.
+    dashboard for want of an answer. ``label`` is how the answer becomes a
+    label, as a :class:`wactorz.core.labels.LabelSpec` dict, or None for a
+    question whose answer is not one.
     """
 
     id: str
@@ -76,6 +78,7 @@ class Question:
     answered_at: float = 0.0
     fallen_back: bool = False
     answer_note: str = ""
+    label: dict[str, Any] | None = None
 
     @property
     def open(self) -> bool:
@@ -110,6 +113,7 @@ class Question:
                 answer_note=str(record.get("answer_note") or ""),
                 answered_at=float(record.get("answered_at") or 0.0),
                 fallen_back=bool(record.get("fallen_back", False)),
+                label=dict(record["label"]) if isinstance(record.get("label"), dict) else None,
             )
         except (KeyError, TypeError, ValueError):
             return None

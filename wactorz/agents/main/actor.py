@@ -36,6 +36,7 @@ from .commands import CommandContext
 from .commands import registry as command_registry
 from .commands.info import terminal_command, terminal_command_reply
 from .delegation import DelegationManager
+from .labels import LabelRecorder
 from .lifecycle import LifecycleService
 from .llm_bridge import LLMBridge
 from .manifests import ManifestRegistry
@@ -161,6 +162,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.essential = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self.manifests = ManifestRegistry(self)
+        self.labels = LabelRecorder(self)
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
@@ -275,6 +277,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self._node_offline_watcher()))
         # Listen for agent capability manifests to build topic registry
         self._tasks.append(asyncio.create_task(self._manifest_listener()))
+        # Answers to questions that carried a label spec become labels
+        self._tasks.append(asyncio.create_task(self._label_listener()))
         # LLM bridge — lets remote agents call agent.ask_llm() / agent.chat()
         self._tasks.append(asyncio.create_task(self._llm_bridge_listener()))
         # Observe real MQTT payloads from remote agents to populate observed_samples
@@ -1295,6 +1299,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _manifest_listener(self) -> None:
         """Follow agent manifests. Owned by `self.manifests`."""
         await self.manifests.manifest_listener()
+
+    async def _label_listener(self) -> None:
+        """Follow agents' question books for answers that make labels. Owned by `self.labels`."""
+        await self.labels.listener()
 
     async def _stalled_migration_watcher(self) -> None:
         await self.migration.stalled_migration_watcher()

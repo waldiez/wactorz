@@ -27,10 +27,12 @@ from . import models
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .labels import Label, LabelError, Labels, LabelSpec
 from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .persistence.stores import get_db
 from .questions import (
     QUESTIONS_KEY,
     Question,
@@ -1896,6 +1898,7 @@ class Actor(ABC):
         channel: str = DASHBOARD,
         user: str = "",
         timeout: float | None = None,
+        label: Mapping[str, Any] | None = None,
     ) -> str:
         """Ask the person ``text``, offer ``options``, and return the one they pick.
 
@@ -1915,20 +1918,31 @@ class Actor(ABC):
         ``asyncio.TimeoutError`` is raised. The question stays open, and a
         later pick still reaches :meth:`on_operator_answer`.
 
-        Raises ``ValueError`` for no options, or options or a channel the
-        channels cannot show.
+        ``label`` makes the answer a label of the provenance graph: the
+        ``source`` it is about, the window from ``start`` (and to ``end``, open
+        when unsaid) in event time, and ``values``, which option stands for
+        which label value; an option left out, such as "Not sure", makes none.
+        Main records the label once the answer is in the question book, for an
+        agent here or on a node. See docs/design/labels-and-provenance.md.
+
+        Raises ``ValueError`` for no options, options or a channel the channels
+        cannot show, or a ``label`` that cannot be used -- before anything is
+        sent.
         """
         if not options:
             raise OptionsError.none()
+        checked = check_options(options)
+        spec = None if label is None else LabelSpec.parse(label, checked)
         self._hear_answers()
         question_id = await self.notify_user(text, options=options, channel=channel, user=user)
         question = Question(
             id=question_id,
             text=str(text),
-            options=check_options(options),
+            options=checked,
             channel=check_channel(channel),
             user=str(user).strip(),
             asked_at=time.time(),
+            label=None if spec is None else spec.to_dict(),
         )
         await self._write_question(question)
         try:
@@ -1947,6 +1961,41 @@ class Actor(ABC):
             Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
         )
         return await self.wait_for_answer(question_id, timeout=timeout)
+
+    async def label(
+        self,
+        source: str,
+        value: str,
+        *,
+        start: Any,
+        end: Any = None,
+        note: str = "",
+        model: str = "",
+    ) -> Label:
+        """Record that ``source`` was ``value`` from ``start`` (to ``end``, open when unsaid).
+
+        Times are event times: Unix seconds, or ISO 8601 with an offset. The
+        label is recorded as this agent's, superseding the earlier labels it
+        overlaps on ``source`` (see :class:`wactorz.core.labels.Labels`).
+
+        Main keeps the labels, so an agent on a node cannot write one this way
+        yet; its questions' answers still become labels through
+        :meth:`ask_operator`. Raises :class:`~wactorz.core.labels.LabelError`
+        for a label that cannot be taken as written, or there.
+        """
+        db = get_db()
+        if getattr(self, "reads_history_from_main", False) or db is None:
+            raise LabelError.not_here()
+        return await asyncio.to_thread(
+            Labels(db).write,
+            source=source,
+            start=start,
+            end=end,
+            value=value,
+            actor=f"agent:{self.name}",
+            note=note,
+            model=model,
+        )
 
     async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
         """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.

@@ -381,6 +381,31 @@ if answer == "maintenance":
 - The answer is not authenticated. It arrives on the agent's `agents/{id}/answer` topic, and anything that can publish to the broker, any node included, can publish one there. Read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.
 - `timeout` is seconds; `None` waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then `asyncio.TimeoutError` is raised, and the question stays open: a later pick still reaches `on_operator_answer`.
 
+#### Answers that become labels
+
+Pass `label=` and the answer becomes a label: a record that a source was doing something over a period, which models train on, the controller reads and a simulator scores against.
+
+```python
+answer = await me.ask_operator(
+    "Every reading on AHU-1 looks unusual since 14:02. Did something change?",
+    options=["Maintenance", "Real problem", "Not sure"],
+    label={
+        "source": "sensors/ahu-1",          # the topic or entity it is about
+        "start": shift_ts,                  # event time, Unix seconds or ISO 8601 with an offset
+        "values": {"Maintenance": "maintenance", "Real problem": "fault"},
+    },
+)
+```
+
+- `values` maps an option to the label value it stands for; an option left out, such as "Not sure", makes no label. `end` closes the window; left out, it stays open, "until further notice". `model` names the model a label is meant for, if any.
+- The spec is checked before the question is sent, and a spec that cannot be used raises a `ValueError` (`LabelError`) without sending anything.
+- Main writes the label once the agent's question book says the question was answered, for an agent on main or on a node. It takes a book only from where its agent is, as it does a manifest.
+- A later label on the same source overrides an earlier one where their windows overlap. The earlier one is kept, marked superseded; `GET /api/labels/effective` says what held when.
+- A label from an answer the dashboard sent is marked verified; one from an answer heard on the broker is not, since anything there could have published it.
+- An agent on main can also write a label of its own: `await me.label("sensors/ahu-1", "maintenance", start=ts)`. On a node, use a question.
+
+See `docs/design/labels-and-provenance.md` for the design, and `GET /api/labels` in the API reference.
+
 A rule can ask without any code, with the `ask_operator` action:
 
 ```python
@@ -403,6 +428,8 @@ RuleConfig(
 ```
 
 The text may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, `{"question", "option", "index", "trigger"}` is published on `topic`, or on `answers/<rule name>` when none is given, which is where a label store or a controller listens.
+
+A rule can also record a label itself, with the `label` action: `{"type": "label", "source": "sensors/{entity_id}", "value": "maintenance", "text": "maintenance switch on"}` records that the source was under maintenance from when the trigger says it happened (its `ts` or `timestamp`, else now), as the rule's own label. `source` and `value` may name trigger fields in braces, and `text` is kept as the label's note.
 
 Two things a channel cannot do:
 

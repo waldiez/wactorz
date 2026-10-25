@@ -75,6 +75,15 @@ class ManifestHost(ListenerHost, VoiceHost, Protocol):
     async def agent_withdrew(self, actor_id: str, name: str = ...) -> bool: ...
 
 
+class LabelHost(ListenerHost, VoiceHost, Protocol):
+    """The label recorder needs a connection and where agents are, to take a book from the right node."""
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """The heartbeat table: which node lists an agent main placed nowhere."""
+        ...
+
+
 class SpawnHost(Protocol):
     """What putting an agent somewhere needs from the actor.
 

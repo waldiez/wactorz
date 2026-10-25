@@ -475,6 +475,35 @@ class Supervisor:
         spec.retired = False
         return actor
 
+    async def restart_afresh(self, name: str, between: Callable[[], object]) -> bool:
+        """Stop `name`, run `between`, and start it again from its factory. False if none runs.
+
+        For a reset of what the actor keeps, which `between` clears. Stopped
+        first, because a stop writes out what is pending, and only then cleared,
+        so the new instance starts from nothing rather than from a copy written on
+        the way out. Not counted as a crash, and held back from the watch loop
+        meanwhile, as a start is: a spec with no actor would read as one to restart.
+
+        A start that fails is left to the watch loop, as a failed restart is: the
+        spec is live with no actor, and the next poll starts it.
+        """
+        spec = self._specs.get(name)
+        if spec is None or spec.actor is None:
+            return False
+        spec.retired = True
+        try:
+            await self._stop_actor(name, spec)
+            between()
+            spec.actor = await self._spawn_actor(name, spec)
+        except Exception:
+            spec.actor = None
+            logger.exception("[Supervisor] '%s' did not start again after its reset", name)
+            return True
+        finally:
+            spec.retired = False
+        logger.info("[Supervisor] '%s' started again with nothing kept.", name)
+        return True
+
     async def stop_supervised(self, name: str) -> None:
         """Stop an actor and forget it entirely — the undo of :meth:`start_supervised`.
 

@@ -22,6 +22,25 @@ def _on_the_node(app: backend.Backend) -> set[str] | None:
     return None
 
 
+def test_an_agent_on_the_node_forgets_its_count_when_its_state_is_reset(
+    dashboard: browser.Dashboard,
+) -> None:
+    # The count journey 06 started lives in the agent and in the node's file.
+    # Reset from the page, both go: main asks the node, and the node starts the
+    # agent again with nothing kept.
+    dashboard.read_thread_of("counter")
+
+    asked = dashboard.clear("Agent state (restarts it)", agent="counter")
+
+    assert asked == "Confirm agent state (restarts it)?"
+    waiting.until(
+        lambda: "Reset: Agent state (restarts it) cleared for @counter." in dashboard.notices(),
+        what="the page to say the counter's state was cleared, on its node too",
+    )
+    dashboard.say("once more", to="counter")
+    dashboard.expect("counter", "counted 1")
+
+
 def test_a_confirmed_delete_removes_the_agent(
     dashboard: browser.Dashboard, app: backend.Backend
 ) -> None:
@@ -70,7 +89,7 @@ def test_wiping_everything_asks_first_and_says_when_it_is_done(
 
     assert asked == "Confirm wipe everything?"
     waiting.until(
-        lambda: "Reset: Wipe everything cleared" in dashboard.notices(),
+        lambda: "Reset: Wipe everything cleared." in dashboard.notices(),
         what="the page to say everything was cleared",
     )
     # Every thread starts again from nothing, and so does what has been claimed in it.

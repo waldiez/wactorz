@@ -528,6 +528,15 @@ class NodeManager:
             return []
         return [str(target) for target in agents if isinstance(target, str)]
 
+    def takes_resets(self, node_name: str) -> bool:
+        """Whether `node_name` clears its own agents' copies when main resets them.
+
+        From its manifest, which says so; a node from a release before resets
+        reached nodes does not, and is not asked.
+        """
+        manifest = self.node_manifests.get(node_name) or {}
+        return manifest.get("resets") is True
+
     def takes_bundles(self, node_name: str) -> bool:
         """Whether `node_name` builds a library agent from code sent with its spawn.
 

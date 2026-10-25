@@ -80,32 +80,25 @@ def record_lifetime_cost(agent_id: str, cost_usd) -> None:
             logger.debug("[cost] the lifetime ledger could not be saved: %s", exc)
 
 
+def forget_lifetime_cost(agent_id: str) -> None:
+    """Drop one agent's banked lifetime cost, for a reset of its metrics.
+
+    Saved at once, as a raise is: removed only from memory, the old high-water
+    comes back with the ledger on the next start, and pins the total again.
+    """
+    ensure_lifetime_loaded()
+    if lifetime_cost.pop(agent_id, None) is None or runtime.db is None:
+        return
+    try:
+        runtime.db.kv_set("_system", LIFETIME_LEDGER_KEY, lifetime_cost)
+    except Exception as exc:
+        logger.debug("[cost] the lifetime ledger could not be saved: %s", exc)
+
+
 def lifetime_cost_total() -> float:
     """Get the total lifetime cost."""
     ensure_lifetime_loaded()
     return sum(lifetime_cost.values())
-
-
-def reset_actor_cost(actor) -> None:
-    """Zero a live actor's cost/token counters AND its per-call accrual baseline.
-
-    The baseline must move with total_cost_usd: _persist_cost / _accrue_usage
-    accumulate (total_cost_usd - baseline) into the global period and all-time
-    counters. Zeroing total_cost_usd on a reset without also zeroing the baseline
-    leaves the baseline at the pre-reset total, so every subsequent call yields a
-    negative delta and the period/all-time counters stop advancing until spend
-    climbs back past the old total — the "limit count stopped counting after a
-    wipe" bug.
-    """
-    if not hasattr(actor, "total_cost_usd"):
-        return
-    actor.total_cost_usd = 0.0
-    actor.total_input_tokens = 0
-    actor.total_output_tokens = 0
-    if hasattr(actor, "_last_persisted_usd"):
-        actor._last_persisted_usd = 0.0
-    if hasattr(actor, "_last_period_cost_usd"):
-        actor._last_period_cost_usd = 0.0
 
 
 def historical_cost_usd(live_names: set) -> float:

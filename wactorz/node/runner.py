@@ -37,6 +37,7 @@ from ..config import (
 )
 from ..core import bundles
 from ..core.actor import Actor, ActorState, SupervisorStrategy
+from ..core.agent_reset import LIVE_SCOPES
 from ..core.artifacts import ArtifactError, pinned_in
 from ..core.blob_transfer import (
     INBOX_DIRNAME,
@@ -782,6 +783,9 @@ class NodeRunner:
                 # it sends the agent's code with the spawn, which this node takes.
                 "agents": plugins.targets(),
                 "code_bundles": True,
+                # Whether this node clears its agents' chat, state or counters
+                # when main resets its own; main asks only a node that says so.
+                "resets": True,
                 "timestamp": time.time(),
             },
             retain=True,
@@ -877,6 +881,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/restart_agent": self._on_restart_agent,
             f"nodes/{self.node_name}/list": self._on_list,
             f"nodes/{self.node_name}/code_request": self._on_code_request,
+            f"nodes/{self.node_name}/reset": self._on_reset,
         }
         handler = exact.get(topic_str)
         if handler is not None:
@@ -1039,6 +1044,55 @@ class NodeRunner:
         name = data.get("name") if isinstance(data, dict) else str(data)
         self._background(self._restart_agent(str(name)), "restart_agent")
 
+    async def _on_reset(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Clear what main asked of one agent here, or of all of them, then say so.
+
+        Main has cleared its own records already; these are the copies only this
+        node holds. The answer quotes main's request, so main can tell it from an
+        answer to an earlier one, and names the agents that were cleared. A scope
+        this node does not reach into is answered with none, rather than ignored:
+        main is waiting on the answer to report the reset whole.
+        """
+        if not isinstance(data, dict):
+            return
+        # Off the subscriber loop, as every command is: a state reset respawns
+        # the agent, and a respawn may wait on blobs this same loop delivers.
+        self._background(self._reset_and_answer(data), "reset")
+
+    async def _reset_and_answer(self, data: dict[str, Any]) -> None:
+        """Carry out one reset, then answer it with the agents it actually cleared."""
+        scope = str(data.get("scope") or "")
+        name = data.get("agent")
+        hosted = self.agents
+        if isinstance(name, str) and name:
+            hosted = {name: hosted[name]} if name in hosted else {}
+        cleared: list[str] = []
+        if scope in LIVE_SCOPES:
+            for agent in hosted.values():
+                try:
+                    if scope == "state":
+                        await self._start_afresh(agent)
+                    else:
+                        agent.reset(scope)
+                except Exception:
+                    logger.exception("[runner] Could not reset %s of '%s'", scope, agent.name)
+                    continue
+                # Not cleared unless it is running again: an agent whose respawn
+                # failed is gone, and main must not be told it was reset.
+                if self.hosted(agent.name) is not None:
+                    cleared.append(agent.name)
+        logger.info("[runner] Reset %s for %s", scope or "nothing", cleared or "no agent")
+        await self.publish(
+            f"nodes/{self.node_name}/reset_done",
+            {
+                "node": self.node_name,
+                "request": data.get("request"),
+                "scope": scope,
+                "cleared": sorted(cleared),
+                "timestamp": time.time(),
+            },
+        )
+
     async def _on_list(self, topic_str: str, data: Any, msg: Any) -> None:
         await self.publish(
             f"nodes/{self.node_name}/agents",
@@ -1197,6 +1251,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/migrate",
             f"nodes/{self.node_name}/list",
             f"nodes/{self.node_name}/code_request",
+            f"nodes/{self.node_name}/reset",
             f"nodes/{self.node_name}/reply/#",
             f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
             "agents/by-name/+/task",
@@ -1309,6 +1364,21 @@ class NodeRunner:
             for t in tasks:
                 t.cancel()
             self._loops = []
+
+    async def _start_afresh(self, agent: NodeHosted) -> None:
+        """Restart `agent` with no memory, for a reset of its state.
+
+        Deleting the file is not enough while the agent runs: what it read from
+        the file at start is in memory, and its next persist writes it back.
+        Stopped first, since a stop writes out what it holds; started again from
+        its config without the state a migration brought, which would otherwise
+        be the memory it comes back with.
+        """
+        config = self._configs.get(agent.name, agent._config)
+        fresh = {key: value for key, value in config.items() if key != "_initial_state"}
+        await self.stop_agent(agent.name)
+        agent.delete_state()
+        await self.spawn_agent(fresh)
 
     async def _restart_agent(self, name: str) -> None:
         """Restart one agent without losing its config or its memory.

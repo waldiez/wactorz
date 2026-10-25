@@ -104,7 +104,7 @@ Every remote node main knows: whether it is online, its agents, its latest readi
 {
   "nodes": [
     {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
-     "version": "0.7.1", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "version": "0.7.2", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
      "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
      "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
      "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
@@ -281,9 +281,11 @@ Clear stored state and broadcast a reset event over the dashboard WebSocket.
 ```
 
 `scope` must be one of `"chat"`, `"state"`, `"metrics"`, `"spawns"`, `"logs"`, or `"all"`.
-`agent` is optional — when set, the reset is limited to that agent by name.
+`agent` is optional — when set, the reset is limited to that agent by name, for `chat`, `state`, `metrics` and `spawns`. `logs` is this server's log files, which every agent shares, and `all` is a factory reset, which stops and wipes everything whatever agent is named; both ignore it. A `chat` reset for one agent deletes the uploaded files only that agent's thread referred to; a file another thread also shows is kept. A `state` reset also restarts each agent it covers on a node, and each on main that the supervisor runs, so the agent forgets what it read when it started as well as the file; the system's own agents (main, the monitor, the installer, the catalogue), and any the supervisor does not hold, keep running with their copies cleared.
 
-**Response** `200 OK` with the result of the reset operation; `400` if `scope` is missing or invalid. Also available as the `wactorz-reset` CLI for offline use.
+`chat`, `state` and `metrics` also reach the agents on nodes: main asks each node concerned to clear its own copies, and waits up to 10 s for it to say so.
+
+**Response** `200 OK` with `{"status": "ok", "scope": ..., "agent": ..., "nodes": {...}}`. `nodes` (empty for `all`, which deletes the agents on nodes rather than resetting them) says, for each node the reset concerned, `"cleared"`, `"no answer"`, `"offline"` (not asked: the request is not kept for it), or `"older release"` (a node that does not reset its agents; deploy it again). `400` if `scope` is missing or invalid. Also available as the `wactorz-reset` CLI for offline use.
 
 ---
 

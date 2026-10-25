@@ -7,4 +7,4 @@ changes it and carries it to the frontend's ``package.json``, the add-on
 manifests and the docs.
 """
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"

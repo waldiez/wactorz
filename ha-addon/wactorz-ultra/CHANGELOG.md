@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.2
+
+- Changed: **redeploy your edge nodes.** Each node now signs what it publishes, and the add-on takes a node's replies, manifests and heartbeats only from the node they belong to. Until a node is deployed again with `/deploy <node>` it stays online but is sent no tasks, spawns or migrations, and the chat says it needs deploying.
+- Added: `sandbox_node` option. With it on, the add-on runs a node of its own, as a second user, and code the model writes runs there rather than beside the add-on's secrets. It needs a broker account of its own: the embedded broker, or `node_accounts` with its login pasted into the Mosquitto add-on. Off by default, which changes nothing.
+- Changed: a package not on the list is installed only once you press **Install** on the dashboard. An agent you already run that installs an uncommon package asks once, the next time it is spawned or moved. `/packages` shows and changes the list.
+- Changed: the assistant checks on a node only by named operations that read, such as disk, memory and the node's log. To run a command of your own on a node, type `/nodes run <node> <command>`.
+- Changed: the doc-to-pptx agent reads and writes only in your document folders and files attached in the chat.
+- Added: agents can write to you first, on Telegram, Discord, WhatsApp or the dashboard, with options to pick, and can wait for your answer.
+- Added: the dashboard's address names the open view, so a refresh or a bookmark returns to it, and the chat box completes slash commands as you type.
+- Fixed: the embedded broker no longer locks the add-on out of its own broker once a deploy target is configured.
+- Fixed: server speech works again, and the dashboard reads one reply aloud at a time.
+- Fixed: `/agents restart`, `/agents stop`, `/agents delete` and `/agents <keyword>` typed in the dashboard's chat act as they do on the other channels.
+- Fixed: a message in the activity feed can be selected and copied, and a node's routine reports are heartbeats rather than "node online" rows.
+- Fixed: the sign-in page no longer follows a crafted link to another site after you sign in.
+
 ## 0.7.1
 
 - Changed: **redeploy your edge nodes.** A node on 0.7.0 keeps working with this version, but most of this release's node changes ship in what the node runs, and a 0.7.0 node does not understand the models, arrays and bytes a migration now carries, so an agent holding any comes up there without them. Run `/deploy <node>` for each.

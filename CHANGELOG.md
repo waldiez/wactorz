@@ -22,6 +22,8 @@ Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: 
 ### Before you upgrade
 
 - **Redeploy every edge node** with `/deploy <node>`. Until you do, a node stays online but is sent no tasks, spawns or migrations.
+- **Migrations change.** A `/migrate`, spawn or plan step sent to a node not yet redeployed is refused at once, saying so. An agent leaving a node starts from main's own copy of its program, never the one the node hands back. A move is completed only by the node it was sent to, and one whose agent never starts on the target is undone at once.
+- **Known security advisories.** The images and locked installs take certifi 2026.10.19, which drops the compromised emSign roots (GHSA-6q48-6c7w-9gw2), pip 26.2.2, Pillow 13.0.0, filelock 4.2.4 and setuptools 84.2.1. **On Python 3.10, Pillow stays at 12.3 and filelock at 4.0, which have advisories with no fix for 3.10.** Run on Python 3.11 or later if Wactorz opens images you did not make. filelock comes only with torch, an optional dependency.
 - **An agent that installs an uncommon package asks once**, on the dashboard, the next time it is spawned or moved.
 - **Compose: a client of your own with its own broker account** needs it listed in `WACTORZ_BROKER_ACCOUNTS`.
 - **The doc-to-pptx agent reads and writes only in your document folders** (`WACTORZ_DOCUMENT_DIRS`, by default Documents) and attached files.

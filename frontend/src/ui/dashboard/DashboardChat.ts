@@ -10,7 +10,7 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import { canDirectMessage, messageableNames } from "./agentState";
+import { askingAgents, canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
@@ -20,21 +20,22 @@ import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import {
-    preferredChatTarget,
+    markAnswered,
     replacementTarget,
     resolveSendTarget,
     sendBlockedReason,
+    settlingTarget,
     stripLeadingMention,
     voiceThreadTarget,
 } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
-import { safeStorage } from "../../safeStorage";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
 import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, listen } from "../../events";
+import { rememberConversation, rememberedConversation } from "./viewRoutes";
 
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
@@ -47,9 +48,6 @@ export interface ChatHost {
     /** Agents sorted with main pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
 }
-
-/** Where the picked agent is remembered between visits. */
-const CHAT_TARGET_KEY = "wactorz-chat-target";
 
 export class DashboardChat {
     /**
@@ -105,6 +103,7 @@ export class DashboardChat {
     private _evSendFailed: EventListener | null = null;
     private _evAttach: EventListener | null = null;
     private _evConnection: EventListener | null = null;
+    private _evAnswered: EventListener | null = null;
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
     private _pendingAttachments: Attachment[] = [];
@@ -133,7 +132,8 @@ export class DashboardChat {
     }
 
     /**
-     * Mark the target as the user's own: remembered, and no longer movable.
+     * Mark the target as the user's own: remembered, no longer movable, and,
+     * with the chat open, in the address.
      *
      * The two ways in are picking an agent and sending to one. Not the third:
      * an agent going away moves the conversation by assigning the field
@@ -143,7 +143,7 @@ export class DashboardChat {
     private _claimTarget(name: string): void {
         this._targetSettled = true;
         if (name) {
-            safeStorage.set(CHAT_TARGET_KEY, name);
+            rememberConversation(name, this.host.getView());
         }
     }
 
@@ -263,12 +263,12 @@ export class DashboardChat {
         const sorted = this.host
             .sortedAgents()
             .filter(a => !this.sidebarFilter || a.name.toLowerCase().includes(this.sidebarFilter));
-        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name));
+        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this.chatMessages);
     }
 
     private _selectAgent(name: string): void {
         const latest = [...this.host.agents.values()].find(a => a.name === name);
-        if (!latest || !canDirectMessage(latest)) {
+        if (!latest || !canOpenThread(latest, askingAgents(this.chatMessages))) {
             return;
         }
         this.setTarget(name);
@@ -377,6 +377,9 @@ export class DashboardChat {
      *  the chat reply path); failure is not — an unreachable backend is exactly
      *  when the user reaches for Stop. */
     private async _stopGeneration(): Promise<void> {
+        // Before the request: the answer already read aloud stops now, whether
+        // or not the server is there to cancel the rest of it.
+        emit("tts-stop");
         await postOrWarn(`${window.__WACTORZ_INGRESS_PATH ?? ""}/api/chat/stop`, { method: "POST" }, "stop");
     }
 
@@ -464,25 +467,19 @@ export class DashboardChat {
      * shown nothing.
      */
     resolveDefaultTarget(): void {
+        const before = this.chatTarget;
         const agents = [...this.host.agents.values()];
-        const remembered = safeStorage.get(CHAT_TARGET_KEY);
-        if (!this.chatTarget) {
-            this.chatTarget = preferredChatTarget(agents, remembered);
-            return;
-        }
-        const wanted = remembered ?? MAIN_AGENT;
-        if (this._targetSettled || wanted === this.chatTarget) {
-            return;
-        }
-        // Only ever an upgrade of a fallback that still stands. A target that
-        // has gone belongs to dropTargetIfGone, which moves the user and says
-        // so; stepping aside here would move them off it in silence.
-        const current = agents.find(a => a.name === this.chatTarget);
-        if (!current || !canDirectMessage(current)) {
-            return;
-        }
-        if (agents.some(a => a.name === wanted && canDirectMessage(a))) {
-            this.chatTarget = wanted;
+        this.chatTarget = settlingTarget(agents, before, rememberedConversation(), this._targetSettled);
+        // Only for a chat already on screen: one still being built is drawn,
+        // and its history loaded, once it is attached (`afterMount`).
+        if (this.chatTarget !== before && this.root.querySelector("#af-chat-pane-header")) {
+            // A fresh page lands on the chat before any agent has arrived,
+            // showing nobody's conversation, and the target filled in afterwards
+            // has to reach the header and thread too. Not claimed: it is what
+            // the page chose, not what the user did.
+            this._refreshForTarget();
+            this._syncPaneVisibility();
+            void this.loadHistory(this.chatTarget);
         }
     }
 
@@ -614,6 +611,8 @@ export class DashboardChat {
             ["af-send-failed", this._evSendFailed],
             ["af-connection-status", this._evConnection],
             ["af-attachment-added", this._evAttach],
+            ["af-answered", this._evAnswered],
+            ["af-answer-option", this._evAnswered],
         ];
         pairs.forEach(([name, fn]) => {
             if (fn) {
@@ -622,6 +621,22 @@ export class DashboardChat {
         });
         this._evChat = this._evChunk = this._evEnd = this._evResetChat = this._evSendMessage = null;
         this._evSendFailed = this._evAttach = this._evConnection = null;
+        this._evAnswered = null;
+    }
+
+    /** Mark the question `id` answered with `option`, and redraw if it is on screen.
+     *  The same for a press here and an answer from another channel: the buttons close either way. */
+    private _markAnswered(id: string, option: string): void {
+        const answered = markAnswered(this.chatMessages, id, option);
+        if (!answered) {
+            return;
+        }
+        this.chatMessages = answered.messages;
+        if (this.host.getView() === "chat" && this._msgBelongsHere(answered.message)) {
+            this.renderChatThread();
+        }
+        // The row of an agent that cannot be messaged locks again once nothing it asked is open.
+        this.renderSidebar();
     }
 
     private _wireChatEvents(): void {
@@ -641,7 +656,14 @@ export class DashboardChat {
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
                 this._showSentMessage(stored, Boolean(voiceTarget));
             }
+            // A question may open a thread the sidebar keeps closed otherwise.
+            this.renderSidebar();
         });
+
+        // Marked at the press, not at the broker's echo, so a second press cannot answer twice.
+        // One listener for both: a press here and an answer from elsewhere read the same.
+        this._evAnswered = listen("af-answered", detail => this._markAnswered(detail.id, detail.option));
+        document.addEventListener("af-answer-option", this._evAnswered);
 
         this._evResetChat = listen("af-reset-chat", detail => {
             const agent = detail.agent;

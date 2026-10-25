@@ -15,8 +15,21 @@ from operator import attrgetter
 from .assemble import PromptFragment, Slot, Template, render
 from .fragments import DEFAULT_FRAGMENTS
 
+#: How to place an agent on a node, shown after the NODES list in both of the
+#: planner's prompts. Inserted as a value, never formatted, so braces are single.
+NODE_PLACEMENT_RULES = """WHERE AN AGENT RUNS: a spawn_config may name one of the NODES above as "node": "<name>".
+- Name a node when the request names one, or when the agent needs that machine itself: a
+  camera or other device on it, or its own CPU, memory, disk or temperature. With no "node",
+  a dynamic agent goes where the NODES line says a dynamic agent naming no node goes, or to main.
+- An agent reads the machine it runs on with psutil, installed on every node and on main:
+  psutil.cpu_percent(interval=None), psutil.virtual_memory().percent,
+  psutil.disk_usage('/').percent, psutil.sensors_temperatures(). A machine's own readings
+  need no topic and no sensor entity. Call cpu_percent with interval=None, once
+  per poll: with an interval it blocks the agent while it measures.
+- Name only a node listed under NODES, and never one marked CANNOT TAKE AGENTS or offline."""
+
 #: Asks for a plan as a JSON array of steps, one agent per step.
-#: Fields: workers_desc, topic_schema_ctx, task.
+#: Fields: workers_desc, topic_schema_ctx, nodes_ctx, task.
 DECOMPOSE_TEMPLATE: Template = (
     """You are a task planner for a multi-agent system.
 Break the task into steps. Each step is handled by one agent.
@@ -24,6 +37,7 @@ Break the task into steps. Each step is handled by one agent.
 AVAILABLE AGENTS (with input/output contracts):
 {workers_desc}
 {topic_schema_ctx}
+{nodes_ctx}
 DELEGATING TO EXISTING AGENTS — strongly preferred over raw MQTT:
 - When an existing agent has its own LLM/NL planner (look for phrases like
   "internal LLM planner", "PREFERRED interface", or "send_to" in its description),
@@ -65,6 +79,8 @@ OUTPUT RULES:
         agent.window(topic, seconds=N)    — returns StreamWindow immediately
         agent.persist(key, val)           — save to disk
         agent.recall(key)                 — load from disk
+        agent.persist_bytes(key, data)    — save bytes (a model) as text
+        agent.recall_bytes(key)           — load them back, or None
         agent.declare_contract(...)       — register topic contract
         agent.agents()                    — list running agents
         agent.topics(keyword)             — list known topics
@@ -99,6 +115,10 @@ OUTPUT RULES:
   Main will combine results using its LLM. Never assign synthesis to a domain agent.
 - Only create new agents when TRULY necessary — prefer existing agents.
 - If one agent can handle everything, output a single-step plan.
+- Never spawn an agent whose only job is to ask the user something or to report that
+  something is missing. If the task cannot be done -- a source only the user can name, a
+  node that cannot take agents -- output one step for "main" whose task is to tell the user
+  what is missing and what they can do.
 - Keep it minimal — avoid unnecessary steps.
 - IMPORTANT: For any step that combines, summarizes, synthesizes or compares results
   from other steps, ALWAYS use "agent": "main" — never a domain agent.
@@ -218,6 +238,12 @@ TYPE 3 — "dynamic"
     await agent.log("message")                        — structured log (ASYNC, must await)
     await agent.publish("topic", {dict})              — publish to MQTT (ASYNC, must await)
     await agent.alert("message")                      — trigger alert (ASYNC, must await)
+    await agent.notify_user(text, options=[...], channel="dashboard", user="")
+                                                      — a chat message to the person, outside any turn (ASYNC);
+                                                        options show as buttons or a numbered list, the pick
+                                                        arrives on agents/{id}/answer ({"id","option","index"})
+    await agent.ask_operator(text, options=[...], channel="dashboard", user="", timeout=None)
+                                                      — the same, waiting for the pick; returns the option (ASYNC)
     await agent.send_to("name", payload)              — delegate to agent (ASYNC, must await)
     await agent.mqtt_get("topic")                     — one-shot MQTT read (ASYNC, must await)
     agent.subscribe("topic", async_callback)          — subscribe to MQTT (SYNC, NO await!)
@@ -228,9 +254,15 @@ TYPE 3 — "dynamic"
     agent.persist("key", value)                       — save persisted value (SYNC, NO await!)
     agent.declare_contract(...)                        — register topic contract (SYNC, NO await!)
     agent.state["key"]                                — in-memory dict (cleared on restart)
+    await agent.load_model("key")                     — a model named in "artifacts", loaded once (ASYNC, must await):
+                                                        npz → dict of numpy arrays, npy → array, safetensors → dict
+                                                        of arrays, onnx → onnxruntime session, state_dict → tensors
+    agent.artifact_path("key")                        — where that model's file is, as a str (SYNC, NO await!)
   CRITICAL RULES FOR DYNAMIC AGENT CODE:
     NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()
     NEVER import or use aiomqtt directly — use agent.subscribe() instead
+    Import ONLY the standard library, wactorz and pip packages listed in "install" — NEVER a local
+    module or file of this machine: a step may run on a node, where only those exist
     NEVER hardcode MQTT broker hostnames or ports — agent.subscribe() handles this automatically
     NEVER use asyncio.create_task() for MQTT — agent.subscribe() already creates the background task
     agent.subscribe() is non-blocking — call it in setup() and return immediately
@@ -239,7 +271,18 @@ TYPE 3 — "dynamic"
     "description": "<what this does>"
     "install": ["<pip-package>", ...]       — packages to install before running
     "poll_interval": <seconds>              — how often process(agent) runs
+    "artifacts": {"<key>": "<model>"}       — models from STORED MODELS below, read by that key
+    "node": "<node name>"                   — the machine it runs on: see NODES below
     "code": "<full python source as single string with \\n for newlines>"
+  MODELS: when the request names a trained model, or a model in STORED MODELS fits it, name it
+    in "artifacts" and read it with agent.load_model("<key>") — never re-implement its maths.
+    Name ONLY models listed under STORED MODELS; an agent naming another does not start.
+    Where STORED MODELS lists a model's arrays ("arrays mean[3], inverse_covariance[3x3]"),
+    read it by exactly those names and shapes: model["mean"], model["inverse_covariance"].
+  FIELDS: read a payload only by the field names LIVE TOPIC SAMPLES shows for its topic, or the
+    USER REQUEST gives. With neither, guess, and when a payload lacks the fields the code reads,
+    log its keys with agent.log() the first time, so a wrong guess shows in the logs instead of
+    the agent silently doing nothing.
 
 ═══ CANONICAL WIRING PATTERNS ═══
 
@@ -328,6 +371,10 @@ TYPE 3 — "dynamic"
     Slot("rules_head"),
     """- Multiple rules in one request → output ALL agents for ALL rules
 - Each agent does exactly ONE job — keep it minimal
+- Never plan an agent whose only job is to ask the user something or to report that
+  something is missing. When the request cannot be built -- a data source only the user can
+  name, a node that cannot take agents -- output exactly
+  [{"_feasibility_error": "<what is missing, and what the user can do about it>"}]
 - Replace <slug> consistently across paired agents with a short descriptive kebab-case id
 """,
     Slot("rules_state_bridge"),

@@ -13,22 +13,26 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .state_codec import NotJson, json_form
+
 #: The word a `/migrate` command takes to move an agent whose state holds values
 #: that cannot travel, leaving those behind.
 FORCE_FLAG = "--force"
 
 
 def json_safe(values: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """The part of ``values`` that can travel over MQTT, and the keys that cannot."""
+    """The part of ``values`` that can travel over MQTT, as JSON, and the keys that cannot.
+
+    A date, a set or a tuple is written in the form `wactorz.core.state_codec`
+    reads back, so what is kept is what comes back.
+    """
     safe: dict[str, Any] = {}
     dropped: list[str] = []
     for key, value in values.items():
         try:
-            json.dumps(value)
-        except (TypeError, ValueError):
+            safe[key] = json_form(value)
+        except NotJson:
             dropped.append(key)
-        else:
-            safe[key] = value
     return safe, dropped
 
 

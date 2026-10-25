@@ -25,6 +25,7 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
+import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
 import type { SpeechToText } from "../io/SpeechToText";
 import { uploadFile } from "../ui/dashboard/uploads";
 import { toast } from "../ui/ToastManager";
@@ -47,7 +48,12 @@ function makeStt(): FakeStt {
 
 function makeDeps(stt: FakeStt): IobarDeps {
     return {
-        chatInput: { onChange: vi.fn(), onKeydown: vi.fn(), closePanel: vi.fn() } as unknown as ChatInput,
+        chatInput: {
+            onChange: vi.fn(),
+            onKeydown: vi.fn(),
+            closePanel: vi.fn(),
+            commands: new CommandCompletion(new CommandCatalog(async () => [])),
+        } as unknown as ChatInput,
         stt: stt as unknown as SpeechToText,
         target: () => "main",
         setTarget: vi.fn(),

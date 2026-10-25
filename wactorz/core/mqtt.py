@@ -156,6 +156,16 @@ def session_kwargs(expiry_seconds: int) -> dict[str, Any]:
     }
 
 
+def v5_kwargs() -> dict[str, Any]:
+    """Connect arguments for a short-lived connection that reads user properties.
+
+    Only MQTT v5 carries them, and a node's signature travels in them, so a
+    v3.1.1 subscriber receives every node's message as unsigned. Unlike
+    :func:`session_kwargs`, the session ends with the connection.
+    """
+    return {"protocol": aiomqtt.ProtocolVersion.V5}
+
+
 def client_id(role: str, scope: str, detail: str | None = None) -> str:
     """Build an MQTT client id: ``wactorz-<role>-<scope>[-<detail>]``.
 
@@ -256,3 +266,9 @@ def publish_properties(user_properties: Sequence[tuple[str, str]]) -> Properties
     properties = Properties(PacketTypes.PUBLISH)
     properties.UserProperty = list(user_properties)
     return properties
+
+
+def user_properties(msg: Any) -> dict[str, str]:
+    """The MQTT v5 user properties a received message carries, by name."""
+    pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
+    return {str(name): str(value) for name, value in pairs}

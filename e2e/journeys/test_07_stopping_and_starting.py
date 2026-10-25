@@ -47,6 +47,7 @@ def test_deleting_asks_first_and_cancel_keeps_the_agent(
 ) -> None:
     dashboard.press("greeter", "delete")
     asked = dashboard.asked_to_confirm()
+    dashboard.assert_accessible("the question before deleting")
 
     dashboard.cancel()
 

@@ -4,11 +4,12 @@
  */
 /**
  * Chat sidebar agent list: diff-renders one row per agent, highlighting the
- * active target and disabling unreachable (system) agents. Selecting a row is
- * delegated to the caller via `onSelect`.
+ * active target and disabling unreachable (system) agents, except one asking
+ * the user something, whose thread opens so its question can be answered.
+ * Selecting a row is delegated to the caller via `onSelect`.
  */
-import type { AgentInfo } from "../../types/agent";
-import { canDirectMessage, stateColor } from "./agentState";
+import type { AgentInfo, ChatMessage } from "../../types/agent";
+import { askingAgents, canDirectMessage, canOpenThread, stateColor } from "./agentState";
 import { button, el } from "../dom";
 
 /** Create a sidebar row button that selects its agent on click. */
@@ -23,9 +24,10 @@ function createRow(name: string, onSelect: (name: string) => void): HTMLButtonEl
 }
 
 /** Patch the mutable bits (active/disabled state, dot colour, lock) of a row. */
-function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string): void {
+function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string, asking: ReadonlySet<string>): void {
     const isActive = agent.name === chatTarget;
-    const isDisabled = !canDirectMessage(agent);
+    const isDisabled = !canOpenThread(agent, asking);
+    const isLocked = !canDirectMessage(agent);
 
     const cls = ["af-chat-agent-row"];
     if (isActive) {
@@ -36,7 +38,11 @@ function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string): void 
     }
     row.className = cls.join(" ");
     (row as HTMLButtonElement).disabled = isDisabled;
-    row.title = isDisabled ? `${agent.name} — infrastructure agent, not directly reachable` : agent.name;
+    row.title = isDisabled
+        ? `${agent.name} — infrastructure agent, not directly reachable`
+        : isLocked
+          ? `${agent.name} — asking you something; it cannot be messaged`
+          : agent.name;
 
     const color = stateColor(agent.state);
     const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
@@ -45,7 +51,7 @@ function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string): void 
     }
     const lock = row.querySelector<HTMLElement>(".af-chat-agent-lock");
     if (lock) {
-        lock.textContent = isDisabled ? "🔒" : "";
+        lock.textContent = isLocked ? "🔒" : "";
     }
 }
 
@@ -55,7 +61,9 @@ export function renderChatSidebar(
     sorted: AgentInfo[],
     chatTarget: string,
     onSelect: (name: string) => void,
+    messages: ChatMessage[] = [],
 ): void {
+    const asking = askingAgents(messages);
     const existing = new Map<string, HTMLElement>();
     list.querySelectorAll<HTMLElement>(".af-chat-agent-row").forEach(r => {
         if (r.dataset["name"]) {
@@ -71,7 +79,7 @@ export function renderChatSidebar(
 
     sorted.forEach((agent, idx) => {
         const row = existing.get(agent.name) ?? createRow(agent.name, onSelect);
-        patchRow(row, agent, chatTarget);
+        patchRow(row, agent, chatTarget, asking);
         const sibling = list.children[idx];
         if (sibling !== row) {
             list.insertBefore(row, sibling ?? null);

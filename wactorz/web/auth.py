@@ -112,10 +112,15 @@ def safe_next(raw: str) -> str:
 
     A scheme-relative `//host` is the case worth naming: it starts with `/`, so
     a "must be absolute" check alone waves it through, and a browser reads it as
-    another host. Anything unacceptable becomes `/` rather than being repaired —
-    landing on the dashboard is a better failure than landing somewhere the user
-    did not ask for.
+    another host. So is one hidden behind a control character: a browser drops
+    tabs and newlines from a URL before reading it, and aiohttp drops them from
+    a `Location` too, so `/<tab>/host` arrives as `//host`. Anything
+    unacceptable becomes `/` rather than being repaired — landing on the
+    dashboard is a better failure than landing somewhere the user did not ask
+    for.
     """
+    if any(ch < " " or ch == "\x7f" for ch in raw):
+        return "/"
     if raw.startswith("/") and not raw.startswith("//") and "\\" not in raw:
         return raw
     return "/"

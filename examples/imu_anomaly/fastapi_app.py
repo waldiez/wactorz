@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager, suppress
 
 from agent import detect
 from fastapi import FastAPI, HTTPException
+from model import STATE_DIR
 
 import wactorz
 
@@ -31,7 +32,7 @@ AGENT = "imu-anomaly"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir="./state"))
+    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir=STATE_DIR))
     # A start that is refused raises inside the task; look once, so the app
     # refuses to start rather than reporting it when it stops.
     await asyncio.sleep(0)

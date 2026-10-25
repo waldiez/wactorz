@@ -34,6 +34,28 @@ KNOWN_PROVIDERS = frozenset(
 )
 
 
+class AG2Error(RuntimeError):
+    """AG2, or the client it needs for a provider, is not installed here."""
+
+    @classmethod
+    def not_installed(cls) -> "AG2Error":
+        return cls("AG2 is not installed. Install it with: pip install 'wactorz[ag2]'")
+
+    @classmethod
+    def client_unusable(cls, extra: str, exc: Exception) -> "AG2Error":
+        return cls(
+            f"AG2's {extra} client is not usable ({exc}). Install it with: "
+            f"pip install 'ag2[{extra}]'"
+        )
+
+
+class UnmappedProviderError(AssertionError):
+    """A provider in KNOWN_PROVIDERS that `model_config` has no mapping for."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(f"unmapped provider {kind}")
+
+
 def _config_classes() -> tuple[Any, Any, Any]:
     """AG2's Anthropic, Gemini and OpenAI configuration classes, imported on first use.
 
@@ -51,9 +73,7 @@ def _config_classes() -> tuple[Any, Any, Any]:
             OpenAIConfig,
         )
     except ImportError as exc:
-        raise RuntimeError(
-            "AG2 is not installed. Install it with: pip install 'wactorz[ag2]'"
-        ) from exc
+        raise AG2Error.not_installed() from exc
     return AnthropicConfig, GeminiConfig, OpenAIConfig
 
 
@@ -110,7 +130,7 @@ def model_config(actor: Any) -> Any:
             model=model,
             api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or key,
         )
-    raise AssertionError(f"unmapped provider {kind}")  # KNOWN_PROVIDERS and the chain disagree
+    raise UnmappedProviderError(kind)  # KNOWN_PROVIDERS and the chain disagree
 
 
 def _build(extra: str, config_class: Any, **settings: Any) -> Any:
@@ -123,10 +143,7 @@ def _build(extra: str, config_class: Any, **settings: Any) -> Any:
     try:
         return config_class(**settings)
     except Exception as exc:
-        raise RuntimeError(
-            f"AG2's {extra} client is not usable ({exc}). Install it with: "
-            f"pip install 'ag2[{extra}]'"
-        ) from exc
+        raise AG2Error.client_unusable(extra, exc) from exc
 
 
 def usage_totals(report: Any, prices: Prices | None = None) -> tuple[float, int, int, str]:

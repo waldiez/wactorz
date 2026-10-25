@@ -807,6 +807,13 @@ async def _fetch_automation_config(
         return None
 
 
+class AutomationPostError(RuntimeError):
+    """Home Assistant refused an automation written over REST."""
+
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__(f"REST automation POST failed ({status}): {body}")
+
+
 async def _post_automation_config(
     base_url: str,
     token: str,
@@ -848,7 +855,7 @@ async def _post_automation_config(
                 body = await response.text()
 
             if response.status >= 400:
-                raise RuntimeError(f"REST automation POST failed ({response.status}): {body}")
+                raise AutomationPostError(response.status, body)
 
             return {
                 "automation_id": automation_id,

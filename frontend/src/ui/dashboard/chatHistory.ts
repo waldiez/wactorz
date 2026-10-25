@@ -11,6 +11,7 @@
  */
 import type { Attachment, ChatMessage } from "../../types/agent";
 import { toMs } from "../../time";
+import { stripActionBlocks } from "../../agents/actionBlocks";
 
 function ingressBase(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";
@@ -47,6 +48,12 @@ function stripInternalTurns<T extends { role: string; content: string }>(rows: T
         out.push(r);
     }
     return out;
+}
+
+/** A stored turn's text as the chat shows it: an agent's reply without the
+ *  action blocks it may have been recorded with. What the user typed is theirs. */
+function shownContent(row: { role: string; content: string }): string {
+    return row.role === "user" ? row.content : stripActionBlocks(row.content);
 }
 
 /** What the server records on a turn — the file's identity, but no address. */
@@ -90,7 +97,7 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
             id: `hist-${agentName}-${r.id}`,
             from: r.role === "user" ? "user" : agentName,
             to: r.role === "user" ? agentName : "user",
-            content: r.content,
+            content: shownContent(r),
             timestampMs: toMs(r.ts),
             // Spread rather than set: `exactOptionalPropertyTypes` refuses an
             // explicit `undefined` for an optional field.
@@ -113,7 +120,7 @@ async function fromKvStore(agentName: string): Promise<ChatMessage[] | null> {
         id: `hist-${agentName}-${i}`,
         from: m.role === "user" ? "user" : agentName,
         to: m.role === "user" ? agentName : "user",
-        content: m.content,
+        content: shownContent(m),
         timestampMs: base + i * 2000,
     }));
 }

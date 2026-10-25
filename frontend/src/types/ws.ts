@@ -48,4 +48,6 @@ export interface LogFeedItem {
     agentType?: string;
     agent_type?: string;
     command?: string;
+    /** The option picked, on an `answer` entry. */
+    option?: string;
 }

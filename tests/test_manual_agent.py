@@ -741,6 +741,20 @@ class TestScrapingSearchPages:
         ]
         assert clock.slept and all(1.5 <= s <= 3.0 for s in clock.slept)
 
+    def test_only_manualslib_itself_is_kept_or_rewritten_by_its_name(
+        self, web: dict[str, Any], clock: _Clock
+    ) -> None:
+        web["https://html.duckduckgo.com/"] = _page(
+            "https://evil.example/manual/1?via=manualslib.com",
+            "https://manualslib.com.evil.example/manual/2",
+            "https://manualslib.com/manual/3/X.html",
+        )
+        web["https://www.mojeek.com/"] = _SyncResponse(200, "short")
+
+        found = NS["_ddg_html_scrape"](_Agent(), "Philips 2200", {})
+
+        assert found == ["https://manualslib.com/manual/3/X/download.pdf"]
+
     def test_duckduckgo_redirect_links_are_unwrapped(
         self, web: dict[str, Any], clock: _Clock
     ) -> None:
@@ -833,6 +847,25 @@ class TestTheSearchLibrary:
             "https://a.example/m.PDF",
             "https://support.hp.com/m404",
             "https://shop.example/x",
+        ]
+
+    def test_a_trusted_host_is_read_from_the_host_not_the_text(self) -> None:
+        results = [
+            {"href": "https://evil.example/?r=manualslib.com", "title": "", "body": ""},
+            {"href": "https://manualslib.com.evil.example/manual/1", "title": "", "body": ""},
+            {"href": "https://notmanualslib.com/manual/2", "title": "", "body": ""},
+            {"href": "https://www.manualslib.com/manual/3/X.html"},
+            {"href": "https://shop.example/?from=google.com", "title": "manual", "body": ""},
+        ]
+
+        ranked = NS["_rank_manual_urls"](results, lambda r: r["href"])
+
+        assert ranked == [
+            "https://www.manualslib.com/manual/3/X.html/download.pdf",
+            "https://evil.example/?r=manualslib.com",
+            "https://manualslib.com.evil.example/manual/1",
+            "https://notmanualslib.com/manual/2",
+            "https://shop.example/?from=google.com",
         ]
 
 

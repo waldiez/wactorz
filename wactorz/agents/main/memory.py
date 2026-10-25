@@ -7,11 +7,14 @@ self.total_*_tokens, self._persist_cost, self.system_prompt) plus the Actor
 base (self.persist, self.recall, self._registry).
 """
 
+import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING, Any
 
 from ... import plugins
+from ...core.artifacts import ArtifactError, ArtifactStore, summary
+from ...core.paths import resolve_state_dir
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import facts_extract_prompt, orchestrator_prompt
@@ -35,6 +38,9 @@ class MemoryMixin(_Host):
     #: The integrations the system prompt and fact extraction speak of. Every
     #: one unless the host says otherwise.
     _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
+    #: One line per model kept on main, for the prompt's STORED MODELS block.
+    #: Read before each turn by `_refresh_stored_models`.
+    _stored_models: tuple[str, ...] = ()
 
     def get_user_facts(self) -> dict[str, Any]:
         return self.recall("_user_facts") or {}
@@ -256,6 +262,16 @@ class MemoryMixin(_Host):
                 "does what one of these does.\n"
             ) + registered_summary
 
+        # ── Block 1c: the models a spawned agent may name ──
+        # Read off the event loop by `_refresh_stored_models` before the turn;
+        # here it is only placed, so the prompt is built without touching disk.
+        stored = self._stored_models
+        if stored:
+            prompt += (
+                '\n\n== STORED MODELS (artifacts a spawn may name in "artifacts") ==\n'
+                "Only these exist. Name one by its name, or name:version.\n"
+            ) + "\n".join(f"  {line}" for line in stored)
+
         # ── Block 2: persisted user facts, grouped by bucket ──
         facts = self.get_user_facts()
         if facts:
@@ -287,6 +303,19 @@ class MemoryMixin(_Host):
                 )
 
         self.system_prompt = prompt
+
+    async def _refresh_stored_models(self) -> None:
+        """Read which models are kept, for the prompt's STORED MODELS block, off the event loop.
+
+        A store that cannot be read leaves the block out rather than failing
+        the turn: the user asked something else.
+        """
+        store = ArtifactStore.in_state_dir(resolve_state_dir())
+        try:
+            self._stored_models = tuple(await asyncio.to_thread(summary, store))
+        except (ArtifactError, OSError) as exc:
+            logger.warning("[%s] Could not list the stored models: %s", self.name, exc)
+            self._stored_models = ()
 
     def _inject_user_facts_into_prompt(self) -> None:
         """Backward-compatible alias — delegates to the unified rebuild."""

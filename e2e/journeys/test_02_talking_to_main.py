@@ -7,6 +7,11 @@ def test_main_answers_what_it_was_asked(dashboard: browser.Dashboard) -> None:
     dashboard.say("please say hello", to="main")
 
     dashboard.expect("main", "Hello from the scripted model.")
+    dashboard.assert_accessible("a conversation with main")
+
+
+def test_the_feed_with_the_conversation_in_it_passes_axe(dashboard: browser.Dashboard) -> None:
+    dashboard.show("feed").assert_accessible("the feed with a conversation in it")
 
 
 def test_answering_was_paid_for(dashboard: browser.Dashboard, app: backend.Backend) -> None:

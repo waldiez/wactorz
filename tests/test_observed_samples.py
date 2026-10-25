@@ -21,8 +21,11 @@ import pytest
 
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import ActorState
+
+from .node_messages import SignedMessage
 
 
 class _Contract:
@@ -105,13 +108,14 @@ class _Broker:
         return False
 
 
-def sample(topic: str, **fields: Any) -> _Message:
-    return _Message(topic, json.dumps(fields).encode())
+def sample(topic: str, **fields: Any) -> SignedMessage:
+    """A data message as the agent's node, ``rpi``, publishes it."""
+    return SignedMessage(topic, json.dumps(fields).encode(), node="rpi")
 
 
 async def run_listener(
     monkeypatch: pytest.MonkeyPatch,
-    messages: list[_Message],
+    messages: list[Any],
     *,
     producers: dict[str, str] | None = None,
 ) -> tuple[_Bus, _Broker]:
@@ -120,9 +124,14 @@ async def run_listener(
     main.name = "main"
     main.manifests = ManifestRegistry(main)
     main.nodes = NodeManager(main, main.manifests)
+    main.migration = Migration(main, main.nodes)
     main.state = ActorState.RUNNING
     main._mqtt_broker = "localhost"
     main._mqtt_port = 1883
+    # Every producer runs on node `rpi`, as main placed it.
+    placed = {name: {"node": "rpi"} for name in (producers or {}).values()}
+    setattr(main, "_registry", None)
+    setattr(main, "_get_spawn_registry", lambda: placed)
 
     def _stop() -> None:
         main.state = ActorState.STOPPED
@@ -167,6 +176,35 @@ class TestRecordingWhatArrives:
         )
 
         assert len(bus.contracts["thermometer"].observed) == 2
+
+
+class TestWhoseSampleItIs:
+    """A remote agent's sample counts only from the node main places it on."""
+
+    async def test_one_from_another_node_is_not_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A node publishing on the Pi's topic, to plant field names the
+        # planner then reads as the thermometer's.
+        forged = SignedMessage("sensors/kitchen", b'{"ignore_previous": 1}', node="sandbox")
+
+        bus, _ = await run_listener(
+            monkeypatch, [forged], producers={"sensors/kitchen": "thermometer"}
+        )
+
+        assert bus.contracts["thermometer"].observed == []
+
+    async def test_an_unsigned_one_is_not_recorded_under_enforce(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.core.node_publications.NODE_SIGNING", "enforce")
+        unsigned = SignedMessage("sensors/kitchen", b'{"t": 1}', node="rpi", signed=False)
+
+        bus, _ = await run_listener(
+            monkeypatch, [unsigned], producers={"sensors/kitchen": "thermometer"}
+        )
+
+        assert bus.contracts["thermometer"].observed == []
 
 
 class TestWhatItSkips:

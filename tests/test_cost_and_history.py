@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # level (web, WSMsgType, …), so it must NOT be stubbed — handler responses are
 # real aiohttp Response objects, read via _payload() below.
 from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
+from wactorz.core import agent_reset
 from wactorz.web import api_actors, cost, events, runtime
 
 ensure_importable("openai")
@@ -382,7 +383,7 @@ class ResetActorCostTest(unittest.TestCase):
             _last_period_cost_usd = 0.42
 
         a = _Actor()
-        cost.reset_actor_cost(a)
+        agent_reset.reset_actor_cost(a)
         self.assertEqual(a.total_cost_usd, 0.0)
         self.assertEqual(a.total_input_tokens, 0)
         self.assertEqual(a.total_output_tokens, 0)
@@ -400,12 +401,12 @@ class ResetActorCostTest(unittest.TestCase):
             _last_persisted_usd = 0.42
 
         a = _Actor()
-        cost.reset_actor_cost(a)
+        agent_reset.reset_actor_cost(a)
         a.total_cost_usd += 0.01  # one new LLM call after the wipe
         self.assertGreater(a.total_cost_usd - a._last_persisted_usd, 0)
 
     def test_actor_without_cost_attrs_is_noop(self):
-        cost.reset_actor_cost(object())  # must not raise
+        agent_reset.reset_actor_cost(object())  # must not raise
 
 
 class SnapshotTotalsTest(unittest.TestCase):

@@ -29,6 +29,14 @@ async def handle_task(agent, payload):
     return {"result": "counted " + str(agent.state["seen"])}
 """
 
+#: An agent that reads the history without awaiting it, which only main answers:
+#: on a node the call must be awaited.
+READS_HISTORY_BARE = """
+async def handle_task(agent, payload):
+    rows = agent.query_ts(hours=1)
+    return {"result": "rows " + str(len(rows))}
+"""
+
 #: An agent that ends itself a few seconds after it starts, as a planner or a
 #: one-off actuator does once its work is done.
 FINISHER = """
@@ -65,6 +73,19 @@ _JUST_NOW = (
 def _starts(words: str, **agent: object) -> str:
     """A reply from main that starts an agent: what it says, then the block that asks for it."""
     return f"{words}\n<spawn>\n{json.dumps(agent)}\n</spawn>"
+
+
+def _asks(words: str, agent: str, **payload: object) -> str:
+    """A reply from main that asks another agent: what it says, then the block that asks it."""
+    return f"{words}\n<delegate>{json.dumps({'agent': agent, 'payload': payload})}</delegate>"
+
+
+#: A package on no list, and not on any index either: asked about, never installed.
+UNLISTED_PACKAGE = "wactorz-unlisted-probe"
+
+#: A package not on the list that the node already has, as a dependency of
+#: Wactorz: allowed, its install finds it there and needs no network.
+ON_THE_NODE_ALREADY = "psutil"
 
 
 SCRIPT = {
@@ -130,6 +151,67 @@ SCRIPT = {
         type="scheduled",
         description="Reminds once",
         schedule={"type": "once", "at": _JUST_NOW},
+    ),
+    # A named operation on the node, the only way the model reaches one.
+    "how full is the disk on the node": _asks(
+        "Checking.",
+        "installer",
+        action="node_op",
+        node_name=NODE_NAME,
+        operation="disk",
+    ),
+    # A command of the model's own for the node, which is refused.
+    "please reboot the node": _asks(
+        "Rebooting it.",
+        "installer",
+        action="node_run",
+        node_name=NODE_NAME,
+        command="sudo reboot",
+    ),
+    "start an agent that needs an unknown package": _starts(
+        "Starting it.",
+        name="prober",
+        type="dynamic",
+        description="Needs a package nobody has allowed",
+        capabilities=["probing"],
+        install=[UNLISTED_PACKAGE],
+        code=COUNTER,
+    ),
+    "start a sampler on the node": _starts(
+        "Starting it there.",
+        name="sampler",
+        type="dynamic",
+        node=NODE_NAME,
+        description="Needs a package the node has and the list does not",
+        capabilities=["sampling"],
+        install=[ON_THE_NODE_ALREADY],
+        code=COUNTER,
+    ),
+    # Written while model code still runs on main, and moved once it does not.
+    "start a tallier here": _starts(
+        "Starting it.",
+        name="tallier",
+        type="dynamic",
+        description="Counts the messages it is sent",
+        capabilities=["tallying"],
+        code=COUNTER,
+    ),
+    "start a trend reader here": _starts(
+        "Starting it.",
+        name="trend-reader",
+        type="dynamic",
+        description="Reads the last hour of readings",
+        capabilities=["trends"],
+        code=READS_HISTORY_BARE,
+    ),
+    # Naming no node, after model code is sent to one.
+    "start a second tallier": _starts(
+        "Starting it.",
+        name="tallier-two",
+        type="dynamic",
+        description="Counts the messages it is sent",
+        capabilities=["tallying"],
+        code=COUNTER,
     ),
     "start a finisher on the node": _starts(
         "Starting it there.",

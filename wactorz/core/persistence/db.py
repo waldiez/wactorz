@@ -127,6 +127,13 @@ def _insert_sql(table: str, columns: tuple[str, ...]) -> str:
     )
 
 
+class ClosedError(RuntimeError):
+    """The database was used after it was closed."""
+
+    def __init__(self) -> None:
+        super().__init__("WactorzDB connection is closed")
+
+
 class WactorzDB:
     """SQLite connection manager. One instance per process, created at startup.
 
@@ -218,7 +225,7 @@ class WactorzDB:
         is serialised rather than each statement on its own.
         """
         if self._conn is None:
-            raise RuntimeError("WactorzDB connection is closed")
+            raise ClosedError()
         return self._conn
 
     @contextmanager
@@ -498,15 +505,22 @@ class WactorzDB:
         return cur.rowcount
 
     @_serialised
-    def chat_attachment_ids(self) -> set[str]:
+    def chat_attachment_ids(self, agent_name: str | None = None) -> set[str]:
         """Every upload id a kept chat turn refers to: what the upload sweep must keep.
 
+        With `agent_name`, only the turns in that agent's thread: what a reset of
+        that thread may take with it, less whatever another thread still names.
         A row whose attachments cannot be read counts as naming none, as it does
         everywhere else a row is read.
         """
         ids: set[str] = set()
-        rows = self.conn.execute(
+        query = (
             "SELECT attachments FROM chat_log WHERE attachments IS NOT NULL AND attachments != ''"
+        )
+        rows = (
+            self.conn.execute(f"{query} AND agent_name=?", (agent_name,))
+            if agent_name
+            else self.conn.execute(query)
         )
         for (raw,) in rows:
             for item in _with_attachments({"attachments": raw})["attachments"]:
@@ -555,11 +569,20 @@ class WactorzDB:
         entity_id: str | None = None,
         field: str | None = None,
         limit: int = 100_000,
+        *,
+        since: float | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Query sensor readings by time range, topic, entity, or field.
         Returns list of dicts suitable for pandas DataFrame conversion.
+
+        ``since`` (a timestamp) replaces ``hours`` and ``offset`` skips that many
+        rows, so a reader taking the rows a page at a time keeps one window and
+        one order across its pages -- see :mod:`wactorz.agents.main.history`.
+        The other history queries take both for the same reason.
         """
-        since = time.time() - (hours * 3600)
+        if since is None:
+            since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
         params: list = [since]
 
@@ -577,8 +600,8 @@ class WactorzDB:
         rows = self.conn.execute(
             # `where` is joined from literal fragments; every value is a bound `?`.
             f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "  # noqa: S608  # the fragment is literal; every value is bound
-            f"FROM sensor_readings WHERE {where} ORDER BY ts ASC LIMIT ?",
-            [*params, limit],
+            f"FROM sensor_readings WHERE {where} ORDER BY ts ASC, rowid ASC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -591,8 +614,12 @@ class WactorzDB:
         class_name: str | None = None,
         min_confidence: float = 0.0,
         limit: int = 50_000,
+        *,
+        since: float | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        since = time.time() - (hours * 3600)
+        if since is None:
+            since = time.time() - (hours * 3600)
         conditions = ["ts >= ?", "confidence >= ?"]
         params: list = [since, min_confidence]
 
@@ -607,8 +634,8 @@ class WactorzDB:
         rows = self.conn.execute(
             # `where` is joined from literal fragments; every value is a bound `?`.
             f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "  # noqa: S608  # the fragment is literal; every value is bound
-            f"FROM detections WHERE {where} ORDER BY ts ASC LIMIT ?",
-            [*params, limit],
+            f"FROM detections WHERE {where} ORDER BY ts ASC, rowid ASC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
 
         return [dict(r) for r in rows]
@@ -620,8 +647,12 @@ class WactorzDB:
         entity_id: str | None = None,
         domain: str | None = None,
         limit: int = 50_000,
+        *,
+        since: float | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        since = time.time() - (hours * 3600)
+        if since is None:
+            since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
         params: list = [since]
 
@@ -636,8 +667,8 @@ class WactorzDB:
         rows = self.conn.execute(
             # `where` is joined from literal fragments; every value is a bound `?`.
             f"SELECT ts, entity_id, old_state, new_state, domain, attributes "  # noqa: S608  # the fragment is literal; every value is bound
-            f"FROM ha_state_changes WHERE {where} ORDER BY ts ASC LIMIT ?",
-            [*params, limit],
+            f"FROM ha_state_changes WHERE {where} ORDER BY ts ASC, rowid ASC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
         ).fetchall()
 
         return [dict(r) for r in rows]

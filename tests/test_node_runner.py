@@ -8,20 +8,36 @@ plumbing under it.
 
 import asyncio
 import inspect
-from collections.abc import AsyncIterator
+import json
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.waiting import until
+from wactorz import plugins
+from wactorz.agents.function_agent import FunctionAgent, agent
 from wactorz.core.actor import ActorState
 from wactorz.node.agent import NodeAgent
+from wactorz.node.hosted import NodeHosted
 from wactorz.node.runner import NodeRunner
 from wactorz.node.state import flush_states
 
 CODE = "async def process(agent):\n    pass\n"
 REPAIRED = "async def process(agent):\n    pass  # repaired by the LLM\n"
+
+#: Counts what it is sent, keeping the count in memory and in its state.
+COUNTING = """
+async def setup(agent):
+    agent.state["seen"] = int(agent.recall("seen") or 0)
+
+
+async def handle_task(agent, payload):
+    agent.state["seen"] += 1
+    agent.persist("seen", agent.state["seen"])
+    return {"result": agent.state["seen"]}
+"""
 
 
 class RecordingRunner(NodeRunner):
@@ -119,6 +135,97 @@ class TestSpawning:
         await runner.spawn_agent("collector")
 
         assert not runner.agents
+
+
+BROKEN = "async def process(agent)\n    pass\n"
+
+
+def answers(runner: RecordingRunner) -> list[dict[str, Any]]:
+    """What the node said to main about agents it was moving here."""
+    return [p for t, p, _ in runner.published if t.endswith("/spawn_ack")]
+
+
+@pytest.fixture(name="no_repair")
+def no_repair_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No model to repair a program with, so one that does not compile stays broken."""
+
+    async def unavailable(_self: NodeAgent, _code: str, _error: str) -> None:
+        return None
+
+    monkeypatch.setattr(NodeAgent, "_fix_syntax_with_llm", unavailable)
+
+
+class TestRefusingAMigration:
+    """An agent moving here that does not start is refused, not confirmed.
+
+    A confirmation is what lets main delete the source's copy. Given for a
+    program that never ran, the agent would be nowhere.
+    """
+
+    @pytest.mark.usefixtures("no_repair")
+    async def test_a_program_that_does_not_compile_is_refused(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": BROKEN, "_migration_token": "t"})
+
+        (answer,) = answers(runner)
+        assert answer["migration_token"] == "t"
+        assert answer["refused"] == "its program did not start (compile)"
+
+    @pytest.mark.usefixtures("no_repair")
+    async def test_it_is_stopped_rather_than_restarted(self, runner: RecordingRunner) -> None:
+        # Supervised, it would be compiled again on every restart, and fail the
+        # same way each time.
+        await runner.spawn_agent({"name": "collector", "code": BROKEN, "_migration_token": "t"})
+
+        assert runner.get("collector") is None
+        assert "collector" not in runner.supervisor._specs
+        assert "collector" not in runner._configs
+
+    @pytest.mark.usefixtures("no_repair")
+    async def test_outside_a_migration_it_is_left_to_supervision(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Nobody is waiting on an answer, and main spawned it here on purpose.
+        await runner.spawn_agent({"name": "collector", "code": BROKEN})
+
+        assert not answers(runner)
+        assert "collector" in runner.supervisor._specs
+
+    async def test_a_start_that_raises_is_refused(self, runner: RecordingRunner) -> None:
+        real_start = NodeAgent.start
+
+        async def failing_start(self: NodeAgent) -> None:
+            raise RuntimeError("the camera is not there")
+
+        NodeAgent.start = failing_start  # type: ignore[method-assign]
+        try:
+            await runner.spawn_agent({"name": "collector", "code": CODE, "_migration_token": "t"})
+        finally:
+            NodeAgent.start = real_start  # type: ignore[method-assign]
+
+        (answer,) = answers(runner)
+        assert answer["refused"] == "it failed to start: the camera is not there"
+
+    async def test_a_refused_install_list_is_refused(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent(
+            {
+                "name": "collector",
+                "code": CODE,
+                "install": ["numpy; rm -rf /"],
+                "_migration_token": "t",
+            }
+        )
+
+        (answer,) = answers(runner)
+        assert "not package names" in answer["refused"]
+        assert runner.get("collector") is None
+
+    async def test_a_program_that_starts_is_confirmed(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE, "_migration_token": "t"})
+
+        (answer,) = answers(runner)
+        assert "refused" not in answer
 
 
 class TestSupervision:
@@ -339,6 +446,150 @@ class TestTellingMainAboutARepair:
         )
 
         assert not [t for t in runner.topics if t.endswith("/code_return")]
+
+
+async def _set_up(agent: NodeAgent) -> None:
+    """Wait for a counting program's `setup()` to have read its count."""
+    await until(lambda: "seen" in agent._api.state, f"{agent.name}'s setup() to have run")
+
+
+class TestResetting:
+    """Main's reset clears main's records; an agent here keeps its own copy until the node clears it."""
+
+    @staticmethod
+    async def _reset(runner: RecordingRunner, scope: str, agent: str | None = None) -> Any:
+        await runner._on_reset(
+            "nodes/rpi/reset",
+            {"scope": scope, "agent": agent, "request": "req-1"},
+            _Message(),
+        )
+
+        def answers() -> list[Any]:
+            return [p for t, p, _r in runner.published if t == "nodes/rpi/reset_done"]
+
+        # Carried out off the subscriber loop, so the answer comes a moment later.
+        await until(answers, "the node to answer the reset")
+        assert len(answers()) == 1, answers()
+        return answers()[0]
+
+    @staticmethod
+    def _file(agent: NodeHosted) -> dict[str, Any]:
+        flush_states()
+        return json.loads(agent._state_file.path.read_text())
+
+    async def test_a_chat_reset_forgets_the_conversation_and_keeps_the_rest(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("conversation_history", [{"role": "user", "content": "hello"}])
+        agent.persist("count", 3)
+
+        answer = await self._reset(runner, "chat", "collector")
+
+        assert answer["request"] == "req-1"
+        assert answer["cleared"] == ["collector"]
+        assert agent.recall("conversation_history") is None
+        assert agent.recall("count") == 3
+        # The file too: a restart reads it, and would bring the conversation back.
+        assert "conversation_history" not in json.dumps(self._file(agent))
+        assert "count" in json.dumps(self._file(agent))
+
+    async def test_a_state_reset_removes_the_file(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("count", 3)
+        flush_states()
+        assert agent._state_file.path.exists()
+
+        await self._reset(runner, "state", "collector")
+        flush_states()
+
+        assert agent.recall("count") is None
+        assert not agent._state_file.path.exists()
+
+    async def test_a_state_reset_starts_the_agent_again_with_nothing_kept(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The count is in memory as well as in the file: deleting only the file
+        # leaves the agent counting on, and its next persist writes it back. It
+        # came here by migration, so its config carries the state it arrived with.
+        await runner.spawn_agent(
+            {"name": "counter", "code": COUNTING, "_initial_state": {"seen": 4}}
+        )
+        before = runner.get("counter")
+        assert before is not None
+        await _set_up(before)
+        assert (await before.run_task({}))["result"] == 5
+
+        answer = await self._reset(runner, "state", "counter")
+
+        after = runner.get("counter")
+        assert after is not None and after is not before
+        assert answer["cleared"] == ["counter"]
+        await _set_up(after)
+        assert (await after.run_task({}))["result"] == 1
+
+    async def test_an_agent_that_does_not_start_again_is_not_reported_cleared(
+        self, runner: RecordingRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+
+        async def refuse(_config: dict[str, Any]) -> None:
+            return None  # the spawn did not bring it back
+
+        monkeypatch.setattr(runner, "spawn_agent", refuse)
+
+        answer = await self._reset(runner, "state", "collector")
+
+        # Main would otherwise report a reset done for an agent that is gone.
+        assert answer["cleared"] == []
+
+    async def test_a_metrics_reset_zeroes_what_the_next_heartbeat_reports(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.metrics.messages_processed = 7
+        agent.persist("_messages_processed", 7)
+
+        await self._reset(runner, "metrics", "collector")
+
+        assert agent.metrics.messages_processed == 0
+        assert agent.recall("_messages_processed") is None
+
+    async def test_without_an_agent_every_agent_here_is_reset(
+        self, runner: RecordingRunner
+    ) -> None:
+        for name in ("collector", "counter"):
+            await runner.spawn_agent({"name": name, "code": CODE})
+            hosted = runner.get(name)
+            assert hosted is not None
+            hosted.persist("conversation_history", ["hi"])
+
+        answer = await self._reset(runner, "chat")
+
+        assert answer["cleared"] == ["collector", "counter"]
+
+    async def test_an_agent_not_here_or_a_scope_it_does_not_reach_is_still_answered(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Main waits on the answer to report the reset whole; silence would read
+        # as a node that did not hear.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+
+        assert (await self._reset(runner, "chat", "elsewhere"))["cleared"] == []
+        runner.published.clear()
+        assert (await self._reset(runner, "spawns", "collector"))["cleared"] == []
+
+    async def test_the_manifest_says_this_node_resets(self, runner: RecordingRunner) -> None:
+        await runner._publish_manifest()
+
+        manifest = next(p for t, p, _r in runner.published if t == "nodes/rpi/manifest")
+        assert manifest["resets"] is True
 
 
 class TestStopping:
@@ -870,3 +1121,133 @@ async def _settle() -> None:
     """Let the tasks a control handler started run to completion."""
     for _ in range(6):
         await asyncio.sleep(0)
+
+
+@agent(subscribes="probe/in", publishes="probe/out", description="Echoes what it is sent.")
+def probe(reading: dict, me: FunctionAgent) -> dict:
+    """A library agent: counts what it has seen, and answers with it."""
+    me.persist("seen", int(me.recall("seen", 0)) + 1)
+    return {"echo": reading, "seen": me.recall("seen")}
+
+
+class TestALibraryAgent:
+    """`type: module`: an agent built from a package installed on this node.
+
+    Built from its plugin the way main builds it, with what a node adds in
+    front: its commands go through the node, a task reaches it on a topic,
+    and the state a migration brings is its own before it starts.
+    """
+
+    @pytest.fixture(autouse=True)
+    def target(self) -> Iterator[str]:
+        with plugins.registered([probe]) as (plugin,):
+            yield plugin.target
+
+    @staticmethod
+    def _config(target: str, **more: Any) -> dict[str, Any]:
+        return {"name": "probe", "type": "module", "target": target, **more}
+
+    async def test_it_is_built_from_the_plugin_and_runs_here(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+
+        hosted = runner.hosted("probe")
+        assert isinstance(hosted, NodeHosted)
+        assert isinstance(hosted, FunctionAgent)
+        assert hosted.node == "rpi"
+        assert "probe" in runner.agents, "it is in the node's heartbeat"
+        assert f"agents/{runner.node_name}/logs" in runner.topics
+
+    async def test_a_task_is_answered_by_the_function(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+
+        await runner._run_task(hosted, {"x": 1}, "reply/here")
+
+        assert [p for t, p, _r in runner.published if t == "reply/here"] == [
+            {"echo": {"x": 1}, "seen": 1}
+        ]
+
+    async def test_the_state_a_migration_brings_is_its_own(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(
+            self._config(target, _initial_state={"seen": 41}, _migration_token="tok")
+        )
+
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+        assert hosted.recall("seen") == 41
+        acks = [p for t, p, _r in runner.published if t.endswith("/spawn_ack")]
+        assert [a["migration_token"] for a in acks] == ["tok"]
+
+    async def test_it_is_handed_back_with_its_config_and_state(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+        hosted.persist("seen", 7)
+
+        await runner._return_to_main(hosted, {"return_token": "tok"})
+
+        (returned,) = [p for t, p, _r in runner.published if t.endswith("/state_return")]
+        assert returned["config"]["type"] == "module"
+        assert returned["config"]["target"] == target
+        assert returned["state"] == {"seen": 7}
+        assert runner.hosted("probe") is None
+
+    async def test_a_delete_removes_what_it_kept(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+        hosted.persist("seen", 1)
+        state_file = hosted._persistence_dir / "state.pkl"
+
+        await runner.stop_agent("probe", delete=True)
+
+        assert not state_file.exists()
+
+    async def test_a_target_this_node_does_not_have_is_refused(
+        self, runner: RecordingRunner
+    ) -> None:
+        """Nothing starts, main is told it was refused, and the dashboard says why."""
+        await runner.spawn_agent(
+            {
+                "name": "ghost",
+                "type": "module",
+                "target": "nowhere.pkg:ghost",
+                "_migration_token": "t",
+            }
+        )
+
+        assert runner.hosted("ghost") is None
+        (ack,) = [p for t, p, _r in runner.published if t.endswith("/spawn_ack")]
+        assert "nowhere.pkg:ghost" in ack["refused"], "a refusal, never a confirmation"
+        await until(
+            lambda: any(
+                t == f"agents/{runner.node_name}/logs" and p.get("type") == "error"
+                for t, p, _r in runner.published
+            ),
+            "the refusal reaches the dashboard",
+        )
+        (error,) = [
+            p
+            for t, p, _r in runner.published
+            if t == f"agents/{runner.node_name}/logs" and p.get("type") == "error"
+        ]
+        assert "nowhere.pkg:ghost" in error["message"]
+
+    async def test_the_manifest_names_what_this_node_can_build(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner._publish_manifest()
+
+        manifest = [p for t, p, _r in runner.published if t.endswith("/manifest")][-1]
+        assert target in manifest["agents"]

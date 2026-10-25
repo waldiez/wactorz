@@ -15,6 +15,7 @@ import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
 import { el, iconButton, named } from "../dom";
+import { MAIN_AGENT } from "../../agents/naming";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
 export function composerPlaceholder(target: string): string {
@@ -127,11 +128,20 @@ export const TURN_IDLE_TIMEOUT_MS = 60_000;
  * `to: "user"` just as a bystander's message may be, so `to` cannot distinguish
  * them.
  *
+ * A command is the exception: main answers it whichever thread it was typed
+ * in, and the server attributes its reply to main, so a command's turn waits
+ * on main rather than on the agent the thread belongs to.
+ *
  * Neither event arrives at all if the backend dies mid-turn, which would strand
  * the composer with send disabled and stop inert. Two independent escapes: the
  * transport dropping out of `live`, and a silence timeout as the backstop for a
  * terminating frame that is simply lost on a connection that still looks fine.
  */
+/** Who will answer what was sent to `target`: main for a command, else `target`. */
+function answererOf(content: string | undefined, target: string | undefined): string | undefined {
+    return content?.startsWith("/") ? MAIN_AGENT : target;
+}
+
 function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): void {
     let turnTarget: string | null = null;
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -158,7 +168,7 @@ function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButton
     // Page-lifetime listeners: buildIobar runs once (CardDashboard is a single
     // instance never remounted), so these are intentionally not removed. If that
     // assumption ever changes, a second call here double-fires busy/idle.
-    listen("af-send-message", d => busy(d?.target));
+    listen("af-send-message", d => busy(answererOf(d?.content, d?.target)));
     listen("af-stream-end", d => {
         if (endsTurn(d?.from)) {
             idle();
@@ -249,7 +259,8 @@ function buildInputArea(
     const ghost = el("div", "af-input-ghost");
     ghost.setAttribute("aria-hidden", "true");
     const input = buildTextarea(deps, select, ghost, mentionPanel);
-    const hint = el("div", "af-input-hint", "↑↓ history · Tab accept · @agent");
+    deps.chatInput.commands.attach(input);
+    const hint = el("div", "af-input-hint", "↑↓ history · Tab accept · @agent · / commands");
     // Pending-attachment chip tray (hidden while empty via CSS); filled by the
     // chat controller from `af-attachment-added` events (drop / paste).
     const tray = el("div", "af-attach-tray");
@@ -257,7 +268,7 @@ function buildInputArea(
     // Always attached, gated inside: the input is built before /api/config has
     // answered, so a check here would decide with an answer nobody has yet.
     input.addEventListener("paste", e => void handlePaste(e));
-    inputWrap.append(tray, mentionPanel, ghost, input, hint);
+    inputWrap.append(tray, mentionPanel, deps.chatInput.commands.element, ghost, input, hint);
     return { inputWrap, input, mentionPanel };
 }
 

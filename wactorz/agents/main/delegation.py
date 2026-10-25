@@ -35,7 +35,9 @@ from ...core.mqtt import (
     install_id,
     mqtt_client,
     session_kwargs,
+    user_properties,
 )
+from ...core.node_publications import admit
 
 if TYPE_CHECKING:
     from .hosts import DelegationHost
@@ -61,6 +63,23 @@ _BARE_MENTION = re.compile(r"(?:^|\n|[.!?:]\s+)(@([\w][\w\-]*)[ \t]+)")
 #: reach from Discord and Telegram until someone decides otherwise, which is the
 #: safe direction for a default to fail in.
 RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
+
+#: What the model may ask the installer for. Not ``node_run``: a command for a
+#: node's shell is the operator's to type, as ``/nodes run``, and the model asks
+#: for a named operation (``node_op``) instead. What it reads is untrusted text,
+#: so a command it writes could be anyone's.
+MODEL_INSTALLER_ACTIONS = frozenset(
+    {
+        "check",
+        "history",
+        "install",
+        "node_deploy",
+        "node_install",
+        "node_install_for_agent",
+        "node_op",
+        "resolve",
+    }
+)
 
 #: How long to wait for a reply subscription before publishing regardless.
 #:
@@ -104,8 +123,13 @@ class DelegationManager:
         self.host = host
 
     @contextlib.asynccontextmanager
-    async def _reply_topic(self) -> AsyncGenerator[tuple[str, asyncio.Future]]:
+    async def _reply_topic(self, node: str) -> AsyncGenerator[tuple[str, asyncio.Future]]:
         """A reply topic that is already subscribed, and the future its answer lands in.
+
+        The answer is the first message there signed by ``node``, the node the
+        task goes to. Every node can read the task and publish on its reply
+        topic, so one that is not signed by it is passed over and the wait goes
+        on, rather than ending with whatever arrived first.
 
         **Subscribing before the caller publishes is the whole point.** Both
         call sites used to publish first and subscribe after, so an agent that
@@ -137,9 +161,12 @@ class DelegationManager:
                     await client.subscribe(topic, qos=1)
                     subscribed.set()
                     async for msg in client.messages:
+                        raw = bytes(msg.payload or b"")
+                        if not admit(node, topic, raw, user_properties(msg), "a task reply"):
+                            continue
                         try:
                             if not future.done():
-                                future.set_result(json.loads(msg.payload.decode()))
+                                future.set_result(json.loads(raw.decode()))
                         except Exception as exc:
                             logger.debug(
                                 "[%s] Undecodable reply on %r: %s", self.host.name, topic, exc
@@ -180,6 +207,28 @@ class DelegationManager:
           2. Remote node   — MQTT request/reply via agents/by-name/{name}/task
           3. Returns None if the agent is unknown in both
         """
+        return await self._delegate(
+            target_name, {"text": task}, {"text": task, "payload": task}, timeout
+        )
+
+    async def delegate_payload(
+        self, target_name: str, payload: dict[str, Any], timeout: float = 60.0
+    ) -> dict | None:
+        """`delegate_task` for a structured task: ``payload`` reaches the agent as it is.
+
+        The planner's route to an agent it did not find in its own process,
+        which on a node it cannot reach itself.
+        """
+        return await self._delegate(target_name, payload, payload, timeout)
+
+    async def _delegate(
+        self,
+        target_name: str,
+        local: dict[str, Any],
+        remote: dict[str, Any],
+        timeout: float,
+    ) -> dict | None:
+        """``local`` to the agent here, or ``remote`` to it on its node; None if neither has it."""
         if not self.host._registry:
             return None
 
@@ -187,7 +236,7 @@ class DelegationManager:
         if target:
             # ── Local path (fast, in-process) ────────────────────────────────
             try:
-                return await ask_through(self.host, target_name, {"text": task}, timeout=timeout)
+                return await ask_through(self.host, target_name, local, timeout=timeout)
             except ReplyError as exc:
                 # The agent's own account of its failure is the answer here;
                 # every caller reads the reply's fields and says what it finds.
@@ -198,22 +247,23 @@ class DelegationManager:
                 return None
 
         # ── Remote path: check if agent is on a known node ───────────────────
-        remote_node = None
-        for node_name, nd in self.host._known_nodes.items():
-            if target_name in nd.get("agents", []):
-                remote_node = node_name
-                break
-
+        remote_node = self.host.nodes.node_for(target_name)
         if not remote_node:
             logger.warning(
                 "[%s] delegate_task: %r not found locally or remotely", self.host.name, target_name
             )
             return None
+        refusal = self.host.nodes.refuses_tasks(remote_node)
+        if refusal:
+            logger.warning(
+                "[%s] delegate_task: %r not sent: %s", self.host.name, target_name, refusal
+            )
+            return {"error": refusal}
 
-        async with self._reply_topic() as (reply_topic, future):
+        async with self._reply_topic(remote_node) as (reply_topic, future):
             await self.host._mqtt_publish(
                 f"agents/by-name/{target_name}/task",
-                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
+                {**remote, "_reply_topic": reply_topic, "_remote_task": True},
             )
             try:
                 return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
@@ -231,8 +281,13 @@ class DelegationManager:
         self, payload: dict[str, Any], timeout: float = 300.0
     ) -> dict[str, Any]:
         """Send a task to the installer agent and wait for the result.
-        Handles node_deploy, node_install, node_run, install, check actions.
-        timeout is generous (300s) because deploys involve SSH + pip installs.
+
+        Main's own route to it, for every action it takes: a local ``install``
+        or ``check``, and the node actions only main may ask for -- ``node_deploy``,
+        ``node_install``, a named read-only ``node_op``, and ``node_run``, which
+        main sends for a command the operator typed as ``/nodes run`` and never
+        for one the model wrote (see `MODEL_INSTALLER_ACTIONS`). The timeout is
+        generous because deploys involve SSH and pip installs.
         """
         if not self.host._registry:
             return {"error": "No registry available"}
@@ -252,12 +307,24 @@ class DelegationManager:
         """Dispatch one already-resolved delegation and format the result string.
         Shared by @mention delegations and <delegate> blocks.
         """
+        action = payload.get("action", "install") if isinstance(payload, dict) else "install"
+        if agent_name == "installer" and action not in MODEL_INSTALLER_ACTIONS:
+            logger.warning("[%s] Refused the model's %r for the installer", self.host.name, action)
+            return (
+                f"[installer: '{action}' is not something the assistant may ask for. A command "
+                "for a node is typed by the operator: /nodes run <node> <command>]"
+            )
         json_str = json.dumps(payload)
         logger.info(
             "[%s] Executing LLM delegation → @%s %s", self.host.name, agent_name, json_str[:80]
         )
         try:
-            result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+            if agent_name == "installer" and isinstance(payload, dict):
+                # The installer reads its action from the payload itself, so
+                # it is sent as one rather than as task text.
+                result = await self.delegate_to_installer(payload, timeout=300.0)
+            else:
+                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
         except Exception as e:
             return f"[{agent_name} error: {e}]"
         # Formatting the reply is outside the guard on purpose: only the
@@ -500,7 +567,10 @@ class DelegationManager:
 
     async def _ask_node(self, target_name: str, node: str, message: str) -> str:
         """Ask an agent on another machine, over the broker."""
-        async with self._reply_topic() as (reply_topic, future):
+        refusal = self.host.nodes.refuses_tasks(node)
+        if refusal:
+            return f"{target_name} was not asked: {refusal}."
+        async with self._reply_topic(node) as (reply_topic, future):
             await self.host._mqtt_publish(
                 f"agents/by-name/{target_name}/task",
                 {
@@ -520,13 +590,6 @@ class DelegationManager:
                     f"{REMOTE_MENTION_TIMEOUT_S:.0f}s."
                 )
             return f"**{target_name}** (on {node}): {_readable(result)}"
-
-    def _node_claiming(self, target_name: str) -> str | None:
-        """The node whose last heartbeat listed this agent, if any."""
-        for node_name, info in self.host._known_nodes.items():
-            if target_name in info.get("agents", []):
-                return node_name
-        return None
 
     async def ask_home_assistant(self, text: str) -> str:
         """Put a question to the Home Assistant agent, and say what came back.
@@ -572,7 +635,7 @@ class DelegationManager:
         if target:
             return await self._ask_here(target_name, message)
 
-        node = self._node_claiming(target_name)
+        node = self.host.nodes.node_for(target_name)
         if node:
             return await self._ask_node(target_name, node, message)
 

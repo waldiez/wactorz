@@ -4,12 +4,14 @@
  */
 /**
  * Chat input behaviour for the iobar textarea: history (↑/↓), ghost-text
- * autosuggestion from history, and the `@mention` panel. Owns all of that state
+ * autosuggestion from history, the `@mention` panel and the `/` command list
+ * (`commandCompletion.ts`). Owns all of that state
  * so CardDashboard doesn't have to; it reaches back to the host only for the
  * agent list, the active target, and the send action.
  */
 
 import { button, el } from "../dom";
+import { CommandCompletion } from "./commandCompletion";
 
 export interface ChatInputHost {
     /** All known agent names (for `@mention` completion). */
@@ -29,7 +31,11 @@ export class ChatInput {
     private mentionIdx = -1;
     private mentionMatches: string[] = [];
 
-    constructor(private host: ChatInputHost) {}
+    constructor(
+        private host: ChatInputHost,
+        /** The `/` command list; the iobar places its element beside the mention panel. */
+        readonly commands = new CommandCompletion(),
+    ) {}
 
     /** Handle a keydown on the textarea (mention nav, send, suggestion, history). */
     onKeydown(
@@ -39,6 +45,11 @@ export class ChatInput {
         ghost: HTMLElement,
         mentionPanel: HTMLElement,
     ): void {
+        // The command list first: while it is open, ↑/↓ move through it rather
+        // than through history, and Tab and Enter complete from it.
+        if (this.commands.onKeydown(e, input)) {
+            return;
+        }
         if (this.mentionOpen && this._handleMentionKeydown(e, input, select, ghost, mentionPanel)) {
             return;
         }
@@ -72,6 +83,11 @@ export class ChatInput {
         mentionPanel: HTMLElement,
     ): void {
         const val = input.value;
+        if (this.commands.update(input)) {
+            this._closeMentions(mentionPanel);
+            this._clearGhost(input, ghost);
+            return;
+        }
         // @mention detection: `@` anywhere at the end of the current word.
         const mentionMatch = /@(\w*)$/.exec(val);
         if (mentionMatch) {
@@ -101,8 +117,13 @@ export class ChatInput {
         }
     }
 
-    /** Close the `@mention` panel and reset its selection state. */
+    /** Close the `@mention` panel and the command list, and reset their selection. */
     closePanel(panel: HTMLElement): void {
+        this.commands.close();
+        this._closeMentions(panel);
+    }
+
+    private _closeMentions(panel: HTMLElement): void {
         this.mentionOpen = false;
         this.mentionIdx = -1;
         this.mentionMatches = [];

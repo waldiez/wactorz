@@ -249,6 +249,18 @@ MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 10
 #: no limit.
 MIGRATION_MAX_BLOB_BYTES = _env_int("WACTORZ_MIGRATION_MAX_BLOB_BYTES", 64 * 1024 * 1024)
 
+#: Largest artifact -- a model kept with `wactorz-artifacts` -- main sends a node
+#: and a node accepts. It goes in chunks over MQTT and is written to disk as it
+#: arrives, so this bounds the disk and the time a transfer takes, not memory; a
+#: broker holding messages for a node that is away holds this much for it too.
+#: Read on main and on each node alike. 0 sets no limit.
+ARTIFACT_MAX_BYTES = _env_int("WACTORZ_ARTIFACT_MAX_BYTES", 256 * 1024 * 1024)
+
+#: How much a node keeps of the artifacts it has fetched. Past it, those no agent
+#: on the node names are deleted, the least recently used first; one an agent
+#: names is kept whatever the total. 0 keeps everything.
+NODE_ARTIFACT_CACHE_BYTES = _env_int("WACTORZ_NODE_ARTIFACT_CACHE_BYTES", 1024 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:
@@ -307,6 +319,51 @@ def _node_signing_mode() -> str:
 
 
 NODE_SIGNING = _node_signing_mode()
+
+#: How many model calls a minute main's bridge answers for one node, after a
+#: burst of as many. Past it a call is refused at once, saying why, rather than
+#: queued: an agent on a node -- often code the model wrote -- that calls in a
+#: loop would otherwise spend main's budget as fast as the provider answers. 0
+#: sets no limit.
+BRIDGE_CALLS_PER_MINUTE = _env_int("WACTORZ_BRIDGE_CALLS_PER_MINUTE", 60)
+
+#: How many pages of main's history (``query_ts`` and the like on a node) the
+#: bridge answers for one node a minute, after a burst of as many. A page holds
+#: as many rows as fit in one broker message. 0 sets no limit.
+BRIDGE_HISTORY_PAGES_PER_MINUTE = _env_int("WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE", 600)
+
+#: The node model-written code runs on when its spawn names none. Unset, it is
+#: ``sandbox`` whenever a node by that name exists (see ``wactorz-node
+#: setup-local``) and main otherwise; ``main`` keeps such code on main, where it
+#: has every credential main holds.
+MODEL_CODE_NODE = _unquote(os.getenv("WACTORZ_MODEL_CODE_NODE", "") or "").strip()
+
+#: What happens when a spawn the model wrote asks for main by name, while
+#: ``WACTORZ_MODEL_CODE_NODE`` sends model-written code elsewhere: ``ask`` the
+#: operator on the dashboard, ``allow`` it, or refuse it (``never``).
+MODEL_CODE_ON_MAIN_MODES = ("ask", "allow", "never")
+
+#: The mode when none is set, or when the one set is not a mode.
+DEFAULT_MODEL_CODE_ON_MAIN = "ask"
+
+
+def _model_code_on_main() -> str:
+    """The configured mode, or ``DEFAULT_MODEL_CODE_ON_MAIN`` when unset or unrecognised."""
+    value = _unquote(os.getenv("WACTORZ_MODEL_CODE_ON_MAIN", "") or "").strip().lower()
+    if not value:
+        return DEFAULT_MODEL_CODE_ON_MAIN
+    if value not in MODEL_CODE_ON_MAIN_MODES:
+        warnings.warn(
+            f"WACTORZ_MODEL_CODE_ON_MAIN={value!r} is not one of "
+            f"{', '.join(MODEL_CODE_ON_MAIN_MODES)} — using {DEFAULT_MODEL_CODE_ON_MAIN!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_MODEL_CODE_ON_MAIN
+    return value
+
+
+MODEL_CODE_ON_MAIN = _model_code_on_main()
 
 #: How a log line is written: ``text`` for a person reading it, ``json`` for a
 #: collector that parses it.
@@ -411,6 +468,10 @@ def _env_slug(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", name.strip().upper()).strip("_")
 
 
+#: Names that already mean main itself, in `/migrate` and on the dashboard, so a
+#: node may not take them.
+RESERVED_NODE_NAMES = frozenset({"local", "main"})
+
 #: Characters a node name may not contain, because it becomes one level of an
 #: MQTT topic: ``#`` and ``+`` are the wildcards, ``/`` is the level separator.
 _NODE_NAME_FORBIDDEN = ("#", "+", "/")
@@ -442,6 +503,23 @@ def deploy_name_error(node_name: str) -> str | None:
         )
     if name != node_name:
         return f"Node name {node_name!r} has leading or trailing whitespace."
+    return None
+
+
+def reserved_node_name_error(node_name: str) -> str | None:
+    """Why ``node_name`` may not be given to a new node, or None if it may.
+
+    Checked where a node is made -- ``/deploy`` and ``setup-local`` -- and not
+    where one starts: a node already running under such a name keeps starting,
+    and is renamed by deploying it again under another.
+    """
+    name = (node_name or "").strip()
+    if name.lower() in RESERVED_NODE_NAMES:
+        return (
+            f"Node name {name!r} already means main itself: `/migrate <agent> {name}` moves an "
+            "agent to main, and the dashboard lists main's agents under 'local'. Give the "
+            "node another name; a node on main's own machine is usually 'sandbox'."
+        )
     return None
 
 
@@ -680,7 +758,7 @@ def deploy_target_for_host(host: str) -> DeployTarget | None:
     """The configured target whose ``host`` matches, or None.
 
     Lets the installer re-authenticate to a node it only knows by address —
-    ``node_install`` and ``node_run`` are given a host, not a node name.
+    the installer's node actions may be given a host rather than a node name.
     """
     host = (host or "").strip().lower()
     if not host:

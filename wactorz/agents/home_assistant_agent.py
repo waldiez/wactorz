@@ -73,6 +73,42 @@ logger = logging.getLogger(__name__)
 class AutomationEditError(Exception):
     """Internal error used to map edit helper failures to the public edit response."""
 
+    @classmethod
+    def unidentified(cls, exc: Exception) -> "AutomationEditError":
+        return cls(f"Could not identify automation to edit: {exc}")
+
+    @classmethod
+    def which(cls) -> "AutomationEditError":
+        return cls("Could not identify which automation to edit.")
+
+    @classmethod
+    def no_id(cls) -> "AutomationEditError":
+        return cls("Could not determine the automation ID to edit.")
+
+    @classmethod
+    def not_generated(cls, exc: Exception) -> "AutomationEditError":
+        return cls(f"LLM could not generate updated automation: {exc}")
+
+    @classmethod
+    def invalid_config(cls) -> "AutomationEditError":
+        return cls("Invalid generated automation config.")
+
+    @classmethod
+    def config_not_an_object(cls) -> "AutomationEditError":
+        return cls("Generated automation config must be an object.")
+
+
+class NotAnObjectError(TypeError):
+    """The model answered with JSON that is not the object the prompt asked for."""
+
+    @classmethod
+    def automation(cls) -> "NotAnObjectError":
+        return cls("automation must be a JSON object")
+
+    @classmethod
+    def reply(cls) -> "NotAnObjectError":
+        return cls("LLM response is not a JSON object")
+
 
 # ---------------------------------------------------------------------------
 # Agent
@@ -1254,7 +1290,7 @@ class HomeAssistantAgent(LLMAgent):
             }
 
         if not isinstance(automation, dict):
-            raise TypeError("automation must be a JSON object")
+            raise NotAnObjectError.automation()
 
         error = self._validate_automation(automation)
         if error:
@@ -1412,10 +1448,10 @@ class HomeAssistantAgent(LLMAgent):
             self._accumulate_usage(usage)
             ident_data = json.loads(self._strip_fences(ident_response))
         except Exception as exc:
-            raise AutomationEditError(f"Could not identify automation to edit: {exc}") from exc
+            raise AutomationEditError.unidentified(exc) from exc
 
         if not isinstance(ident_data, dict):
-            raise AutomationEditError("Could not identify which automation to edit.")
+            raise AutomationEditError.which()
         if not ident_data.get("found"):
             raise AutomationEditError(
                 str(ident_data.get("result", "Could not identify which automation to edit."))
@@ -1425,7 +1461,7 @@ class HomeAssistantAgent(LLMAgent):
         automation_name = str(ident_data.get("automation_name", "")).strip()
 
         if not automation_id:
-            raise AutomationEditError("Could not determine the automation ID to edit.")
+            raise AutomationEditError.no_id()
 
         return automation_id, automation_name
 
@@ -1475,15 +1511,15 @@ class HomeAssistantAgent(LLMAgent):
             self._accumulate_usage(usage)
             edit_data = json.loads(self._strip_fences(edit_response))
         except Exception as exc:
-            raise AutomationEditError(f"LLM could not generate updated automation: {exc}") from exc
+            raise AutomationEditError.not_generated(exc) from exc
 
         if not isinstance(edit_data, dict):
-            raise AutomationEditError("Invalid generated automation config.")
+            raise AutomationEditError.invalid_config()
         if not edit_data.get("can_edit"):
             raise AutomationEditError(str(edit_data.get("result", "Automation cannot be edited.")))
         updated_automation = edit_data.get("automation") or {}
         if not isinstance(updated_automation, dict):
-            raise AutomationEditError("Generated automation config must be an object.")
+            raise AutomationEditError.config_not_an_object()
         return updated_automation
 
     async def _edit_automation(
@@ -1586,7 +1622,7 @@ class HomeAssistantAgent(LLMAgent):
         """
         data = json.loads(self._strip_fences(response))
         if not isinstance(data, dict):
-            raise TypeError("LLM response is not a JSON object")
+            raise NotAnObjectError.reply()
         return data
 
     @staticmethod

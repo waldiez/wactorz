@@ -3,9 +3,10 @@
 A node used to carry its own retelling of the agent contract, because the file
 deployed to it could not import the package. It installs the package now, so
 `NodeAgent` is a `DynamicAgent` and the surface generated code is handed is the
-same `AgentAPI` — which is what these pin, along with the four things that are
+same `AgentAPI` — which is what these pin, along with the things that are
 genuinely different on a node: where its messages go, where its memory lives,
-what answers its LLM calls, and how a task reaches it.
+what answers its LLM calls, where its history comes from, and how a task
+reaches it.
 
 The shared surface itself is covered in `test_dynamic_agent_api_surface.py` and
 the sliding window in `test_topic_bus_window.py`; nothing here repeats them.
@@ -190,6 +191,34 @@ class TestWhatIsDifferentOnANode:
 
     async def test_a_reply_for_another_agent_is_not_claimed(self, runner: NodeRunner) -> None:
         assert _agent(runner).deliver_reply("nodes/node-a/reply/nobody", {"text": "x"}) is False
+
+
+class TestItsHistoryComesFromMain:
+    async def test_a_query_is_a_signed_read_of_main_s_history(self, runner: NodeRunner) -> None:
+        runner._control = ControlGuard(node_key("node-a"), "", "enforce", runner.state_dir)
+        agent = _agent(runner)
+        sent: list[tuple[str, dict[str, Any]]] = []
+
+        async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
+            if isinstance(payload, dict) and "_reply_topic" in payload:
+                sent.append((topic, payload))
+                agent.deliver_reply(
+                    payload["_reply_topic"], {"rows": [{"value": 21.5}], "since": 0, "next": None}
+                )
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+
+        rows = await agent._api.query_ts(field="temp")
+
+        assert rows == [{"value": 21.5}]
+        topic, payload = sent[0]
+        assert topic == "main/history_request"
+        assert (payload["query"], payload["filters"]) == ("ts", {"field": "temp"})
+        assert request_signed_for(json.loads(json.dumps(payload)), "node-a")
+
+    def test_a_bare_query_says_to_await_it(self, runner: NodeRunner) -> None:
+        with pytest.raises(TypeError, match="await"):
+            len(_agent(runner)._api.query_ts())
 
 
 class TestTheNameANodeAnswersTo:

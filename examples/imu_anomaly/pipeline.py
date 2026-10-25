@@ -10,6 +10,7 @@ the glue. Run it the way `run.py` is run:
 import threading
 
 from agent import detect
+from model import STATE_DIR
 
 import wactorz
 
@@ -64,4 +65,4 @@ watch = wactorz.pipeline(
 )
 
 if __name__ == "__main__":
-    wactorz.run(web=True, minimal=True, state_dir="./state")
+    wactorz.run(web=True, minimal=True, state_dir=STATE_DIR)

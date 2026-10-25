@@ -12,7 +12,7 @@
  * out rather than shown as zero.
  */
 import type { NodeReadings, RemoteNode } from "../../types/agent";
-import { button, el } from "../dom";
+import { button, el, labelled, listItem, testId } from "../dom";
 import { buildSparkline, lastValue, SERIES_COLORS, type Point } from "./trend";
 
 /** A node's trends over the last hour, as its card draws them. */
@@ -137,7 +137,7 @@ function machineParts(manifest: Record<string, unknown>): HTMLElement[] {
     const parts: HTMLElement[] = [];
     const machine = machineLine(manifest);
     if (machine) {
-        parts.push(el("div", "af-node-machine", machine));
+        parts.push(testId(el("div", "af-node-machine", machine), "node-machine"));
     }
     const capacity = capacityLine(manifest);
     if (capacity) {
@@ -176,7 +176,7 @@ function nowParts(readings: NodeReadings | undefined): HTMLElement[] {
  * ``onOpen`` is called with the node's name when its History button is pressed.
  */
 export function buildNodeCard(data: NodeCardData, onOpen: (name: string) => void): HTMLElement {
-    const card = el("div", "af-node-card");
+    const card = listItem(testId(el("div", "af-node-card"), "node"), data.name);
     card.dataset["node"] = data.name;
 
     const head = el("div", "af-node-card-head");
@@ -198,15 +198,10 @@ export function buildNodeCard(data: NodeCardData, onOpen: (name: string) => void
             trendRow("Free", data.trend.free, megabytes, SERIES_COLORS[2]),
         );
     }
-    card.appendChild(
-        el(
-            "div",
-            "af-node-meta af-node-agents",
-            data.agents.length > 0 ? data.agents.join(", ") : "no agents",
-        ),
-    );
+    const agents = data.agents.length > 0 ? data.agents.join(", ") : "no agents";
+    card.appendChild(testId(el("div", "af-node-meta af-node-agents", agents), "node-agents"));
 
-    const history = button("af-mini-btn af-node-history", "History");
+    const history = labelled(button("af-mini-btn af-node-history", "History"), `History of ${data.name}`);
     history.addEventListener("click", () => onOpen(data.name));
     card.appendChild(history);
     return card;

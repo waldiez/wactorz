@@ -59,7 +59,7 @@
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--af-text-dim);
   flex-shrink: 0;
 }
 .af-host-metric {
@@ -74,7 +74,7 @@
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.28);
+  color: var(--af-text-dim);
   flex-shrink: 0;
   width: 30px;
 }

@@ -62,6 +62,17 @@ def _describe(name: str, reason: str) -> dict[str, str]:
     return _note(f"[attachment: {name} — {reason}]")
 
 
+def _label(item: dict[str, Any]) -> str:
+    """How the model is told of a file: its name, and the upload id an agent reads it by.
+
+    The id is what lets the model hand the file on, to the doc-to-pptx agent
+    say, which reads an upload by its id and never by a path.
+    """
+    name = str(item.get("name") or "attachment")
+    file_id = str(item.get("id") or "")
+    return f"{name} (upload {file_id})" if file_id else name
+
+
 def to_blocks(
     attachments: list[dict[str, Any]],
     read_bytes: Callable[[str], bytes | None],
@@ -73,7 +84,7 @@ def to_blocks(
     """
     blocks: list[dict[str, Any]] = []
     for item in attachments:
-        name = str(item.get("name") or "attachment")
+        name = _label(item)
         mime = str(item.get("mime") or "")
         size = int(item.get("size") or 0)
 

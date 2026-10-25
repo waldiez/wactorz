@@ -104,7 +104,7 @@ Every remote node main knows: whether it is online, its agents, its latest readi
 {
   "nodes": [
     {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
-     "version": "0.7.1", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "version": "0.7.2", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
      "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
      "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
      "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
@@ -210,6 +210,23 @@ Query the persistent chat log table. Query parameters:
 
 ---
 
+### `GET /api/commands`
+
+The slash commands the chat can send, each way to type them, for the dashboard's chat box to offer as a person types `/`. They come from the orchestrator that answers the chat (main's commands, the model-free profile's few, or an orchestrator's own by name), and from the server for the few it answers itself before any orchestrator: `/agents` where nothing else does, `/deploy`, `/migrate` and `/clear-plans`.
+
+**Response** `200 OK`
+```json
+{
+  "commands": [
+    {"usage": "/plans approve <id>", "typed": "/plans approve", "summary": "execute a proposed pipeline"}
+  ]
+}
+```
+
+`typed` is what goes in the box before the first argument. `/help` lists the same forms.
+
+---
+
 ### `GET /api/cost`
 
 Return current LLM spend, the active period, and the configured limit.
@@ -264,9 +281,11 @@ Clear stored state and broadcast a reset event over the dashboard WebSocket.
 ```
 
 `scope` must be one of `"chat"`, `"state"`, `"metrics"`, `"spawns"`, `"logs"`, or `"all"`.
-`agent` is optional — when set, the reset is limited to that agent by name.
+`agent` is optional — when set, the reset is limited to that agent by name, for `chat`, `state`, `metrics` and `spawns`. `logs` is this server's log files, which every agent shares, and `all` is a factory reset, which stops and wipes everything whatever agent is named; both ignore it. A `chat` reset for one agent deletes the uploaded files only that agent's thread referred to; a file another thread also shows is kept. A `state` reset also restarts each agent it covers on a node, and each on main that the supervisor runs, so the agent forgets what it read when it started as well as the file; the system's own agents (main, the monitor, the installer, the catalogue), and any the supervisor does not hold, keep running with their copies cleared.
 
-**Response** `200 OK` with the result of the reset operation; `400` if `scope` is missing or invalid. Also available as the `wactorz-reset` CLI for offline use.
+`chat`, `state` and `metrics` also reach the agents on nodes: main asks each node concerned to clear its own copies, and waits up to 10 s for it to say so.
+
+**Response** `200 OK` with `{"status": "ok", "scope": ..., "agent": ..., "nodes": {...}}`. `nodes` (empty for `all`, which deletes the agents on nodes rather than resetting them) says, for each node the reset concerned, `"cleared"`, `"no answer"`, `"offline"` (not asked: the request is not kept for it), or `"older release"` (a node that does not reset its agents; deploy it again). `400` if `scope` is missing or invalid. Also available as the `wactorz-reset` CLI for offline use.
 
 ---
 
@@ -279,6 +298,117 @@ Sanitized runtime configuration (no secrets).
 ### `GET /api/feed`
 
 Recent activity feed events.
+
+---
+
+### `GET /api/models`
+
+Every model kept with `wactorz-artifacts`: its newest version and where its pointers stand.
+
+**Response** `200 OK`
+```json
+{
+  "models": [
+    {
+      "name": "imu-detector",
+      "newest": {"name": "imu-detector", "version": 4, "format": "npz", "size": 2048,
+                 "sha256": "…", "metadata": {"caught": 0.92}, "reference": "imu-detector:4", "…": "…"},
+      "versions": 4,
+      "pointers": {
+        "active": {"name": "imu-detector", "pointer": "active", "version": 3, "previous": 2,
+                   "by": "dashboard", "reason": "auc 0.95", "moved_at": 1760000000.0,
+                   "sha256": "…", "holds": true}
+      }
+    }
+  ]
+}
+```
+
+A pointer's `holds` is false when the version it names no longer holds the bytes it was set to, which happens once a removed version's number is reused: move the pointer.
+
+---
+
+### `GET /api/models/{name}`
+
+One model: every version, oldest first, with what was said of it when it was stored (`metadata`), and its pointers as above. `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
+
+---
+
+### `POST /api/models/{name}/active` · `POST /api/models/{name}/shadow`
+
+Point `active`, the version agents serve, or `shadow`, the one on trial beside it, at a version.
+
+**Request body**
+```json
+{"version": 3, "reason": "auc 0.95 on imu-2026"}
+```
+
+`reason` is optional. The move is recorded as made `by` `dashboard`, as the CLI's are `by` `cli`. Pointing `active` at the shadow version promotes it.
+
+**Response** `200 OK`: `{"pointer": {...}}`, where the pointer stands now. Main publishes it on `models/{name}/{pointer}` within a few seconds.
+
+---
+
+### `POST /api/models/{name}/promote`
+
+Make the shadow version active and end the trial. Body optional: `{"reason": "..."}`.
+
+---
+
+### `POST /api/models/{name}/rollback`
+
+Move `active` back to the version it named before its last move. Only that one step is kept, so a second rollback returns to where the first started. Body optional: `{"reason": "..."}`.
+
+---
+
+### `DELETE /api/models/{name}/shadow`
+
+End the trial: unset `shadow`.
+
+---
+
+Every pointer move answers `200 OK` with `{"pointer": {...}}`, the pointer it moved as it stands now; for `DELETE .../shadow`, the shadow pointer as it was before it was cleared. Each answers `409` for a move the pointers do not allow now (already there, no shadow to promote, nothing to roll back to, a shadow on the active version), `404` for a name or version that is not stored, and `400` for a request that is not one; `{"error": "..."}` says which in the store's words.
+
+---
+
+### `GET /api/questions`
+
+The questions agents have put to a person, on any channel, from main or a node: the open ones oldest first, and the newest answered ones.
+
+**Response** `200 OK`
+```json
+{
+  "open": [
+    {"id": "3f2a…", "agent_id": "…", "agent": "hvac-watch",
+     "text": "Did something change at 14:02?", "options": ["maintenance", "real problem"],
+     "channel": "telegram", "user": "123456789", "asked_at": 1760000000.0,
+     "answer": null, "answer_index": null, "answer_channel": "", "answered_at": 0.0,
+     "answer_note": "", "fallen_back": false}
+  ],
+  "answered": []
+}
+```
+
+Read from the books agents publish on `agents/{id}/questions`.
+
+---
+
+### `POST /api/questions/{agent_id}/{question_id}/answer`
+
+Pick one of a question's options, as the dashboard's button does. The first pick on any channel is the answer.
+
+**Request body**
+```json
+{"option": "maintenance", "note": "valve replaced at 14:02"}
+```
+
+`note` is optional: what the person adds in their own words, up to 500 characters. The agent keeps it with the answer as `answer_note`.
+
+**Response** `200 OK`: `{"answer": {"id": "...", "option": "maintenance", "index": 0, "channel": "dashboard", ...}}`, the pick as it went to the agent on `agents/{agent_id}/answer`. `404` for a question that is not in `GET /api/questions`, `409` for one already answered, `400` for an option it did not offer, `503` when the broker is not connected.
+
+A `200` says the pick was sent, not that it was first: the `409` is checked against the ledger, which learns of an answer only when the agent publishes its book again. Two picks sent at nearly the same moment can both be sent, and the agent keeps the one that reaches it first. `GET /api/questions` shows which.
+
+The dashboard's button is checked the same way when the question is listed. A message sent with `notify_user` alone keeps no book, so its pick goes to the agent unchecked, for the agent to judge.
 
 ---
 

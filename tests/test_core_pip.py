@@ -106,6 +106,26 @@ class TestTheCommandItself:
         assert "--no-input" in cmd
 
 
+class TestTheIndex:
+    """`WACTORZ_PIP_INDEX_URL` sends every install to one index, a private mirror."""
+
+    def test_unset_pip_uses_its_own(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(pip.INDEX_URL_ENV, raising=False)
+
+        cmd, _env = pip.install_command(["requests"])
+
+        assert "--index-url" not in cmd
+
+    def test_set_it_is_the_one_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(pip.INDEX_URL_ENV, "https://mirror.example/simple")
+
+        cmd, _env = pip.install_command(["requests"])
+
+        at = cmd.index("--index-url")
+        assert cmd[at + 1] == "https://mirror.example/simple"
+        assert at < cmd.index("requests")
+
+
 class TestSayingWhereItWent:
     """The log line that follows every install, so it is not a guess."""
 

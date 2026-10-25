@@ -1,32 +1,36 @@
-"""The model class, in a module of its own so a pickle of it can be loaded anywhere.
+"""The model: the mean of normal motion and the inverse of its covariance.
 
-Pickle records where a class lives. A class defined in the script that trains
-it is recorded as living in `__main__`, which is a different module in every
-process that later loads the file; one that lives here is found by the agent,
-by the training script and by anything else that imports it.
+Two named arrays, saved as an ``.npz`` and kept on main with
+``wactorz-artifacts`` as `MODEL_NAME`. No class and no pickle: loading it runs
+nothing from the file, it loads in any process that has numpy, and a node an
+agent moves to fetches it by name rather than needing this module beside it.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-MODEL_PATH = Path(__file__).with_name("imu_model.pkl")
+#: The name the model is stored under, and that the agent names it by.
+MODEL_NAME = "imu-detector"
+#: Where `train.py` writes the file before storing it.
+MODEL_FILE = Path(__file__).with_name("imu_model.npz")
+#: The state directory the example's scripts run with, beside them rather than
+#: wherever they are started from, so the model `train.py` stores is the one
+#: `run.py` finds.
+STATE_DIR = Path(__file__).with_name("state")
 AXES = ("ax", "ay", "az")
 
 
-class MahalanobisModel:
-    """Distance from the mean of normal motion, in units of its spread."""
+def fit(samples: np.ndarray) -> dict[str, np.ndarray]:
+    """The model of the motion in ``samples``, one reading per row."""
+    mean = samples.mean(axis=0)
+    covariance = np.cov(samples, rowvar=False) + np.eye(samples.shape[1]) * 1e-6
+    return {"mean": mean, "inverse_covariance": np.linalg.inv(covariance)}
 
-    def __init__(self, mean: np.ndarray, inverse_covariance: np.ndarray) -> None:
-        self.mean = mean
-        self.inverse_covariance = inverse_covariance
 
-    @classmethod
-    def fit(cls, samples: np.ndarray) -> "MahalanobisModel":
-        mean = samples.mean(axis=0)
-        covariance = np.cov(samples, rowvar=False) + np.eye(samples.shape[1]) * 1e-6
-        return cls(mean, np.linalg.inv(covariance))
-
-    def score(self, reading: dict) -> float:
-        x = np.array([float(reading.get(axis, 0.0)) for axis in AXES]) - self.mean
-        return float(np.sqrt(x @ self.inverse_covariance @ x))
+def score(model: Mapping[str, np.ndarray], reading: Mapping[str, Any]) -> float:
+    """How far ``reading`` is from normal motion, in units of its spread."""
+    x = np.array([float(reading.get(axis, 0.0)) for axis in AXES]) - model["mean"]
+    return float(np.sqrt(x @ model["inverse_covariance"] @ x))

@@ -6,6 +6,7 @@ for the whole round trip, the broker both ways included, and a node serves no
 and how many requests main never answered in time.
 """
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,10 @@ class TestTheFrame:
         frame = agent._build_metrics()
         assert text == ""
         assert frame["llm_timeouts"] == 1
-        assert frame["llm_round_trip_p50_s"] >= 0.05
+        # Less a tick at most: the loop may wake a timer up to one tick of the
+        # monotonic clock early, which on Windows is about 16 ms.
+        tick = time.get_clock_info("monotonic").resolution
+        assert frame["llm_round_trip_p50_s"] >= 0.05 - tick
 
     async def test_a_request_that_could_not_be_sent_is_counted_apart(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

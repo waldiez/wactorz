@@ -104,7 +104,7 @@ Every remote node main knows: whether it is online, its agents, its latest readi
 {
   "nodes": [
     {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
-     "version": "0.7.2", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "version": "0.7.1", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
      "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
      "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
      "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
@@ -383,13 +383,13 @@ The questions agents have put to a person, on any channel, from main or a node: 
      "text": "Did something change at 14:02?", "options": ["maintenance", "real problem"],
      "channel": "telegram", "user": "123456789", "asked_at": 1760000000.0,
      "answer": null, "answer_index": null, "answer_channel": "", "answered_at": 0.0,
-     "answer_note": "", "fallen_back": false}
+     "answer_note": "", "fallen_back": false, "label": null}
   ],
   "answered": []
 }
 ```
 
-Read from the books agents publish on `agents/{id}/questions`.
+Read from the books agents publish on `agents/{id}/questions`. `label` is the label spec a question was asked with (`ask_operator(..., label=...)`), or `null`; see `GET /api/labels`.
 
 ---
 
@@ -409,6 +409,54 @@ Pick one of a question's options, as the dashboard's button does. The first pick
 A `200` says the pick was sent, not that it was first: the `409` is checked against the ledger, which learns of an answer only when the agent publishes its book again. Two picks sent at nearly the same moment can both be sent, and the agent keeps the one that reaches it first. `GET /api/questions` shows which.
 
 The dashboard's button is checked the same way when the question is listed. A message sent with `notify_user` alone keeps no book, so its pick goes to the agent unchecked, for the agent to judge.
+
+---
+
+### `GET /api/labels`
+
+Labels: what a source was doing over a period, as the operator, an agent or a rule said. Oldest recorded first. Query parameters, all optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `source` | Only labels on this topic or entity |
+| `since`, `until` | Only labels whose window touches this stretch of event time, in Unix seconds |
+| `all` | `1` to include labels a later one has superseded entirely |
+| `limit` | At most this many, up to 5000 (default 1000) |
+
+**Response** `200 OK`
+```json
+{
+  "labels": [
+    {"id": "…", "source": "sensors/ahu-1", "start": 1760000000.0, "end": null,
+     "value": "maintenance", "status": "partly_superseded", "recorded": 1760001860.0,
+     "actor": "operator", "node": "rpi", "channel": "telegram", "note": "valve replaced",
+     "question_id": "3f2a…", "model": "", "verified": false}
+  ]
+}
+```
+
+A label is written, never here, by an answer to a question asked with a label spec, by an agent's `agent.label(...)` on main, or by a rule's `label` action. A later label on the same source supersedes an earlier one where their windows overlap: the earlier one stays, `partly_superseded` or `superseded`. `verified` is `true` for a label from an answer the dashboard sent, from an agent or from a rule, and `false` for one from an answer heard on the broker, which anything there could have published. `400` for a parameter that is not what it should be, `503` when persistence is not running. See `docs/design/labels-and-provenance.md`.
+
+---
+
+### `GET /api/labels/effective`
+
+What one `source` was doing, moment by moment: the newest label at each moment over `since` to `until` (Unix seconds, both optional). Adjacent stretches of one label are one interval, and a stretch no label covers is left out.
+
+**Response** `200 OK`
+```json
+{
+  "source": "sensors/ahu-1", "since": null, "until": null,
+  "intervals": [
+    {"start": 1760000000.0, "end": 1760003600.0, "value": "maintenance",
+     "label_id": "…", "actor": "operator", "channel": "telegram", "verified": false},
+    {"start": 1760003600.0, "end": null, "value": "fault",
+     "label_id": "…", "actor": "operator", "channel": "dashboard", "verified": true}
+  ]
+}
+```
+
+`400` without a `source`, `503` when persistence is not running.
 
 ---
 

@@ -156,17 +156,41 @@ class MessagingMixin(_Host):
         channel: str = "dashboard",
         user: str = "",
         timeout: float | None = None,
+        label: dict[str, Any] | None = None,
     ) -> str:
         """Ask the person ``text`` with ``options`` and return the one picked (see Actor.ask_operator).
 
         Waits for the pick, up to ``timeout`` seconds (None: as long as the
         agent runs). A question outlives a restart; an answer that arrives
         when nothing waits goes to the program's ``on_answer(agent, question,
-        option)`` if it defines one.
+        option)`` if it defines one. ``label`` makes the answer a label:
+        ``{"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance":
+        "maintenance", "Real problem": "fault"}}``, an option left out making
+        none.
         """
         return await self._actor.ask_operator(
-            text, options=options, channel=channel, user=user, timeout=timeout
+            text, options=options, channel=channel, user=user, timeout=timeout, label=label
         )
+
+    async def label(
+        self,
+        source: str,
+        value: str,
+        *,
+        start: Any,
+        end: Any = None,
+        note: str = "",
+        model: str = "",
+    ) -> dict[str, Any]:
+        """Record that ``source`` was ``value`` from ``start`` to ``end`` (event times; see Actor.label).
+
+        Returns the label as a dict. On main only: an agent on a node gets its
+        labels from its questions' answers.
+        """
+        written = await self._actor.label(
+            source, value, start=start, end=end, note=note, model=model
+        )
+        return written.to_dict()
 
     async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
         """The option picked for an earlier question, waiting up to ``timeout`` seconds."""

@@ -38,15 +38,34 @@ afterEach(() => {
     document.body.innerHTML = "";
 });
 
-describe("a turn sent from elsewhere", () => {
+/** Send `words` from the composer, as the person does; the send event it puts out. */
+function send(words: string): { id: string; content: string; target: string } {
+    if (!cd.root.querySelector("#af-iobar-input")) {
+        cd.root.appendChild(cd._chat.buildIobar());
+    }
+    let sent: { id: string; content: string; target: string } | undefined;
+    const record = (e: Event) => {
+        sent = (e as CustomEvent<{ id: string; content: string; target: string }>).detail;
+    };
+    document.addEventListener("af-send-message", record);
+    cd.root.querySelector("#af-iobar-input").value = words;
+    cd.root.querySelector(".af-send-btn").click();
+    document.removeEventListener("af-send-message", record);
+    if (!sent) {
+        throw new Error(`nothing went out for ${words}`);
+    }
+    return sent;
+}
+
+describe("a turn sent from the composer", () => {
     it("raises the row for its target", () => {
-        emit("af-send-message", { content: "what is the weather", target: "weather", attachments: [] });
+        send("what is the weather");
 
         expect(waitingRow()).not.toBeNull();
     });
 
     it("is cleared by a reply from that agent", () => {
-        emit("af-send-message", { content: "what is the weather", target: "weather", attachments: [] });
+        send("what is the weather");
 
         emit("af-chat-message", {
             msg: {
@@ -62,15 +81,15 @@ describe("a turn sent from elsewhere", () => {
     });
 
     it("is cleared when the send never left", () => {
-        emit("af-send-message", { content: "what is the weather", target: "weather", attachments: [] });
+        const sent = send("what is the weather");
 
-        emit("af-send-failed", { content: "what is the weather", target: "weather" });
+        emit("af-send-failed", sent);
 
         expect(waitingRow()).toBeNull();
     });
 
-    it("is cleared when the transport drops", () => {
-        emit("af-send-message", { content: "what is the weather", target: "weather", attachments: [] });
+    it("is cleared when the socket closes", () => {
+        send("what is the weather");
 
         emit("af-socket", { open: false });
 
@@ -80,7 +99,7 @@ describe("a turn sent from elsewhere", () => {
 
 describe("a command", () => {
     it("never claims an agent is working", () => {
-        emit("af-send-message", { content: "/help", target: "weather", attachments: [] });
+        send("/help");
 
         // Handled before any agent sees it and answered by main, so naming the
         // target would name the wrong agent.

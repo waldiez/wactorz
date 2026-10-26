@@ -40,7 +40,7 @@ import { questionToast } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
-import type { AgentInfo } from "./types/agent";
+import type { AgentInfo, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import {
     toAgentInfo,
@@ -177,6 +177,20 @@ function pushFeed(item: FeedItem): void {
     emit("af-feed-push", { item });
 }
 
+/** A chat message arrived, as a reply on the socket or as an agent's own: its notice,
+ *  read aloud, its agent's card, the chat and the feed, the same whichever way it came. */
+function ingestChat(msg: ChatMessage): void {
+    if (msg.from !== "user") {
+        toast.show(
+            questionToast(msg) ?? { type: "chat", title: msg.from, message: msg.content.slice(0, 120) },
+        );
+    }
+    ioManager.receiveAgentMessage(msg);
+    agentStore.onChat(msg.from, msg.to);
+    emit("af-chat-message", { msg });
+    pushFeed(chatFeedItem(msg));
+}
+
 function refreshLiveActors(): void {
     if (liveSyncInFlight) {
         return;
@@ -213,10 +227,7 @@ function refreshLiveActors(): void {
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
 ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain) => {
-    if (from !== "user") {
-        toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
-    }
-    const msg = {
+    ingestChat({
         id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
         to,
@@ -226,17 +237,7 @@ ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain)
         ...(surface ? { surface } : {}),
         ...(surfaceLabel ? { surfaceLabel } : {}),
         ...(brain ? { brain } : {}),
-    };
-    ioManager.receiveAgentMessage(msg);
-    agentStore.onChat(from, "user");
-    const feedItem = {
-        type: "chat" as const,
-        label: content,
-        agentName: from,
-        timestamp: timestampMs,
-    };
-    emit("af-feed-push", { item: feedItem });
-    emit("af-chat-message", { msg });
+    });
 });
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
@@ -313,17 +314,7 @@ router.on("alert", payload => {
     });
 });
 
-router.on("chat", msg => {
-    if (msg.from !== "user") {
-        toast.show(
-            questionToast(msg) ?? { type: "chat", title: msg.from, message: msg.content.slice(0, 120) },
-        );
-    }
-    ioManager.receiveAgentMessage(msg);
-    agentStore.onChat(msg.from, msg.to);
-    emit("af-chat-message", { msg });
-    pushFeed(chatFeedItem(msg));
-});
+router.on("chat", msg => ingestChat(msg));
 
 // A question answered on any channel: the card closes on every open dashboard.
 router.on("answer", answer => {
@@ -490,9 +481,9 @@ listen("af-answer-option", detail => {
 
 // af-iobar sends: route through ioManager (same as regular io-bar)
 listen("af-send-message", detail => {
-    const { content, attachments } = detail;
+    const { id, content, attachments } = detail;
     const agent = agentStore.getAgents().find(a => a.name === detail.target) ?? null;
-    void ioManager.send(content, agent, attachments);
+    void ioManager.send(content, agent, attachments, id);
 });
 
 // wipe all

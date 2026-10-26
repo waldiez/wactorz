@@ -184,6 +184,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   lists goes from the thread and its notice with it.
 - **A notice being closed is no longer read out or reachable with Tab while it fades.**
 
+- **Speaking to an agent through a voice surface opens its conversation as typing to it does.**
+  The address names it and a reload opens there; before, the thread switched but the address
+  stayed on the previous agent, and outside the chat view so did the composer.
+- **The attachment tray's remove buttons say what they remove** ("Remove notes.txt") to a
+  screen reader, which read each one as "times".
+- **The activity feed shows a message to you as its words, the same from every channel.** The
+  `→ user:` prefix is gone from agents' own messages; one an agent sends to another still
+  says whom it was to.
+
 ## [0.7.2] - 2026-10-25
 
 Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.

@@ -101,9 +101,9 @@ describe("IOManager.send", () => {
     it("emits af-send-failed when the transport rejects the send", async () => {
         const io = new IOManager(makeRouter());
         io.setWSClient(makeWS(false) as unknown as WSClient);
-        await io.send("hi", null);
-        // so the optimistic bubble rendered before the attempt can be rolled back
-        expect(lastEvent("af-send-failed")?.detail).toEqual({ content: "hi", target: "main" });
+        await io.send("hi", null, [], "m1");
+        // under the id of the bubble rendered before the attempt, which waits to go again
+        expect(lastEvent("af-send-failed")?.detail).toEqual({ id: "m1", content: "hi", target: "main" });
     });
 });
 

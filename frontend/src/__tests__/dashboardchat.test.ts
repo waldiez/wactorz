@@ -9,7 +9,8 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } 
 import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { TURN_IDLE_TIMEOUT_MS } from "../chat/turnTracker";
-import { withoutAttachment } from "../ui/dashboard/attachTray";
+import { allByRole, byRole } from "./queries";
+import { rememberedConversation } from "../ui/dashboard/viewRoutes";
 import {
     defaultChatTarget,
     preferredChatTarget,
@@ -65,6 +66,26 @@ function mount(host: ChatHost): DashboardChat {
 }
 
 const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-chat-thread")!;
+
+/** Press Stop, as the person does. */
+function pressStop(host: ChatHost, chat: DashboardChat): void {
+    if (!host.root.querySelector(".af-stop-btn")) {
+        host.root.appendChild(chat.buildIobar());
+    }
+    host.root.querySelector<HTMLButtonElement>(".af-stop-btn")!.click();
+}
+
+/** Let what is waiting in the task queue run: a request's answer, and what follows it. */
+const drained = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+/** Send `words` as the person does: typed into the composer and sent with its button. */
+function sendFromComposer(host: ChatHost, chat: DashboardChat, words: string): void {
+    if (!host.root.querySelector("#af-iobar-input")) {
+        host.root.appendChild(chat.buildIobar());
+    }
+    host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!.value = words;
+    host.root.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+}
 
 // A raw UUID agent id — the backend uses these (not WIDs), and one that never
 // resolved to a friendly name keeps the id as its name.
@@ -418,8 +439,7 @@ describe("DashboardChat — target selection", () => {
         host = makeHost([agent("main"), agent("installer", { protected: true })]);
         const dc = mount(host);
         dc.wire();
-        dc.chatTarget = "installer";
-        dc.renderChatThread();
+        dc.setTarget("installer");
         expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(0);
 
         const asked: ChatMessage = {
@@ -500,9 +520,14 @@ describe("DashboardChat — target selection", () => {
     it("resolveDefaultTarget leaves a target that vanished alone", () => {
         // A target that is merely absent may be coming back, and a deletion has
         // its own signal (dropTargetIfGone). Resolution only fills a blank.
+        // Filled for them, not chosen: the agent it named then leaves the list.
+        host = makeHost([agent("ghost")]);
         const dc = mount(host);
-        dc.chatTarget = "ghost";
+        expect(dc.chatTarget).toBe("ghost");
+        host.agents.delete("ghost");
+
         dc.resolveDefaultTarget();
+
         expect(dc.chatTarget).toBe("ghost");
     });
 
@@ -612,6 +637,36 @@ describe("DashboardChat — sending & live events", () => {
         expect(thread(host).textContent).toContain("turn on the light");
     });
 
+    it("takes a voice session's thread as the person's choice: remembered, in the address, named in the composer", () => {
+        dc.unwire();
+        host = makeHost([agent("main"), agent("reachy-mini")]);
+        dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.setTarget("main");
+        dc.wire();
+        const addressed: string[][] = [];
+        const hear = (e: Event) => addressed.push((e as CustomEvent<{ path: string[] }>).detail.path);
+        document.addEventListener("af-view-changed", hear);
+
+        const msg: ChatMessage = {
+            id: "voice-2",
+            from: "user",
+            to: "reachy-mini",
+            content: "lights off",
+            timestampMs: Date.now(),
+            source: "voice",
+            surface: "reachy-mini",
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+
+        document.removeEventListener("af-view-changed", hear);
+        expect(rememberedConversation()).toBe("reachy-mini");
+        expect(addressed).toContainEqual(["reachy-mini"]);
+        expect(host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.placeholder).toBe(
+            "Message @reachy-mini…",
+        );
+    });
+
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
             new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main", text: "Hel" } }),
@@ -634,9 +689,9 @@ describe("DashboardChat — sending & live events", () => {
                 new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main", text } }),
             );
         }
-        const streams = (dc as unknown as { _streamUI: { streams: { text: (from: string) => string } } })
-            ._streamUI.streams;
-        expect(streams.text("main").length).toBeLessThan(300_000);
+        const live = thread(host).querySelector('[data-testid="message-body"]');
+        expect(live?.textContent?.length ?? 0).toBeGreaterThan(0);
+        expect(live?.textContent?.length ?? 0).toBeLessThan(300_000);
     });
 
     it("af-reset-chat clears the thread", () => {
@@ -683,11 +738,7 @@ describe("DashboardChat — thread integrity", () => {
     });
 
     it("scoped af-reset-chat drops only that agent's thread, keeping user messages to others", () => {
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "hi main", target: "main", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, dc, "hi main");
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
@@ -695,33 +746,28 @@ describe("DashboardChat — thread integrity", () => {
                 },
             }),
         );
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "hi worker", target: "worker", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, dc, "@worker hi worker");
 
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "main" } }));
 
-        // the old filter dropped every user message regardless of its target
         expect(said("main")).toEqual([]);
         expect(said("worker")).toEqual(["hi worker"]);
     });
 
-    it("removes the optimistic bubble when the send fails (af-send-failed)", () => {
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "hello?", target: "main", attachments: [] },
-            }),
-        );
-        expect(thread(host).textContent).toContain("hello?");
+    it("keeps the bubble of a send that did not go out, waiting to go, found by its id", () => {
+        const sends: { id: string; content: string; target: string }[] = [];
+        const record = (e: Event) =>
+            sends.push((e as CustomEvent<{ id: string; content: string; target: string }>).detail);
+        document.addEventListener("af-send-message", record);
+        sendFromComposer(host, dc, "hello?");
+        document.removeEventListener("af-send-message", record);
+        expect(sends).toHaveLength(1);
+        const sent = sends[0]!;
 
-        document.dispatchEvent(
-            new CustomEvent("af-send-failed", { detail: { content: "hello?", target: "main" } }),
-        );
+        document.dispatchEvent(new CustomEvent("af-send-failed", { detail: sent }));
 
-        expect(thread(host).textContent).not.toContain("hello?");
-        expect(said("main")).toEqual([]);
+        expect(said("main")).toEqual(["hello?"]);
+        expect(thread(host).textContent).toContain("Waiting to send");
     });
 
     it("keeps concurrent agent streams separate (no merged bubble)", () => {
@@ -840,7 +886,12 @@ describe("DashboardChat — one turn at a time", () => {
     let dc: DashboardChat;
     let input: HTMLTextAreaElement;
     const sent: string[] = [];
-    const record = (e: Event) => sent.push((e as CustomEvent<{ content: string }>).detail.content);
+    const ids: string[] = [];
+    const record = (e: Event) => {
+        const detail = (e as CustomEvent<{ id: string; content: string }>).detail;
+        sent.push(detail.content);
+        ids.push(detail.id);
+    };
     const type = (words: string) => {
         input.value = words;
         host.root.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
@@ -855,8 +906,13 @@ describe("DashboardChat — one turn at a time", () => {
         document.dispatchEvent(new CustomEvent("af-socket", { detail: { open } }));
     const status = (value: string) =>
         document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: value } }));
+    /** The newest send that went out fails: its id comes back, as `IOManager` sends it. */
     const fails = (content: string) =>
-        document.dispatchEvent(new CustomEvent("af-send-failed", { detail: { content, target: "main" } }));
+        document.dispatchEvent(
+            new CustomEvent("af-send-failed", {
+                detail: { id: ids[ids.length - 1], content, target: "main" },
+            }),
+        );
     const said = () =>
         [...thread(host).querySelectorAll('[data-testid="user-message"] [data-testid="message-body"]')].map(
             n => n.textContent,
@@ -865,6 +921,7 @@ describe("DashboardChat — one turn at a time", () => {
     beforeEach(() => {
         document.body.innerHTML = "";
         sent.length = 0;
+        ids.length = 0;
         host = makeHost();
         dc = mount(host);
         dc.wire();
@@ -1040,9 +1097,10 @@ describe("DashboardChat — stop, attachments, external events", () => {
     }
 
     it("stop generation POSTs to /api/chat/stop", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
-        dc._stopGeneration();
+        pressStop(host, dc);
         expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/chat/stop"), {
             method: "POST",
         });
@@ -1050,7 +1108,8 @@ describe("DashboardChat — stop, attachments, external events", () => {
     });
 
     it("stops the answer being read aloud too, before the server is asked", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         const order: string[] = [];
         const stopped = () => order.push("tts-stop");
         document.addEventListener("tts-stop", stopped);
@@ -1059,7 +1118,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
             return Promise.resolve({ ok: true } as unknown as Response);
         });
         try {
-            dc._stopGeneration();
+            pressStop(host, dc);
         } finally {
             document.removeEventListener("tts-stop", stopped);
             fetchSpy.mockRestore();
@@ -1069,37 +1128,46 @@ describe("DashboardChat — stop, attachments, external events", () => {
     });
 
     it("says so when stop cannot reach the backend", async () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         vi.mocked(toast.show).mockClear();
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
 
-        await dc._stopGeneration();
+        pressStop(host, dc);
 
         // Stop against a dead backend must say so rather than appear to work.
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+        );
         fetchSpy.mockRestore();
     });
 
     it("says so when the backend refuses the stop", async () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         vi.mocked(toast.show).mockClear();
         const fetchSpy = vi
             .spyOn(globalThis, "fetch")
             .mockResolvedValue({ ok: false, status: 503 } as unknown as Response);
 
-        await dc._stopGeneration();
+        pressStop(host, dc);
 
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+        );
         fetchSpy.mockRestore();
     });
 
     it("stays quiet when stop succeeds", async () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         vi.mocked(toast.show).mockClear();
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
 
-        await dc._stopGeneration();
+        pressStop(host, dc);
+        await drained();
 
+        expect(fetchSpy).toHaveBeenCalled();
         expect(toast.show).not.toHaveBeenCalled();
         fetchSpy.mockRestore();
     });
@@ -1108,7 +1176,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         // Attaching is the first half of composing; the caret belongs where the
         // second half gets typed.
         const host = makeHost();
-        const dc = mount(host) as any;
+        const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
 
@@ -1123,7 +1191,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         // the overview is already visible in the tray. Sending moves to the chat
         // view on its own — attaching should not.
         const host = makeHost([agent("main")], "overview");
-        const dc = mount(host) as any;
+        const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
 
@@ -1139,7 +1207,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         // clears the tray on a target change, and the mention decides the
         // recipient — so the file must ride along to the agent named last.
         const host = makeHost([agent("main"), agent("worker")]);
-        const dc = mount(host) as any;
+        const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
         const seen: Array<{ target: string; attachments: unknown[] }> = [];
@@ -1147,9 +1215,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         document.addEventListener("af-send-message", onSend);
 
         document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
-        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
-        input.value = "@worker look at this";
-        dc._sendMessage(input);
+        sendFromComposer(host, dc, "@worker look at this");
 
         document.removeEventListener("af-send-message", onSend);
         dc.unwire();
@@ -1160,75 +1226,72 @@ describe("DashboardChat — stop, attachments, external events", () => {
 
     it("sends an attachments-only message and clears the pending tray", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
-        const seen: Array<{ attachments: string[] }> = [];
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+        dc.setTarget("worker"); // the choice is what routes; the select only shows it
+        const seen: Array<{ content: string; target: string; attachments: string[] }> = [];
         const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
         document.addEventListener("af-send-message", onSend);
 
-        dc._pendingAttachments = [att()];
-        const input = document.createElement("textarea");
-        input.value = ""; // no text — attachment alone must still send
-        dc.chatTarget = "worker"; // the choice is what routes; the select only shows it
-        dc._sendMessage(input, document.createElement("select"));
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+        sendFromComposer(host, dc, ""); // no text — the attachment alone must still send
 
         document.removeEventListener("af-send-message", onSend);
-        expect(seen).toEqual([{ content: "", target: "worker", attachments: ["a1"] }]);
-        expect(dc._pendingAttachments).toEqual([]);
+        expect(seen.map(s => [s.content, s.target, s.attachments])).toEqual([["", "worker", ["a1"]]]);
+        expect(allByRole(host.root, "button", "Remove Image #1")).toHaveLength(0);
     });
 
     it("removing a blob attachment revokes its object URL; a non-blob one does not", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
         const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+        const added = (attachment: object) =>
+            document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment } }));
+        added(att({ url: "blob:abc" }));
+        added(att({ id: "a2", name: "notes.txt", mime: "text/plain", url: "https://x/y.txt" }));
 
-        const blob = att({ url: "blob:abc" });
-        const remote = att({ id: "a2", url: "https://x/y.png" });
-        dc._pendingAttachments = [blob, remote];
-
-        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, remote);
+        byRole(host.root, "button", "Remove notes.txt").click();
         expect(revoke).not.toHaveBeenCalled(); // non-blob → nothing to release
-        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, blob);
+        byRole(host.root, "button", "Remove Image #1").click();
         expect(revoke).toHaveBeenCalledWith("blob:abc");
-        expect(dc._pendingAttachments).toEqual([]);
+        expect(allByRole(host.root, "button", "Remove Image #1")).toHaveLength(0);
         revoke.mockRestore();
     });
 
     it("sending revokes pending blob attachment URLs (dev-stub uploads)", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
         const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-        dc._pendingAttachments = [att({ url: "blob:send-me" })];
-        const input = document.createElement("textarea");
-        input.value = "hi";
-        const select = document.createElement("select");
-        const opt = document.createElement("option");
-        opt.value = "worker";
-        select.append(opt);
-        select.value = "worker";
-        dc._sendMessage(input, select);
+        document.dispatchEvent(
+            new CustomEvent("af-attachment-added", { detail: { attachment: att({ url: "blob:send-me" }) } }),
+        );
+
+        sendFromComposer(host, dc, "@worker hi");
+
         expect(revoke).toHaveBeenCalledWith("blob:send-me");
-        expect(dc._pendingAttachments).toEqual([]);
+        expect(allByRole(host.root, "button", "Remove Image #1")).toHaveLength(0);
         revoke.mockRestore();
     });
 
     it("clearAll revokes pending blob attachment URLs", () => {
-        const dc = mount(makeHost()) as any;
-        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-        dc._pendingAttachments = [att({ url: "blob:wipe-me" })];
-        dc.clearAll();
-        expect(revoke).toHaveBeenCalledWith("blob:wipe-me");
-        expect(dc._pendingAttachments).toEqual([]);
-        revoke.mockRestore();
-    });
-
-    it("an external af-send-message (not self-dispatched) appends to the thread", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
         dc.wire();
+        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
         document.dispatchEvent(
-            new CustomEvent("af-send-message", { detail: { content: "ping", target: "worker" } }),
+            new CustomEvent("af-attachment-added", { detail: { attachment: att({ url: "blob:wipe-me" }) } }),
         );
-        expect(dc.chatTarget).toBe("worker");
-        expect(thread(host).textContent).toContain("ping");
-        dc.unwire();
+
+        dc.clearAll();
+
+        expect(revoke).toHaveBeenCalledWith("blob:wipe-me");
+        revoke.mockRestore();
     });
 
     it("af-reset-chat scoped to an agent drops that agent + user turns, keeps others", () => {
@@ -1239,11 +1302,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
             document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
         arrive({ id: "1", from: "worker", to: "user", content: "w", timestampMs: 1 });
         arrive({ id: "2", from: "main", to: "user", content: "m", timestampMs: 2 });
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "u", target: "worker", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, dc, "@worker u");
 
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "worker" } }));
 
@@ -1256,22 +1315,31 @@ describe("DashboardChat — stop, attachments, external events", () => {
         dc.unwire();
     });
 
-    it("populateSelect pins priority names then orders the rest alphabetically", () => {
+    it("the target select pins priority names then orders the rest alphabetically", () => {
         const host = makeHost([agent("zeta"), agent("alpha"), agent("main")]);
-        const dc = mount(host) as any;
-        const select = document.createElement("select");
-        dc._populateSelect(select);
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+
+        dc.updateTargetSelect();
+
+        const select = host.root.querySelector<HTMLSelectElement>("#af-target-select")!;
         expect([...select.options].map(o => o.value)).toEqual(["main", "alpha", "zeta"]);
     });
 
     it("re-rendering mid-stream reattaches the live bubble with its accumulated text", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
-        dc._streamUI.streams.append("main", "partial reply");
-        dc._streamUI["_targets"].set("main", "main");
-        dc._lastSentTarget = "main";
+        const dc = mount(host);
+        dc.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-stream-chunk", {
+                detail: { chunk: "partial reply", from: "main", text: "partial reply" },
+            }),
+        );
+
         dc.renderChatThread();
+
         expect(thread(host).textContent).toContain("partial reply");
+        dc.unwire();
     });
 });
 
@@ -1343,11 +1411,7 @@ describe("mobile master–detail: which pane is showing", () => {
         expect(el()?.classList.contains("agent-selected")).toBe(false);
 
         chat.wire();
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, chat, "@catalog spawn weather agent");
         chat.afterMount();
 
         expect(el()?.classList.contains("agent-selected")).toBe(true);
@@ -1380,17 +1444,12 @@ describe("mobile master–detail: which pane is showing", () => {
         host.root.appendChild(chat.buildChatView());
         chat.afterMount();
         // The composer lives in the shell, outside the chat view, so the
-        // harness has to supply it the way the dashboard does.
-        const input = document.createElement("textarea");
-        input.id = "af-iobar-input";
-        host.root.appendChild(input);
+        // harness supplies it the way the dashboard does.
+        host.root.appendChild(chat.buildIobar());
+        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
         chat.wire();
 
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, chat, "@catalog spawn weather agent");
 
         expect(input.placeholder).toBe("Message @catalog…");
     });
@@ -1403,11 +1462,7 @@ describe("mobile master–detail: which pane is showing", () => {
         expect(el()?.classList.contains("agent-selected")).toBe(false);
 
         chat.wire();
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "@catalog spawn weather-agent", target: "catalog", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, chat, "@catalog spawn weather-agent");
 
         expect(el()?.classList.contains("agent-selected")).toBe(true);
     });

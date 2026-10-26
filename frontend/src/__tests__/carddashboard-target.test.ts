@@ -32,7 +32,7 @@ describe("CardDashboard chat-target selection", () => {
     it("falls back to 'main' when chatTarget default ('main') is absent", () => {
         cd.agents.set("1", agent("main", true)); // protected, but always messageable
         cd.agents.set("2", agent("monitor-agent", true)); // system → not messageable
-        cd._chat.chatTarget = "main";
+        cd._chat.setTarget("main");
 
         const select = document.createElement("select");
         cd._chat._populateSelect(select);
@@ -46,7 +46,7 @@ describe("CardDashboard chat-target selection", () => {
     it("falls back to the first messageable agent when no main exists", () => {
         cd.agents.set("1", agent("catalog"));
         cd.agents.set("2", agent("monitor-agent", true)); // system → excluded
-        cd._chat.chatTarget = "main";
+        cd._chat.setTarget("main");
 
         const select = document.createElement("select");
         cd._chat._populateSelect(select);

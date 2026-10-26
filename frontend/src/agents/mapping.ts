@@ -303,11 +303,11 @@ export function feedSeedItem(raw: {
     };
 }
 
-/** Feed row for a chat message (agent→user or any). */
+/** Feed row for a chat message: its words, and whom it was to when that is not the person. */
 export function chatFeedItem(msg: ChatMessage): FeedItem {
     return {
         type: "chat",
-        label: `→ ${msg.to}: ${msg.content}`,
+        label: msg.to && msg.to !== "user" ? `→ ${msg.to}: ${msg.content}` : msg.content,
         agentName: msg.from,
         timestamp: msg.timestampMs,
     };

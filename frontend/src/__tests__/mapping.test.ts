@@ -309,14 +309,12 @@ describe("live MQTT event feed builders", () => {
         });
     });
 
-    it("chatFeedItem formats the routed-to label", () => {
-        const msg = { from: "a1", to: "user", content: "hi", timestampMs: 7 } as ChatMessage;
-        expect(chatFeedItem(msg)).toEqual({
-            type: "chat",
-            label: "→ user: hi",
-            agentName: "a1",
-            timestamp: 7,
-        });
+    it("chatFeedItem says whom a message was to, unless it was the person", () => {
+        const toUser = { from: "a1", to: "user", content: "hi", timestampMs: 7 } as ChatMessage;
+        const toAgent = { from: "a1", to: "worker", content: "do it", timestampMs: 8 } as ChatMessage;
+
+        expect(chatFeedItem(toUser)).toEqual({ type: "chat", label: "hi", agentName: "a1", timestamp: 7 });
+        expect(chatFeedItem(toAgent).label).toBe("→ worker: do it");
     });
 
     it("stoppedFeedItem stamps the provided time", () => {

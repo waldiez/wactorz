@@ -53,11 +53,16 @@ export interface ChatHost {
 export class DashboardChat {
     /**
      * Who the user is talking to — their choice, and nothing else. Empty until
-     * one is made (or resolved for them on first arrival), which is the state
-     * the old `MAIN_AGENT` default could not express: "never chose" looked
-     * exactly like "chose main", so renders felt free to overwrite it.
+     * one is made (or resolved for them on first arrival): "never chose" is not
+     * "chose main", so nothing draws over a choice that was never made. Changed
+     * only through `_move`.
      */
-    chatTarget = "";
+    private _target = "";
+
+    /** Who the user is talking to, or "" before anyone is. */
+    get chatTarget(): string {
+        return this._target;
+    }
 
     /** Whether the target is the user's rather than a default filled for them. */
     private _targetSettled = false;
@@ -91,8 +96,6 @@ export class DashboardChat {
      */
     private _listVisible = false;
 
-    private _selfDispatching = false;
-
     private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
@@ -123,27 +126,32 @@ export class DashboardChat {
      * went on showing the previous conversation.
      */
     setTarget(name: string): void {
-        this.chatTarget = name;
-        this._claimTarget(name);
+        this._move(name, "claim");
         this._refreshForTarget();
         void this.loadHistory(name);
         this.updateTargetSelect();
     }
 
     /**
-     * Mark the target as the user's own: remembered, no longer movable, and,
-     * with the chat open, in the address.
+     * Make `name` the conversation — the one place it changes — and say so in
+     * the composer, which names its recipient.
      *
-     * The two ways in are picking an agent and sending to one. Not the third:
-     * an agent going away moves the conversation by assigning the field
-     * directly, and remembering that would bring it back next load as though
-     * they had chosen it.
+     * `claim` is the person's own choice: picking an agent, sending or speaking
+     * to one. It is settled, so nothing moves it under them, and remembered,
+     * so it is in the address and is where the next load opens. `settle` is a
+     * move made for them because theirs went away: settled, but not
+     * remembered, or the next load would bring it back as though chosen.
+     * `default` fills an empty choice while they have been shown nothing.
      */
-    private _claimTarget(name: string): void {
-        this._targetSettled = true;
-        if (name) {
+    private _move(name: string, how: "claim" | "settle" | "default"): void {
+        this._target = name;
+        if (how !== "default") {
+            this._targetSettled = true;
+        }
+        if (how === "claim" && name) {
             rememberConversation(name, this.host.getView());
         }
+        this._updateComposerPlaceholder();
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -216,16 +224,11 @@ export class DashboardChat {
      * already on its way to an agent the user cannot see.
      */
     private _focusConversation(target: string): void {
-        this.chatTarget = target;
-        // Sending is a choice too. Both callers are a message going out — an
-        // `@mention` routes it elsewhere and the view follows, so reopening on
-        // the agent left behind contradicts what the screen last showed.
-        this._claimTarget(target);
+        // Sending is a choice too: an `@mention` routes it elsewhere and the
+        // view follows, so reopening on the agent left behind contradicts what
+        // the screen last showed.
+        this._move(target, "claim");
         this._listVisible = false;
-        // The composer names its recipient, and nothing on the send paths
-        // refreshed it — an `@mention` left it advertising the previous agent,
-        // "Message @main…" while replies went to catalog.
-        this._updateComposerPlaceholder();
     }
 
     /**
@@ -421,8 +424,7 @@ export class DashboardChat {
             return;
         }
         const lost = this.chatTarget;
-        this._targetSettled = true;
-        this.chatTarget = next;
+        this._move(next, "settle");
         this._refreshForTarget();
         this.updateTargetSelect();
         // The move always happens, or the chat is wrong when it is next opened.
@@ -461,7 +463,10 @@ export class DashboardChat {
     resolveDefaultTarget(): void {
         const before = this.chatTarget;
         const agents = [...this.host.agents.values()];
-        this.chatTarget = settlingTarget(agents, before, rememberedConversation(), this._targetSettled);
+        const resolved = settlingTarget(agents, before, rememberedConversation(), this._targetSettled);
+        if (resolved !== before) {
+            this._move(resolved, "default");
+        }
         // Only for a chat already on screen: one still being built is drawn,
         // and its history loaded, once it is attached (`afterMount`).
         if (this.chatTarget !== before && this.root.querySelector("#af-chat-pane-header")) {
@@ -559,7 +564,7 @@ export class DashboardChat {
         if (!send.content.startsWith("/")) {
             this._streamUI.awaiting(send.target);
         }
-        this._emitSend(send.content, send.target, send.attachments);
+        emit("af-send-message", send);
     }
 
     /** Say what the turn is now, and stop showing an agent working once it ends. */
@@ -568,14 +573,6 @@ export class DashboardChat {
         if (state.agent === null) {
             this._streamUI.endWait();
         }
-    }
-
-    /** Dispatch the send while flagging it as our own, so the af-send-message
-     *  listener below skips the message we've already shown optimistically. */
-    private _emitSend(content: string, target: string, attachments: string[]): void {
-        this._selfDispatching = true;
-        emit("af-send-message", { content, target, attachments });
-        this._selfDispatching = false;
     }
 
     /** Put a just-sent user message on screen. Not in chat view → switch to it
@@ -657,8 +654,11 @@ export class DashboardChat {
             this._streamUI.endWait(stored.from);
             this._turns.ended(stored.from);
             const voiceTarget = voiceThreadTarget(stored, this.chatTarget, [...this.host.agents.values()]);
-            this.chatTarget = voiceTarget ?? this.chatTarget;
-            this._lastSentTarget = voiceTarget ?? this._lastSentTarget;
+            if (voiceTarget) {
+                // Speaking to an agent is choosing it, as typing to one is.
+                this._move(voiceTarget, "claim");
+                this._lastSentTarget = voiceTarget;
+            }
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
                 this._showSentMessage(stored, Boolean(voiceTarget));
             }
@@ -697,42 +697,14 @@ export class DashboardChat {
         });
 
         this._listeners.on("af-send-failed", detail => {
-            // Nothing went on the wire, so no reply is coming for anyone. The row
-            // goes directly too: a send made outside the composer has no turn.
-            const back = this._turns.failed();
-            this._streamUI.endWait();
-            // Its bubble must not stay on screen looking delivered: the composer's
-            // waits to go again once the socket opens; one sent from elsewhere goes.
-            const changed = back
-                ? this._log.update(back.id, m => ({ ...m, queued: true })) !== null
-                : this._log.removeLast(detail.target, m => m.from === "user" && m.content === detail.content);
-            if (!changed) {
-                return;
-            }
-            if (this.host.getView() === "chat") {
+            // Nothing went on the wire, so no reply is coming. The send goes back to
+            // wait for the socket, and its bubble with it, not looking delivered.
+            this._turns.failed();
+            if (
+                this._log.update(detail.id, m => ({ ...m, queued: true })) &&
+                this.host.getView() === "chat"
+            ) {
                 this.renderChatThread();
-            }
-        });
-
-        this._listeners.on("af-send-message", detail => {
-            if (this._selfDispatching) {
-                return;
-            }
-            const { content, target } = detail;
-            const switched = this.chatTarget !== target;
-            this._focusConversation(target);
-            this._lastSentTarget = target;
-            const msg: ChatMessage = {
-                id: uid("user"),
-                from: "user",
-                to: target,
-                content,
-                timestampMs: Date.now(),
-            };
-            this._log.add(msg);
-            this._showSentMessage(msg, switched);
-            if (!content.startsWith("/")) {
-                this._streamUI.awaiting(target);
             }
         });
     }
@@ -740,13 +712,7 @@ export class DashboardChat {
     private _wireStreamEvents(): void {
         // The socket closing means no reply is arriving for anything outstanding,
         // whichever agent it was sent to; its opening lets what waits go.
-        this._listeners.on("af-socket", detail => {
-            this._turns.connection(detail.open);
-            if (!detail.open) {
-                // As for a failed send: a send made outside the composer has no turn.
-                this._streamUI.endWait();
-            }
-        });
+        this._listeners.on("af-socket", detail => this._turns.connection(detail.open));
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
             this._turns.chunk(detail.from);

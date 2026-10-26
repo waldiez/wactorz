@@ -77,7 +77,7 @@ A pointer records:
 | ----- | ---------- |
 | `version` | The version it names. |
 | `sha256` | The bytes that version held when the pointer was set. A version's bytes never change, but its number can be reused after a remove, so the pointer carries the hash the way a pinned spawn does, and a pointer whose version no longer holds those bytes is reported as dangling rather than followed. |
-| `previous` | The version it named before this move, or null. Enough for a one-step rollback without any history; the history itself is the feed, below. |
+| `previous` | The version it named before this move, or null. Enough for a one-step rollback without any history; the history itself is kept in the provenance graph, below. |
 | `moved_at` | When, as a Unix time, like `added_at` on a version. |
 | `by` | Who moved it: `cli`, `chat`, `dashboard`, `agent:<name>`, `rule:<name>`, or an extension's name. Free text, like `metadata.source` on a version; recorded, never checked. Chat knows the channel a turn came from, not a person's name, so it records where, not who. |
 | `reason` | Why, in the mover's words, or null. The train step writes its margin here; a person writes whatever they would say in a commit message. |
@@ -89,8 +89,11 @@ know, is the better failure. The format-2 reader accepts a format-1 index as one
 pointers and writes it back as format 2.
 
 No history is kept in the index: it holds where each pointer is now and where it was.
-Every move is one event on the feed, which is where "what happened to this model" is
-answered, and the retained topics below say where things stand.
+Every move is one event on the feed, and one `action` node of the provenance graph in
+main's database (`labels-and-provenance.md`): main writes it when its watcher sees the
+change, whoever made it, and `GET /api/models/{name}/moves` reads the history back. That
+is where "what happened to this model" is answered; the retained topics below say where
+things stand.
 
 ### How a reference resolves
 
@@ -204,8 +207,9 @@ through the store or through main, never by publishing here.
   there is always a way to say that. The bare name is what changes meaning, and only
   once a pointer is set.
 - **A history of moves in the index.** Rejected: the index would grow with every
-  retrain, and the feed already is the history. `previous` covers the one case where
-  the index itself needs to look back, a rollback.
+  retrain, and an older release refuses an index format it does not know. The history
+  is kept as actions in the provenance graph instead. `previous` covers the one case
+  where the index itself needs to look back, a rollback.
 - **More pointers, or named tags.** Rejected: two roles are what the loop needs, and a
   tag that means nothing to the system is metadata, which exists.
 - **Pointers in a file of their own.** Rejected: one lock, one file, one export; and a

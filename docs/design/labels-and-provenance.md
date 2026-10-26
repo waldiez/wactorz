@@ -222,6 +222,9 @@ unverified label only within what the stream's policy allows without asking.
   `superseded_by` edges, the label spec on `ask_operator`, `agent.label`, the
   rule action `label`, `labels.effective`, and `GET /api/labels`, with question
   nodes and `answered_by` edges.
+- **Pointer moves** (built): each move of a model's `active` or `shadow` pointer is an
+  `action` node, written by main when it sees the change (`wactorz/core/pointer_moves.py`),
+  read back by `GET /api/models/{name}/moves`.
 - **The train step** writes an `action` for each run, a `model` node for the
   version it stores, `produced` and `trained` edges, and its window and splits
   in the action's payload.

@@ -1326,6 +1326,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/list",
             f"nodes/{self.node_name}/code_request",
             f"nodes/{self.node_name}/reset",
+            f"nodes/{self.node_name}/swap_model",  # serve another version of a model
             f"nodes/{self.node_name}/reply/#",
             f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
             "agents/by-name/+/task",

@@ -484,6 +484,10 @@ export class ToastManager {
             return;
         }
         clearTimeout(Number(toastEl.dataset["timer"]));
+        // Gone as far as anyone reading or pressing is concerned, while it fades:
+        // a notice closed is neither read out nor focused, nor its buttons pressed.
+        toastEl.setAttribute("aria-hidden", "true");
+        toastEl.inert = true;
         toastEl.classList.remove("wz-toast--in");
         toastEl.classList.add("wz-toast--out");
         this.active = this.active.filter(t => t !== toastEl);

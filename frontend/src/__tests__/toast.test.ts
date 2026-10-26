@@ -85,6 +85,19 @@ describe("ToastManager (DOM)", () => {
         expect(live[1]!.textContent).toContain("again");
     });
 
+    it("a toast being dismissed is hidden from assistive technology while it fades", async () => {
+        const t = await freshToast();
+        t.show({ title: "triage", message: "asked", key: "q-1", sticky: true });
+        const shown = document.querySelector<HTMLElement>("[data-key='q-1']")!;
+        expect(shown.getAttribute("aria-hidden")).toBeNull();
+
+        t.close("q-1");
+
+        expect(shown.isConnected).toBe(true);
+        expect(shown.getAttribute("aria-hidden")).toBe("true");
+        expect(shown.inert).toBe(true);
+    });
+
     it("show() appends a .wz-toast element to the DOM", async () => {
         const t = await freshToast();
         t.show({ title: "Hello", message: "World" });

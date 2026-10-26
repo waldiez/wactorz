@@ -571,6 +571,9 @@ class Actor(ABC):
         self._artifacts: dict[str, dict[str, Any]] = {}
         #: What `load_model` has loaded, by key, so a model is read once.
         self._loaded_models: dict[str, Any] = {}
+        #: Whether each loaded key was read with ``allow_code``, so a swap
+        #: reads the new version the way the program read the old one.
+        self._model_load_flags: dict[str, bool] = {}
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -1529,7 +1532,46 @@ class Actor(ABC):
             self._loaded_models[key] = await asyncio.to_thread(
                 models.load, entry, allow_code=allow_code
             )
+            self._model_load_flags[key] = allow_code
         return self._loaded_models[key]
+
+    async def swap_model(self, key: str, entry: Mapping[str, Any]) -> Any:
+        """Serve the version ``entry`` names under ``key`` from now on, without a restart.
+
+        ``entry`` is a pinned artifact with the ``path`` it is read at on this
+        host, as `artifacts` holds them. A model the program loaded through
+        `load_model` is read again first, off the event loop and with the same
+        ``allow_code`` as before, so the old one is served until the new one is
+        in memory; then the path and the loaded object change together, in one
+        assignment, and `on_model_swapped` tells the program. One the program
+        opens itself through `artifact_path` changes path only, and the hook
+        says so with ``None``.
+
+        Returns what is now loaded, or None. Raises what the loader raises when
+        the new version cannot be read, and then nothing has changed: the agent
+        keeps serving what it served. Raises `UnnamedModelError` for a key this
+        agent does not name.
+        """
+        self._artifact(key)
+        loaded: Any = None
+        if key in self._loaded_models:
+            loaded = await asyncio.to_thread(
+                models.load, entry, allow_code=self._model_load_flags.get(key, False)
+            )
+        self._artifacts[key] = dict(entry)
+        if key in self._loaded_models:
+            self._loaded_models[key] = loaded
+        await self.on_model_swapped(key, loaded)
+        return loaded
+
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The version under ``key`` changed; ``model`` is the new one, or None. Override to react.
+
+        Called after `swap_model` has put the new version in place, so a
+        program that kept the old object somewhere replaces it here. The
+        default does nothing: a program that reads through `load_model` or
+        `artifact_path` on each call already sees the new version.
+        """
 
     def _artifact(self, key: str) -> dict[str, Any]:
         entry = self._artifacts.get(key)

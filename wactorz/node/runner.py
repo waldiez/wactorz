@@ -38,7 +38,7 @@ from ..config import (
 from ..core import bundles
 from ..core.actor import Actor, ActorState, SupervisorStrategy
 from ..core.agent_reset import LIVE_SCOPES
-from ..core.artifacts import ArtifactError, pinned_in
+from ..core.artifacts import ArtifactError, check_pinned, pinned_in
 from ..core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsUnusable,
@@ -882,6 +882,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/list": self._on_list,
             f"nodes/{self.node_name}/code_request": self._on_code_request,
             f"nodes/{self.node_name}/reset": self._on_reset,
+            f"nodes/{self.node_name}/swap_model": self._on_swap_model,
         }
         handler = exact.get(topic_str)
         if handler is not None:
@@ -1102,6 +1103,79 @@ class NodeRunner:
                 "timestamp": time.time(),
             },
         )
+
+    async def _on_swap_model(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Have an agent here serve another version of a model it names, and say how it went.
+
+        Main sends this when a pointer the agent's pin follows has moved,
+        with the new pin -- name, version, hash, format, size -- since the
+        pointer topic alone does not carry enough to fetch and check a
+        version. Signed like every other command, and answered on
+        ``nodes/<node>/swap_ack`` quoting main's token, so main records the
+        swap that landed and says on the feed what did not.
+        """
+        if not isinstance(data, dict):
+            return
+        # Off the subscriber loop, as every command is: the fetch waits on
+        # blobs this same loop delivers.
+        self._background(self._swap_and_answer(data), "swap_model")
+
+    async def _swap_and_answer(self, data: dict[str, Any]) -> None:
+        """Carry out one swap, then answer with what the agent serves now, or why not."""
+        name = str(data.get("agent") or "")
+        key = str(data.get("key") or "")
+        answer: dict[str, Any] = {
+            "token": data.get("token", ""),
+            "agent": name,
+            "key": key,
+            "node": self.node_name,
+            "timestamp": time.time(),
+        }
+        hosted = self.hosted(name)
+        config = self._configs.get(name)
+        if hosted is None or config is None:
+            await self._answer_swap({**answer, "ok": False, "reason": "not running here"})
+            return
+        try:
+            entry = check_pinned(data.get("entry"))
+        except ArtifactError as exc:
+            await self._answer_swap(
+                {**answer, "ok": False, "reason": f"not a pinned artifact: {exc}"}
+            )
+            return
+        try:
+            named = pinned_in(config)
+        except ArtifactError as exc:
+            await self._answer_swap({**answer, "ok": False, "reason": f"its artifacts: {exc}"})
+            return
+        held = named.get(key)
+        answer["from"] = None if held is None else held.get("version")
+        answer["to"] = entry["version"]
+        # The config with the new pin, fetched against while the old one is
+        # still what the agent names: the cache keeps what any config here
+        # names, so the old version stays until the swap has landed.
+        wanted = {**config, "artifacts": {**named, key: entry}}
+        problem = await self._fetch_artifacts(name, wanted)
+        if problem:
+            await self._answer_swap({**answer, "ok": False, "reason": problem})
+            return
+        try:
+            path = await asyncio.to_thread(self.artifacts.readable_path, entry)
+            await hosted.swap_model(key, {**entry, "path": str(path)})
+        except Exception as exc:
+            logger.warning("[runner] '%s' keeps its %s: %s", name, key, exc)
+            await self._answer_swap({**answer, "ok": False, "reason": str(exc)})
+            return
+        # The stored config is the one the supervisor's factory closed over,
+        # so changing it here is what a restart rebuilds the agent from.
+        config["artifacts"] = wanted["artifacts"]
+        logger.info(
+            "[runner] '%s' now serves %s:%s as %s", name, entry["name"], entry["version"], key
+        )
+        await self._answer_swap({**answer, "ok": True, "reason": ""})
+
+    async def _answer_swap(self, answer: dict[str, Any]) -> None:
+        await self.publish(f"nodes/{self.node_name}/swap_ack", answer)
 
     async def _on_code_request(self, topic_str: str, data: Any, msg: Any) -> None:
         """Answer with the program an agent here is actually running.

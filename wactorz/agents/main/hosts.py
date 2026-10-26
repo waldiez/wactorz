@@ -291,6 +291,30 @@ class CodeRefreshHost(ListenerHost, Protocol):
     ) -> None: ...
 
 
+class SwapHost(ListenerHost, Protocol):
+    """What reloading the agents that follow a moved pointer needs from the actor.
+
+    It reads the registry to find them, writes the one entry it re-pins, finds
+    an agent running here to swap it, republishes a node's desired state and
+    sends that node its command; ``actor_id`` is for the feed.
+    """
+
+    actor_id: str
+    _registry: Any
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
 class ArtifactHost(ListenerHost, Protocol):
     """What sending nodes their agents' artifacts needs from the actor.
 

@@ -91,7 +91,13 @@ def history(prov: Provenance, name: str, *, limit: int = DEFAULT_LIMIT) -> list[
     By when each happened, not when main wrote it down: a move found at start
     is written late.
     """
-    nodes = prov.nodes(ACTION, source=source_of(name), limit=None)
+    # The swaps that followed a move are about the model too (`model_swaps`),
+    # and are not moves: a move says what it changed.
+    nodes = [
+        node
+        for node in prov.nodes(ACTION, source=source_of(name), limit=None)
+        if "change" in node.payload
+    ]
     newest_first = sorted(nodes, key=lambda node: (node.ts, node.seq), reverse=True)
     return [_move(node) for node in newest_first[: max(0, limit)]]
 

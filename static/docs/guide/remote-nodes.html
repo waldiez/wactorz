@@ -845,6 +845,16 @@ sent all the same and starts when the node does; the chat says so.</p>
 <td>The reset done, quoting <code>request</code> and naming the agents it cleared (<code>"cleared": [...]</code>); a scope the node does not reach into is answered with none.</td>
 </tr>
 <tr>
+<td><code>nodes/{name}/swap_model</code></td>
+<td>→ runner</td>
+<td>Have an agent here serve another version of a model it names, because the pointer its pin follows moved. Payload: <code>{"agent": "...", "key": "...", "entry": {pinned artifact}, "token": "..."}</code>. The node fetches the version as it fetched the first, swaps it in place, and keeps the old one if the new one will not load. Signed.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/swap_ack</code></td>
+<td>← runner</td>
+<td>How the swap went, quoting the token: <code>{"ok": true}</code> with <code>from</code> and <code>to</code>, or <code>{"ok": false, "reason": "..."}</code>.</td>
+</tr>
+<tr>
 <td><code>nodes/{name}/reply/{id}</code></td>
 <td>← runner</td>
 <td>Reply routing for <code>agent.send_to()</code> calls originating on this node.</td>

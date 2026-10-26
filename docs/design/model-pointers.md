@@ -201,6 +201,46 @@ through the store or through main, never by publishing here.
 - The dashboard's model view shows both and lets a person move them; the feed shows
   every move with its `by` and `reason`.
 
+### Hot swap: what a move does to a running agent
+
+When a pointer moves, every running agent whose pin follows it is re-pinned to where the
+pointer stands now and reloaded in place. The old version is served until the new one is
+in memory; then the path and the loaded object change in one assignment. A version that
+will not load leaves the agent serving what it served, and the feed says so with the
+reason. Nothing restarts, and an agent that named a version is left alone. A pointer
+cleared moves nobody: a pin keeps its version while there is nothing to follow. Both
+pointers swap the same way, since a pin may follow `shadow` as well as `active`.
+
+The program is told through one hook, `on_model(agent, key, model)`, called after the
+swap has landed with the newly loaded object, or `None` for a model the program opens
+itself through `artifact_path`. A program that reads `await agent.load_model(key)` on
+each call needs no hook: the call returns the new version. One that kept what it loaded
+in a local or in `agent.state` replaces it in the hook; without one it keeps serving the
+old object, and the feed line says the host swapped while the program is what decides.
+The IMU example's function reads through `load_model` and needs nothing.
+
+On main, the pointer watcher hands each change to the swap directly. For an agent on a
+node, main sends the node the new pin on a signed control topic
+(`nodes/<node>/swap_model`) and the node answers on `nodes/<node>/swap_ack`, after
+updating the spawn registry and the node's desired state, so the node may fetch the
+version and a reboot runs it. A node that stayed up while main was away is sent the
+version everyone else moved to on main's first look. A swap that landed is an `action`
+node in the provenance graph, joined `led_to` from the move that caused it; one that
+failed is a feed line and nothing in the graph.
+
+Decided against:
+
+- **Restarting the agent.** Rejected: the restart loses the agent's state and in-flight
+  work, which is what the swap exists to keep.
+- **Every read through `load_model`.** Rejected: slower for a program that would hold the
+  object anyway, and still a change to the program; the hook is the change, made once.
+- **A node following `models/<name>/<pointer>` itself.** Rejected: the topic carries the
+  version and its hash, not the format or the size a node needs to fetch and check it,
+  and anything may publish to a topic a node reads, while a command to a node is
+  signed.
+- **Recording a failed swap in the graph.** Rejected: nothing changed; the agent's
+  record stays true, and the feed is where a failure is read.
+
 ## What was decided against
 
 - **`latest` following `active`.** Rejected: `latest` keeps one meaning, the newest, so
@@ -227,8 +267,9 @@ through the store or through main, never by publishing here.
   format, `resolve`, the three operations, the refusals, `follows` on a pin, the CLI
   and chat commands, main publishing the topics. Built; the dashboard's model view is
   not part of it and waits for the dashboard work.
-- **Item 7, hot swap**, is a subscriber to `models/{name}/active` that re-pins and
-  reloads the agents whose pin follows it, on main and on nodes.
+- **Item 7, hot swap**, re-pins and reloads the agents whose pin follows a moved pointer,
+  on main and on nodes, as "Hot swap" above says. Built (`wactorz/agents/main/hot_swap.py`,
+  `Actor.swap_model`, the runner's `swap_model` command, `wactorz/core/model_swaps.py`).
 - **Item 8, shadow serving**, resolves `NAME:shadow` beside `active` and runs both; the
   pointer being unset is what turns the shadow path off.
 - **Item 9, the train step**, stores a version, scores it, and calls `move` or not,

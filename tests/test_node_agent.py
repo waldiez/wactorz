@@ -48,6 +48,18 @@ class TestItIsTheSameAgent:
     def test_a_node_agent_is_a_dynamic_agent(self, runner: NodeRunner) -> None:
         assert isinstance(_agent(runner), DynamicAgent)
 
+    @pytest.mark.parametrize("timeout", [None, 140.0])
+    def test_task_timeouts_match_local_agents(
+        self, runner: NodeRunner, tmp_path: Path, timeout: float | None
+    ) -> None:
+        config: dict[str, Any] = {} if timeout is None else {"task_timeout_s": timeout}
+        remote = _agent(runner, **config)
+        local = DynamicAgent(name="local-timeout", code="", persistence_dir=str(tmp_path), **config)
+
+        assert remote._HANDLE_TASK_TIMEOUT == local._HANDLE_TASK_TIMEOUT
+        expected = 60.0 if timeout is None else timeout
+        assert expected == remote._HANDLE_TASK_TIMEOUT
+
     def test_generated_code_is_handed_the_shared_api(self, runner: NodeRunner) -> None:
         # Not a lookalike: the class itself, so a method added for main is on a
         # node the same day rather than when someone remembers to copy it.
@@ -435,9 +447,9 @@ class TestTasksArriveOnATopic:
                 "async def handle_task(agent, payload):\n"
                 "    await asyncio.sleep(3600)\n"
             ),
+            task_timeout_s=0.05,
         )
         agent._compile_code(agent._code)
-        agent._HANDLE_TASK_TIMEOUT = 0.05  # type: ignore[misc]
 
         result = await asyncio.wait_for(agent.run_task({}), timeout=5)
 

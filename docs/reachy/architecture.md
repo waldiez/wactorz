@@ -111,6 +111,8 @@ Each command publishes its outcome on `custom/reachy/events` (and
   watch, the conversation loop) are started with `agent.run_in_background()`, which ties
   them to the agent's lifetime, and are cancelled in `cleanup()`.
 - At most one conversation session exists at a time; starting a second is refused.
+- The recipe's `task_timeout_s` applies on main and on nodes. Reachy uses 140 seconds;
+  dynamic agents without an override keep the 60-second default.
 
 ## Connection and recovery
 

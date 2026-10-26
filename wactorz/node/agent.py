@@ -57,6 +57,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
             input_schema=config.get("input_schema"),
             output_schema=config.get("output_schema"),
             trusted=bool(config.get("trusted", False)),
+            task_timeout_s=config.get("task_timeout_s"),
             artifacts=runner.readable_artifacts(config),
             # Passed in rather than assigned after, because `AgentAPI` is built
             # inside this call and decides there whether `agent.llm` exists. It

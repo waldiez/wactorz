@@ -293,6 +293,17 @@ def get_native_factory(name: str):
     return recipe.get("factory") if recipe else None
 
 
+class RecipeRestoreError(ValueError):
+    """A saved catalogue recipe that needs a fresh approved spawn."""
+
+    @classmethod
+    def dependencies_changed(cls, name: str) -> "RecipeRestoreError":
+        return cls(
+            f"{name}: catalogue dependencies changed; respawn through "
+            "@catalog so installation is approved before restoring this agent"
+        )
+
+
 def current_recipe_config(saved: dict) -> dict:
     """Refresh code only for recipes explicitly supporting saved configuration.
 
@@ -306,10 +317,7 @@ def current_recipe_config(saved: dict) -> dict:
     if not recipe or recipe.get("type") != "dynamic" or not recipe.get("refresh_on_restore"):
         return saved
     if saved.get("install", []) != recipe.get("install", []):
-        raise ValueError(
-            f"{saved.get('name')}: catalogue dependencies changed; respawn through "
-            "@catalog so installation is approved before restoring this agent"
-        )
+        raise RecipeRestoreError.dependencies_changed(str(saved.get("name")))
     return {
         **recipe,
         **saved,

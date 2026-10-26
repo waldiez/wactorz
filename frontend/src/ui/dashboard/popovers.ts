@@ -12,7 +12,9 @@ import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { tts } from "../../ext/tts";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
+import { parseRoute, type Route } from "../../router";
 import { button, el, named, option } from "../dom";
+import { AGENT_SCOPES, buildScopeSwitch, nodesSay, openAgent } from "./resetScope";
 
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
@@ -163,23 +165,40 @@ const RESET_SCOPES: { scope: string; label: string; danger?: boolean }[] = [
     { scope: "chat", label: "Chat history & files" },
     { scope: "metrics", label: "Metrics & costs" },
     { scope: "spawns", label: "Spawn registry" },
-    { scope: "state", label: "Agent state files" },
-    { scope: "logs", label: "Log files" },
+    // Restarts it: what an agent read from its state at start is in memory, and
+    // only a fresh start forgets it.
+    { scope: "state", label: "Agent state (restarts it)" },
+    // This server's: a node's own output goes to its journal or its container,
+    // which the node cannot clear and the dashboard never shows.
+    { scope: "logs", label: "This server's log files" },
     { scope: "all", label: "Wipe everything", danger: true },
 ];
 
 /** Fire the reset REST call for a scope and toast the outcome. */
-async function postReset(scope: string, label: string, pop: HTMLElement): Promise<void> {
+async function postReset(
+    scope: string,
+    label: string,
+    pop: HTMLElement,
+    agent: string | null,
+): Promise<void> {
     pop.classList.remove("open");
     try {
         const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
         const res = await fetch(`${ingress}/api/reset`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ scope }),
+            body: JSON.stringify(agent ? { scope, agent } : { scope }),
         });
         if (res.ok) {
-            toast.show({ type: "system", title: "Reset", message: `${label} cleared` });
+            const done = (await res.json().catch(() => ({}))) as { nodes?: Record<string, string> };
+            const whom = agent ? ` for @${agent}` : "";
+            const missed = nodesSay(done.nodes);
+            // A warning when some node kept its copy: the reset is only partly done.
+            toast.show({
+                type: missed ? "alert-warning" : "system",
+                title: "Reset",
+                message: `${label} cleared${whom}.${missed}`,
+            });
         } else {
             const err = (await res.json().catch(() => ({}))) as { error?: string };
             toast.show({
@@ -198,6 +217,7 @@ function buildResetButton(
     pop: HTMLElement,
     armResets: Array<() => void>,
     { scope, label, danger }: (typeof RESET_SCOPES)[number],
+    agent: string | null,
 ): HTMLButtonElement {
     const btn = button("af-mini-btn");
     btn.style.cssText = [
@@ -236,7 +256,7 @@ function buildResetButton(
             return;
         }
         disarm();
-        void postReset(scope, label, pop);
+        void postReset(scope, label, pop, agent);
     });
 
     return btn;
@@ -245,28 +265,75 @@ function buildResetButton(
 /** A reset popover that exposes a hook to re-arm its two-step confirm buttons
  *  (called when the popover is re-opened, so a previously-armed button resets). */
 export interface ResetPopover extends HTMLElement {
-    /** Re-arm (reset) the two-step confirm buttons; call when the popover re-opens. */
+    /** Disarm every armed button (called when the popover is dismissed). */
     _resetArmed(): void;
+    /** Stop following the route, before the popover is removed. */
+    _release(): void;
 }
 
-/** Scoped state-reset menu with per-button two-step confirmation. */
+/**
+ * Clear stored state: for the agent whose conversation is open, or for all.
+ *
+ * Rebuilt whenever the open agent changes, so the choice it offers is always
+ * about the agent on screen. The rows that cannot be limited to one agent are
+ * left out while one is chosen, rather than shown and quietly applied to all.
+ */
 export function buildResetPopover(): ResetPopover {
     const pop = el("div", "af-audio-popover glass");
     pop.style.cssText = "min-width:210px;padding:12px 14px;";
-
-    const title = el("div", "", "Clear stored state");
-    title.style.cssText =
-        "font-size:10px;font-weight:600;opacity:.45;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;";
-    pop.appendChild(title);
-
     const armResets: Array<() => void> = [];
-    RESET_SCOPES.forEach(spec => {
-        if (spec.danger) {
-            const hr = el("div");
-            hr.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:6px 0 8px;";
-            pop.appendChild(hr);
+    let agent = openAgent(parseRoute(location.hash));
+    let forAgent = true;
+
+    const render = (): void => {
+        armResets.splice(0).forEach(disarm => disarm());
+        pop.replaceChildren();
+        const title = el("div", "", "Clear stored state");
+        title.style.cssText =
+            "font-size:10px;font-weight:600;opacity:.45;margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;";
+        pop.appendChild(title);
+        if (agent) {
+            pop.appendChild(
+                buildScopeSwitch(agent, chosen => {
+                    forAgent = chosen;
+                    render();
+                }),
+            );
+            const picked = pop.querySelector<HTMLInputElement>(
+                `input[value="${forAgent ? "agent" : "all"}"]`,
+            );
+            if (picked) {
+                picked.checked = true;
+            }
         }
-        pop.appendChild(buildResetButton(pop, armResets, spec));
+        const whom = agent && forAgent ? agent : null;
+        for (const spec of RESET_SCOPES) {
+            if (whom && !AGENT_SCOPES.has(spec.scope)) {
+                continue;
+            }
+            if (spec.danger) {
+                const hr = el("div");
+                hr.style.cssText = "height:1px;background:rgba(255,255,255,.08);margin:6px 0 8px;";
+                pop.appendChild(hr);
+            }
+            pop.appendChild(buildResetButton(pop, armResets, spec, whom));
+        }
+    };
+    const follow = (route: Route): void => {
+        const next = openAgent(route);
+        if (next !== agent) {
+            agent = next;
+            forAgent = true;
+            render();
+        }
+    };
+    const following = [
+        ["af-route", listen("af-route", follow)],
+        ["af-view-changed", listen("af-view-changed", follow)],
+    ] as const;
+    render();
+    return Object.assign(pop, {
+        _resetArmed: () => armResets.forEach(fn => fn()),
+        _release: () => following.forEach(([type, fn]) => document.removeEventListener(type, fn)),
     });
-    return Object.assign(pop, { _resetArmed: () => armResets.forEach(fn => fn()) });
 }

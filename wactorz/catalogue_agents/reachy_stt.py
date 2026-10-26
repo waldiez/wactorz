@@ -51,6 +51,62 @@ def _as_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+class STTError(RuntimeError):
+    """A speech-to-text backend that cannot run here."""
+
+    @classmethod
+    def no_faster_whisper(cls) -> STTError:
+        return cls("faster-whisper is not installed; run: pip install faster-whisper")
+
+    @classmethod
+    def no_whisper(cls) -> STTError:
+        return cls("whisper is not installed; run: pip install openai-whisper")
+
+    @classmethod
+    def no_openai_key(cls) -> STTError:
+        return cls("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
+
+    @classmethod
+    def no_openai(cls) -> STTError:
+        return cls("openai is not installed; run: pip install 'wactorz[openai]'")
+
+    @classmethod
+    def no_deepgram_channel(cls) -> STTError:
+        return cls("Deepgram returned no transcription channel")
+
+    @classmethod
+    def no_deepgram_key(cls) -> STTError:
+        return cls("DEEPGRAM_API_KEY is required when REACHY_STT_BACKEND=deepgram")
+
+    @classmethod
+    def no_deepgram(cls) -> STTError:
+        return cls("deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'")
+
+    @classmethod
+    def no_streaming_key(cls) -> STTError:
+        return cls("DEEPGRAM_API_KEY is required for Deepgram streaming")
+
+    @classmethod
+    def stream_not_started(cls) -> STTError:
+        return cls("Deepgram streaming connection did not start")
+
+
+class STTInputError(ValueError):
+    """A backend name, or audio, that speech-to-text cannot take."""
+
+    @classmethod
+    def unknown_backend(cls, raw_backend: Any, choices: str) -> STTInputError:
+        return cls(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
+
+    @classmethod
+    def empty_wav(cls) -> STTInputError:
+        return cls("WAV payload is empty")
+
+    @classmethod
+    def streaming_backend(cls) -> STTInputError:
+        return cls("streaming capture requires the Deepgram backend")
+
+
 @dataclass(frozen=True)
 class STTConfig:
     """Resolved backend settings for one transcription request."""
@@ -86,7 +142,7 @@ class STTConfig:
         backend = _BACKEND_ALIASES.get(raw_backend, raw_backend)
         if backend not in _DEFAULT_MODELS:
             choices = ", ".join(sorted(_DEFAULT_MODELS))
-            raise ValueError(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
+            raise STTInputError.unknown_backend(raw_backend, choices)
         model = str(
             payload.get("stt_model") or environ.get("REACHY_STT_MODEL") or _DEFAULT_MODELS[backend]
         ).strip()
@@ -182,9 +238,7 @@ class FasterWhisperBackend:
                     WhisperModel,
                 )
             except ImportError as exc:
-                raise RuntimeError(
-                    "faster-whisper is not installed; run: pip install faster-whisper"
-                ) from exc
+                raise STTError.no_faster_whisper() from exc
             key = ("faster-whisper", config.model, config.device, config.compute_type)
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
@@ -247,9 +301,7 @@ class WhisperBackend:
             try:
                 import whisper  # pyright: ignore[reportMissingImports]  # optional backend
             except ImportError as exc:
-                raise RuntimeError(
-                    "whisper is not installed; run: pip install openai-whisper"
-                ) from exc
+                raise STTError.no_whisper() from exc
             key = ("whisper", config.model, config.device, config.compute_type)
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
@@ -278,13 +330,11 @@ class OpenAIBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
+            raise STTError.no_openai_key()
         try:
             from openai import AsyncOpenAI  # pyright: ignore[reportMissingImports]  # optional
         except ImportError as exc:
-            raise RuntimeError(
-                "openai is not installed; run: pip install 'wactorz[openai]'"
-            ) from exc
+            raise STTError.no_openai() from exc
         client = AsyncOpenAI(api_key=api_key, timeout=config.timeout_s)
         file_arg = ("reachy.wav", wav_bytes, "audio/wav")
         kwargs: dict[str, Any] = {"file": file_arg, "model": config.model}
@@ -322,7 +372,7 @@ def _deepgram_result(response: Any) -> _BackendResult:
         channel = response.results.channels[0]
         alternative = channel.alternatives[0]
     except (AttributeError, IndexError, TypeError) as exc:
-        raise RuntimeError("Deepgram returned no transcription channel") from exc
+        raise STTError.no_deepgram_channel() from exc
     return _BackendResult(
         text=str(getattr(alternative, "transcript", "") or "").strip(),
         confidence=getattr(alternative, "confidence", None),
@@ -367,7 +417,7 @@ class DeepgramBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
         api_key = os.environ.get("DEEPGRAM_API_KEY")
         if not api_key:
-            raise RuntimeError("DEEPGRAM_API_KEY is required when REACHY_STT_BACKEND=deepgram")
+            raise STTError.no_deepgram_key()
         try:
             import httpx  # pyright: ignore[reportMissingImports]  # optional Deepgram dependency
             from deepgram import (  # pyright: ignore[reportMissingImports]  # optional backend
@@ -375,9 +425,7 @@ class DeepgramBackend:
                 PrerecordedOptions,
             )
         except ImportError as exc:
-            raise RuntimeError(
-                "deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'"
-            ) from exc
+            raise STTError.no_deepgram() from exc
         return await asyncio.to_thread(
             _transcribe_deepgram_sync,
             wav_bytes,
@@ -411,10 +459,10 @@ def capture_deepgram_turn(
     resolved_payload = payload or {}
     config = STTConfig.resolve(resolved_payload)
     if config.backend != "deepgram":
-        raise ValueError("streaming capture requires the Deepgram backend")
+        raise STTInputError.streaming_backend()
     api_key = os.environ.get("DEEPGRAM_API_KEY")
     if not api_key:
-        raise RuntimeError("DEEPGRAM_API_KEY is required for Deepgram streaming")
+        raise STTError.no_streaming_key()
     try:
         from deepgram import (  # pyright: ignore[reportMissingImports]  # optional backend
             DeepgramClient,
@@ -422,9 +470,7 @@ def capture_deepgram_turn(
             LiveTranscriptionEvents,
         )
     except ImportError as exc:
-        raise RuntimeError(
-            "deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'"
-        ) from exc
+        raise STTError.no_deepgram() from exc
 
     samplerate = int(media.get_input_audio_samplerate() or 16000)
     endpointing_ms = max(
@@ -506,7 +552,7 @@ def capture_deepgram_turn(
     connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
     connection.on(LiveTranscriptionEvents.Error, on_error)
     if not connection.start(LiveOptions(**options_kwargs)):
-        raise RuntimeError("Deepgram streaming connection did not start")
+        raise STTError.stream_not_started()
 
     def send_frame(frame: bytes) -> None:
         nonlocal stream_error
@@ -647,7 +693,7 @@ async def transcribe_wav(
 ) -> Transcription:
     """Transcribe WAV bytes with the backend selected by payload/environment."""
     if not wav_bytes:
-        raise ValueError("WAV payload is empty")
+        raise STTInputError.empty_wav()
     config = STTConfig.resolve(payload)
     result = await _BACKENDS[config.backend].transcribe(wav_bytes, config)
     if isinstance(result, _BackendResult):

@@ -240,6 +240,13 @@ is pressed. That press only wakes it, unless late presses are on: then it is
 published when the button connects, up to a minute late, marked "late"."""
 
 
+class NoFlicLibraryError(RuntimeError):
+    """A client asked for while pyflic-ble is not importable."""
+
+    def __init__(self) -> None:
+        super().__init__("pyflic-ble is not loaded; callers check _have_lib first")
+
+
 class FlicAgent(Actor):
     """Pairs Flic buttons and publishes their presses.
 
@@ -822,7 +829,7 @@ class FlicAgent(Actor):
         """A client for one button, wired to this agent but not yet started."""
         client_cls = self._client_cls
         if client_cls is None:
-            raise RuntimeError("pyflic-ble is not loaded; callers check _have_lib first")
+            raise NoFlicLibraryError()
         client = client_cls(
             address=button.address,
             ble_device=device,

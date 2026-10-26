@@ -6,12 +6,9 @@ no network. Each test creates a minimal ActorSystem, registers actors under
 the Supervisor, and verifies behaviour by inspecting actor state.
 """
 
-import argparse
 import asyncio
-import sys
 import tempfile
 import time
-import traceback
 from collections.abc import Callable
 from typing import Any
 
@@ -22,40 +19,22 @@ from wactorz.core.registry import ActorSystem, Supervisor
 
 # Every actor built here writes state somewhere. A fixed path under /tmp is
 # shared by every run at once — a second run of the suite, or a second checkout,
-# reads and writes the same files. Not `tmp_path`: these tests are also run
-# directly (see ``ALL_TESTS`` and ``main`` below), so they take no fixtures.
-# Held at module scope so it is cleaned up when the process exits.
+# reads and writes the same files, so each run gets a directory of its own,
+# held at module scope so it is cleaned up when the process exits.
 _STATE = tempfile.TemporaryDirectory(prefix="wactorz-supervisor-test-")
 STATE_DIR = _STATE.name
-
-PASS = "✅ PASS"
-FAIL = "❌ FAIL"
-
-_results: list[tuple[str, bool, str]] = []
 
 
 def assert_eq(label: str, got: Any, expected: Any) -> bool:
     ok = bool(got == expected)
-    _results.append((label, ok, f"got={got!r}, expected={expected!r}"))
-    marker = PASS if ok else FAIL
-    print(f"  {marker}  {label}")
     assert ok, f"{label}: got={got!r}, expected={expected!r}"
     return ok
 
 
 def assert_true(label: str, value: Any, detail: str = "") -> bool:
     ok = bool(value)
-    _results.append((label, ok, detail or str(value)))
-    marker = PASS if ok else FAIL
-    print(f"  {marker}  {label}")
     assert ok, f"{label}: {detail or value}"
     return ok
-
-
-def section(title: str) -> None:
-    print(f"\n{'─' * 60}")
-    print(f"  {title}")
-    print(f"{'─' * 60}")
 
 
 # ── Minimal test actors ───────────────────────────────────────────────────────
@@ -183,7 +162,6 @@ def make_system(poll_interval: float = 0.05) -> ActorSystem:
 
 async def test_stable_actor_not_restarted() -> None:
     """A healthy actor should never be restarted."""
-    section("TEST 1 — Stable actor: no restarts")
 
     system = make_system()
     actor_ref = {}
@@ -215,7 +193,6 @@ async def test_stable_actor_not_restarted() -> None:
 
 async def test_one_for_one_restart() -> None:
     """Crashed actor is restarted; siblings are untouched."""
-    section("TEST 2 — ONE_FOR_ONE: crashed actor restarted, sibling untouched")
 
     system = make_system()
     crash_ref = {}
@@ -272,7 +249,6 @@ async def test_one_for_one_restart() -> None:
 
 async def test_restart_count_increments() -> None:
     """restart_count on ActorMetrics increments after each supervisor restart."""
-    section("TEST 3 — restart_count increments correctly")
 
     system = make_system()
 
@@ -310,7 +286,6 @@ async def test_restart_count_increments() -> None:
 
 async def test_repeated_crashes_slow_restarts_down() -> None:
     """After max_restarts crashes in a row the supervisor slows down, and keeps it."""
-    section("TEST 4 — Repeated crashes: supervisor slows down")
 
     system = make_system()
     notifications = []
@@ -360,7 +335,6 @@ async def test_repeated_crashes_slow_restarts_down() -> None:
 
 async def test_one_for_all_restarts_siblings() -> None:
     """ONE_FOR_ALL: crashing one restarts all supervised actors."""
-    section("TEST 5 — ONE_FOR_ALL: all actors restart when one crashes")
 
     system = make_system()
     start_counts = {"alpha": 0, "beta": 0, "gamma": 0}
@@ -425,7 +399,6 @@ async def test_one_for_all_restarts_siblings() -> None:
 
 async def test_rest_for_one_only_downstream() -> None:
     """REST_FOR_ONE: only the crashed actor and those after it restart."""
-    section("TEST 6 — REST_FOR_ONE: only downstream actors restart")
 
     system = make_system()
     start_counts = {"upstream": 0, "middle": 0, "downstream": 0}
@@ -488,7 +461,6 @@ async def test_rest_for_one_only_downstream() -> None:
 
 async def test_supervisor_status_snapshot() -> None:
     """supervisor.status() returns correct info for all registered actors."""
-    section("TEST 7 — supervisor.status() snapshot")
 
     system = make_system()
 
@@ -519,7 +491,6 @@ async def test_supervisor_status_snapshot() -> None:
 
 async def test_supervised_flag_on_actor() -> None:
     """Actor.get_status() reports supervised=True when under a supervisor."""
-    section("TEST 8 — Actor reports supervised=True in get_status()")
 
     system = make_system()
 
@@ -543,7 +514,6 @@ async def test_supervised_flag_on_actor() -> None:
 
 async def test_stop_all_stops_supervisor() -> None:
     """ActorSystem.stop_all() shuts down the supervisor watch loop."""
-    section("TEST 9 — stop_all() cancels supervisor watch loop")
 
     system = make_system()
 
@@ -564,63 +534,3 @@ async def test_stop_all_stops_supervisor() -> None:
     await asyncio.sleep(0)
 
     assert_true("watch task is cancelled after stop_all", watch_task and watch_task.done())
-
-
-# ── Runner ────────────────────────────────────────────────────────────────────
-
-ALL_TESTS = [
-    ("Stable actor not restarted", test_stable_actor_not_restarted),
-    ("ONE_FOR_ONE restart", test_one_for_one_restart),
-    ("restart_count increments", test_restart_count_increments),
-    ("Repeated crashes — slows down", test_repeated_crashes_slow_restarts_down),
-    ("ONE_FOR_ALL restarts siblings", test_one_for_all_restarts_siblings),
-    ("REST_FOR_ONE only downstream", test_rest_for_one_only_downstream),
-    ("supervisor.status() snapshot", test_supervisor_status_snapshot),
-    ("Actor supervised flag", test_supervised_flag_on_actor),
-    ("stop_all stops supervisor", test_stop_all_stops_supervisor),
-]
-
-
-async def run_all(filter_name: str | None = None) -> None:
-    failed = 0
-    skipped = 0
-    for name, fn in ALL_TESTS:
-        if filter_name and filter_name.lower() not in name.lower():
-            skipped += 1
-            continue
-        try:
-            await fn()
-        except Exception:
-            print(f"\n  💥 EXCEPTION in '{name}':")
-            traceback.print_exc()
-            failed += 1
-
-    print(f"\n{'═' * 60}")
-    passed = sum(1 for _, ok, _ in _results if ok)
-    failed_assertions = sum(1 for _, ok, _ in _results if not ok)
-    print(
-        f"  Results: {passed} passed, {failed_assertions} failed assertions, "
-        f"{failed} exceptions, {skipped} skipped"
-    )
-    print(f"{'═' * 60}\n")
-
-    if failed_assertions or failed:
-        print("Failed assertions:")
-        for label, ok, detail in _results:
-            if not ok:
-                print(f"  ❌  {label}: {detail}")
-        sys.exit(1)
-    else:
-        print("  All tests passed 🎉")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "filter",
-        nargs="?",
-        default=None,
-        help="Only run tests whose name contains this string (case-insensitive)",
-    )
-    args = parser.parse_args()
-    asyncio.run(run_all(args.filter))

@@ -34,12 +34,14 @@ import sqlite3
 import time
 from typing import Any
 
+from .schema import PROVENANCE_SQL
+
 logger = logging.getLogger(__name__)
 
 # ── Current version ────────────────────────────────────────────────────────
 # Increment this when adding new migrations.
 # The startup sequence runs all migrations between the stored version and this.
-FRAMEWORK_VERSION = 4
+FRAMEWORK_VERSION = 5
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -104,13 +106,23 @@ def migrate_sql_4(conn: sqlite3.Connection):
             conn.execute(f"ALTER TABLE node_metrics_history ADD COLUMN {column} {kind}")
 
 
+def migrate_sql_5(conn: sqlite3.Connection):
+    """v4 → v5: the provenance graph, where labels and the model loop's record live.
+
+    The same tables the schema creates for a new database; see
+    docs/design/labels-and-provenance.md.
+    """
+    conn.executescript(PROVENANCE_SQL)
+
+
 # Register SQL migrations: version → function
 # Each migration upgrades FROM (version-1) TO (version)
 _SQL_MIGRATIONS = {
     2: migrate_sql_2,
     3: migrate_sql_3,
     4: migrate_sql_4,
-    # 5: migrate_sql_5,  ← add future migrations here
+    5: migrate_sql_5,
+    # 6: migrate_sql_6,  ← add future migrations here
 }
 
 

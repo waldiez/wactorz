@@ -11,7 +11,13 @@ from aiohttp import web
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.outbound import numbered
 from ...orchestration import SOCIAL
-from .outbound import Outbox, PendingChoices, outbound
+from .outbound import (
+    ChannelNotRunningError,
+    NotAUserError,
+    Outbox,
+    PendingChoices,
+    outbound,
+)
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
@@ -134,10 +140,10 @@ class WhatsAppInterface:
         """
         twilio = self._twilio
         if twilio is None:
-            raise RuntimeError("the WhatsApp webhook is not running")
+            raise ChannelNotRunningError.whatsapp()
         number = self._normalize_number(user)
         if not number:
-            raise ValueError("a WhatsApp user is a phone number")
+            raise NotAUserError.whatsapp()
         message = outbound("whatsapp", number, text, options, message_id, agent_id)
         await self._send_message(
             twilio, numbered(message.text, message.options), f"whatsapp:{number}"

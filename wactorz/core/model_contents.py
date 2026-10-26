@@ -34,6 +34,34 @@ _SAFETENSORS_HEADER_LIMIT = 100 << 20
 class _Unreadable(Exception):
     """The file is not what its format says."""
 
+    @classmethod
+    def not_npy(cls) -> "_Unreadable":
+        return cls("not an npy file")
+
+    @classmethod
+    def cut_short(cls, fmt: str) -> "_Unreadable":
+        return cls(f"{fmt} header cut short")
+
+    @classmethod
+    def too_long(cls, fmt: str) -> "_Unreadable":
+        return cls(f"{fmt} header too long")
+
+    @classmethod
+    def not_a_literal(cls) -> "_Unreadable":
+        return cls("npy header is not a literal")
+
+    @classmethod
+    def not_json(cls) -> "_Unreadable":
+        return cls("safetensors header is not JSON")
+
+    @classmethod
+    def not_an_object(cls) -> "_Unreadable":
+        return cls("safetensors header is not an object")
+
+    @classmethod
+    def no_shape(cls) -> "_Unreadable":
+        return cls("no shape")
+
 
 def contents(path: Path, format_name: str) -> str | None:
     """The arrays in the file at ``path``, as ``mean[3], inverse_covariance[3x3]``.
@@ -81,20 +109,20 @@ def _npz_arrays(path: Path) -> list[tuple[str, tuple[int, ...]]]:
 def _npy_shape(file: IO[bytes]) -> tuple[int, ...]:
     """The shape in the header of the npy file ``file`` is at the start of."""
     if file.read(len(_NPY_MAGIC)) != _NPY_MAGIC:
-        raise _Unreadable("not an npy file")
+        raise _Unreadable.not_npy()
     major = file.read(2)[:1]
     # Version 1 gives the header's length in two bytes, later versions in four.
     size = 2 if major == b"\x01" else 4
     length_bytes = file.read(size)
     if len(length_bytes) != size:
-        raise _Unreadable("npy header cut short")
+        raise _Unreadable.cut_short("npy")
     (length,) = struct.unpack("<H" if size == 2 else "<I", length_bytes)
     if length > _NPY_HEADER_LIMIT:
-        raise _Unreadable("npy header too long")
+        raise _Unreadable.too_long("npy")
     try:
         header: Any = ast.literal_eval(file.read(length).decode("latin-1"))
     except (ValueError, SyntaxError, MemoryError, RecursionError) as exc:
-        raise _Unreadable("npy header is not a literal") from exc
+        raise _Unreadable.not_a_literal() from exc
     shape = header.get("shape") if isinstance(header, dict) else None
     return _checked_shape(shape)
 
@@ -103,16 +131,16 @@ def _safetensors_arrays(path: Path) -> list[tuple[str, tuple[int, ...]]]:
     with path.open("rb") as file:
         length_bytes = file.read(8)
         if len(length_bytes) != 8:
-            raise _Unreadable("safetensors header cut short")
+            raise _Unreadable.cut_short("safetensors")
         (length,) = struct.unpack("<Q", length_bytes)
         if length > _SAFETENSORS_HEADER_LIMIT:
-            raise _Unreadable("safetensors header too long")
+            raise _Unreadable.too_long("safetensors")
         try:
             header: Any = json.loads(file.read(length))
         except ValueError as exc:
-            raise _Unreadable("safetensors header is not JSON") from exc
+            raise _Unreadable.not_json() from exc
     if not isinstance(header, dict):
-        raise _Unreadable("safetensors header is not an object")
+        raise _Unreadable.not_an_object()
     return [
         (name, _checked_shape(entry.get("shape") if isinstance(entry, dict) else None))
         for name, entry in header.items()
@@ -124,7 +152,7 @@ def _checked_shape(shape: Any) -> tuple[int, ...]:
     if not isinstance(shape, (tuple, list)) or not all(
         isinstance(dim, int) and dim >= 0 for dim in shape
     ):
-        raise _Unreadable("no shape")
+        raise _Unreadable.no_shape()
     return tuple(shape)
 
 

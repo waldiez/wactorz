@@ -65,13 +65,29 @@ def _store(args: argparse.Namespace) -> ArtifactStore:
     return ArtifactStore.in_state_dir(resolve_state_dir(args.state_dir))
 
 
+class CliError(ArtifactError):
+    """What the command was asked that it will not do, said to whoever ran it."""
+
+    @classmethod
+    def not_key_value(cls, pair: str) -> "CliError":
+        return cls(f"{pair!r} is not KEY=VALUE")
+
+    @classmethod
+    def code_refused(cls, exc: ArtifactError) -> "CliError":
+        return cls(f"{exc}. Add --allow-code to store it anyway.")
+
+    @classmethod
+    def mismatched(cls, problems: int, checked: int) -> "CliError":
+        return cls(f"{problems} of {checked} artifact(s) do not match")
+
+
 def _metadata(pairs: list[str]) -> dict[str, Any]:
     """``KEY=VALUE`` pairs as metadata, each value read as JSON where it is JSON."""
     metadata: dict[str, Any] = {"source": "cli"}
     for pair in pairs:
         key, sep, value = pair.partition("=")
         if not sep or not key:
-            raise ArtifactError(f"{pair!r} is not KEY=VALUE")
+            raise CliError.not_key_value(pair)
         try:
             metadata[key] = json.loads(value)
         except ValueError:
@@ -119,7 +135,7 @@ def _add(args: argparse.Namespace) -> None:
             allow_code=args.allow_code,
         )
     except CodeRefusedError as exc:
-        raise ArtifactError(f"{exc}. Add --allow-code to store it anyway.") from exc
+        raise CliError.code_refused(exc) from exc
     logger.info("Stored %s (%s, %s)", artifact.pinned, artifact.format, _size(artifact.size))
     logger.info("in %s", store.root.resolve())
     if new_state_dir:
@@ -198,7 +214,7 @@ def _verify(args: argparse.Namespace) -> None:
     for problem in problems:
         logger.error("%s", problem)
     if problems:
-        raise ArtifactError(f"{len(problems)} of {len(checked)} artifact(s) do not match")
+        raise CliError.mismatched(len(problems), len(checked))
     logger.info("%s artifact(s) match what was stored.", len(checked))
 
 

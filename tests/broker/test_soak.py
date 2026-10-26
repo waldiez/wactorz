@@ -282,7 +282,7 @@ async def test_nothing_grows_while_agents_come_and_go(main: MainActor, node: Fas
         lag.stop()
         problems = _problems(samples)
         report = _report(samples, problems)
-        print("\n" + report)
+        print("\n" + report)  # noqa: T201  # the soak's report is what it is run for
         wanted = os.environ.get("WACTORZ_SOAK_REPORT", "").strip()
         if wanted:
             Path(wanted).write_text(

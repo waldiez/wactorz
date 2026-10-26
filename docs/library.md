@@ -433,9 +433,10 @@ rules=[{"triggers": ["anomalies/imu"],
         "cooldown_seconds": 30}]
 ```
 
-Actions are `publish`, `task` (sent to an agent by name), `webhook` and
+Actions are `publish`, `task` (sent to an agent by name), `webhook`,
 `ask_operator` (a question to the person, with options, whose pick is published
-when it comes; see *Asking and waiting* in the interfaces guide).
+when it comes; see *Asking and waiting* in the interfaces guide) and `label`
+(a record that a source was doing something from the trigger's time on).
 Conditions take `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`,
 `exists`, `absent`, with dotted fields such as `reading.ax`; an action's
 payload may name trigger fields in braces and carries the trigger under
@@ -557,6 +558,12 @@ they arrive, and yields the whole answer once when there is nothing to stream;
 (`/help`), so a surface can say "unknown command" for the rest instead of
 handing it over.
 
+An orchestrator may also have a `command_forms()` method, returning a list of
+`wactorz.orchestration.Form(usage, summary)`: each way to type one of its
+commands, as `Form("/report <day>", "the readings for one day")`. The
+dashboard's chat box offers them as a person types `/`. Without it the
+dashboard offers each command by its name alone.
+
 **The channel.** Every call says where the message came from: `"dashboard"`,
 `"cli"` and `"rest"` are the operator's own surfaces; `"social"` is Discord,
 Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,
@@ -667,7 +674,8 @@ What this guide uses is the surface you can rely on:
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
 | `notify_user(text, options=[...], channel=..., user=...)` and `agents/<id>/answer` | a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see *Messages from an agent* in the interfaces guide) |
-| `ask_operator(text, options=[...], channel=..., user=..., timeout=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart |
+| `ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart, and with `label=` its answer becomes a label |
+| `label(source, value, start=..., end=...)` | a label written as the agent's own, on main (see *Answers that become labels* in the interfaces guide) |
 | `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
 | `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.model_config` and `record_reply` | LangChain and AG2 beside the system |

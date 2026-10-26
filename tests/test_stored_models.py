@@ -133,7 +133,7 @@ class TestTheCommand:
         assert found is None or found[0].handler is not info.show_artifacts
 
     def test_it_is_in_the_help(self) -> None:
-        assert any(line.strip().startswith("/artifacts ") for line in info.HELP_LINES)
+        assert any(line.strip().startswith("/artifacts ") for line in info.help_lines(registry))
 
 
 # ── Main's prompt ─────────────────────────────────────────────────────────────

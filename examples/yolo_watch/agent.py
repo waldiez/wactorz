@@ -43,6 +43,13 @@ def load_model(path: str) -> Any:
     return YOLO(path)
 
 
+class NotAnImageError(ValueError):
+    """Bytes OpenCV could not decode as an image."""
+
+    def __init__(self) -> None:
+        super().__init__("not an image the decoder recognises")
+
+
 def decode_image(raw: bytes) -> Any:
     """A JPEG or PNG as the array the model takes."""
     # Optional dependency: `pip install 'wactorz[vision]'`. Imported here for
@@ -52,7 +59,7 @@ def decode_image(raw: bytes) -> Any:
 
     image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
-        raise ValueError("not an image the decoder recognises")
+        raise NotAnImageError()
     return image
 
 

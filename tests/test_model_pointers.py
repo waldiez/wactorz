@@ -28,6 +28,7 @@ from wactorz.agents.main.hosts import ArtifactHost
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import (
     INDEX_FORMAT,
+    ArtifactConflictError,
     ArtifactError,
     ArtifactNotFoundError,
     ArtifactStore,
@@ -205,6 +206,49 @@ class TestMoving:
             imu.clear("active", name)
         with pytest.raises(ArtifactError, match="not a usable name"):
             imu.promote(name, by="test")
+        with pytest.raises(ArtifactError, match="not a usable name"):
+            imu.rollback(name, by="test")
+
+    def test_rolling_back_returns_active_to_the_version_it_left(self, imu: ArtifactStore) -> None:
+        imu.move("active", "imu:1", by="test")
+        imu.move("active", "imu:3", by="test")
+
+        back = imu.rollback("imu", by="dashboard", reason="worse")
+
+        assert (back.version, back.previous, back.by, back.reason) == (1, 3, "dashboard", "worse")
+        assert imu.resolve("imu").version == 1
+
+    def test_rolling_back_twice_returns_to_where_it_started(self, imu: ArtifactStore) -> None:
+        """One step back is all that is kept, so a second step undoes the first."""
+        imu.move("active", "imu:1", by="test")
+        imu.move("active", "imu:3", by="test")
+        imu.rollback("imu", by="test")
+
+        assert imu.rollback("imu", by="test").version == 3
+
+    def test_rolling_back_onto_the_shadow_promotes_it(self, imu: ArtifactStore) -> None:
+        imu.move("active", "imu:1", by="test")
+        imu.move("active", "imu:3", by="test")
+        imu.move("shadow", "imu:1", by="test")
+
+        assert imu.rollback("imu", by="test").version == 1
+        assert imu.pointer("imu", "shadow") is None
+
+    def test_rolling_back_with_nowhere_to_go_is_refused(self, imu: ArtifactStore) -> None:
+        with pytest.raises(ArtifactConflictError, match="imu has no active version"):
+            imu.rollback("imu", by="test")
+        imu.move("active", "imu:2", by="test")
+        with pytest.raises(ArtifactConflictError, match="no earlier one"):
+            imu.rollback("imu", by="test")
+
+    def test_rolling_back_to_a_version_since_removed_is_refused(self, imu: ArtifactStore) -> None:
+        imu.move("active", "imu:1", by="test")
+        imu.move("active", "imu:3", by="test")
+        imu.remove("imu:1")
+
+        with pytest.raises(ArtifactNotFoundError):
+            imu.rollback("imu", by="test")
+        assert imu.resolve("imu").version == 3, "a refused step back leaves active where it was"
 
 
 # ── Removing ──────────────────────────────────────────────────────────────────

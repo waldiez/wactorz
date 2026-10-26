@@ -50,7 +50,7 @@ def write_pickle(path: Path, obj: Any) -> None:
             # rename applied over contents that never landed.
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -70,7 +70,7 @@ def write_bytes(path: Path, data: bytes) -> None:
             # filesystem has been handed.
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -98,7 +98,7 @@ def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
             # boards that lose power for a living.
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -122,7 +122,7 @@ def write_private_json(path: Path, data: dict[str, Any]) -> None:
         fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
-        os.replace(tmp, path)
+        tmp.replace(path)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -150,7 +150,7 @@ def quarantine_unreadable(path: Path) -> Path | None:
         while target.exists():
             target = path.with_name(f"{path.name}.corrupt.{int(time.time())}.{suffix}")
             suffix += 1
-        os.replace(path, target)
+        path.replace(target)
     except Exception:
         return None
     else:

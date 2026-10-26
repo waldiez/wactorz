@@ -152,6 +152,15 @@ _PROVIDERS: dict[str, Callable[[str | None], LLMProvider]] = {
 }
 
 
+class UnknownProviderError(ValueError):
+    """An LLM provider name this release has no provider for."""
+
+    def __init__(self, provider_name: str) -> None:
+        super().__init__(
+            f"Unknown LLM provider: {provider_name!r} (known: {', '.join(sorted(_PROVIDERS))})"
+        )
+
+
 def create_provider(provider_name: str, model: str | None = None) -> LLMProvider | None:
     """Construct an LLM provider by name, using the same env-var fallbacks as
     the global provider in ``build_system``. Returns None for ``none``/empty.
@@ -162,9 +171,7 @@ def create_provider(provider_name: str, model: str | None = None) -> LLMProvider
         return None
     build = _PROVIDERS.get(name)
     if build is None:
-        raise ValueError(
-            f"Unknown LLM provider: {provider_name!r} (known: {', '.join(sorted(_PROVIDERS))})"
-        )
+        raise UnknownProviderError(provider_name)
     return build(model)
 
 

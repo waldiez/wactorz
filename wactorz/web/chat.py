@@ -21,6 +21,8 @@ from aiomqtt import MqttError
 
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
+from ..agents.main.commands import registry as main_command_registry
+from ..agents.main.commands.dispatch import Form
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
@@ -232,6 +234,48 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 #: The slash commands only main answers, whichever orchestrator is installed.
 MAIN_COMMANDS = frozenset({"/deploy", "/migrate"})
 
+#: The commands this server answers itself, before any orchestrator: the plan
+#: cache is main's, and the two listings stand in where nothing else answers.
+SERVER_FORMS = {
+    "/agents": Form("/agents", "list the agents running here"),
+    "/nodes": Form("/nodes", "this process is the one node"),
+}
+
+
+def answered_past_the_server(word: str) -> bool:
+    """Whether ``word``, a command's first word, is answered by more than this server.
+
+    By the orchestrator that claims it, or, with none installed, by main. The
+    server's own listings answer only where neither would.
+    """
+    orchestrator = runtime.orchestrator
+    if orchestrator is not None:
+        return word in orchestrator.commands()
+    return find_main_actor(runtime.registry) is not None
+
+
+def server_forms() -> list[Form]:
+    """The commands typed on the dashboard that this server answers, or hands to main itself.
+
+    What `handle_slash` takes before the orchestrator sees anything, so a list
+    of what the chat answers is complete with an orchestrator that does not
+    claim them.
+    """
+    forms: list[Form] = []
+    if not answered_past_the_server("/agents"):
+        forms.append(SERVER_FORMS["/agents"])
+    if find_main_actor(runtime.registry) is None:
+        forms.append(SERVER_FORMS["/nodes"])
+        return forms
+    handed_to_main = MAIN_COMMANDS | {"/clear-plans"}
+    forms += [
+        form
+        for described in main_command_registry
+        for form in described.forms
+        if command_word(form.usage) in handed_to_main
+    ]
+    return forms
+
 
 async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) -> bool:
     """Dispatch a slash command. Returns True if recognised.
@@ -252,7 +296,11 @@ async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) 
         await reply_fn("[System: Plan cache cleared.]")
         return True
 
-    if cmd == "/agents":
+    if cmd == "/agents" and not answered_past_the_server(cmd):
+        # Main answers every /agents command: the list with its descriptions,
+        # a capability filter, and the verbs (stop, delete, restart), and an
+        # orchestrator that claims /agents answers it its own way. Where
+        # neither would, the running agents are listed here.
         if runtime.registry is None:
             await reply_fn("[agents] Registry not available.")
             return True

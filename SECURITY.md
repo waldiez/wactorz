@@ -13,7 +13,7 @@ Include the version, how the deployment is exposed (loopback, LAN, Home Assistan
 | 0.7.x   | Yes       |
 | < 0.7   | No        |
 
-Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below are those of 0.7.1.
+Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below are those of 0.7.2.
 
 ## The surfaces
 
@@ -28,13 +28,6 @@ A deployment can listen on three: the dashboard and its WebSocket (`WS_PORT`, 88
 - **The Home Assistant add-on trusts ingress and nothing else.** A request must both carry the Supervisor's ingress marker and arrive from its address range; either alone is not enough, and the bypass does not exist unless the add-on enables it.
 - **The add-on does not run as root.** Its start script drops to an unprivileged user before Wactorz starts, with no way back, and Home Assistant's configuration folder is mapped read-only. What agent code can change is the add-on's own data.
 - **A node cannot hand the server code to load.** An agent moved back from a node brings its data, arrays and plain bytes, each checked against the hash its hand-back names, but never a value that runs code when it loads, such as a torch module or a joblib-saved model.
-- **Failed sign-in attempts are throttled.**
-- **Secrets stay server-side.** The Home Assistant token, LLM and broker credentials are not sent to the browser.
-
-## Since 0.7.1, on `dev`
-
-These are on the development branch and in no release yet. With the next one they join the list above.
-
 - **The assistant cannot run a command on a node.** Main's model reaches a node only by named operations that read — uptime, disk, memory, temperature, the OS, network interfaces, Python, installed packages and the node's log — each a fixed command. A command of your own is typed as `/nodes run <node> <command>`, which the model cannot send, and only main may send the installer to a node at all.
 - **A package not on the list is installed only when you say yes.** An agent's packages are installed at once only if they are on the list: what the catalogue and the examples use, what the installer knows by import name, `WACTORZ_PIP_ALLOW`, and what you have allowed. For anything else the dashboard asks, and the agent is not started or sent unless you answer Install there or type `/packages allow`. The answer is taken from the dashboard through the server itself, never from the broker, where any agent could publish one. `WACTORZ_PIP_INDEX_URL` sends every install to one index.
 - **A node cannot get its code run elsewhere through a migration.** An agent moved off a node is started from main's own copy of its program, on main or on the next node; a different program or bundle the node hands back is discarded, and you are told.
@@ -46,6 +39,8 @@ These are on the development branch and in no release yet. With the next one the
 - **Main takes a node's word only from that node.** Each node signs what it publishes with its own key, and main checks it against where its own records place the agent: a task's reply, an agent's manifest and the data samples the planner reads count only from that agent's node, and a node's heartbeat only from that node. Code on one node, the sandbox included, cannot answer for another node's agent or plant a description of one in what the planner reads. Main reads its own agents' manifests from the agents, never from the broker. With `WACTORZ_NODE_SIGNING=enforce`, the default, a node deployed before this stays up but is sent no tasks until it is deployed again.
 - **One node cannot spend main's model budget alone.** Main answers each node's model calls and history reads up to a rate per node (`WACTORZ_BRIDGE_CALLS_PER_MINUTE`, `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE`) and with a few at a time per node, refusing the rest at once, so code in a loop on one node, the sandbox included, neither runs up main's bill unchecked nor holds up another node's answers. A cost cap over all of it is still `LLM_COST_LIMIT_USD`, off by default.
 - **The document converter keeps to your document folders.** It reads and writes only inside the folders named in `WACTORZ_DOCUMENT_DIRS` (by default your Documents folder) and files attached in the chat, never the state directory, and runs no other program.
+- **Failed sign-in attempts are throttled.**
+- **Secrets stay server-side.** The Home Assistant token, LLM and broker credentials are not sent to the browser.
 
 ## What it does not protect against
 

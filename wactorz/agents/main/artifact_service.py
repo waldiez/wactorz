@@ -88,6 +88,16 @@ def pointer_message(name: str, which: str, now: Pointer | None, was: Pointer | N
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
+class TooLargeForNodeError(ArtifactError):
+    """Artifacts over the size a node accepts."""
+
+    def __init__(self, too_large: list[str]) -> None:
+        super().__init__(
+            f"{', '.join(too_large)} is over the {ARTIFACT_MAX_BYTES}-byte limit for an "
+            "artifact sent to a node (WACTORZ_ARTIFACT_MAX_BYTES)"
+        )
+
+
 class ArtifactService:
     """Pins the artifacts a spawn names, and sends them to the nodes that ask."""
 
@@ -124,10 +134,7 @@ class ArtifactService:
             if ARTIFACT_MAX_BYTES and entry["size"] > ARTIFACT_MAX_BYTES
         ]
         if too_large:
-            raise ArtifactError(
-                f"{', '.join(too_large)} is over the {ARTIFACT_MAX_BYTES}-byte limit for an "
-                "artifact sent to a node (WACTORZ_ARTIFACT_MAX_BYTES)"
-            )
+            raise TooLargeForNodeError(too_large)
         self.offered.setdefault(node, set()).update(entry["sha256"] for entry in pinned.values())
         return pinned
 

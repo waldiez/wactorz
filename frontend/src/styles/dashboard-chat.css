@@ -164,6 +164,52 @@
   border-color: #3b82f6;
   color: #fff;
 }
+/* The `/` command list: one row per way to type a command, above the box. */
+.af-command-list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  background: rgba(9, 18, 40, 0.97);
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  border-radius: 10px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  z-index: 200;
+}
+.af-command-list[hidden] {
+  display: none;
+}
+.af-command-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.af-command-option:hover,
+.af-command-option.active {
+  background: rgba(37, 99, 235, 0.28);
+}
+.af-command-usage {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  color: #fff;
+  white-space: nowrap;
+}
+.af-command-summary {
+  font-size: 12px;
+  color: var(--af-text-dim);
+}
+.af-command-option.active .af-command-summary {
+  color: rgba(255, 255, 255, 0.85);
+}
 .af-send-btn {
   width: 32px;
   height: 32px;

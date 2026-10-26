@@ -157,7 +157,10 @@ describe("buildResetPopover", () => {
     });
 
     it("requires two clicks to fire, then POSTs the reset and toasts", async () => {
-        globalThis.fetch = vi.fn(async () => ({ ok: true })) as unknown as typeof fetch;
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ nodes: {} }),
+        })) as unknown as typeof fetch;
         const pop = buildResetPopover();
         const btn = pop.querySelector<HTMLButtonElement>("button")!; // first = chat
         btn.click(); // arm
@@ -165,7 +168,9 @@ describe("buildResetPopover", () => {
         expect(fetch).not.toHaveBeenCalled();
         btn.click(); // fire
         await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/reset", expect.anything()));
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Reset" }));
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Reset" })),
+        );
     });
 
     it("arming one button disarms the others", () => {

@@ -18,8 +18,15 @@ from aiohttp.web import Response
 
 from ..agents.llm import cost as llm_cost
 from ..agents.lookup import find_main_actor
+from ..core.agent_reset import (
+    LIVE_SCOPES,
+    forget_conversation,
+    forget_legacy_state,
+    reset_actor_cost,
+    reset_live,
+)
 from ..core.node_signing import signed_publish_kwargs
-from . import cost, events, lifecycle, runtime, ws
+from . import cost, events, lifecycle, node_reset, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -54,35 +61,6 @@ HA_SYSTEM_AGENTS = frozenset(
         "home-assistant-state-bridge",
     }
 )
-
-
-#: The legacy-pickle keys a *chat* reset owns. Mirrors `reset._CHAT_KV_KEYS`,
-#: which is what the same reset deletes from the database.
-CHAT_STATE_KEYS = ("conversation_history", "history_summary")
-
-
-def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None:
-    """Drop the in-memory state a wipe cannot otherwise reach.
-
-    An actor without a persistence store holds its state in
-    `_persistent_state` and writes all of it back on every `persist`, so a key
-    a reset removed from disk returns with the next write unless it goes from
-    memory too. An actor with a store holds nothing there, and this leaves it
-    unchanged.
-
-    `keys=None` clears the lot, for a factory reset: it has already deleted the
-    pickle from disk, so anything left in memory is the two halves disagreeing.
-    A chat reset passes `CHAT_STATE_KEYS` instead, because it clears the
-    conversation and nothing else.
-    """
-    state = getattr(actor, "_persistent_state", None)
-    if not isinstance(state, dict):
-        return
-    if keys is None:
-        state.clear()
-        return
-    for key in keys:
-        state.pop(key, None)
 
 
 async def forget_actor(actor: Any) -> None:
@@ -155,6 +133,25 @@ async def _delete_on_nodes(on: dict[str, set[str]]) -> None:
                 )
             )
     await asyncio.gather(*sends, return_exceptions=True)
+
+
+def _restartable(agent: str | None) -> tuple[Any, list[Any]]:
+    """The supervisor, and the running agents a state reset starts again: `agent`, or all, less the system's own.
+
+    Only those the supervisor holds, since it is what brings them back; a
+    protected one is the system's -- main, the monitor, the installer, the
+    catalogue -- and keeps running with its copies cleared instead.
+    """
+    supervisor = getattr(runtime.registry, "_supervisor_ref", None) if runtime.registry else None
+    if supervisor is None or runtime.registry is None:
+        return None, []
+    return supervisor, [
+        actor
+        for actor in runtime.registry.all_actors()
+        if (agent is None or actor.name == agent)
+        and not getattr(actor, "protected", False)
+        and actor.name in supervisor._specs
+    ]
 
 
 async def reset_handler(request: web.Request) -> Response:
@@ -271,11 +268,8 @@ async def reset_handler(request: web.Request) -> Response:
                 actor.metrics.errors = 0
                 actor.metrics.tasks_completed = 0
                 actor.metrics.tasks_failed = 0
-                cost.reset_actor_cost(actor)
-                if hasattr(actor, "_conversation_history"):
-                    actor._conversation_history = []  # pyright: ignore[reportAttributeAccessIssue]
-                if hasattr(actor, "_history_summary"):
-                    actor._history_summary = ""  # pyright: ignore[reportAttributeAccessIssue]
+                reset_actor_cost(actor)
+                forget_conversation(actor)
                 if hasattr(actor, "_user_facts"):
                     actor._user_facts = {}  # pyright: ignore[reportAttributeAccessIssue]
                 if hasattr(actor, "_pipeline_rules"):
@@ -287,7 +281,9 @@ async def reset_handler(request: web.Request) -> Response:
                 # NOTE: the kv-backed spawn registry is cleared by
                 # _purge_spawn_reconcile() above — assigning the _spawned_agents
                 # attribute was a no-op (the registry is read via recall()).
-            _reset.reset_all(agent)
+            # Everything, whatever agent was named: the agents were all stopped
+            # above, and records kept for some would be a half-wiped install.
+            _reset.reset_all(None)
             # Clear the in-memory lifetime cost ledger + global accumulator too, or
             # the headline total re-pins to the old high-water once _hard_resetting
             # clears and heartbeats resume (mirrors /api/cost/reset).
@@ -322,56 +318,41 @@ async def reset_handler(request: web.Request) -> Response:
                 "state": events.snapshot(),
             }
         )
-        return web.json_response({"status": "ok", "scope": "all", "agent": None})
+        return web.json_response({"status": "ok", "scope": "all", "agent": None, "nodes": {}})
     if scope == "chat":
         _reset.reset_chat(agent)
-        # Also clear the LIVE in-memory conversation on running actors. reset_chat
-        # only clears the persisted chat_log/kv, so without this the agent still
-        # "remembers" the conversation (and re-persists it on the next turn) until
-        # a restart — the same live-vs-disk gap the metrics scope guards against.
-        live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
-        for actor in live_actors:
-            if agent and actor.name != agent:
-                continue
-            if hasattr(actor, "_conversation_history"):
-                actor._conversation_history = []  # pyright: ignore[reportAttributeAccessIssue]
-            if hasattr(actor, "_history_summary"):
-                actor._history_summary = ""  # pyright: ignore[reportAttributeAccessIssue]
-            # Only the conversation keys: a chat reset is not a factory reset,
-            # and the rest of the legacy dict is not its to drop.
-            forget_legacy_state(actor, CHAT_STATE_KEYS)
     elif scope == "state":
+        # An agent forgets its state only once it starts again: what it read at
+        # start is in memory, and its next persist writes it back. So each is
+        # restarted with the file gone -- except the system's own agents, main
+        # among them, which this request runs through.
+        supervisor, restarting = _restartable(agent)
+        for actor in restarting:
+            await supervisor.restart_afresh(
+                actor.name, lambda name=actor.name: _reset.reset_agent_state(name)
+            )
         if agent:
             _reset.reset_agent_state(agent)
         else:
             _reset._reset_all_pickles()
-        # The files are gone; the copies loaded from them are not.
-        live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
-        for actor in live_actors:
-            if agent and actor.name != agent:
-                continue
-            forget_legacy_state(actor)
     elif scope == "metrics":
         _reset.reset_metrics(agent)
-        # Also zero the LIVE in-memory counters on running actors. reset_metrics
-        # only clears the persisted kv snapshot, so without this the next
-        # heartbeat re-reports the old totals and the dashboard looks unchanged
-        # until a restart. Scoped to metrics/cost fields only (not history).
         live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
-        for actor in live_actors:
-            if agent and actor.name != agent:
-                continue
-            actor.metrics.messages_processed = 0
-            cost.reset_actor_cost(actor)
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory cost.lifetime_cost
         # high-water survives in THIS process and pins the headline to its old
         # value — so the total only "drops" by the live component and never
         # zeroes. Clear it here, mirroring /api/cost/reset.
         if agent:
-            aid = next((getattr(a, "actor_id", None) for a in live_actors if a.name == agent), None)
+            # The dashboard's agents as well as this process's: an agent on a
+            # node banks its cost here too, under an id no local actor has.
+            aid = next(
+                (getattr(a, "actor_id", None) for a in live_actors if a.name == agent), None
+            ) or next(
+                (k for k, v in runtime.state["agents"].items() if v.get("name") == agent), None
+            )
             if aid:
-                cost.lifetime_cost.pop(aid, None)
+                cost.forget_lifetime_cost(aid)
         else:
             cost.lifetime_cost.clear()
             try:
@@ -390,6 +371,20 @@ async def reset_handler(request: web.Request) -> Response:
         # The activity feed mirrors the log files we just truncated, so drop the
         # in-memory entries too — otherwise the UI keeps showing stale lines.
         runtime.state["log_feed"].clear()
+
+    nodes: dict[str, str] = {}
+    if scope in LIVE_SCOPES:
+        # The disk is cleared. The agents running in this process hold copies of
+        # their own and write them back on their next turn, persist or heartbeat
+        # unless those go too, and an agent on a node keeps its copy there.
+        for actor in list(runtime.registry.all_actors()) if runtime.registry is not None else []:
+            if agent is None or actor.name == agent:
+                reset_live(actor, scope)
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is not None:
+            nodes = await node_reset.reset_on_nodes(
+                main_actor, scope, agent, _agents_on_nodes(main_actor)
+            )
 
     # Clear in-memory dashboard cost/message state for the affected agents.
     # Scoped to "metrics" only — clearing chat history must not zero cost/
@@ -412,4 +407,4 @@ async def reset_handler(request: web.Request) -> Response:
     await ws.broadcast(
         {"type": "reset", "scope": scope, "agent": agent, "state": events.snapshot()}
     )
-    return web.json_response({"status": "ok", "scope": scope, "agent": agent})
+    return web.json_response({"status": "ok", "scope": scope, "agent": agent, "nodes": nodes})

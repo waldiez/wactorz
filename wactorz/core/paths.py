@@ -60,6 +60,18 @@ def ensure_state_dir(explicit: str | None = None) -> str:
     return base
 
 
+class UnsafeAgentNameError(ValueError):
+    """An agent name that cannot be a directory under the state directory."""
+
+    @classmethod
+    def unsafe(cls, agent_name: str) -> "UnsafeAgentNameError":
+        return cls(f"unsafe agent name for a state path: {agent_name!r}")
+
+    @classmethod
+    def escapes(cls, agent_name: str) -> "UnsafeAgentNameError":
+        return cls(f"agent name escapes the state directory: {agent_name!r}")
+
+
 def agent_state_dir(base: str | Path, agent_name: str) -> Path:
     """The directory `agent_name` may keep state in, inside `base`.
 
@@ -80,10 +92,10 @@ def agent_state_dir(base: str | Path, agent_name: str) -> Path:
     """
     safe = agent_name.replace("/", "_").replace("\\", "_").strip()
     if safe in {"", ".", ".."} or safe.startswith(".."):
-        raise ValueError(f"unsafe agent name for a state path: {agent_name!r}")
+        raise UnsafeAgentNameError.unsafe(agent_name)
 
     root = Path(base).resolve()
     candidate = (root / safe).resolve()
     if candidate != root and root not in candidate.parents:
-        raise ValueError(f"agent name escapes the state directory: {agent_name!r}")
+        raise UnsafeAgentNameError.escapes(agent_name)
     return candidate

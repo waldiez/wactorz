@@ -7,6 +7,12 @@ is written into the agent's persisted state under :data:`QUESTIONS_KEY`, as a
 plain dict a node can store as JSON, and the answer is matched against that
 record when it arrives, whether or not anything is still waiting for it.
 
+The book is also published, retained, on ``agents/<id>/questions`` -- when the
+agent starts and whenever a question is asked or answered -- so whoever shows a
+person what is waiting for them reads one place, for agents here and on nodes
+alike, and a question asked while that reader was down is still there when it
+comes back.
+
 This module is the record and the few operations on the book of them. The
 waiting, the sending and the listening are the actor's.
 """
@@ -25,15 +31,39 @@ QUESTIONS_KEY = "_questions"
 #: read what was decided a while ago without the book growing for ever.
 ANSWERED_KEPT = 100
 
+#: The leaf of the retained topic an agent publishes its book on.
+QUESTIONS_LEAF = "questions"
+
+
+def questions_topic(agent_id: str) -> str:
+    """The retained topic ``agent_id`` publishes its question book on."""
+    return f"agents/{agent_id}/{QUESTIONS_LEAF}"
+
+
+def book_frame(agent: str, questions: dict[str, Question]) -> dict[str, Any]:
+    """What the questions topic carries: who asks, and every question in the book."""
+    return {"agent": agent, "questions": [q.to_dict() for q in questions.values()]}
+
+
+def questions_in_frame(frame: Any) -> list[Question]:
+    """The questions a questions-topic frame holds; records that are not one are left out."""
+    records = frame.get("questions") if isinstance(frame, dict) else None
+    if not isinstance(records, list):
+        return []
+    return [q for q in (Question.from_dict(r) for r in records) if q is not None]
+
 
 @dataclass
 class Question:
     """One question put to a person, and its answer once there is one.
 
     ``id`` is the message id the channels know it by. ``answer`` is the option
-    picked, None until then; ``answer_channel`` says where it was picked.
-    ``fallen_back`` is set once a question sent on a chat channel was shown
-    again on the dashboard for want of an answer.
+    picked, None until then; ``answer_channel`` says where it was picked, and
+    ``answer_note`` what the person added to it, if anything. ``fallen_back``
+    is set once a question sent on a chat channel was shown again on the
+    dashboard for want of an answer. ``label`` is how the answer becomes a
+    label, as a :class:`wactorz.core.labels.LabelSpec` dict, or None for a
+    question whose answer is not one.
     """
 
     id: str
@@ -47,6 +77,8 @@ class Question:
     answer_channel: str = ""
     answered_at: float = 0.0
     fallen_back: bool = False
+    answer_note: str = ""
+    label: dict[str, Any] | None = None
 
     @property
     def open(self) -> bool:
@@ -78,8 +110,10 @@ class Question:
                     None if record.get("answer_index") is None else int(record["answer_index"])
                 ),
                 answer_channel=str(record.get("answer_channel", "")),
+                answer_note=str(record.get("answer_note") or ""),
                 answered_at=float(record.get("answered_at") or 0.0),
                 fallen_back=bool(record.get("fallen_back", False)),
+                label=dict(record["label"]) if isinstance(record.get("label"), dict) else None,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -109,8 +143,8 @@ def book_of(questions: Sequence[Question] | dict[str, Question]) -> dict[str, di
     return {q.id: q.to_dict() for q in items if q.id not in dropped}
 
 
-def answered(question: Question, option: str, index: int, channel: str) -> Question:
-    """``question`` with ``option`` recorded as its answer, now."""
+def answered(question: Question, option: str, index: int, channel: str, note: str = "") -> Question:
+    """``question`` with ``option`` recorded as its answer, now, with the person's ``note``."""
     return Question(
         **{
             **asdict(question),
@@ -118,6 +152,7 @@ def answered(question: Question, option: str, index: int, channel: str) -> Quest
             "answer": option,
             "answer_index": index,
             "answer_channel": channel,
+            "answer_note": note,
             "answered_at": time.time(),
         }
     )

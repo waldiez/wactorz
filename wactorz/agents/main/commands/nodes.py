@@ -7,6 +7,7 @@ opposite afterwards, which is why each says what it is about to affect.
 
 from ....core.node_operations import COMMAND_TIMEOUT_S
 from .dispatch import CommandContext, command
+from .groups import NODES
 
 
 @command(
@@ -14,6 +15,13 @@ from .dispatch import CommandContext, command
     exact=("/deploy",),
     prefixes=("/deploy ",),
     summary="deploy a remote Wactorz node",
+    group=NODES,
+    forms=(
+        (
+            "/deploy <node>",
+            "deploy a node from DEPLOY_TARGETS; bare, list them (SSH credentials come from the environment, not chat)",
+        ),
+    ),
 )
 async def deploy_node(ctx: CommandContext, argument: str) -> str:
     """Deploy a remote Wactorz node."""
@@ -28,6 +36,8 @@ async def deploy_node(ctx: CommandContext, argument: str) -> str:
     "/nodes remove",
     prefixes=("/nodes remove ",),
     summary="stop all agents on a node and remove it",
+    group=NODES,
+    forms=(("/nodes remove <node>", "stop all agents on a node and remove it"),),
 )
 async def remove_node(ctx: CommandContext, argument: str) -> str:
     """Stop all agents on a node and remove it."""
@@ -57,6 +67,8 @@ async def remove_node(ctx: CommandContext, argument: str) -> str:
     "/nodes run",
     prefixes=("/nodes run ",),
     summary="run a shell command on a node over SSH, as typed",
+    group=NODES,
+    forms=(("/nodes run <node> <command>", "run a shell command on a node over SSH, as typed"),),
 )
 async def run_on_node(ctx: CommandContext, argument: str) -> str:
     """Run a shell command on a node, over SSH with its deploy target's credentials.
@@ -86,6 +98,8 @@ async def run_on_node(ctx: CommandContext, argument: str) -> str:
     "/nodes restart",
     prefixes=("/nodes restart ",),
     summary="restart the runner process on a node",
+    group=NODES,
+    forms=(("/nodes restart <node>", "restart the runner process on a node"),),
 )
 async def restart_node(ctx: CommandContext, argument: str) -> str:
     """Restart the runner process on a node."""
@@ -106,6 +120,8 @@ async def restart_node(ctx: CommandContext, argument: str) -> str:
     "/nodes shutdown",
     prefixes=("/nodes shutdown ",),
     summary="stop all agents and shut down a node",
+    group=NODES,
+    forms=(("/nodes shutdown <node>", "stop all agents and shut down a node"),),
 )
 async def shutdown_node(ctx: CommandContext, argument: str) -> str:
     """Stop all agents and shut down a node."""

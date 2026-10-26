@@ -14,6 +14,7 @@ from typing import Any
 from ....config import CONFIG
 from ..planning import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
+from .groups import MEMORY, NOTIFICATIONS, PIPELINES
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,12 @@ logger = logging.getLogger(__name__)
     exact=("/memory",),
     prefixes=("/memory ",),
     summary="show or clear stored user facts and summary",
+    group=MEMORY,
+    forms=(
+        ("/memory", "show stored user facts and conversation summary"),
+        ("/memory clear", "wipe all memory"),
+        ("/memory forget <key>", "remove one stored fact"),
+    ),
 )
 async def manage_memory(ctx: CommandContext, argument: str) -> str:
     """Show, clear, or forget one item of stored memory."""
@@ -96,6 +103,8 @@ def _show_memory(ctx: CommandContext) -> str:
     "/rules",
     exact=("/rules", "rules"),
     summary="list active pipeline rules",
+    group=PIPELINES,
+    forms=(("/rules", "list active pipeline rules"),),
 )
 async def show_rules(ctx: CommandContext, _argument: str) -> str:
     """List active pipeline rules."""
@@ -134,6 +143,8 @@ async def show_rules(ctx: CommandContext, _argument: str) -> str:
     "/rules delete",
     prefixes=("/rules delete ",),
     summary="stop agents and remove a rule",
+    group=PIPELINES,
+    forms=(("/rules delete <id>", "stop agents and remove a rule"),),
 )
 async def delete_rule(ctx: CommandContext, argument: str) -> str:
     """Stop agents and remove a rule."""
@@ -144,6 +155,8 @@ async def delete_rule(ctx: CommandContext, argument: str) -> str:
     "/clear-plans",
     exact=("/clear-plans",),
     summary="clear the plan cache",
+    group=PIPELINES,
+    forms=(("/clear-plans", "clear the plan cache"),),
 )
 async def clear_plans(ctx: CommandContext, _argument: str) -> str:
     """Clear the plan cache."""
@@ -160,6 +173,13 @@ async def clear_plans(ctx: CommandContext, _argument: str) -> str:
     exact=("/plans",),
     prefixes=("/plans ",),
     summary="list, inspect, approve or reject pipeline proposals",
+    group=PIPELINES,
+    forms=(
+        ("/plans", "list pending pipeline proposals (dry-run)"),
+        ("/plans show <id>", "inspect a proposal's full code"),
+        ("/plans approve <id>", "execute a proposed pipeline"),
+        ("/plans reject <id>", "discard a proposed pipeline"),
+    ),
 )
 async def manage_plans(ctx: CommandContext, argument: str) -> str:
     """List, inspect, approve or reject pipeline proposals."""
@@ -264,6 +284,14 @@ def _list_plans(ctx: CommandContext) -> str:
     exact=("/webhook",),
     prefixes=("/webhook ",),
     summary="list or store notification webhook URLs",
+    group=NOTIFICATIONS,
+    forms=(
+        ("/webhook", "list stored webhook URLs"),
+        (
+            "/webhook <service> <url>",
+            "store a webhook URL for a service, such as discord or telegram",
+        ),
+    ),
 )
 async def manage_webhooks(ctx: CommandContext, argument: str) -> str:
     """List or store notification webhook URLs."""

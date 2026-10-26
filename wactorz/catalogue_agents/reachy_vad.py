@@ -83,6 +83,25 @@ def _pcm16_bytes(frame: npt.NDArray[np.float32]) -> bytes:
     return (np.clip(frame, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
+class VADError(RuntimeError):
+    """Voice activity detection that cannot run here."""
+
+    def __init__(self) -> None:
+        super().__init__("webrtcvad is not installed; run: pip install webrtcvad-wheels")
+
+
+class VADInputError(ValueError):
+    """Audio settings WebRTC VAD does not take."""
+
+    @classmethod
+    def frame_ms(cls) -> "VADInputError":
+        return cls("VAD frame_ms must be 10, 20, or 30")
+
+    @classmethod
+    def samplerate(cls, samplerate: int) -> "VADInputError":
+        return cls(f"WebRTC VAD does not support {samplerate} Hz input")
+
+
 def capture_utterance(
     media: Any,
     cancel_event: Event | None = None,
@@ -100,15 +119,15 @@ def capture_utterance(
     try:
         import webrtcvad  # pyright: ignore[reportMissingImports]  # optional dependency
     except ImportError as exc:
-        raise RuntimeError("webrtcvad is not installed; run: pip install webrtcvad-wheels") from exc
+        raise VADError() from exc
 
     cfg = config or VADConfig()
     if cfg.frame_ms not in (10, 20, 30):
-        raise ValueError("VAD frame_ms must be 10, 20, or 30")
+        raise VADInputError.frame_ms()
     samplerate = int(media.get_input_audio_samplerate() or 16000)
     channels = max(1, int(media.get_input_channels() or 1))
     if samplerate not in (8000, 16000, 32000, 48000):
-        raise ValueError(f"WebRTC VAD does not support {samplerate} Hz input")
+        raise VADInputError.samplerate(samplerate)
 
     vad = webrtcvad.Vad(max(0, min(3, int(cfg.mode))))
     frame_samples = samplerate * cfg.frame_ms // 1000

@@ -398,6 +398,28 @@ async def _build_provider(args: argparse.Namespace, minimal: bool) -> "LLMProvid
     return provider
 
 
+class MainDidNotStartError(StartupError):
+    """Main failed on start; what it logged says why."""
+
+    def __init__(self) -> None:
+        super().__init__("the main actor did not start; see the log above for why")
+
+
+class InterfaceError(StartupError):
+    """A chat interface that cannot be run as asked."""
+
+    @classmethod
+    def no_token(cls, variable: str) -> "InterfaceError":
+        return cls(f"{variable} not set.")
+
+    @classmethod
+    def unknown(cls, interface: str) -> "InterfaceError":
+        return cls(
+            f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
+            f"telegram or {HEADLESS}"
+        )
+
+
 async def build_system(
     args: argparse.Namespace, on_system: "Callable[[ActorSystem], object] | None" = None
 ):
@@ -721,7 +743,7 @@ async def build_system(
 
     main_actor = find_main_actor(system.registry)
     if not main_actor and not minimal:
-        raise StartupError("the main actor did not start; see the log above for why")
+        raise MainDidNotStartError()
     orchestrator = install_orchestrator(
         system, main_actor, requested=getattr(args, "orchestrator", None)
     )
@@ -1024,7 +1046,7 @@ async def _run_interface(
     elif interface == "discord":
         discord_token = args.discord_token or CONFIG.discord_token
         if not discord_token:
-            raise StartupError("DISCORD_BOT_TOKEN not set.")
+            raise InterfaceError.no_token("DISCORD_BOT_TOKEN")
         iface = DiscordInterface(
             orchestrator,
             token=discord_token,
@@ -1047,7 +1069,7 @@ async def _run_interface(
     elif interface == "telegram":
         telegram_token = args.telegram_token or CONFIG.telegram_token
         if not telegram_token:
-            raise StartupError("TELEGRAM_BOT_TOKEN not set.")
+            raise InterfaceError.no_token("TELEGRAM_BOT_TOKEN")
         iface = TelegramInterface(
             orchestrator,
             token=telegram_token,
@@ -1057,10 +1079,7 @@ async def _run_interface(
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     else:
-        raise StartupError(
-            f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
-            f"telegram or {HEADLESS}"
-        )
+        raise InterfaceError.unknown(interface)
 
 
 async def _run(

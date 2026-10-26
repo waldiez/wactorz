@@ -260,6 +260,28 @@ describe("DashboardChat — resolveDefaultTarget", () => {
         expect(dc.chatTarget).toBe("main");
     });
 
+    it("shows the conversation it settles on when the chat opened before any agent arrived", () => {
+        // A fresh page lands on the chat it was left on, before the first
+        // agent has registered: the view is drawn for nobody, and the target
+        // the arriving agents give it must reach the header and thread too.
+        localStorage.setItem("wactorz-chat-target", "catalog");
+        const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => [] }));
+        globalThis.fetch = fetchSpy as unknown as typeof fetch;
+        const host = makeHost([]);
+        const dc = mount(host);
+        dc.afterMount();
+        const header = host.root.querySelector<HTMLElement>("#af-chat-pane-header")!;
+
+        host.agents.set("main", agent("main"));
+        host.agents.set("catalog", agent("catalog"));
+        dc.resolveDefaultTarget();
+
+        expect(dc.chatTarget).toBe("catalog");
+        expect(header.textContent).toContain("catalog");
+        expect(thread(host).textContent).not.toContain("with @ yet");
+        expect(fetchSpy).toHaveBeenCalled();
+    });
+
     it("keeps a target resolved earlier once the chat has been shown", () => {
         // Mounting is what marks the target as seen, and from there main
         // arriving late must not take the conversation over.
@@ -684,6 +706,25 @@ describe("DashboardChat — stop, attachments, external events", () => {
             method: "POST",
         });
         fetchSpy.mockRestore();
+    });
+
+    it("stops the answer being read aloud too, before the server is asked", () => {
+        const dc = mount(makeHost()) as any;
+        const order: string[] = [];
+        const stopped = () => order.push("tts-stop");
+        document.addEventListener("tts-stop", stopped);
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+            order.push("fetch");
+            return Promise.resolve({ ok: true } as unknown as Response);
+        });
+        try {
+            dc._stopGeneration();
+        } finally {
+            document.removeEventListener("tts-stop", stopped);
+            fetchSpy.mockRestore();
+        }
+        // First, so an unreachable backend still leaves the page quiet.
+        expect(order).toEqual(["tts-stop", "fetch"]);
     });
 
     it("says so when stop cannot reach the backend", async () => {

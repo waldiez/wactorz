@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.actor import Actor, Message, MessageType, run_callable
+from ..core.subscriptions import ConcurrencyError
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ def agent(
     with ``me.artifact_path("model")`` or ``await me.load_model("model")``.
     """
     if concurrency < 1:
-        raise ValueError(f"concurrency must be at least 1, got {concurrency}")
+        raise ConcurrencyError(concurrency)
 
     def _declare(target: Callable[..., Any]) -> Callable[..., Any]:
         spec = AgentSpec(

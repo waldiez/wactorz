@@ -569,9 +569,10 @@ dicts, which are the spelling chat and JSON use:</p>
         <span class="s2">"cooldown_seconds"</span><span class="p">:</span> <span class="mi">30</span><span class="p">}]</span>
 </code></pre></div>
 
-<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name), <code>webhook</code> and
+<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name), <code>webhook</code>,
 <code>ask_operator</code> (a question to the person, with options, whose pick is published
-when it comes; see <em>Asking and waiting</em> in the interfaces guide).
+when it comes; see <em>Asking and waiting</em> in the interfaces guide) and <code>label</code>
+(a record that a source was doing something from the trigger's time on).
 Conditions take <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>in</code>, <code>contains</code>,
 <code>exists</code>, <code>absent</code>, with dotted fields such as <code>reading.ax</code>; an action's
 payload may name trigger fields in braces and carries the trigger under
@@ -674,6 +675,11 @@ they arrive, and yields the whole answer once when there is nothing to stream;
 <code>commands</code> names the slash commands the orchestrator answers, by first word
 (<code>/help</code>), so a surface can say "unknown command" for the rest instead of
 handing it over.</p>
+<p>An orchestrator may also have a <code>command_forms()</code> method, returning a list of
+<code>wactorz.orchestration.Form(usage, summary)</code>: each way to type one of its
+commands, as <code>Form("/report &lt;day&gt;", "the readings for one day")</code>. The
+dashboard's chat box offers them as a person types <code>/</code>. Without it the
+dashboard offers each command by its name alone.</p>
 <p><strong>The channel.</strong> Every call says where the message came from: <code>"dashboard"</code>,
 <code>"cli"</code> and <code>"rest"</code> are the operator's own surfaces; <code>"social"</code> is Discord,
 Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,
@@ -814,8 +820,12 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see <em>Messages from an agent</em> in the interfaces guide)</td>
 </tr>
 <tr>
-<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
-<td>the same, waiting for the pick; a question outlives a restart</td>
+<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
+<td>the same, waiting for the pick; a question outlives a restart, and with <code>label=</code> its answer becomes a label</td>
+</tr>
+<tr>
+<td><code>label(source, value, start=..., end=...)</code></td>
+<td>a label written as the agent's own, on main (see <em>Answers that become labels</em> in the interfaces guide)</td>
 </tr>
 <tr>
 <td><code>models=</code> on <code>wactorz.agent</code>, <code>MODELS</code> on an <code>Actor</code>, with <code>artifact_path</code>, <code>load_model</code> and <code>artifacts</code></td>

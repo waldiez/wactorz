@@ -8,13 +8,14 @@
  * One test per view rather than per component: a component can be fine alone
  * and wrong where it is put, such as a list item outside its list.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { CardDashboard } from "../ui/CardDashboard";
 import type { AgentInfo } from "../types/agent";
 import type { FeedItem } from "../types/feed";
 import { emit } from "../events";
 import { blockingFindings, isAccepted } from "./axe";
+import { byRole } from "./queries";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
@@ -51,6 +52,34 @@ describe("the dashboard passes axe", () => {
         expect(document.querySelector(`[data-testid="view-${view}"]`)).not.toBeNull();
         document.querySelector<HTMLButtonElement>(".af-feed-toggle")?.click();
         expect(await blockingFindings(document.body)).toEqual([]);
+    });
+
+    it("on the chat view, with the command list open", async () => {
+        const commands = [
+            { usage: "/plans", typed: "/plans", summary: "list pending pipeline proposals" },
+            { usage: "/plans approve <id>", typed: "/plans approve", summary: "execute a proposed pipeline" },
+        ];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(
+                async () =>
+                    new Response(JSON.stringify({ commands }), {
+                        headers: { "Content-Type": "application/json" },
+                    }),
+            ),
+        );
+        try {
+            (cd as unknown as { _setView(v: string): void })._setView("chat");
+            const input = document.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+            input.value = "/pl";
+            input.dispatchEvent(new Event("input"));
+            await vi.waitFor(() => expect(byRole(document.body, "listbox", "Commands").hidden).toBe(false));
+
+            expect(input.getAttribute("aria-activedescendant")).toBeTruthy();
+            expect(await blockingFindings(document.body)).toEqual([]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
     });
 });
 

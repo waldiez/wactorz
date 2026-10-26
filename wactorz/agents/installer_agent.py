@@ -308,6 +308,53 @@ class _Asking:
     settled: "asyncio.Future[bool]"
 
 
+class DeployRefusedError(PermissionError):
+    """A deploy that would connect somewhere, or with something, it was not configured for."""
+
+    @classmethod
+    def host_mismatch(cls, target: DeployTarget, requested: str) -> "DeployRefusedError":
+        return cls(
+            f"Refusing to connect: deploy target '{target.name}' is configured "
+            f"as {target.host}, but the task asked for {requested}. Credentials "
+            "are bound to the configured host."
+        )
+
+    @classmethod
+    def unresolvable(cls, target: DeployTarget, mdns: str) -> "DeployRefusedError":
+        return cls(
+            f"Deploy target '{target.name}' has no host configured and "
+            f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
+        )
+
+    @classmethod
+    def unknown_host_key(cls, host: str, port: int, path: Path) -> "DeployRefusedError":
+        return cls(
+            f"Host key for {host}:{port} is not in {path} and "
+            "DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
+            f"`ssh-keyscan -p {port} {host} >> {path}` after verifying it."
+        )
+
+    @classmethod
+    def no_host_key(cls, host: str, port: int) -> "DeployRefusedError":
+        return cls(f"{host}:{port} offered no SSH host key.")
+
+    @classmethod
+    def no_target(cls, requested: str) -> "DeployRefusedError":
+        return cls(
+            f"No deploy target configured for '{requested}'. "
+            "SSH credentials come from the environment (DEPLOY_TARGETS plus a "
+            "DEPLOY_<NODE>_* block), not from the task payload."
+        )
+
+    @classmethod
+    def no_credentials(cls, target: DeployTarget) -> "DeployRefusedError":
+        return cls(
+            f"Deploy target '{target.name}' has no credentials. Set "
+            f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
+            f"{deploy_env_prefix(target.name)}_PASSWORD."
+        )
+
+
 class InstallerAgent(Actor):
     """Pre-defined agent that installs Python packages on demand.
     Uses sys.executable so packages are installed into the active venv.
@@ -872,21 +919,14 @@ class InstallerAgent(Actor):
         """
         if target.host:
             if requested and requested.strip().lower() != target.host.strip().lower():
-                raise PermissionError(
-                    f"Refusing to connect: deploy target '{target.name}' is configured "
-                    f"as {target.host}, but the task asked for {requested}. Credentials "
-                    f"are bound to the configured host."
-                )
+                raise DeployRefusedError.host_mismatch(target, requested)
             return target.host
 
         mdns = f"{target.name}.local"
         try:
             return await asyncio.to_thread(socket.gethostbyname, mdns)
         except OSError as exc:
-            raise PermissionError(
-                f"Deploy target '{target.name}' has no host configured and "
-                f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
-            ) from exc
+            raise DeployRefusedError.unresolvable(target, mdns) from exc
 
     def _known_hosts_path(self) -> Path:
         """Where learned SSH host keys live.
@@ -927,15 +967,11 @@ class InstallerAgent(Actor):
                 return str(path)
 
             if CONFIG.deploy_strict_host_keys:
-                raise PermissionError(
-                    f"Host key for {host}:{port} is not in {path} and "
-                    f"DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
-                    f"`ssh-keyscan -p {port} {host} >> {path}` after verifying it."
-                )
+                raise DeployRefusedError.unknown_host_key(host, port, path)
 
             key = await asyncssh.get_server_host_key(host, port)
             if key is None:
-                raise PermissionError(f"{host}:{port} offered no SSH host key.")
+                raise DeployRefusedError.no_host_key(host, port)
             entry = host if port == 22 else f"[{host}]:{port}"
             line = f"{entry} {key.export_public_key('openssh').decode().strip()}\n"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1155,18 +1191,10 @@ class InstallerAgent(Actor):
         requested = str(payload.get("host") or "")
         target = self._resolve_ssh_target(payload)
         if target is None:
-            raise PermissionError(
-                f"No deploy target configured for '{requested}'. "
-                f"SSH credentials come from the environment (DEPLOY_TARGETS plus a "
-                f"DEPLOY_<NODE>_* block), not from the task payload."
-            )
+            raise DeployRefusedError.no_target(requested)
         host = await self._resolve_target_host(target, requested)
         if not target.key_path and not target.password:
-            raise PermissionError(
-                f"Deploy target '{target.name}' has no credentials. Set "
-                f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
-                f"{deploy_env_prefix(target.name)}_PASSWORD."
-            )
+            raise DeployRefusedError.no_credentials(target)
 
         kwargs: dict = {
             "host": host,

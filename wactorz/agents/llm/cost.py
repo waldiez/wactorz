@@ -11,6 +11,7 @@ separate binding and patching it does not reach this code.
 import json
 import logging
 from datetime import datetime
+from typing import Any
 
 from ...core.persistence import get_db
 
@@ -62,17 +63,17 @@ def _known_persisted_cost_total(db) -> float:
                     value = json.loads(value)
                 if isinstance(value, dict):
                     total += float(value.get("cost_usd") or 0.0)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as exc:
+                logger.debug("[cost-limit] a cost row was skipped: %s", exc)
+    except Exception as exc:
+        logger.debug("[cost-limit] the cost rows could not be read: %s", exc)
     try:
         ledger = db.kv_get("_system", "_lifetime_cost_ledger")
         if isinstance(ledger, dict):
             ledger_total = sum(float(v) for v in ledger.values())
             total = max(total, ledger_total)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("[cost-limit] the lifetime ledger could not be read: %s", exc)
     return round(total, 6)
 
 
@@ -153,8 +154,8 @@ def get_global_cost_info() -> dict:
             if isinstance(override, dict):
                 limit = float(override.get("limit_usd", limit))
                 period = override.get("period", period)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[cost-limit] the cost limit override could not be read: %s", exc)
         _bootstrap_active_global_cost(db, period)
         _seed_alltime_cost(db)
     key = _global_cost_kv_key(period)
@@ -162,8 +163,8 @@ def get_global_cost_info() -> dict:
     if db is not None:
         try:
             spend = float(db.kv_get("_system", key) or 0.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[cost-limit] the spend for this period could not be read: %s", exc)
     pct = round(spend / limit * 100, 1) if limit > 0 else None
     return {
         "period": period,
@@ -176,13 +177,35 @@ def get_global_cost_info() -> dict:
     }
 
 
+class CostPeriodError(ValueError):
+    """A cost limit period that is not one of those a limit is kept over."""
+
+    def __init__(self, period: Any) -> None:
+        super().__init__(f"period must be daily, weekly, or monthly (got {period!r})")
+
+
+class CostLimitError(RuntimeError):
+    """The cost limit cannot be set, or has been reached."""
+
+    @classmethod
+    def no_database(cls) -> "CostLimitError":
+        return cls("Database not available")
+
+    @classmethod
+    def reached(cls, info: dict[str, Any]) -> "CostLimitError":
+        return cls(
+            f"LLM cost limit of ${info['limit_usd']:.2f} reached "
+            f"for {info['period_key']}. Blocking further LLM calls."
+        )
+
+
 def set_cost_limit(limit_usd: float, period: str) -> None:
     """Persist a runtime cost limit override to SQLite."""
     if period not in ("daily", "weekly", "monthly"):
-        raise ValueError(f"period must be daily, weekly, or monthly (got {period!r})")
+        raise CostPeriodError(period)
     db = get_db()
     if db is None:
-        raise RuntimeError("Database not available")
+        raise CostLimitError.no_database()
     db.kv_set("_system", "_cost_limit_override", {"limit_usd": limit_usd, "period": period})
 
 
@@ -190,7 +213,7 @@ def reset_global_cost() -> dict:
     """Clear accumulated spend for all periods. Returns new spend info."""
     db = get_db()
     if db is None:
-        raise RuntimeError("Database not available")
+        raise CostLimitError.no_database()
     for period in ("daily", "weekly", "monthly"):
         db.kv_set("_system", _global_cost_kv_key(period), 0.0)
     # Zero the all-time counter too — a full reset wipes the durable cost records
@@ -231,10 +254,7 @@ def check_cost_limit() -> None:
     if not info.get("limit_usd"):
         return
     if info["limit_reached"]:
-        raise RuntimeError(
-            f"LLM cost limit of ${info['limit_usd']:.2f} reached "
-            f"for {info['period_key']}. Blocking further LLM calls."
-        )
+        raise CostLimitError.reached(info)
     if info["warning"]:
         logger.warning(
             "[cost-limit] %.1f%% of $%.2f %s budget used ($%.4f)",

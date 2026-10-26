@@ -173,7 +173,7 @@ class TestTheLockedReachy:
             assert re.search(rf'^name = "{name}"$', locked, re.MULTILINE), name
         assert re.search(
             r'^name = "pygobject"\nversion = "3\.46\.0"\nsource = \{[^\n]*\}\n'
-            r'dependencies = \[\n    \{ name = "pycairo",',
+            r'dependencies = \[\n    \{ name = "pycairo"(?:,| \})',
             locked,
             re.MULTILINE | re.DOTALL,
         )

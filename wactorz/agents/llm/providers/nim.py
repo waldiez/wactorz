@@ -24,6 +24,15 @@ from ..retry import attempt_timeout, is_retryable
 logger = logging.getLogger(__name__)
 
 
+class NIMToolsError(RuntimeError):
+    """A tool call NIM refused, most often because the model takes no tools."""
+
+    def __init__(self, exc: Exception) -> None:
+        super().__init__(
+            f"NIM tool calling failed; verify the selected model supports tools: {exc}"
+        )
+
+
 class NIMProvider(LLMProvider):
     """NVIDIA NIM — OpenAI-compatible API hosted at integrate.api.nvidia.com.
     Free tier: 1000 requests/month per model. No local GPU required.
@@ -145,9 +154,7 @@ class NIMProvider(LLMProvider):
                 # exception, and a `RuntimeError` carrying it only in its text
                 # is a failure nothing will try again.
                 raise
-            raise RuntimeError(
-                f"NIM tool calling failed; verify the selected model supports tools: {exc}"
-            ) from exc
+            raise NIMToolsError(exc) from exc
         message = response.choices[0].message
         raw_calls = getattr(message, "tool_calls", None) or []
         tool_calls = [

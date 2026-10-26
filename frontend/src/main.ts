@@ -353,10 +353,12 @@ router.on("status", payload => {
 ws.onServerEvent((topic, payload) => router.route(topic, payload));
 ws.onConnected(() => {
     _wsOpen = true;
+    emit("af-socket", { open: true });
     recomputeLive();
 });
 ws.onDisconnected(() => {
     _wsOpen = false;
+    emit("af-socket", { open: false });
     recomputeLive();
 });
 ws.onMqttStatus(up => {
@@ -454,9 +456,6 @@ router.on("raw", ({ topic, payload }) => {
 
 // Streaming reply finished — notify
 listen("af-stream-end", detail => {
-    if (!detail) {
-        return;
-    }
     const { text, from } = detail;
     if (!text) {
         return;

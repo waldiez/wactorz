@@ -40,6 +40,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **A message sent while an agent is still answering waits its turn instead of being blocked.**
+  It shows in the thread at once, marked "Waiting to send", and goes when the reply ends,
+  one at a time and in order. One written while the dashboard's connection to the server is
+  down, or that could not go out because it dropped, is kept the same way and goes once the
+  connection is back; a broker outage alone holds nothing back, since main answers without
+  it. Send and Enter both work during a turn; Stop shows while one is under way.
+
 - **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
   first-run installation, connection checks, first commands, and recovery steps are presented
   before the advanced MQTT, media, and motion reference. It says what to expect before

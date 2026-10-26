@@ -17,10 +17,15 @@
  * - **a cap per thread**, so one busy agent never pushes another's restored
  *   history out while that thread still counts as loaded;
  * - **copy on write**: a message is replaced, never changed where it stands,
- *   and the list is a new one after every change.
+ *   and a thread is a new array after every change to it.
  *
- * No DOM: the views read `thread` and `all`, and redraw when a write says it
- * changed something.
+ * Kept thread by thread, with an index of ids, so a message costs the same
+ * however many threads are held: a write copies only the thread it changes, and
+ * which agents are asking something is kept per thread as it changes rather
+ * than found by reading every message.
+ *
+ * No DOM: the views read `thread`, `asking` and `all`, and redraw when a write
+ * says it changed something.
  */
 import type { ChatMessage } from "../types/agent";
 import { IO_GATEWAY } from "../agents/naming";
@@ -30,6 +35,8 @@ export const MAX_PER_THREAD = 500;
 
 /** How far apart the page's time for a message and the server's may be. */
 const SAME_MESSAGE_WINDOW_MS = 120_000;
+
+const NONE: readonly ChatMessage[] = Object.freeze([]);
 
 /** The thread a message is in: the person's own turns, and the gateway's and the
  *  system's, are in the thread of whom they were to; anyone else's in its sender's. */
@@ -50,18 +57,41 @@ export interface Reconciled {
 }
 
 export class ChatLog {
-    private _messages: readonly ChatMessage[] = [];
+    /** Each thread's messages, by thread name, in the order the threads began. */
+    private _threads = new Map<string, readonly ChatMessage[]>();
+    /** Which thread each held id is in. */
+    private _where = new Map<string, string>();
+    /** Per thread, the agents in it with a question still open. */
+    private _asking = new Map<string, ReadonlySet<string>>();
     /** Threads whose persisted history was taken in, by agent name. */
     private _loaded = new Set<string>();
+    private _all: readonly ChatMessage[] | null = null;
 
-    /** Every message, oldest first within each thread. */
+    /** Every message, thread by thread. */
     get all(): readonly ChatMessage[] {
-        return this._messages;
+        this._all ??= [...this._threads.values()].flat();
+        return this._all;
     }
 
-    /** The messages of `name`'s thread, in order. */
-    thread(name: string): ChatMessage[] {
-        return this._messages.filter(m => threadOf(m) === name);
+    /** The messages of `name`'s thread, in order: the thread itself, unchanged
+     *  until it is next written to. */
+    thread(name: string): readonly ChatMessage[] {
+        return this._threads.get(name) ?? NONE;
+    }
+
+    /** The message `id`, or undefined when none is held. */
+    get(id: string): ChatMessage | undefined {
+        const name = this._where.get(id);
+        return name === undefined ? undefined : this.thread(name).find(m => m.id === id);
+    }
+
+    /** The agents asking the person something still open. */
+    asking(): Set<string> {
+        const agents = new Set<string>();
+        for (const inThread of this._asking.values()) {
+            inThread.forEach(agent => agents.add(agent));
+        }
+        return agents;
     }
 
     /** Whether `name`'s history has been taken in. */
@@ -71,10 +101,11 @@ export class ChatLog {
 
     /** Take a message as it arrives, after the rest; false when its id is held already. */
     add(msg: ChatMessage): boolean {
-        if (this._messages.some(m => m.id === msg.id)) {
+        if (this._where.has(msg.id)) {
             return false;
         }
-        this._write([...this._messages, msg], threadOf(msg));
+        const name = threadOf(msg);
+        this._set(name, [...this.thread(name), msg]);
         return true;
     }
 
@@ -85,42 +116,55 @@ export class ChatLog {
      */
     addHistory(name: string, incoming: ChatMessage[]): number {
         this._loaded.add(name);
-        let next = [...this._messages];
+        const threads = new Map<string, ChatMessage[]>();
+        const seen = new Set<string>();
         let added = 0;
         for (const raw of incoming) {
-            if (next.some(m => m.id === raw.id)) {
+            if (this._where.has(raw.id) || seen.has(raw.id)) {
                 continue;
             }
+            seen.add(raw.id);
             // The `@agent ` routing prefix is added on send; the restored turn
             // must match what the thread shows, and pair with it.
             const m = raw.from === "user" ? { ...raw, content: raw.content.replace(/^@[\w-]+\s+/, "") } : raw;
-            const shown = next.find(x => sameMessage(x, m));
-            if (shown) {
-                // The persisted id, so the next restored copy of the same words
-                // pairs with the next one shown, not with this one again.
-                next = next.map(x => (x === shown ? { ...x, id: m.id } : x));
-                continue;
+            const into = threadOf(m);
+            const list = threads.get(into) ?? [...this.thread(into)];
+            const adopted = placeRestored(list, m);
+            if (adopted === null) {
+                added += 1;
+            } else {
+                this._where.delete(adopted);
             }
-            next = insertByTime(next, m);
-            added += 1;
+            threads.set(into, list);
         }
-        this._write(next, name);
+        threads.forEach((list, into) => this._set(into, list));
         return added;
+    }
+
+    /** Replace the message `id` with what `change` makes of it; the message as it is
+     *  now, or null when there is none. */
+    update(id: string, change: (m: ChatMessage) => ChatMessage): ChatMessage | null {
+        const name = this._where.get(id);
+        const found = this.get(id);
+        if (name === undefined || !found) {
+            return null;
+        }
+        const message = change(found);
+        this._set(
+            name,
+            this.thread(name).map(m => (m === found ? message : m)),
+        );
+        return message;
     }
 
     /** Mark the question `id` answered with `option`; the message as it is now, or
      *  null when there is no such question here. */
     answer(id: string, option: string): ChatMessage | null {
-        const idx = this._messages.findIndex(m => m.id === id && (m.options?.length ?? 0) > 0);
-        const found = idx === -1 ? undefined : this._messages[idx];
-        if (!found) {
+        const found = this.get(id);
+        if (!found || (found.options?.length ?? 0) === 0) {
             return null;
         }
-        const message: ChatMessage = { ...found, answer: option };
-        const next = [...this._messages];
-        next[idx] = message;
-        this._messages = next;
-        return message;
+        return this.update(id, m => ({ ...m, answer: option }));
     }
 
     /**
@@ -133,56 +177,78 @@ export class ChatLog {
      * and its questions are left as they are.
      */
     reconcile(open: ChatMessage[], answered: ChatMessage[]): Reconciled {
-        const before = this._messages;
         const closed: string[] = [];
-        let next = [...before];
+        let changed = false;
         for (const msg of open) {
-            if (!next.some(m => m.id === msg.id)) {
-                next = insertByTime(next, msg);
+            if (!this._where.has(msg.id)) {
+                const name = threadOf(msg);
+                const list = [...this.thread(name)];
+                list.splice(insertionPoint(list, msg), 0, msg);
+                this._set(name, list);
+                changed = true;
             }
         }
         const picks = new Map(answered.map(m => [m.id, m.answer]));
         const listed = new Set([...open, ...answered].map(m => m.id));
         const known = new Set([...open, ...answered].map(m => m.agentId ?? ""));
-        next = next.flatMap(m => {
-            if (!isOpenQuestion(m) || !m.agentId || !known.has(m.agentId)) {
+        for (const [name, list] of [...this._threads]) {
+            let touched = false;
+            const next = list.flatMap(m => {
+                if (!isOpenQuestion(m) || !m.agentId || !known.has(m.agentId)) {
+                    return [m];
+                }
+                const pick = picks.get(m.id);
+                if (pick !== undefined) {
+                    touched = true;
+                    closed.push(m.id);
+                    return [{ ...m, answer: pick }];
+                }
+                if (!listed.has(m.id)) {
+                    touched = true;
+                    closed.push(m.id);
+                    this._where.delete(m.id);
+                    return [];
+                }
                 return [m];
+            });
+            if (touched) {
+                this._set(name, next);
+                changed = true;
             }
-            const pick = picks.get(m.id);
-            if (pick !== undefined) {
-                closed.push(m.id);
-                return [{ ...m, answer: pick }];
-            }
-            if (!listed.has(m.id)) {
-                closed.push(m.id);
-                return [];
-            }
-            return [m];
-        });
-        this._messages = next;
-        this._capAll();
-        return { changed: this._messages !== before && !sameList(before, this._messages), closed };
+        }
+        return { changed, closed };
     }
 
-    /** Remove the newest message `matches` picks; whether there was one. */
-    removeLast(matches: (m: ChatMessage) => boolean): boolean {
-        const at = lastIndexWhere(this._messages, matches);
-        if (at === -1) {
+    /** Remove the newest message of `name`'s thread that `matches` picks; whether there was one. */
+    removeLast(name: string, matches: (m: ChatMessage) => boolean): boolean {
+        const list = this.thread(name);
+        const at = lastIndexWhere(list, matches);
+        const gone = list[at];
+        if (!gone) {
             return false;
         }
-        this._messages = this._messages.filter((_, i) => i !== at);
+        this._where.delete(gone.id);
+        this._set(
+            name,
+            list.filter((_, i) => i !== at),
+        );
         return true;
     }
 
     /**
-     * Drop `agent`'s thread — its own messages and the person's to it — or
-     * everything when `agent` is null. Every thread's history is to be fetched
-     * again either way: the server's copy may have been reset with it.
+     * Drop `agent`'s thread — its own messages and everything said to it — or
+     * every thread when `agent` is null. Every thread's history is to be
+     * fetched again either way: the server's copy may have been reset with it.
      */
     reset(agent: string | null): void {
-        this._messages = agent
-            ? this._messages.filter(m => m.from !== agent && !(m.from === "user" && m.to === agent))
-            : [];
+        if (agent === null) {
+            this._drop();
+            return;
+        }
+        this.thread(agent).forEach(m => this._where.delete(m.id));
+        this._threads.delete(agent);
+        this._asking.delete(agent);
+        this._all = null;
         this._loaded.clear();
     }
 
@@ -193,19 +259,34 @@ export class ChatLog {
 
     /** Drop every message and what was loaded. */
     clear(): void {
-        this._messages = [];
+        this._drop();
+    }
+
+    private _drop(): void {
+        this._threads = new Map();
+        this._where = new Map();
+        this._asking = new Map();
+        this._all = null;
         this._loaded.clear();
     }
 
-    /** Make `next` the list, keeping `name`'s thread to its cap. */
-    private _write(next: ChatMessage[], name: string): void {
-        this._messages = capThread(next, name);
-    }
-
-    private _capAll(): void {
-        for (const name of new Set(this._messages.map(threadOf))) {
-            this._messages = capThread([...this._messages], name);
+    /** Make `list` `name`'s thread, kept to its cap, with the index and who is asking
+     *  brought up to date for that thread alone. */
+    private _set(name: string, list: readonly ChatMessage[]): void {
+        const kept = list.length > MAX_PER_THREAD ? list.slice(-MAX_PER_THREAD) : list;
+        for (let i = 0; i < list.length - kept.length; i++) {
+            const dropped = list[i];
+            if (dropped) {
+                this._where.delete(dropped.id);
+            }
         }
+        kept.forEach(m => this._where.set(m.id, name));
+        this._threads.set(name, kept);
+        this._asking.set(
+            name,
+            new Set(kept.filter(m => m.from !== "user" && isOpenQuestion(m)).map(m => m.from)),
+        );
+        this._all = null;
     }
 }
 
@@ -222,25 +303,26 @@ function sameMessage(shown: ChatMessage, restored: ChatMessage): boolean {
     );
 }
 
-/** `list` with `msg` after the last message stamped no later than it, or first. */
-function insertByTime(list: ChatMessage[], msg: ChatMessage): ChatMessage[] {
-    const at = lastIndexWhere(list, m => m.timestampMs <= msg.timestampMs) + 1;
-    return [...list.slice(0, at), msg, ...list.slice(at)];
+/**
+ * Put the restored `m` into `list`, changing it: onto the message it already is
+ * on screen, which takes its stored id so the next restored copy of the same
+ * words pairs with the next one shown, or where its time puts it. The id the
+ * message on screen had, or null when `m` was inserted.
+ */
+function placeRestored(list: ChatMessage[], m: ChatMessage): string | null {
+    const shown = list.findIndex(x => sameMessage(x, m));
+    const was = list[shown];
+    if (was) {
+        list[shown] = { ...was, id: m.id };
+        return was.id;
+    }
+    list.splice(insertionPoint(list, m), 0, m);
+    return null;
 }
 
-/** `list` without the oldest of `name`'s messages beyond `MAX_PER_THREAD`. */
-function capThread(list: ChatMessage[], name: string): ChatMessage[] {
-    let over = list.filter(m => threadOf(m) === name).length - MAX_PER_THREAD;
-    if (over <= 0) {
-        return list;
-    }
-    return list.filter(m => {
-        if (over > 0 && threadOf(m) === name) {
-            over -= 1;
-            return false;
-        }
-        return true;
-    });
+/** Where `msg` goes in `list`: after the last message stamped no later than it, or first. */
+function insertionPoint(list: readonly ChatMessage[], msg: ChatMessage): number {
+    return lastIndexWhere(list, m => m.timestampMs <= msg.timestampMs) + 1;
 }
 
 /** The index of the last message `matches` picks, or -1. */
@@ -252,8 +334,4 @@ function lastIndexWhere(list: readonly ChatMessage[], matches: (m: ChatMessage) 
         }
     }
     return -1;
-}
-
-function sameList(a: readonly ChatMessage[], b: readonly ChatMessage[]): boolean {
-    return a.length === b.length && a.every((m, i) => m === b[i]);
 }

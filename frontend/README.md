@@ -103,8 +103,10 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
 | `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
 | `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
-| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
+| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from, text }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
+| `af-socket` | main.ts → DashboardChat | `{ open }` |
+| `af-turn` | DashboardChat → iobar | `{ agent, queued }` |
 | `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "disconnected" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
 | `af-send-failed` | IOManager → DashboardChat | `{ content, target }` |

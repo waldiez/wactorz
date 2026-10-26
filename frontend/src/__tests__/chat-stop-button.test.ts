@@ -6,10 +6,9 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { CardDashboard } from "../ui/CardDashboard";
 
 // The stop button (cancel in-flight generation) must be usable for the whole
-// turn: it appears the moment the user sends and is hidden once the turn
-// completes. A turn completes via "af-stream-end" (streamed reply) or
-// "af-chat-message" (non-streamed reply, e.g. slash commands). While busy the
-// send button is disabled so prompts can't overlap.
+// turn: it appears the moment the turn starts and is hidden once it ends, as
+// the turn tracker reports them (`af-turn`). Send stays usable throughout: a
+// message sent during a turn is queued, not refused.
 
 describe("chat stop button lifecycle", () => {
     let send: HTMLButtonElement;
@@ -29,22 +28,15 @@ describe("chat stop button lifecycle", () => {
         expect(send.disabled).toBe(false);
     });
 
-    it("shows stop and disables send the moment a message is sent", () => {
-        document.dispatchEvent(new CustomEvent("af-send-message", { detail: {} }));
+    it("shows stop while a turn is under way, with send still usable", () => {
+        document.dispatchEvent(new CustomEvent("af-turn", { detail: { agent: "main", queued: 0 } }));
         expect(stop.style.display).toBe("flex");
-        expect(send.disabled).toBe(true);
-    });
-
-    it("restores after a streamed reply (af-stream-end)", () => {
-        document.dispatchEvent(new CustomEvent("af-send-message", { detail: {} }));
-        document.dispatchEvent(new CustomEvent("af-stream-end", { detail: {} }));
-        expect(stop.style.display).toBe("none");
         expect(send.disabled).toBe(false);
     });
 
-    it("restores after a non-streamed reply (af-chat-message)", () => {
-        document.dispatchEvent(new CustomEvent("af-send-message", { detail: {} }));
-        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: {} }));
+    it("hides stop once the turn ends", () => {
+        document.dispatchEvent(new CustomEvent("af-turn", { detail: { agent: "main", queued: 0 } }));
+        document.dispatchEvent(new CustomEvent("af-turn", { detail: { agent: null, queued: 0 } }));
         expect(stop.style.display).toBe("none");
         expect(send.disabled).toBe(false);
     });

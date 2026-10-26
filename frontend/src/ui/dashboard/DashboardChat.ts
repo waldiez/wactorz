@@ -10,7 +10,7 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import { askingAgents, canOpenThread, messageableNames } from "./agentState";
+import { canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
@@ -18,6 +18,7 @@ import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
 import { fetchChatHistory } from "./chatHistory";
 import { ChatLog, threadOf } from "../../chat/chatLog";
+import { TurnTracker, type PendingSend, type TurnState } from "../../chat/turnTracker";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import {
@@ -62,6 +63,11 @@ export class DashboardChat {
     private _targetSettled = false;
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
+    /** Whether a turn is under way, and the person's messages waiting for it. */
+    private _turns = new TurnTracker({
+        deliver: send => this._wire(send),
+        changed: state => this._turnChanged(state),
+    });
     private sidebarFilter = "";
 
     /** Stream accumulation, live bubble and commit — extracted (size + per-agent keying). */
@@ -148,6 +154,7 @@ export class DashboardChat {
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
         this._log.clear();
+        this._turns.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
@@ -255,12 +262,12 @@ export class DashboardChat {
         const sorted = this.host
             .sortedAgents()
             .filter(a => !this.sidebarFilter || a.name.toLowerCase().includes(this.sidebarFilter));
-        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this._log.all);
+        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this._log.asking());
     }
 
     private _selectAgent(name: string): void {
         const latest = [...this.host.agents.values()].find(a => a.name === name);
-        if (!latest || !canOpenThread(latest, askingAgents(this._log.all))) {
+        if (!latest || !canOpenThread(latest, this._log.asking())) {
             return;
         }
         this.setTarget(name);
@@ -501,11 +508,11 @@ export class DashboardChat {
         this._deliver(input, content, target, prevTarget);
     }
 
-    /** Show the message, clear the composer and put it on the wire. */
+    /** Show the message and clear the composer; the turn tracker puts it on the
+     *  wire now, or once the turn under way or the connection lets it. */
     private _deliver(input: HTMLTextAreaElement, content: string, target: string, prevTarget: string): void {
         const attachments = this._pendingAttachments;
         this._focusConversation(target);
-        this._lastSentTarget = target;
         // The leading @mention is the routing prefix; drop it from the displayed
         // bubble/feed (the transport re-adds the canonical one). Keep the original
         // if stripping would leave nothing to send.
@@ -517,20 +524,50 @@ export class DashboardChat {
             content: body,
             timestampMs: Date.now(),
             ...(attachments.length ? { attachments: [...attachments] } : {}),
+            ...(this._turns.sendsNow() ? {} : { queued: true }),
         };
+        // In the thread before the request: a send that fails at once looks
+        // for its bubble to take it back.
         this._log.add(msg);
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
         this._renderAttachTray();
         this._showSentMessage(msg, prevTarget !== target);
         input.value = "";
         input.style.height = "auto";
+        this._turns.request({
+            id: msg.id,
+            content: body,
+            target,
+            attachments: msg.attachments?.map(a => a.id) ?? [],
+        });
+    }
+
+    /** Put `send` on the wire, now the turn tracker says so: its bubble no longer
+     *  waits, and the thread shows its agent working. */
+    private _wire(send: PendingSend): void {
+        this._lastSentTarget = send.target;
+        const waited = this._log.get(send.id)?.queued === true;
+        if (waited) {
+            this._log.update(send.id, ({ queued: _sent, ...rest }) => rest);
+            if (this.host.getView() === "chat") {
+                this.renderChatThread();
+            }
+        }
         // Not for a command: it is handled before any agent sees it and answered
         // by main, so claiming the target is working would name the wrong agent
         // and wait for a reply that is never attributed to it.
-        if (!body.startsWith("/")) {
-            this._streamUI.awaiting(target);
+        if (!send.content.startsWith("/")) {
+            this._streamUI.awaiting(send.target);
         }
-        this._emitSend(body, target, msg.attachments?.map(a => a.id) ?? []);
+        this._emitSend(send.content, send.target, send.attachments);
+    }
+
+    /** Say what the turn is now, and stop showing an agent working once it ends. */
+    private _turnChanged(state: TurnState): void {
+        emit("af-turn", state);
+        if (state.agent === null) {
+            this._streamUI.endWait();
+        }
     }
 
     /** Dispatch the send while flagging it as our own, so the af-send-message
@@ -618,6 +655,7 @@ export class DashboardChat {
             // like any other, so a bystander's message does not end a turn it has
             // nothing to do with.
             this._streamUI.endWait(stored.from);
+            this._turns.ended(stored.from);
             const voiceTarget = voiceThreadTarget(stored, this.chatTarget, [...this.host.agents.values()]);
             this.chatTarget = voiceTarget ?? this.chatTarget;
             this._lastSentTarget = voiceTarget ?? this._lastSentTarget;
@@ -659,11 +697,16 @@ export class DashboardChat {
         });
 
         this._listeners.on("af-send-failed", detail => {
-            // Nothing went on the wire, so no reply is coming for anyone.
+            // Nothing went on the wire, so no reply is coming for anyone. The row
+            // goes directly too: a send made outside the composer has no turn.
+            const back = this._turns.failed();
             this._streamUI.endWait();
-            // The optimistic bubble was rendered before the transport attempt;
-            // a failed send must not stay on screen looking delivered.
-            if (!this._log.removeLast(m => m.from === "user" && m.content === detail.content)) {
+            // Its bubble must not stay on screen looking delivered: the composer's
+            // waits to go again once the socket opens; one sent from elsewhere goes.
+            const changed = back
+                ? this._log.update(back.id, m => ({ ...m, queued: true })) !== null
+                : this._log.removeLast(detail.target, m => m.from === "user" && m.content === detail.content);
+            if (!changed) {
                 return;
             }
             if (this.host.getView() === "chat") {
@@ -695,14 +738,22 @@ export class DashboardChat {
     }
 
     private _wireStreamEvents(): void {
-        // The transport dropping out of `live` means no reply is arriving for
-        // anything outstanding, whichever agent it was sent to.
-        this._listeners.on("af-connection-status", detail => {
-            if (detail?.status !== "live") {
+        // The socket closing means no reply is arriving for anything outstanding,
+        // whichever agent it was sent to; its opening lets what waits go.
+        this._listeners.on("af-socket", detail => {
+            this._turns.connection(detail.open);
+            if (!detail.open) {
+                // As for a failed send: a send made outside the composer has no turn.
                 this._streamUI.endWait();
             }
         });
-        this._listeners.on("af-stream-chunk", detail => this._streamUI.onChunk(detail));
-        this._listeners.on("af-stream-end", detail => this._streamUI.onEnd(detail));
+        this._listeners.on("af-stream-chunk", detail => {
+            this._streamUI.onChunk(detail);
+            this._turns.chunk(detail.from);
+        });
+        this._listeners.on("af-stream-end", detail => {
+            this._streamUI.onEnd(detail);
+            this._turns.ended(detail.from);
+        });
     }
 }

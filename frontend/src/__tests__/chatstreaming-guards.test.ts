@@ -14,6 +14,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import { ChatStreamUI, type StreamHost } from "../ui/dashboard/chatStreaming";
+import { chunk, end } from "./streamFeed";
 
 interface Host extends StreamHost {
     thread(): HTMLElement | null;
@@ -38,7 +39,7 @@ describe("onChunk when the chat view is not open", () => {
         const scrollThread = vi.fn();
         const ui = new ChatStreamUI(makeHost({ isChatView: () => false, scrollThread }));
 
-        ui.onChunk({ chunk: "half an answer", from: "weather" });
+        chunk(ui, "half an answer", "weather");
 
         // Buffered, so returning to the view shows the whole reply…
         expect(ui.streams.text("weather")).toBe("half an answer");
@@ -52,7 +53,7 @@ describe("onChunk when there is no thread to render into", () => {
         // The chat view is open but its element is gone — mid re-render.
         const ui = new ChatStreamUI(makeHost({ thread: () => null }));
 
-        ui.onChunk({ chunk: "text", from: "weather" });
+        chunk(ui, "text", "weather");
 
         expect(ui.streams.text("weather")).toBe("text");
     });
@@ -65,7 +66,7 @@ describe("streamHereText", () => {
 
     it("is null when the active stream has produced no text yet", () => {
         const ui = new ChatStreamUI(makeHost());
-        ui.onChunk({ chunk: "", from: "weather" });
+        chunk(ui, "", "weather");
 
         expect(ui.streamHereText()).toBeNull();
     });
@@ -74,14 +75,14 @@ describe("streamHereText", () => {
         // Someone else's agent is answering; its text must not drive this
         // thread's empty-state or get reattached into it.
         const ui = new ChatStreamUI(makeHost({ belongsHere: () => false }));
-        ui.onChunk({ chunk: "not for you", from: "other" });
+        chunk(ui, "not for you", "other");
 
         expect(ui.streamHereText()).toBeNull();
     });
 
     it("returns the text when the active stream is this thread's", () => {
         const ui = new ChatStreamUI(makeHost());
-        ui.onChunk({ chunk: "for you", from: "weather" });
+        chunk(ui, "for you", "weather");
 
         expect(ui.streamHereText()).toBe("for you");
     });
@@ -100,7 +101,7 @@ describe("reattachRow", () => {
 
     it("rebuilds the live row with the text so far", () => {
         const ui = new ChatStreamUI(makeHost());
-        ui.onChunk({ chunk: "partial", from: "weather" });
+        chunk(ui, "partial", "weather");
         const thread = document.createElement("div");
 
         ui.reattachRow(thread);
@@ -115,12 +116,12 @@ describe("a reply with action blocks in it", () => {
         const commit = vi.fn();
         const ui = new ChatStreamUI(makeHost({ thread: () => thread, commit }));
 
-        for (const chunk of ["Starting it.\n<sp", 'awn>{"name": "a"}', "</spawn>\nDone."]) {
-            ui.onChunk({ chunk, from: "main" });
+        for (const piece of ["Starting it.\n<sp", 'awn>{"name": "a"}', "</spawn>\nDone."]) {
+            chunk(ui, piece, "main");
             expect(thread.textContent).not.toContain("spawn");
             expect(thread.textContent).not.toContain("{");
         }
-        ui.onEnd({ text: null, from: "main" });
+        end(ui, "main");
 
         expect(commit).toHaveBeenCalledWith(expect.objectContaining({ content: "Starting it.\n\nDone." }));
         expect(thread.textContent).not.toContain("spawn");
@@ -131,8 +132,8 @@ describe("a reply with action blocks in it", () => {
         const commit = vi.fn();
         const ui = new ChatStreamUI(makeHost({ thread: () => thread, commit }));
 
-        ui.onChunk({ chunk: '<delete>{"name": "a"}</delete>\n', from: "main" });
-        ui.onEnd({ text: null, from: "main" });
+        chunk(ui, '<delete>{"name": "a"}</delete>\n', "main");
+        end(ui, "main");
 
         expect(commit).not.toHaveBeenCalled();
         expect(thread.querySelectorAll(".af-chat-msg")).toHaveLength(0);

@@ -236,6 +236,18 @@ describe("main.ts bootstrap", () => {
         expect(true).toBe(true);
     });
 
+    it("says when the socket opens and closes, whatever the broker is doing", () => {
+        const said: boolean[] = [];
+        const stop = listen("af-socket", detail => said.push(detail.open));
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("connected")();
+        wsHandler("disconnected")();
+        document.removeEventListener("af-socket", stop);
+
+        expect(said).toEqual([true, false]);
+    });
+
     it("goes live only when both the /ws is open and the broker is up, then seeds once", () => {
         wsHandler("connected")(); // wsOpen=true, but broker still down → not live yet
         wsHandler("mqttStatus")(true); // both up → live: prunes + seeds

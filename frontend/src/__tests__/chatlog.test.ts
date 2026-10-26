@@ -283,15 +283,62 @@ describe("questions", () => {
     });
 });
 
+describe("what one message costs", () => {
+    it("leaves every other thread as it was: only the thread written to is copied", () => {
+        const log = new ChatLog();
+        for (let t = 0; t < 20; t++) {
+            log.add(msg({ id: `t${t}`, from: `agent${t}` }));
+        }
+        const others = Array.from({ length: 19 }, (_, t) => log.thread(`agent${t + 1}`));
+
+        log.add(msg({ id: "new", from: "agent0" }));
+        log.answer("t5", "x");
+
+        // The same arrays, not copies: the cost of a message is one thread's.
+        others.forEach((before, t) => {
+            if (t + 1 !== 5) {
+                expect(log.thread(`agent${t + 1}`)).toBe(before);
+            }
+        });
+    });
+
+    it("finds a message by id, and keeps no id it dropped", () => {
+        const log = new ChatLog();
+        for (let i = 0; i <= MAX_PER_THREAD; i++) {
+            log.add(msg({ id: `m${i}`, timestampMs: i }));
+        }
+
+        expect(log.get("m1")?.id).toBe("m1");
+        // Capped out: gone from the index too, so it may be taken again.
+        expect(log.get("m0")).toBeUndefined();
+        expect(log.add(msg({ id: "m0" }))).toBe(true);
+    });
+
+    it("knows who is asking without reading every message, as questions come and go", () => {
+        const log = new ChatLog();
+        log.add(question("q1"));
+        log.add(question("q2", { from: "installer", agentId: "installer-id" }));
+        log.add(msg({ id: "plain", from: "worker" }));
+        expect([...log.asking()].sort()).toEqual(["installer", "triage"]);
+
+        log.answer("q1", "Yes");
+        expect([...log.asking()]).toEqual(["installer"]);
+
+        log.reset("installer");
+        expect(log.asking().size).toBe(0);
+    });
+});
+
 describe("taking messages away", () => {
     it("removes the newest message a test picks", () => {
         const log = new ChatLog();
         log.add(msg({ id: "1", from: "user", to: "main", content: "ping" }));
         log.add(msg({ id: "2", from: "user", to: "main", content: "ping" }));
 
-        expect(log.removeLast(m => m.content === "ping")).toBe(true);
+        expect(log.removeLast("main", m => m.content === "ping")).toBe(true);
         expect(ids(log.all)).toEqual(["1"]);
-        expect(log.removeLast(m => m.content === "nothing")).toBe(false);
+        expect(log.removeLast("main", m => m.content === "nothing")).toBe(false);
+        expect(log.removeLast("worker", m => m.content === "ping")).toBe(false);
     });
 
     it("resets one agent's thread, keeping the person's turns to others", () => {

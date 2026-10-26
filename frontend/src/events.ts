@@ -26,8 +26,16 @@ export interface AppEventMap {
     "af-agent-command": { command: string; agentId: string };
     "af-send-message": { content: string; target: string; attachments: string[] };
     "af-send-failed": { content: string; target: string };
-    "af-stream-chunk": { chunk: string; from: string };
-    "af-stream-end": { text: string | null; from: string } | null;
+    /** A piece of `from`'s streamed reply, and the reply so far (`text`). */
+    "af-stream-chunk": { chunk: string; from: string; text: string };
+    /** `from`'s streamed reply ended; `text` is all of it, empty when nothing came. */
+    "af-stream-end": { text: string; from: string };
+    /** The socket to the server opened or closed: whether a message can go out now.
+     *  Not `af-connection-status`, which needs the server's broker link too. */
+    "af-socket": { open: boolean };
+    /** A turn started or ended, or what waits changed: who it waits on (null when no
+     *  turn is under way), and how many of the person's messages wait to go out. */
+    "af-turn": { agent: string | null; queued: number };
     "af-reset-chat": { agent: string | null };
     /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
     "af-answer-option": { id: string; agentId: string; option: string; index: number };

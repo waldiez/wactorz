@@ -23,6 +23,11 @@ export class AgentStreams {
         this._buffers.set(from, (cur + chunk).slice(0, MAX_STREAM_CHARS));
     }
 
+    /** Make `from`'s buffer `text`, as the reply so far is reported elsewhere. */
+    set(from: string, text: string): void {
+        this._buffers.set(from, text.slice(0, MAX_STREAM_CHARS));
+    }
+
     /** True while `from` has an unfinished stream. */
     has(from: string): boolean {
         return this._buffers.has(from);

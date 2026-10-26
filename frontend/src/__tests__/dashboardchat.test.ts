@@ -8,6 +8,7 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } 
 
 import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
+import { TURN_IDLE_TIMEOUT_MS } from "../chat/turnTracker";
 import { withoutAttachment } from "../ui/dashboard/attachTray";
 import {
     defaultChatTarget,
@@ -613,11 +614,13 @@ describe("DashboardChat — sending & live events", () => {
 
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
-            new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main" } }),
+            new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main", text: "Hel" } }),
         );
-        document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: "lo", from: "main" } }));
+        document.dispatchEvent(
+            new CustomEvent("af-stream-chunk", { detail: { chunk: "lo", from: "main", text: "Hello" } }),
+        );
         expect(thread(host).textContent).toContain("Hello");
-        document.dispatchEvent(new CustomEvent("af-stream-end"));
+        document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text: "Hello", from: "main" } }));
         // committed into chatMessages → re-render still shows it
         dc.renderChatThread();
         expect(thread(host).textContent).toContain("Hello");
@@ -626,7 +629,10 @@ describe("DashboardChat — sending & live events", () => {
     it("caps accumulation on a runaway stream instead of growing without bound", () => {
         const chunk = "x".repeat(10_000);
         for (let i = 0; i < 30; i++) {
-            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main" } }));
+            const text = chunk.repeat(i + 1);
+            document.dispatchEvent(
+                new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main", text } }),
+            );
         }
         const streams = (dc as unknown as { _streamUI: { streams: { text: (from: string) => string } } })
             ._streamUI.streams;
@@ -719,8 +725,12 @@ describe("DashboardChat — thread integrity", () => {
     });
 
     it("keeps concurrent agent streams separate (no merged bubble)", () => {
-        const chunk = (c: string, from: string) =>
-            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: c, from } }));
+        const soFar = new Map<string, string>();
+        const chunk = (c: string, from: string) => {
+            const text = (soFar.get(from) ?? "") + c;
+            soFar.set(from, text);
+            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: c, from, text } }));
+        };
         const end = (from: string, text: string) =>
             document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text, from } }));
 
@@ -789,6 +799,9 @@ describe("DashboardChat — one place for its messages", () => {
             json: async () => [{ id: 1, ts: 1_700_000_000, role: "assistant", content: "from history" }],
         })) as unknown as typeof fetch;
         await dc.loadHistory("worker");
+        // Reading the worker while main floods: what the cap must not break, and
+        // main's rows are not drawn, only held.
+        dc.setTarget("worker");
 
         for (let i = 0; i <= 500; i++) {
             arrive({ id: `m${i}`, from: "main", to: "user", content: `reply ${i}`, timestampMs: 10 + i });
@@ -819,6 +832,149 @@ describe("DashboardChat — one place for its messages", () => {
         arrive({ ...twice });
 
         expect(shown("main")).toEqual(["once"]);
+    });
+});
+
+describe("DashboardChat — one turn at a time", () => {
+    let host: ChatHost;
+    let dc: DashboardChat;
+    let input: HTMLTextAreaElement;
+    const sent: string[] = [];
+    const record = (e: Event) => sent.push((e as CustomEvent<{ content: string }>).detail.content);
+    const type = (words: string) => {
+        input.value = words;
+        host.root.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+    };
+    const waitingToSend = () =>
+        [...thread(host).querySelectorAll('[data-testid="user-message"]')]
+            .filter(row => row.textContent?.includes("Waiting to send"))
+            .map(row => row.querySelector('[data-testid="message-body"]')?.textContent);
+    const ends = (from: string) =>
+        document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text: "ok", from } }));
+    const socket = (open: boolean) =>
+        document.dispatchEvent(new CustomEvent("af-socket", { detail: { open } }));
+    const status = (value: string) =>
+        document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: value } }));
+    const fails = (content: string) =>
+        document.dispatchEvent(new CustomEvent("af-send-failed", { detail: { content, target: "main" } }));
+    const said = () =>
+        [...thread(host).querySelectorAll('[data-testid="user-message"] [data-testid="message-body"]')].map(
+            n => n.textContent,
+        );
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        sent.length = 0;
+        host = makeHost();
+        dc = mount(host);
+        dc.wire();
+        host.root.appendChild(dc.buildIobar());
+        input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        dc.setTarget("main");
+        document.addEventListener("af-send-message", record);
+    });
+
+    afterEach(() => {
+        document.removeEventListener("af-send-message", record);
+        vi.useRealTimers();
+    });
+
+    it("queues a message sent during a turn and sends it when the turn ends", () => {
+        type("first");
+        type("second");
+
+        expect(sent).toEqual(["first"]);
+        expect(waitingToSend()).toEqual(["second"]);
+
+        ends("main");
+
+        expect(sent).toEqual(["first", "second"]);
+        expect(waitingToSend()).toEqual([]);
+    });
+
+    it("takes Enter down the same path as the button", () => {
+        type("first");
+        input.value = "by enter";
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+        expect(sent).toEqual(["first"]);
+        expect(waitingToSend()).toEqual(["by enter"]);
+    });
+
+    it("keeps what is sent while the socket is closed, and sends it once it opens", () => {
+        socket(false);
+
+        type("offline");
+        expect(sent).toEqual([]);
+        expect(waitingToSend()).toEqual(["offline"]);
+
+        socket(true);
+        expect(sent).toEqual(["offline"]);
+    });
+
+    it("does not hold a message back while only the broker is away: main answers over the socket", () => {
+        status("disconnected");
+
+        type("hello");
+
+        expect(sent).toEqual(["hello"]);
+        expect(waitingToSend()).toEqual([]);
+    });
+
+    it("keeps a send that failed in its own bubble, waiting, and sends it first once the socket opens", () => {
+        type("same");
+        type("same");
+
+        fails("same");
+
+        // Both bubbles stay; neither is taken for the other.
+        expect(said()).toEqual(["same", "same"]);
+        expect(waitingToSend()).toEqual(["same", "same"]);
+        socket(true);
+        expect(sent).toEqual(["same", "same"]);
+        expect(waitingToSend()).toEqual(["same"]);
+    });
+
+    it("stops showing the agent working once a quiet turn is given up on, and sends the next", () => {
+        vi.useFakeTimers();
+        type("first");
+        type("second");
+        expect(thread(host).querySelector('[data-testid="message-waiting"]')).not.toBeNull();
+
+        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS + 1);
+
+        expect(sent).toEqual(["first", "second"]);
+    });
+
+    it("says on the bus who the turn waits on, and what waits", () => {
+        const turns: { agent: string | null; queued: number }[] = [];
+        const hear = (e: Event) =>
+            turns.push((e as CustomEvent<{ agent: string | null; queued: number }>).detail);
+        document.addEventListener("af-turn", hear);
+
+        type("first");
+        type("second");
+        ends("main");
+        ends("main");
+
+        document.removeEventListener("af-turn", hear);
+        expect(turns).toEqual([
+            { agent: "main", queued: 0 },
+            { agent: "main", queued: 1 },
+            { agent: null, queued: 1 },
+            { agent: "main", queued: 0 },
+            { agent: null, queued: 0 },
+        ]);
+    });
+
+    it("drops what waits on a wipe", () => {
+        type("first");
+        type("second");
+
+        dc.clearAll();
+        ends("main");
+
+        expect(sent).toEqual(["first"]);
     });
 });
 

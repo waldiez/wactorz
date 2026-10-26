@@ -191,6 +191,9 @@ export interface ChatMessage {
     answer?: string;
     /** A chat channel the message also went to ("telegram", "discord", "whatsapp"). */
     channel?: string;
+    /** The person's message waits to go out: for a turn under way to end, or for the
+     *  connection. Unset once it is sent. */
+    queued?: boolean;
 }
 
 /** A person's pick among the options an agent offered, from whichever channel showed them. */

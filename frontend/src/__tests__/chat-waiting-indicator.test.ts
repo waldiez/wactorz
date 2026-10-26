@@ -9,10 +9,10 @@
  * rather than as nothing happening. What matters is that it leaves again on
  * every path a turn can end by — including the ones that produce no text at all.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 
 import { ChatStreamUI, type StreamHost } from "../ui/dashboard/chatStreaming";
-import { TURN_IDLE_TIMEOUT_MS } from "../ui/dashboard/chatIobar";
+import { chunk, end } from "./streamFeed";
 
 function makeHost(thread: HTMLElement, inChatView = true, openThread = "weather"): StreamHost {
     return {
@@ -92,7 +92,7 @@ describe("once the turn ends", () => {
         const ui = new ChatStreamUI(makeHost(thread));
         ui.awaiting("weather");
 
-        ui.onChunk({ chunk: "it is ", from: "weather" });
+        chunk(ui, "it is ", "weather");
 
         expect(waiting(thread)).toBeNull();
         expect(ui.isAwaiting).toBe(false);
@@ -105,19 +105,10 @@ describe("once the turn ends", () => {
 
         // What a stopped or failed turn looks like: the stream ends having
         // produced nothing, and the row would otherwise wait forever.
-        ui.onEnd({ text: null, from: "weather" });
+        end(ui, "weather");
 
         expect(waiting(thread)).toBeNull();
         expect(ui.isAwaiting).toBe(false);
-    });
-
-    it("an ending attributed to nobody still clears it", () => {
-        const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
-
-        ui.onEnd(null);
-
-        expect(waiting(thread)).toBeNull();
     });
 });
 
@@ -136,7 +127,7 @@ describe("when the thread is re-rendered underneath it", () => {
     it("does not come back once the turn has ended", () => {
         const ui = new ChatStreamUI(makeHost(thread));
         ui.awaiting("weather");
-        ui.onEnd({ text: null, from: "weather" });
+        end(ui, "weather");
 
         thread.innerHTML = "";
         ui.reattachWaiting();
@@ -182,7 +173,7 @@ describe("which turn an ending belongs to", () => {
         const ui = new ChatStreamUI(makeHost(thread));
         ui.awaiting("weather");
 
-        ui.onChunk({ chunk: "unrelated", from: "calendar" });
+        chunk(ui, "unrelated", "calendar");
 
         // Concurrent streams are a feature: another agent starting to answer
         // says nothing about whether this one has.
@@ -273,47 +264,5 @@ describe("a turn that never goes on the wire", () => {
         ui.endWait();
 
         expect(ui.isAwaiting).toBe(false);
-    });
-});
-
-describe("when nothing ever answers", () => {
-    afterEach(() => {
-        vi.useRealTimers();
-    });
-
-    it("gives up rather than waiting for the life of the page", () => {
-        vi.useFakeTimers();
-        const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
-
-        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS + 1);
-
-        // A backend that dies mid-turn sends none of the endings, and the row
-        // would otherwise stay up until the page is reloaded.
-        expect(waiting(thread)).toBeNull();
-        expect(ui.isAwaiting).toBe(false);
-    });
-
-    it("keeps waiting right up to the limit", () => {
-        vi.useFakeTimers();
-        const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
-
-        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS - 1);
-
-        expect(ui.isAwaiting).toBe(true);
-    });
-
-    it("does not fire after the turn already ended", () => {
-        vi.useFakeTimers();
-        const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
-        ui.onChunk({ chunk: "sunny", from: "weather" });
-
-        // A later turn must not be cut short by the previous turn's timer.
-        ui.awaiting("weather");
-        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS - 1);
-
-        expect(ui.isAwaiting).toBe(true);
     });
 });

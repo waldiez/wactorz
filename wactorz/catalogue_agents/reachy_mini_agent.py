@@ -2978,8 +2978,11 @@ async def _bridge_to_main(
     """Reachy-as-interface bridge.
 
     Anything Reachy can't turn into a robot/HA command is piped to the MAIN
-    orchestrator (send_to('main', _via_interface=True) — full delegation, HA,
-    sub-agents) and the answer is spoken back through the robot. Returns a task
+    orchestrator (send_to('main', _via_interface=True) — restricted conversation,
+    everyday device control and safe delegation) and the answer is spoken back
+    through the robot. Operator commands require the main operator interface;
+    neither this actor nor its microphone authenticates their original caller.
+    Returns a task
     result dict, or None when main is unreachable or answers with nothing, so
     the caller can fall back to the local parse-error hint.
 

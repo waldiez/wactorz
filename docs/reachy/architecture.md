@@ -75,6 +75,14 @@ change it, see the [Developer guide](developer-guide.md).
 Push-to-talk (`ask_voice`) is the same path with a fixed-length recording instead of
 voice-activity detection and a single turn.
 
+Main treats this bridge as restricted input. A reviewed robot program is not proof
+that its text came from an authenticated operator: it also accepts actor tasks and
+MQTT commands, and a microphone does not authenticate a person. Conversation, everyday
+device control and bounded delegation remain available. Administrative commands,
+plan approval, executable spawning/deletion and unrestricted delegation require the
+existing operator entry points. `_via_interface` and source metadata describe the
+turn; they cannot grant those privileges.
+
 Typed chat enters at `handle_task()`: fixed phrases map straight to commands, other robot
 or home requests go to a small LLM planner (`_nl_to_commands`) that emits a JSON list of
 commands, and everything else takes the same `_bridge_to_main()` route.

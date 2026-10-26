@@ -14,12 +14,18 @@ Help works even when the robot is disconnected.
    `look left`, `take a photo`, `stop talking`, `start conversation`, and the others below.
 2. **Other robot or home requests** ("look up slowly and wiggle your antennas") are turned
    into robot commands by the language model.
-3. **Everything else** (questions, calendar, weather, other agents) goes to Wactorz's
+3. **Everything else** (conversation, weather, Home Assistant questions) goes to Wactorz's
    main agent. Reachy speaks its answer and the full text appears in the chat.
    Start with `ask Wactorz` to send something straight there.
 
 Every command answers in the chat, including failures, so a robot that did not move never
 looks like one that did.
+
+Reachy's bridge to main permits conversation, everyday device control, and bounded
+delegation. Voice input, MQTT commands, and agent tasks do not authenticate an operator.
+Use main's existing operator chat for package approval, node administration, plan
+approval, or creating/deleting executable agents. Saying `ask Wactorz` or adding a source
+flag cannot grant those capabilities.
 
 ## Movement
 
@@ -117,7 +123,7 @@ With Home Assistant connected to Wactorz:
 
 ```text
 @reachy-mini turn on the living-room light
-@reachy-mini ask Wactorz what's on my calendar today?
+@reachy-mini ask Wactorz is the living-room light on?
 @reachy-mini when the front door opens, wake up
 ```
 

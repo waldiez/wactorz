@@ -7,7 +7,10 @@ local speech recognition, and how to check an installation.
 SDK 1.12.0 has clean Windows installation and API contract checks. Platform
 behavior below includes earlier hardware observations with SDK 1.8.4; the owner
 must revalidate robot movement, media and native Linux setup on 1.12.0 before
-merging. See the repository safety audit for the remaining evidence gaps.
+claiming a hardware-supported production release. Security and regression validation
+can establish suitability for experimental `dev` review separately; it does not
+establish hardware support. Use the [SDK 1.12 smoke-test checklist](sdk-1.12-smoke-test.md)
+and record which platform and robot were actually tested.
 
 ## Supported systems
 

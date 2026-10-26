@@ -1,5 +1,23 @@
 # Reachy core safety audit
 
+## Security remediation — 2026-10-26
+
+The trusted-interface forwarding finding in this historical audit is corrected by
+routing actor-forwarded interface turns through main's existing restricted entry
+point. A reviewed intermediary may supply conversation context; neither that status,
+payload metadata nor robot voice authenticates an operator. Existing authenticated
+operator routes retain their administrative capabilities. The compositional tests in
+`tests/test_reachy_interface_security.py` exercise real actor mailboxes, the Reachy
+program and main's authorization/action paths, with dangerous effects intercepted.
+
+Hardware validation remains separate: experimental `dev` suitability is not a claim
+of SDK 1.12 production hardware support. See `docs/reachy/sdk-1.12-smoke-test.md`.
+The dated recommendation and evidence below describe their listed historical commits,
+including the inherited Python 3.10 dependency limitations; they are not the verdict
+for the later security correction.
+
+## Historical audit — 2026-10-23
+
 Date: 2026-10-23. Repository: `waldiez/wactorz`; existing draft PR #200, targeting `dev`.
 
 **Final recommendation: NO-GO for merge. Publication to the existing draft is authorized

@@ -569,15 +569,17 @@ the complete command guide in its dashboard thread.</p>
 <p>Use the explicit <code>ask Wactorz</code> prefix in chat to bypass Reachy's local robot planner:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">what</span><span class="err">'</span><span class="n">s</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">weather</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">Athens</span><span class="vm">?</span>
 <span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">turn</span><span class="w"> </span><span class="k">off</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">living</span><span class="o">-</span><span class="n">room</span><span class="w"> </span><span class="n">light</span>
-<span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">summarize</span><span class="w"> </span><span class="n">my</span><span class="w"> </span><span class="n">calendar</span><span class="w"> </span><span class="n">today</span>
+<span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">living</span><span class="o">-</span><span class="n">room</span><span class="w"> </span><span class="n">light</span><span class="w"> </span><span class="k">on</span><span class="vm">?</span>
 </code></pre></div>
 
-<p>The prefix forwards the remaining text to main with <code>_via_interface=True</code>, so it uses
-the same intent routing, agents, tools, and Home Assistant actuator path as normal
-Wactorz chat, slash commands included. Main takes that only from a catalogue agent
-running the catalogue's own program, as this one does: from an agent the model wrote,
-or from this one once it runs a repair of its program, it answers with an error, since
-the turn would let that code type commands as you. <code>ask Wactorz</code> needs the agent on
+<p>The prefix forwards the remaining text to main with <code>_via_interface=True</code> for restricted
+conversation, everyday Home Assistant device control, and delegation to its existing
+bounded allowlist. Main accepts this context only from a reviewed local catalogue
+program; that admission does not authenticate the original caller. Robot voice,
+agent tasks and MQTT input cannot issue operator commands, approve plans, or create
+or delete executable agents through this bridge. Type administrative commands directly
+in main's operator chat. Payload flags and source labels do not grant authority.
+<code>ask Wactorz</code> needs the agent on
 main: from a node it has no route there, since main does not take tasks from nodes, and
 Reachy answers from its own commands instead. The final text is returned to chat and spoken through Reachy's speaker.
 Without the prefix, Reachy handles its own robot, camera, speech, microphone, and

@@ -435,7 +435,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._handle_task(msg)
 
     async def _handle_task(self, msg: Message) -> None:
-        """Route interface tasks through the full orchestrator without blocking replies."""
+        """Route accepted interface tasks through restricted turns without blocking replies."""
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         if payload.get("_via_interface"):
             if not self._speaks_for_a_person(msg):
@@ -459,15 +459,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         await super()._handle_task(msg)
 
     def _speaks_for_a_person(self, msg: Message) -> bool:
-        """Whether ``msg``'s sender may hand main a person's turn (``_via_interface``).
+        """Whether a reviewed local program may supply interface conversation context.
 
-        That turn runs slash commands and acts on the spawn and delegate blocks
-        in the reply, as a message the operator typed does, so it is taken only
-        from a catalogue agent in this process still running the catalogue's
-        own program: one the project wrote. Code the model wrote, a catalogue
-        agent running a repair, and an agent the model configured, such as a
-        rule whose task action sends a body of its choosing, could otherwise
-        type ``/nodes run`` or ``/packages allow`` as the operator.
+        Trust in the intermediary does not authenticate its original input.
+        These turns always use restricted processing; operator commands belong
+        to the existing authenticated operator entry points, not actor payloads.
         """
         sender = self._registry.get(msg.sender_id) if self._registry else None
         return getattr(sender, "_trusted", False) is True
@@ -510,7 +506,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         logger.info("[%s] interface request from %s: %r", self.name, source or "unknown", text[:80])
         try:
             try:
-                reply = await self.process_user_input(text) if text else ""
+                reply = await self.process_user_input_restricted(text) if text else ""
                 clean_reply, interface_actions = self._extract_interface_actions(reply)
                 if interface_actions and not clean_reply:
                     clean_reply = "Okay."
@@ -875,8 +871,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return await self._process_user_input_restricted(text)
 
     async def _process_user_input_restricted(self, text: str) -> str:
-        """Social-channel (Discord/Telegram) entry point — the untrusted-surface
-        counterpart of process_user_input.
+        """Entry point for input without operator authorization, including social
+        channels and actor-forwarded interface conversation.
 
         Conversation, device control (ACTUATE), and HA queries only. Spawning,
         deleting, code, pipelines, admin commands, and delegation to

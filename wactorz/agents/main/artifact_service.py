@@ -27,8 +27,10 @@ keeps it, or an empty payload when it is unset, so a subscriber that comes up
 late sees the same as one that was there. Main publishes what the index says:
 everything at start, and from then on each change it finds, on a short interval,
 so a move the CLI makes beside the server reaches the broker without the two
-talking. A change found is also one line on the feed. Nobody else publishes
-there: a pointer is moved through the store, never by writing to its topic.
+talking. A change found is also one line on the feed, and is handed to the hot
+swap (`hot_swap`), which reloads the agents whose pins follow the pointer.
+Nobody else publishes there: a pointer is moved through the store, never by
+writing to its topic.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...config import ARTIFACT_MAX_BYTES
@@ -135,8 +137,16 @@ class TooLargeForNodeError(ArtifactError):
 class ArtifactService:
     """Pins the artifacts a spawn names, and sends them to the nodes that ask."""
 
-    def __init__(self, host: ArtifactHost | None = None) -> None:
+    def __init__(
+        self,
+        host: ArtifactHost | None = None,
+        *,
+        follow: Callable[[list[Change]], Awaitable[None]] | None = None,
+    ) -> None:
         self.host = host
+        #: Told each change the watcher finds, after it is published and
+        #: recorded: the hot swap, which reloads the agents that follow it.
+        self._follow = follow
         #: node -> the hashes main has sent it a spawn naming, this run. The
         #: registry says the same once a spawn is saved; this covers the moment
         #: before, when the node may already be asking.
@@ -303,6 +313,13 @@ class ArtifactService:
         # After the look is taken, so a database that refuses the record does
         # not make every later look announce the same change again.
         await self._record(changes, standing)
+        if changes and self._follow is not None:
+            try:
+                await self._follow(changes)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] cannot reload the agents that follow a pointer: %s", host.name, exc
+                )
 
     async def _record(
         self, changes: list[Change], standing: Mapping[tuple[str, str], Pointer | None]

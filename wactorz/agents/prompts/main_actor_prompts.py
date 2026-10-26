@@ -550,6 +550,11 @@ async def on_reading(payload):
   await agent.load_model(key)     — async; loads once: npz → dict of numpy arrays, npy → array,
                                     safetensors → dict of arrays, onnx → onnxruntime session,
                                     state_dict → torch tensors, raw → bytes
+  async def on_model(agent, key, model)  — optional; called when the version the model's pointer names
+                                    changes while the agent runs, with the newly loaded model (None if the
+                                    code opens the file itself through artifact_path). Replace what setup()
+                                    kept in agent.state here. Code that calls load_model on each use
+                                    gets the new version without it.
 Where STORED MODELS lists a model's arrays ("arrays mean[3], inverse_covariance[3x3]"), the code reads
 it by exactly those names and shapes; a key it does not list is not there.
 "model-name" alone means the version marked active, or the newest when none is marked (STORED MODELS

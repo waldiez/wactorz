@@ -677,6 +677,8 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
 | `nodes/{name}/reset` | → runner | Clear one agent's chat, state or counters here, or every agent's, as main has cleared its own records. Payload: `{"scope": "chat" \| "state" \| "metrics", "agent": "..." or null, "request": "..."}`. Signed. |
 | `nodes/{name}/reset_done` | ← runner | The reset done, quoting `request` and naming the agents it cleared (`"cleared": [...]`); a scope the node does not reach into is answered with none. |
+| `nodes/{name}/swap_model` | → runner | Have an agent here serve another version of a model it names, because the pointer its pin follows moved. Payload: `{"agent": "...", "key": "...", "entry": {pinned artifact}, "token": "..."}`. The node fetches the version as it fetched the first, swaps it in place, and keeps the old one if the new one will not load. Signed. |
+| `nodes/{name}/swap_ack` | ← runner | How the swap went, quoting the token: `{"ok": true}` with `from` and `to`, or `{"ok": false, "reason": "..."}`. |
 | `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |
 | `agents/{id}/logs` | ← agent | Log messages from `agent.log()` and `agent.alert()`. |

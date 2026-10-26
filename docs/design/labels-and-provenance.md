@@ -225,6 +225,8 @@ unverified label only within what the stream's policy allows without asking.
 - **Pointer moves** (built): each move of a model's `active` or `shadow` pointer is an
   `action` node, written by main when it sees the change (`wactorz/core/pointer_moves.py`),
   read back by `GET /api/models/{name}/moves`.
+- **Hot swaps** (built): each running agent reloaded because a pointer it follows moved is
+  an `action` node, `led_to` from the move (`wactorz/core/model_swaps.py`).
 - **The train step** writes an `action` for each run, a `model` node for the
   version it stores, `produced` and `trained` edges, and its window and splits
   in the action's payload.

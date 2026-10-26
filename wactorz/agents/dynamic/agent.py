@@ -483,6 +483,33 @@ class DynamicAgent(Actor):
         except Exception as e:
             logger.warning("[%s] on_answer() error: %s", self.name, e)
 
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The new version, to the program's ``on_model(agent, key, model)`` if it has one.
+
+        A program that keeps what it loaded in a local or in ``agent.state``
+        replaces it here; one that reads ``agent.load_model(key)`` on each
+        call needs nothing. ``model`` is None when the program opens the file
+        itself through ``agent.artifact_path(key)``, which now names the new
+        version. An error in the hook is the program's, said in the log: the
+        swap itself has landed.
+        """
+        hook = self._ns.get("on_model")
+        if not callable(hook):
+            await super().on_model_swapped(key, model)
+            return
+        try:
+            result = hook(self._api, key, model)
+            if inspect.isawaitable(result):
+                await _bounded_call(result, self._HANDLE_TASK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] on_model() timed out", self.name)
+        except _ProgramHalted as halted:
+            if isinstance(halted.original, KeyboardInterrupt):
+                raise halted.original from None
+            logger.warning("[%s] on_model() error: %s", self.name, halted.original)
+        except Exception as e:
+            logger.warning("[%s] on_model() error: %s", self.name, e)
+
     async def _run_generated_cleanup(self) -> None:
         """Give the generated code its chance to let go, under a timeout."""
         cleanup = self._ns.get("cleanup")
@@ -608,7 +635,7 @@ class DynamicAgent(Actor):
             self._fn_handle_task = self._ns.get("handle_task")
             fns = [
                 f
-                for f in ["setup", "process", "handle_task", "cleanup", "on_answer"]
+                for f in ["setup", "process", "handle_task", "cleanup", "on_answer", "on_model"]
                 if f in self._ns
             ]
             logger.info("[%s] Code compiled OK. Functions: %s", self.name, fns)

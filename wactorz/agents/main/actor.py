@@ -36,6 +36,7 @@ from .commands import CommandContext
 from .commands import registry as command_registry
 from .commands.info import terminal_command, terminal_command_reply
 from .delegation import DelegationManager
+from .hot_swap import HotSwap
 from .labels import LabelRecorder
 from .lifecycle import LifecycleService
 from .llm_bridge import LLMBridge
@@ -210,7 +211,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
-        self.artifact_service = ArtifactService(self)
+        self.hot_swap = HotSwap(self)
+        self.artifact_service = ArtifactService(self, follow=self.hot_swap.follow)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.placement = Placement(self)
@@ -351,6 +353,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self.artifact_service.listener()))
         # Say on models/<name>/active and /shadow where each model's pointers stand
         self._tasks.append(asyncio.create_task(self.artifact_service.pointer_watcher()))
+        # Hear how the agents on nodes took a moved pointer's version
+        self._tasks.append(asyncio.create_task(self.hot_swap.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

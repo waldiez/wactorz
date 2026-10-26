@@ -63,9 +63,9 @@ python run.py
 
 Each version keeps how it did on the same held-out readings: `caught` (jolts
 flagged) and `false_alarms` (normal readings flagged). The dashboard's API lists
-them with the pointers, and moves a pointer; the agent serves the version it
-moved to once `run.py` is started again. `API_KEY` is the one in `.env`, if
-you set one:
+them with the pointers, and moves a pointer; a running agent serves the version
+it moved to from the next reading, without a restart, and the feed says so.
+`API_KEY` is the one in `.env`, if you set one:
 
 ```bash
 curl -s localhost:8888/api/models/imu-detector -H "X-API-Key: $API_KEY"

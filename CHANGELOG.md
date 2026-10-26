@@ -38,6 +38,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (one made with the CLI beside the server is recorded without a name), and a shadow ended
   by a promotion is recorded as part of it. Kept in the provenance graph in main's
   database; the store's index format does not change.
+- **A running agent follows its model's pointer, without a restart.** An agent whose
+  spawn named a model by its bare name, or as `NAME:active` or `NAME:shadow`, serves the
+  version that pointer moves to as soon as it has loaded: promote, roll back, point at a
+  new version from `train.py --set active`, the dashboard or chat, and every agent that
+  follows the pointer, on main or on a node, swaps in place. The old version is served
+  until the new one is in memory, and one that will not load leaves the agent as it was,
+  with the reason on the feed. An agent that named a version is left alone, and a
+  pointer cleared moves nobody. Generated code that keeps what it loaded in `agent.state`
+  can define `async def on_model(agent, key, model)` to take the new one; code that calls
+  `await agent.load_model(key)` as it goes, like the IMU example's function, needs
+  nothing. Each swap that landed is an `action` in the provenance graph, joined to the
+  move that caused it, and one line on the feed. A node takes the new version only from
+  a command main signed; the version is fetched the way the first was.
 
 ### Changed
 

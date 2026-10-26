@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **How two agents can share a name is decided, before it is built.** `docs/design/agent-identity.md` records the following. A name is unique per node, and `name@node` is the full address, with a bare name working while it is unique. An agent's id is minted at spawn and kept across restarts and moves. An ambiguous bare name is answered with a question, never guessed. Tasks are routed by node. A spawn says whether it moves an agent or adds a second one. An optional `WACTORZ_NAMESPACE` puts an install's own control topics under a prefix, while the world topics stay shared. An upgrade changes nothing that is configured. The record also lists what was decided against. Nothing changes until it is built.
 - **An operator's answer can become a label, and labels live in a provenance graph.** `ask_operator(..., label={"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance": "maintenance", "Real problem": "fault"}})` makes the answer a record that the source was doing something from `start` (to `end`, open when unsaid), in event time; an option the spec leaves out, such as "Not sure", makes none, and a spec that cannot be used is refused before the question is sent. The agent keeps the spec in its question book, and main writes the label once the book says the question was answered, for an agent on main or on a node; it takes a book only from where its agent is, as it takes a manifest, so a node cannot answer for another node's agent. A later label on the same source supersedes an earlier one wherever their windows overlap, without editing it: the earlier one is kept, `partly_superseded` or `superseded`, and what held when is the newest label at each moment. A label from an answer the dashboard sent is marked verified; one heard on the broker, where anything can publish an answer, is not. An agent on main can write its own with `agent.label(source, value, start=...)`, and a rule with the new `label` action, from when its trigger says it happened. `GET /api/labels` lists labels by source and event-time window, and `GET /api/labels/effective` resolves a source into what held when. Labels are nodes of a new provenance graph in main's database, two tables of nodes and of edges from cause to effect, which the rest of the model loop will record its decisions and actions in; the database migrates to it at start. See `docs/design/labels-and-provenance.md`.
 
 - **Event time, labels and the provenance graph are decided, before they are built.** `docs/design/event-time.md` records that the model loop reads when a thing happened, as the payload says (`ts`, then `timestamp`, then the arrival time marked as such), rather than when the message arrived; that clocks far in the future are reported rather than trusted; that "now" is per source; and what the collector and `StreamWindow` change for it. `docs/design/labels-and-provenance.md` records that a label covers a period of a source; that an answer becomes one when its question says how; that a later answer supersedes an earlier one over their overlap without editing it; that labels, questions, decisions, actions, model versions and outcomes are nodes of one graph in main's database, joined from cause to effect; that an overridden answer produces a plan for review rather than undoing what followed; who may write the graph; and what was decided against. The rest of the model loop builds on both; nothing changes until it is built.
@@ -37,6 +38,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (one made with the CLI beside the server is recorded without a name), and a shadow ended
   by a promotion is recorded as part of it. Kept in the provenance graph in main's
   database; the store's index format does not change.
+- **A running agent follows its model's pointer, without a restart.** An agent whose
+  spawn named a model by its bare name, or as `NAME:active` or `NAME:shadow`, serves the
+  version that pointer moves to as soon as it has loaded: promote, roll back, point at a
+  new version from `train.py --set active`, the dashboard or chat, and every agent that
+  follows the pointer, on main or on a node, swaps in place. The old version is served
+  until the new one is in memory, and one that will not load leaves the agent as it was,
+  with the reason on the feed. An agent that named a version is left alone, and a
+  pointer cleared moves nobody. Generated code that keeps what it loaded in `agent.state`
+  can define `async def on_model(agent, key, model)` to take the new one; code that calls
+  `await agent.load_model(key)` as it goes, like the IMU example's function, needs
+  nothing. Each swap that landed is an `action` in the provenance graph, joined to the
+  move that caused it, and one line on the feed. A node takes the new version only from
+  a command main signed; the version is fetched the way the first was.
 
 ### Changed
 
@@ -183,6 +197,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the dashboard was away shows its answer and loses its notice; one its agent no longer
   lists goes from the thread and its notice with it.
 - **A notice being closed is no longer read out or reachable with Tab while it fades.**
+
+- **Speaking to an agent through a voice surface opens its conversation as typing to it does.**
+  The address names it and a reload opens there; before, the thread switched but the address
+  stayed on the previous agent, and outside the chat view so did the composer.
+- **The attachment tray's remove buttons say what they remove** ("Remove notes.txt") to a
+  screen reader, which read each one as "times".
+- **The activity feed shows a message to you as its words, the same from every channel.** The
+  `→ user:` prefix is gone from agents' own messages; one an agent sends to another still
+  says whom it was to.
 
 ## [0.7.2] - 2026-10-25
 

@@ -248,6 +248,34 @@ describe("main.ts bootstrap", () => {
         expect(said).toEqual([true, false]);
     });
 
+    it("takes a reply on the socket and an agent's own message down the same path", () => {
+        const feed: FeedItem[] = [];
+        const arrived: unknown[] = [];
+        const onFeed = listen("af-feed-push", detail => feed.push(detail.item));
+        const onChat = listen("af-chat-message", detail => arrived.push(detail.msg));
+
+        wsHandler("chat")("on the socket", "weather", 1_000, "user");
+        routerHandler("chat")({
+            id: "r1",
+            from: "weather",
+            to: "user",
+            content: "on its own",
+            timestampMs: 2_000,
+        });
+        routerHandler("chat")({
+            id: "r2",
+            from: "weather",
+            to: "catalog",
+            content: "do it",
+            timestampMs: 3_000,
+        });
+
+        document.removeEventListener("af-feed-push", onFeed);
+        document.removeEventListener("af-chat-message", onChat);
+        expect(feed.map(i => i.label)).toEqual(["on the socket", "on its own", "→ catalog: do it"]);
+        expect(arrived).toHaveLength(3);
+    });
+
     it("goes live only when both the /ws is open and the broker is up, then seeds once", () => {
         wsHandler("connected")(); // wsOpen=true, but broker still down → not live yet
         wsHandler("mqttStatus")(true); // both up → live: prunes + seeds
@@ -390,8 +418,8 @@ describe("main.ts bootstrap", () => {
         emit("af-stream-end", { text: "done", from: "A" });
         emit("af-stream-end", { text: "", from: "A" }); // !text → return
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
-        emit("af-send-message", { content: "hi", target: "A", attachments: [] }); // agent found
-        emit("af-send-message", { content: "hi", target: "nope", attachments: [] }); // null
+        emit("af-send-message", { id: "s1", content: "hi", target: "A", attachments: [] }); // agent found
+        emit("af-send-message", { id: "s2", content: "hi", target: "nope", attachments: [] }); // null
         emit("af-wipe-all", { survivors: ["a"] });
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));

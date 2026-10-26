@@ -51,6 +51,9 @@ CONTROL_TOPICS = frozenset(
         # Clear one agent's chat, state or counters here, or every agent's, as
         # main has cleared its own records of them.
         "reset",
+        # Have an agent here serve another version of a model it names, with
+        # the new pin: a pointer the agent's pin follows has moved.
+        "swap_model",
         # An agent's blob, in chunks, as main places it here, and an artifact an
         # agent here names, as main answers `artifact_request`. Not signed: the
         # signed spawn names its hash, and only a match is used.
@@ -80,6 +83,8 @@ REPORT_TOPICS = frozenset(
         "artifact_request",
         # A reset done, quoting main's request and naming the agents it cleared.
         "reset_done",
+        # How a swap went, quoting main's token: the version served now, or why not.
+        "swap_ack",
     }
 )
 

@@ -30,6 +30,7 @@ CONTROL_HANDLERS = [
     ("list", "_on_list"),
     ("code_request", "_on_code_request"),
     ("reset", "_on_reset"),
+    ("swap_model", "_on_swap_model"),
 ]
 
 
@@ -203,6 +204,7 @@ class TestTheControlConnection:
             "nodes/rpi/list",
             "nodes/rpi/code_request",
             "nodes/rpi/reset",
+            "nodes/rpi/swap_model",
             "nodes/rpi/reply/#",
             "nodes/rpi/blob/+",
             "agents/by-name/+/task",

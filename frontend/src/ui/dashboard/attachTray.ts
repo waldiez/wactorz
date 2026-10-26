@@ -9,7 +9,7 @@
  */
 import type { Attachment } from "../../types/agent";
 import { isImage } from "./uploads";
-import { button, el } from "../dom";
+import { button, el, labelled } from "../dom";
 
 /** Render the pending-attachment chips into the iobar tray; `×` routes back through `onRemove`. */
 export function renderAttachTray(
@@ -24,8 +24,10 @@ export function renderAttachTray(
     tray.innerHTML = "";
     attachments.forEach((att, i) => {
         const chip = el("span", "af-attach-chip");
-        const label = el("span", "af-attach-chip-label", isImage(att) ? `Image #${i + 1}` : att.name);
-        const remove = button("af-attach-chip-x", "×");
+        const name = isImage(att) ? `Image #${i + 1}` : att.name;
+        const label = el("span", "af-attach-chip-label", name);
+        // Named after what it removes: "×" alone is read out as "times".
+        const remove = labelled(button("af-attach-chip-x", "×"), `Remove ${name}`);
         remove.title = "Remove attachment";
         remove.addEventListener("click", () => onRemove(att));
         chip.append(label, remove);

@@ -24,8 +24,11 @@ export interface AppEventMap {
     "af-connection-status": { status: ConnState };
     "af-attachment-added": { attachment: Attachment };
     "af-agent-command": { command: string; agentId: string };
-    "af-send-message": { content: string; target: string; attachments: string[] };
-    "af-send-failed": { content: string; target: string };
+    /** The chat puts a message on the wire: `id` is its bubble's, and comes back on
+     *  `af-send-failed` should the send not go out. */
+    "af-send-message": { id: string; content: string; target: string; attachments: string[] };
+    /** The send `id` did not go out: the socket was closed. */
+    "af-send-failed": { id: string; content: string; target: string };
     /** A piece of `from`'s streamed reply, and the reply so far (`text`). */
     "af-stream-chunk": { chunk: string; from: string; text: string };
     /** `from`'s streamed reply ended; `text` is all of it, empty when nothing came. */

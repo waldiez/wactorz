@@ -68,7 +68,7 @@ export class IOManager {
     // Async for the caller-facing contract; the transport calls (WS send / MQTT
     // publish) are fire-and-forget, so there's nothing to await.
     // eslint-disable-next-line @typescript-eslint/require-await
-    async send(text: string, agent: AgentInfo | null, attachments: string[] = []): Promise<void> {
+    async send(text: string, agent: AgentInfo | null, attachments: string[] = [], id = uid()): Promise<void> {
         let content = text;
         // Prepend @name if a specific agent is selected and no prefix given. Not
         // for a slash command: it is answered by the orchestrator before any
@@ -93,9 +93,9 @@ export class IOManager {
                 title: "Disconnected",
                 message: "Reconnecting — the message goes once the connection is back.",
             });
-            // The dashboard rendered the bubble before this attempt: it keeps it
-            // waiting to send, or rolls it back (the pre-mention text matches it).
-            emit("af-send-failed", { content: text, target: agent?.name ?? MAIN_AGENT });
+            // The dashboard rendered the bubble before this attempt, under `id`:
+            // it keeps it waiting to go once the connection is back.
+            emit("af-send-failed", { id, content: text, target: agent?.name ?? MAIN_AGENT });
             return;
         }
 

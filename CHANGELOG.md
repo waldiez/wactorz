@@ -21,6 +21,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   volume, and Wactorz/Home Assistant.
 - **Reachy says what voice input is missing before it listens.** Without a Deepgram key, or with the chosen recognizer not installed, `start conversation` and `listen and ask Wactorz` now refuse with the fix instead of failing after someone has spoken. A conversation that ends by itself (nobody spoke, repeated failures) says why in chat. New guides in `docs/reachy/` for users, developers and demonstrators, and `scripts/reachy_sim_check.py` runs the agent against the SDK's simulated robot.
 
+- **The IMU example trains versions you can compare, and asks about what it finds.**
+  `train.py --seed --samples` stores each version with how it did on the same held-out
+  readings (`caught`, `false_alarms`), and `--set active` or `--set shadow` points at it;
+  the agent serves the active one. A new `triage` agent asks on the dashboard whether a
+  strong jolt was maintenance or a real problem, and with main running the answer is kept
+  as a label of the device (`GET /api/labels`). `publish_imu.py` uses the broker settings
+  and credentials Wactorz itself is configured with, so it reaches a broker with a password,
+  and each reading carries its device and time.
+
 ### Changed
 
 - **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,

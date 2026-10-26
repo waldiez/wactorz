@@ -10,19 +10,23 @@ language model.
 | File | Role |
 | ---- | ---- |
 | `model.py` | The model: fitting it to normal motion, as two named arrays, and scoring a reading with them. |
-| `train.py` | Fits it on synthetic "normal" motion, writes `imu_model.npz` and keeps it on main as `imu-detector`. Stands in for your own training. |
+| `train.py` | Fits it on synthetic "normal" motion, writes `imu_model.npz` and keeps it on main as a new version of `imu-detector`, with its score on held-out readings; `--set active` or `--set shadow` points at it. Stands in for your own training. |
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
-| `run.py` | Starts Wactorz with that agent, in the minimal profile; `--with-main` starts main, the planner and the catalogue around it. |
+| `triage.py` | Asks a person whether a strong anomaly was maintenance or a real problem; the answer becomes a label of the device. |
+| `run.py` | Starts Wactorz with the detector and triage, in the minimal profile; `--with-main` starts main, the planner and the catalogue around them. |
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
 | `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
 | `fastapi_app.py` | The same, inside a FastAPI app: the system on the web app's loop, started and stopped by its lifespan, with routes that reach the running agent. |
-| `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal, to the broker `MQTT_HOST`/`MQTT_PORT` name (`localhost:1883` by default). |
+| `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal, each with its device and time, to the broker Wactorz is configured for (`localhost:1883` by default). |
 | `ask.py` | Starts the detector and asks it two questions with `wactorz.ask`, then stops. |
 
 ## Run it
 
 You need a broker on `localhost:1883` (`docker compose up mosquitto` from the
-repository root works) and the package installed (`pip install wactorz`).
+repository root works) and the package installed (`pip install wactorz`). A
+broker with a password, as the repository's is, needs the same `MQTT_USERNAME`
+and `MQTT_PASSWORD` for Wactorz and `publish_imu.py`: in the environment, or in
+the repository's `.env` when you run from a checkout.
 
 ```bash
 cd examples/imu_anomaly
@@ -33,8 +37,9 @@ python publish_imu.py    # in another terminal
 
 `train.py` keeps the model where Wactorz keeps models, in the `state/` folder
 beside these scripts, which is the state directory they all run with. Each run
-stores a new version, and the agent loads the newest. Without one stored, the
-agent does not start, and the error names the model it looked for.
+stores a new version, and the agent loads the one set active, or the newest
+while none is. Without one stored, the agent does not start, and the error
+names the model it looked for.
 
 The agent card on the dashboard shows the detector running and its message
 counter climbing. The feed shows a `Listening on sensors/imu/#` line at start and
@@ -46,10 +51,38 @@ anomalies themselves go out on `anomalies/imu`:
 mosquitto_sub -t 'anomalies/imu'
 ```
 
+## Versions and questions
+
+Train two more versions and point at them, then start again:
+
+```bash
+python train.py --seed 1 --samples 10 --set shadow   # catches more, false alarms too
+python train.py --seed 11 --samples 5000 --set active
+python run.py
+```
+
+Each version keeps how it did on the same held-out readings: `caught` (jolts
+flagged) and `false_alarms` (normal readings flagged). The dashboard's API lists
+them with the pointers, and moves a pointer; the agent serves the version it
+moved to once `run.py` is started again. `API_KEY` is the one in `.env`, if
+you set one:
+
+```bash
+curl -s localhost:8888/api/models/imu-detector -H "X-API-Key: $API_KEY"
+curl -s -X POST localhost:8888/api/models/imu-detector/active -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" -d '{"version": 1, "reason": "back to the first"}'
+```
+
+With `publish_imu.py` running, the first strong jolt makes `triage` ask on the
+dashboard: maintenance, or a real problem? With main running (`python run.py
+--with-main --llm fake`) the answer is kept as a label of `sensors/imu/left-wrist`
+from the jolt's time on, which `GET /api/labels` lists. The device is asked about
+again only after `COOLDOWN_S`.
+
 ## Ask it from chat
 
 **Without a model.** `python run.py` alone is the minimal profile: the monitor,
-the dashboard and the detector, no main and no model. The dashboard chat at
+the dashboard, the detector and triage, no main and no model. The dashboard chat at
 `http://localhost:8888/` still reaches the agent. Type a reading as JSON after
 its name and the function's return value is the reply:
 

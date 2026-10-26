@@ -195,6 +195,28 @@ class RuleCondition:
             return False
 
 
+def _checked_question(
+    raw: dict[str, Any], options: tuple[str, ...], channel: str, timeout: float
+) -> tuple[tuple[str, ...], str]:
+    """An ``ask_operator`` action's options and channel, cleaned, or why it cannot ask.
+
+    The checks run in the order a reader meets the fields, so a question with
+    more than one fault is refused for the first.
+    """
+    if not str(raw.get("text", "")).strip():
+        raise RuleError.question_without_text()
+    try:
+        options = check_options(options)
+        channel = check_channel(channel)
+    except ValueError as exc:
+        raise RuleError.bad_question(exc) from None
+    if not options:
+        raise RuleError.question_without_options()
+    if timeout < 0:
+        raise RuleError.negative_timeout()
+    return options, channel
+
+
 @dataclass(frozen=True)
 class RuleAction:
     """What a rule does once its conditions hold."""
@@ -228,17 +250,7 @@ class RuleAction:
         channel = str(raw.get("channel", ""))
         timeout = float(raw.get("timeout", 0.0) or 0.0)
         if kind == "ask_operator":
-            if not str(raw.get("text", "")).strip():
-                raise RuleError.question_without_text()
-            try:
-                options = check_options(options)
-                channel = check_channel(channel)
-            except ValueError as exc:
-                raise RuleError.bad_question(exc) from None
-            if not options:
-                raise RuleError.question_without_options()
-            if timeout < 0:
-                raise RuleError.negative_timeout()
+            options, channel = _checked_question(raw, options, channel, timeout)
         action = cls(
             type=kind,
             topic=str(raw.get("topic", "")),
@@ -255,17 +267,22 @@ class RuleAction:
             source=str(raw.get("source", "")).strip(),
             value=str(raw.get("value", "")).strip(),
         )
-        if kind == "label" and not action.source:
-            raise RuleError.label_without_source()
-        if kind == "label" and not action.value:
-            raise RuleError.label_without_value()
-        if kind == "publish" and not action.topic:
-            raise RuleError.publish_without_topic()
-        if kind == "task" and not action.agent:
-            raise RuleError.task_without_agent()
-        if kind == "webhook" and not action.url.startswith(("http://", "https://")):
-            raise RuleError.webhook_without_url()
+        action._check_required()
         return action
+
+    def _check_required(self) -> None:
+        """Refuse an action that lacks what its kind cannot run without."""
+        if self.type == "label":
+            if not self.source:
+                raise RuleError.label_without_source()
+            if not self.value:
+                raise RuleError.label_without_value()
+        elif self.type == "publish" and not self.topic:
+            raise RuleError.publish_without_topic()
+        elif self.type == "task" and not self.agent:
+            raise RuleError.task_without_agent()
+        elif self.type == "webhook" and not self.url.startswith(("http://", "https://")):
+            raise RuleError.webhook_without_url()
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type, "payload": dict(self.payload)}

@@ -145,9 +145,10 @@ async def _dispatch(topic: str, payload: str) -> None:
                 agent_name = (
                     push.get("to", "agent") if role == "user" else push.get("from", "agent")
                 )
-                # The options go into the stored text: a reloaded thread has no
-                # buttons, and a question without its choices reads as half of one.
-                stored = numbered(push["content"], push.get("options") or ())
+                # The options go into the stored text, so a question reads whole
+                # wherever the row is shown; /api/chats gives a row the ledger
+                # still knows its buttons back (`questions.asked_in`).
+                stored = numbered(push["content"], push.get("options") or (), reply_hint=False)
                 runtime.db.write_chat_log(
                     ts=push.get("timestamp", time.time()),
                     agent_name=agent_name,

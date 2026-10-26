@@ -270,18 +270,24 @@ def note_text(raw: Any) -> str:
     return raw.strip()[:MAX_NOTE_CHARS] if isinstance(raw, str) else ""
 
 
-def numbered(text: str, options: Sequence[str]) -> str:
+#: The line that tells a person on a channel with no buttons how to answer.
+REPLY_HINT = "Reply with the number."
+
+
+def numbered(text: str, options: Sequence[str], *, reply_hint: bool = True) -> str:
     """``text`` with its options as a numbered list, for a channel with no buttons.
 
     The person answers with the number or the option's words; see
-    :func:`pick_option`. Without options the text goes as it is.
+    :func:`pick_option`. Without options the text goes as it is. Without
+    ``reply_hint`` the list is only a record of what was offered, as the
+    dashboard keeps it: an answer there is a button, not a reply.
     """
     if not options:
         return text
     lines = [text, ""]
     lines.extend(f"{n}. {option}" for n, option in enumerate(options, start=1))
-    lines.append("")
-    lines.append("Reply with the number.")
+    if reply_hint:
+        lines += ["", REPLY_HINT]
     return "\n".join(lines)
 
 

@@ -208,6 +208,20 @@ Query the persistent chat log table. Query parameters:
 | `since` | Unix timestamp float — only newer rows |
 | `limit` | max rows (default 200, max 1000) |
 
+An agent's question is stored as its words with the options numbered under them. A row that
+is a question the ledger still knows (`GET /api/questions`) carries it, so the dashboard can
+show it with its buttons, or with the pick once it is answered:
+
+```json
+{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "role": "assistant",
+ "content": "Did something change at 14:02?\n\n1. maintenance\n2. real problem",
+ "question": {"id": "3f2a…", "agent_id": "…", "text": "Did something change at 14:02?",
+              "options": ["maintenance", "real problem"], "answer": null}}
+```
+
+The same words asked more than once are told apart by time: a row is the question asked
+nearest it.
+
 ---
 
 ### `GET /api/commands`

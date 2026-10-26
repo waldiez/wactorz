@@ -385,6 +385,23 @@ class TestLocalInstall:
 
         assert result["restart_required"] == []
 
+    async def test_a_retry_keeps_the_restart_even_when_nothing_needs_installing(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _pip(installer, monkeypatch)
+        replaced = ["websockets 16.1.1 -> 15.0.1"]
+        monkeypatch.setattr(installer_agent, "installed_versions", dict)
+        monkeypatch.setattr(installer_agent, "stale_loaded_distributions", lambda _a, _b: replaced)
+        first = await installer._install_packages(["numpy"], ask=False)
+        assert first["restart_required"] == replaced
+
+        for current in (installer, InstallerAgent(persistence_dir=str(tmp_path / "replacement"))):
+            ran = _pip(current, monkeypatch, installed={"numpy"})
+            retry = await current._install_packages(["numpy"], ask=False)
+            assert retry["success"] is True
+            assert retry["restart_required"] == replaced
+            assert ran == []
+
     @pytest.mark.parametrize(
         ("requested", "alternative"),
         [("duckduckgo-search", "ddgs"), ("pdfplumber", "pymupdf")],

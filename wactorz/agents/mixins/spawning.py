@@ -43,7 +43,7 @@ from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
-from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements
+from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements, pending_restart
 from ...core.state_codec import decode_state
 from ...core.topics import topic_name_error
 from ...plugins import for_target
@@ -650,6 +650,11 @@ class SpawnMixin(_Host):
         and registers a TopicContract when the config declares pub/sub topics so
         the agent is eligible for auto-wiring on the TopicBus.
         """
+        if config.get("require_install_success") is True and (replaced := pending_restart()):
+            await self._report_install_problem(
+                config, name, InstallOutcome(restart_required=replaced)
+            )
+            return None
         artifacts, problem = await asyncio.to_thread(_readable_here, config)
         if problem:
             logger.error("[%s] Not spawning '%s': its artifacts: %s", self.name, name, problem)

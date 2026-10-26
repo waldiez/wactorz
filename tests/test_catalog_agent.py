@@ -19,6 +19,7 @@ import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -641,6 +642,52 @@ class TestDynamicSpawn:
         # Recorded, so the restart the message asks for brings it up.
         assert [cfg["name"] for cfg in main.spawn_registry] == ["reachy-mini"]
         assert main.spawn_registry[0]["trusted"] is True
+
+    @pytest.mark.parametrize("background", [False, True])
+    async def test_retries_cannot_bypass_a_required_restart(
+        self,
+        catalog: CatalogAgent,
+        main: _Main,
+        monkeypatch: pytest.MonkeyPatch,
+        background: bool,
+    ) -> None:
+        installer = _Installer(
+            catalog, {"failed": [], "restart_required": ["websockets 16.1.1 -> 15.0.1"]}
+        )
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(
+            catalog_agent,
+            "missing_requirements",
+            Mock(side_effect=[["reachy-mini"], [], [], [], []]),
+        )
+        spawner = _spawner(catalog, monkeypatch)
+
+        first = await catalog._action_spawn("reachy-mini", {}, background_install=background)
+        if background:
+            assert first["installing"] is True
+            await asyncio.gather(*list(catalog._tasks))
+        else:
+            assert first["restart_required"] is True
+
+        for _attempt in range(2):
+            result = await catalog._action_spawn("reachy-mini", {})
+            assert result["ok"] is False
+            assert result["restart_required"] is True
+            assert "restart Wactorz" in result["message"]
+        assert spawner.calls == []
+        assert len(installer.requests) == 1
+
+        ordinary = await catalog._action_spawn("anomaly-detector", {})
+        assert ordinary["ok"] is True
+        assert [kwargs["name"] for _cls, kwargs in spawner.calls] == ["anomaly-detector"]
+
+        recreated = CatalogAgent(persistence_dir=str(main._persistence_dir.parent))
+        recreated._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        recreated._mqtt_client = _Broker()
+        new_spawner = _spawner(recreated, monkeypatch)
+        retry = await recreated._action_spawn("reachy-mini", {})
+        assert retry["restart_required"] is True
+        assert new_spawner.calls == []
 
     async def test_a_typed_request_replies_at_once_and_reports_the_outcome_later(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch

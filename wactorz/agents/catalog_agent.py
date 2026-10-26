@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 from .. import plugins
 from ..core.actor import Actor, Message, MessageType, ReplyError
 from ..core.paths import resolve_state_dir
-from ..core.pip import missing_requirements
+from ..core.pip import missing_requirements, pending_restart
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
 from .lookup import find_main_actor
@@ -1132,6 +1132,8 @@ class CatalogAgent(Actor):
 
     async def _spawn_dynamic(self, name: str, recipe: dict, beta_warning: str) -> dict:
         """Start a dynamic recipe whose packages are in place, and record it."""
+        if recipe.get("require_install_success") is True and (replaced := pending_restart()):
+            return self._install_failed(name, recipe, InstallOutcome(restart_required=replaced))
         main = find_main_actor(self._registry)
         actor = await self.spawn(
             DynamicAgent,

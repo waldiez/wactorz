@@ -57,6 +57,17 @@ def is_installable_name(package: str) -> bool:
 PIP_INSTALL_TIMEOUT_S = 900.0
 
 
+#: Replaced loaded packages belong to the interpreter's lifetime, not an actor's.
+#: Keep this in memory: a new process loads the installed versions normally.
+_RESTART_REQUIRED: set[str] = set()
+
+
+def pending_restart(replaced: Sequence[str] = ()) -> list[str]:
+    """Remember replaced loaded packages and return this process's restart reasons."""
+    _RESTART_REQUIRED.update(replaced)
+    return sorted(_RESTART_REQUIRED)
+
+
 def install_wait_s(package_count: int) -> float:
     """How long a caller should wait for the installer to finish `package_count`.
 

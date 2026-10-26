@@ -15,7 +15,7 @@ from typing import Any
 
 from ..core.actor import ReplyError, ask_through
 from ..core.packages import APPROVAL_TIMEOUT_S
-from ..core.pip import install_wait_s
+from ..core.pip import install_wait_s, pending_restart
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ def outcome_from_result(result: Any) -> InstallOutcome:
     }
     return InstallOutcome(
         failed=failed,
-        restart_required=list(result.get("restart_required") or []),
+        restart_required=pending_restart(result.get("restart_required") or []),
         refused=list(result.get("refused") or []),
         error=str(result.get("error") or ""),
     )

@@ -62,6 +62,7 @@ from ..core.pip import (
     installer_command,
     is_installable_name,
     make_user_site_importable,
+    pending_restart,
     requirement_is_satisfied,
     stale_loaded_distributions,
 )
@@ -808,7 +809,7 @@ class InstallerAgent(Actor):
             "results": results,
             "failed": failed,
             "success": len(failed) == 0,
-            "restart_required": restart_required,
+            "restart_required": pending_restart(restart_required),
             "message": f"Installed {len(results) - len(failed)}/{len(results)} packages",
         }
 

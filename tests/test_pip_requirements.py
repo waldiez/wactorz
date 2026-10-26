@@ -10,6 +10,7 @@ is reported, because nothing but a restart makes the new version usable.
 
 import importlib.metadata
 import site
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -240,3 +241,30 @@ def test_a_specifier_that_cannot_be_read_is_not_met() -> None:
 
 def test_an_empty_requirement_is_never_met() -> None:
     assert requirement_is_satisfied("") is False
+
+
+def test_restart_reasons_are_retained_without_exposing_mutable_state() -> None:
+    replaced = ["websockets 16.1.1 -> 15.0.1"]
+    assert pip.pending_restart(replaced) == replaced
+    returned = pip.pending_restart()
+    returned.clear()
+    assert pip.pending_restart(replaced) == replaced
+    assert pip.pending_restart() == replaced
+
+
+def test_a_new_process_has_no_pending_package_restart() -> None:
+    pip.pending_restart(["websockets 16.1.1 -> 15.0.1"])
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from wactorz.core.pip import pending_restart; print(pending_restart())",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=20,
+    )
+
+    assert result.stdout.strip() == "[]"
+    assert pip.pending_restart() == ["websockets 16.1.1 -> 15.0.1"]

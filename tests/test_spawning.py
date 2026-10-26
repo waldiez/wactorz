@@ -20,6 +20,7 @@ from typing import cast
 import pytest
 
 from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
+from wactorz.agents.dependency_install import outcome_from_result
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
@@ -436,6 +437,26 @@ def test_an_install_needing_a_restart_keeps_the_agent_for_after_it(main_host):
     assert {cfg["name"] for cfg in main_host.registered} == {"d7"}
     (told,) = main_host.told
     assert "restart Wactorz" in told
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_installed_packages_cannot_bypass_a_strict_restart(main_host, monkeypatch, strict):
+    outcome_from_result({"restart_required": ["websockets 16.1.1 -> 15.0.1"]})
+    monkeypatch.setattr(spawning, "missing_requirements", lambda _packages: [])
+    config = {
+        "name": "retry",
+        "type": "dynamic",
+        "code": "x",
+        "install": ["numpy"],
+        "require_install_success": strict,
+    }
+
+    result = run(main_host._spawn_local_from_config(config, blocking_install=True))
+
+    assert (result is None) is strict
+    assert bool(main_host.spawn_calls) is not strict
+    if strict:
+        assert "restart Wactorz" in main_host.told[0]
 
 
 def test_the_install_request_asks_for_chat_progress(main_host):

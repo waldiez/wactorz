@@ -102,7 +102,7 @@ interruption (plain `start conversation`). Interruption is off unless asked for.
 
 | Message | Do this |
 | --- | --- |
-| "…restart Wactorz once to finish; reachy-mini will start by itself after the restart" | Normal when the packages are installed at spawn. Restart Wactorz. Installing with the `reachy` extra avoids it. |
+| "…restart Wactorz once to finish; reachy-mini will start by itself after the restart" | Restart the Wactorz process. Retrying the spawn or restarting only the agent cannot clear replaced packages from Python's memory. Installing with the `reachy` extra before Wactorz starts avoids this. |
 | "…some of its packages failed to install" | Fix what pip's error names (usually the network), then `@catalog spawn reachy-mini` again. |
 | "This Python environment … has no pip" | `python -m ensurepip --upgrade`, or put `uv` on the `PATH`. |
 | "the Python module '…' is not installed" | `@catalog spawn reachy-mini` again, or install the `reachy` extra. |

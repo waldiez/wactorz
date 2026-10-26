@@ -35,8 +35,10 @@ override is used. Linux also needs the native libraries below.
 ## Option A: from a clone, with the lock file (recommended)
 
 This installs the exact locked versions. Both pip and uv use the SDK's published
-secure Starlette requirements. The universal lock still selects websockets 15
-because the SDK requires versions below 16, including for default locked installs.
+secure Starlette requirements. On Python 3.11 and newer the universal lock selects
+websockets 15 because the SDK requires versions below 16, including for default
+locked installs without Reachy. Python 3.10 retains websockets 16. Installing with
+pip resolves only the requested extras and does not apply the universal lock.
 
 ```bash
 git clone https://github.com/waldiez/wactorz.git

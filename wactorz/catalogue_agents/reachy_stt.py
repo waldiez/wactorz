@@ -1,8 +1,7 @@
 """Configurable speech-to-text backends for the Reachy Mini voice interface.
 
-Also serves the dashboard's microphone through the `stt` web extension, so the
-module imports with the standard library alone. All optional dependencies,
-numpy included, are imported lazily. This experimental branch uses
+The module imports with the standard library alone. All optional dependencies,
+numpy included, are imported lazily. Reachy uses
 Deepgram by default, so voice clips are uploaded when a Deepgram API key is
 configured. Local Whisper backends remain available by explicit selection.
 """

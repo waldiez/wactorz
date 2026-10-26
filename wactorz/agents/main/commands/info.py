@@ -34,20 +34,30 @@ def help_line(form: Form) -> str:
     return f"  {form.usage:<23} — {form.summary}"
 
 
-def help_lines(commands: Iterable[Command]) -> list[str]:
-    """`/help`, from the commands' own forms: under each heading, in `groups.ORDER`.
+def help_sections(commands: Iterable[Command]) -> list[tuple[str, list[Form]]]:
+    """What `/help` lists: each heading, in `groups.ORDER`, with its forms.
 
     Within a heading, alphabetical by what is typed, so a reader scanning for a
     command finds it where they expect; the notes that are not commands follow.
+    A heading with nothing under it is left out. The docs' command table is
+    written from this too, so the two cannot disagree.
     """
     grouped: dict[str, list[Form]] = {group: [] for group in ORDER}
     for described in commands:
         grouped.setdefault(described.group or SYSTEM, []).extend(described.forms)
-    lines = ["**Wactorz commands**"]
+    sections: list[tuple[str, list[Form]]] = []
     for group, forms in grouped.items():
         listed = sorted(forms, key=lambda form: form.usage) + list(HELP_NOTES.get(group, ()))
         if listed:
-            lines += ["", f"**{group}**", *(help_line(form) for form in listed)]
+            sections.append((group, listed))
+    return sections
+
+
+def help_lines(commands: Iterable[Command]) -> list[str]:
+    """`/help`, from the commands' own forms, as `help_sections` orders them."""
+    lines = ["**Wactorz commands**"]
+    for group, forms in help_sections(commands):
+        lines += ["", f"**{group}**", *(help_line(form) for form in forms)]
     return lines
 
 

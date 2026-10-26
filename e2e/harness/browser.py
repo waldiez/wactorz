@@ -596,11 +596,17 @@ class Dashboard:
         )
 
     def question_from(self, sender: str) -> str:
-        """The question ``sender`` is asking in a notice on screen, or "" when there is none."""
-        notice = self._question_toast(sender)
-        if notice.count() == 0:
-            return ""
-        return notice.first.get_by_test_id("toast-message").inner_text().strip()
+        """The question ``sender`` is asking in a notice on screen, or "" when there is none.
+
+        Read in one step inside the page: a notice closed between finding it and
+        reading it would otherwise leave the read waiting for one that is gone.
+        A notice fading out is hidden, so it is not found.
+        """
+        asked = self._question_toast(sender).evaluate_all(
+            """notices => notices.map(n =>
+                (n.querySelector('[data-testid="toast-message"]')?.innerText || '').trim())"""
+        )
+        return str(asked[0]) if asked else ""
 
     def answer_notice(self, sender: str, option: str) -> Dashboard:
         """Press ``option`` on the notice of ``sender``'s question."""

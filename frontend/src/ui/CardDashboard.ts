@@ -40,7 +40,7 @@ import { el, testId } from "./dom";
 import { MetricsController } from "./dashboard/metrics";
 import { confirmDialog } from "./dashboard/confirmDialog";
 import { seedServerConfig } from "../config/serverConfig";
-import { emit, listen } from "../events";
+import { emit, Listeners } from "../events";
 import { initialRoute } from "../router";
 import { ViewRoutes } from "./dashboard/viewRoutes";
 
@@ -77,13 +77,8 @@ export class CardDashboard {
     /** Extra nav buttons registered by extensions. */
     private _extraViews: { key: string; label: string; icon: IconName }[] = [];
 
-    // Event listeners (stored for cleanup)
-    private _evFeed: ((e: Event) => void) | null = null;
-    private _evConn: ((e: Event) => void) | null = null;
-    private _wipeAll: ((e: Event) => void) | null = null;
-    private _agentsSettled: ((e: Event) => void) | null = null;
-    private _clearFeed: ((e: Event) => void) | null = null;
-    private _evRoute: EventListener | null = null;
+    /** What `_wireEvents` subscribed to, dropped together on teardown. */
+    private _listeners = new Listeners();
     /** Opening what the address names, and saying where the dashboard is. */
     private _routes: ViewRoutes;
 
@@ -396,18 +391,18 @@ export class CardDashboard {
         this._wireFeedEvents();
         this._chat.wire();
         this._activity.wire();
-        this._evConn = listen("af-connection-status", detail => {
+        this._listeners.on("af-connection-status", detail => {
             this.connState = detail.status;
             renderConnBadge(this.root, this.connState);
             this._renderHealth();
         });
-        this._evRoute = listen("af-route", route => this._routes.open(route));
+        this._listeners.on("af-route", route => this._routes.open(route));
     }
 
     private _wireFeedEvents(): void {
-        this._evFeed = listen("af-feed-push", detail => this._activity.push(detail.item));
+        this._listeners.on("af-feed-push", detail => this._activity.push(detail.item));
 
-        this._wipeAll = listen("af-wipe-all", () => {
+        this._listeners.on("af-wipe-all", () => {
             this._activity.clear();
             this._chat.clearAll();
             this._renderView();
@@ -416,13 +411,13 @@ export class CardDashboard {
         // Fires once the agent list can be trusted — a reset's survivors applied,
         // or an agent explicitly deleted. The only point at which "the chat
         // target is gone" is a fact rather than a race with re-registration.
-        this._agentsSettled = listen("af-agents-settled", d => {
+        this._listeners.on("af-agents-settled", d => {
             this._chat.dropTargetIfGone(d?.reason ?? "reset");
         });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
         // dashboard's own in-card feed too.
-        this._clearFeed = listen("af-clear-feed", () => {
+        this._listeners.on("af-clear-feed", () => {
             this._activity.clear();
             this._renderView();
         });
@@ -430,21 +425,7 @@ export class CardDashboard {
 
     private _unwireEvents(): void {
         this._chat.unwire();
-        const pairs: [string, EventListener | null][] = [
-            ["af-feed-push", this._evFeed],
-            ["af-connection-status", this._evConn],
-            ["af-wipe-all", this._wipeAll],
-            ["af-agents-settled", this._agentsSettled],
-            ["af-clear-feed", this._clearFeed],
-            ["af-route", this._evRoute],
-        ];
-        pairs.forEach(([name, fn]) => {
-            if (fn) {
-                document.removeEventListener(name, fn);
-            }
-        });
-        this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
-        this._agentsSettled = this._evRoute = null;
+        this._listeners.off();
     }
 
     private _renderView(): void {
@@ -519,8 +500,9 @@ export class CardDashboard {
         }
         if (this.view === "feed" && v !== "feed") {
             // Leaving the activity view: stop polling for something nobody is
-            // looking at. The flag survives, so returning resumes it.
-            this._activity.release();
+            // looking at. The flag survives, so returning resumes it, and the
+            // pushed records are still taken in meanwhile.
+            this._activity.pause();
         }
         this.view = v;
         this._routes.moved();

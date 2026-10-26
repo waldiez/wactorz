@@ -115,7 +115,7 @@ describe("IOManager streaming", () => {
 
         ws.chunkCb!("Hel", "alpha");
         ws.chunkCb!("lo", "alpha");
-        expect(lastEvent("af-stream-chunk")?.detail).toEqual({ chunk: "lo", from: "alpha" });
+        expect(lastEvent("af-stream-chunk")?.detail).toEqual({ chunk: "lo", from: "alpha", text: "Hello" });
 
         ws.endCb!();
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "Hello", from: "alpha" });

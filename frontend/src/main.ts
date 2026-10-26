@@ -29,6 +29,7 @@ import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { createOutageTracker } from "./io/outage";
+import { fetchQuestionLedger } from "./io/openQuestions";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
@@ -125,13 +126,27 @@ window.addEventListener("error", e => {
 });
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
+const router = new ServerEventRouter();
+const ws = new WSClient();
+// Started in section 7, stopped once the session is gone; clearing 0 does nothing.
+let _liveActorsTimer = 0;
+
+// Ahead of the first request this module makes: mounting the dashboard starts
+// its polling. A session that ended while the tab was closed refuses that one
+// too, and installing after it would leave the very first 401 unhandled and the
+// page waiting on a poll half a minute away.
+installSessionExpiry(window, () => {
+    // The socket is the one thing that would keep trying: it reconnects on a
+    // timer, and every attempt goes to the same revoked prefix.
+    ws.disconnect();
+    window.clearInterval(_liveActorsTimer);
+});
+
 // Before the dashboard mounts: the first view it opens sets the address.
 const stopRouter = startRouter();
 const agentStore = new AgentStore();
 agentStore.mount();
-const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
-const ws = new WSClient();
 // Online by the overview's measure, so the feed and the node cards agree.
 const nodePresence = new NodePresence(STALE_MS);
 
@@ -338,10 +353,12 @@ router.on("status", payload => {
 ws.onServerEvent((topic, payload) => router.route(topic, payload));
 ws.onConnected(() => {
     _wsOpen = true;
+    emit("af-socket", { open: true });
     recomputeLive();
 });
 ws.onDisconnected(() => {
     _wsOpen = false;
+    emit("af-socket", { open: false });
     recomputeLive();
 });
 ws.onMqttStatus(up => {
@@ -367,6 +384,17 @@ function recomputeLive(): void {
         // fetch the current actor list from REST so they appear immediately.
         refreshLiveActors();
     }
+    // A question asked while the page was closed, or the socket down, reached
+    // neither a toast nor its thread: the ledger has it.
+    void fetchQuestionLedger(_apiBase).then(ledger => {
+        emit("af-questions-listed", ledger);
+        ledger.open.forEach(msg => {
+            const asking = questionToast(msg);
+            if (asking) {
+                toast.show(asking);
+            }
+        });
+    });
 }
 
 router.on("qa-flag", payload => {
@@ -428,9 +456,6 @@ router.on("raw", ({ topic, payload }) => {
 
 // Streaming reply finished — notify
 listen("af-stream-end", detail => {
-    if (!detail) {
-        return;
-    }
     const { text, from } = detail;
     if (!text) {
         return;
@@ -496,24 +521,13 @@ listen("af-clear-feed", () => {
 
 ws.connect(`${_wsBase}/ws`);
 refreshLiveActors();
-const _liveActorsTimer = window.setInterval(() => {
+_liveActorsTimer = window.setInterval(() => {
     if (document.hidden) {
         return;
     }
     refreshLiveActors();
     agentStore.pruneSilentRemoteAgents();
 }, 15000);
-
-// Ahead of the first request this module makes — the feed seed below. A session
-// that ended while the tab was closed refuses that one too, and installing after
-// it would leave the very first 401 unhandled and the page waiting on a poll
-// half a minute away.
-installSessionExpiry(window, () => {
-    // The socket is the one thing that would keep trying: it reconnects on a
-    // timer, and every attempt goes to the same revoked prefix.
-    ws.disconnect();
-    window.clearInterval(_liveActorsTimer);
-});
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).

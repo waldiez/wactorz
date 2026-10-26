@@ -26,13 +26,25 @@ export interface AppEventMap {
     "af-agent-command": { command: string; agentId: string };
     "af-send-message": { content: string; target: string; attachments: string[] };
     "af-send-failed": { content: string; target: string };
-    "af-stream-chunk": { chunk: string; from: string };
-    "af-stream-end": { text: string | null; from: string } | null;
+    /** A piece of `from`'s streamed reply, and the reply so far (`text`). */
+    "af-stream-chunk": { chunk: string; from: string; text: string };
+    /** `from`'s streamed reply ended; `text` is all of it, empty when nothing came. */
+    "af-stream-end": { text: string; from: string };
+    /** The socket to the server opened or closed: whether a message can go out now.
+     *  Not `af-connection-status`, which needs the server's broker link too. */
+    "af-socket": { open: boolean };
+    /** A turn started or ended, or what waits changed: who it waits on (null when no
+     *  turn is under way), and how many of the person's messages wait to go out. */
+    "af-turn": { agent: string | null; queued: number };
     "af-reset-chat": { agent: string | null };
     /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
     "af-answer-option": { id: string; agentId: string; option: string; index: number };
     /** A question was answered, here or on another channel: show the pick, take the buttons off. */
     "af-answered": { id: string; option: string };
+    /** The server's ledger of questions, each time the page goes live: the open ones, one
+     *  asked while the page was away among them, and the newest answered. Not
+     *  `af-chat-message`, which says a message arrived now and ends a turn on it. */
+    "af-questions-listed": { open: ChatMessage[]; answered: ChatMessage[] };
     /** Everything was wiped; `survivors` are the ids of the agents still running. */
     "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have
@@ -78,4 +90,26 @@ export function listen<K extends keyof AppEventMap>(
     };
     document.addEventListener(type, fn);
     return fn;
+}
+
+/**
+ * The listeners a component holds on the bus, dropped together when it is torn
+ * down. `on` subscribes as `listen` does and keeps the listener; `off` removes
+ * every one kept, so a component never has to name each again to let it go.
+ */
+export class Listeners {
+    private held: [keyof AppEventMap, EventListener][] = [];
+
+    /** Subscribe `handler` to `type`, as `listen` does, until `off`. */
+    on<K extends keyof AppEventMap>(type: K, handler: (detail: AppEventMap[K]) => void): void {
+        this.held.push([type, listen(type, handler)]);
+    }
+
+    /** Remove every listener `on` added. */
+    off(): void {
+        for (const [type, fn] of this.held) {
+            document.removeEventListener(type, fn);
+        }
+        this.held = [];
+    }
 }

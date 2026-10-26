@@ -175,6 +175,7 @@ SPAWN_CONFIG_FIELDS = frozenset(
         "name",
         "code",
         "poll_interval",
+        "task_timeout_s",
         "description",
         "input_schema",
         "output_schema",

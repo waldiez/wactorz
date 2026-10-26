@@ -39,6 +39,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...config import ARTIFACT_MAX_BYTES
@@ -52,9 +53,16 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
+from ...core.persistence.stores import get_db
+from ...core.pointer_moves import record_clear, record_move
+from ...core.provenance import Provenance
 
 if TYPE_CHECKING:
+    from ...core.persistence.db import WactorzDB
     from .hosts import ArtifactHost
+
+#: One pointer's change: name, pointer, where it stands now, where it stood.
+Change = tuple[str, str, "Pointer | None", "Pointer | None"]
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +91,32 @@ def pointer_message(name: str, which: str, now: Pointer | None, was: Pointer | N
     previous = f" (was {name}:{now.previous})" if now.previous is not None else ""
     reason = f": {now.reason}" if now.reason else ""
     return f"{now.reference} is now {which}{previous}, by {now.by}{reason}"
+
+
+def record_pointer_changes(
+    db: WactorzDB,
+    store: ArtifactStore,
+    changes: list[Change],
+    standing: Mapping[tuple[str, str], Pointer | None],
+) -> None:
+    """Write each change into the provenance graph, as `wactorz.core.pointer_moves` keeps them.
+
+    A shadow that went because its version became active is the promotion's,
+    by whoever promoted; any other clear is by whoever this process saw clear
+    it, or unknown.
+    """
+    prov = Provenance(db)
+    for name, which, now, was in changes:
+        if now is not None:
+            record_move(prov, now)
+            continue
+        if was is None:
+            continue
+        active = standing.get((name, "active"))
+        if which == "shadow" and active is not None and active.version == was.version:
+            record_clear(prov, was, at=active.moved_at, by=active.by, promoted=True)
+        else:
+            record_clear(prov, was, at=time.time(), by=store.cleared_by(name, which))
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -233,6 +267,7 @@ class ArtifactService:
             return
         standing = await asyncio.to_thread(self._standing)
         first = not self._looked
+        changes: list[Change] = []
         for key in sorted(set(standing) | set(self.announced)):
             now = standing.get(key)
             was = self.announced.get(key)
@@ -242,6 +277,11 @@ class ArtifactService:
             name, which = key
             payload: Any = b"" if now is None else now.payload()
             await host._mqtt_publish(pointer_topic(name, which), payload, retain=True, qos=1)
+            # The first look records where each pointer stands, silently: a
+            # move made while main was away is written once, one already held
+            # is passed over (`wactorz.core.pointer_moves`).
+            if now is not None or (known and not first):
+                changes.append((name, which, now, was))
             # A model just stored has pointers to publish and nothing to say:
             # none of them moved.
             if first or (not known and now is None):
@@ -260,6 +300,21 @@ class ArtifactService:
             )
         self.announced = standing
         self._looked = True
+        # After the look is taken, so a database that refuses the record does
+        # not make every later look announce the same change again.
+        await self._record(changes, standing)
+
+    async def _record(
+        self, changes: list[Change], standing: Mapping[tuple[str, str], Pointer | None]
+    ) -> None:
+        """Write ``changes`` into the provenance graph, where main has a database."""
+        db = get_db()
+        if not changes or db is None:
+            return
+        try:
+            await asyncio.to_thread(record_pointer_changes, db, self.store, changes, standing)
+        except Exception as exc:
+            logger.warning("cannot record the model pointer moves: %s", exc)
 
     async def pointer_watcher(self) -> None:
         """Keep the pointer topics true to the index, until the actor stops."""

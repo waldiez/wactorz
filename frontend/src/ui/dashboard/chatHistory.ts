@@ -12,6 +12,7 @@
 import type { Attachment, ChatMessage } from "../../types/agent";
 import { toMs } from "../../time";
 import { stripActionBlocks } from "../../agents/actionBlocks";
+import { type LedgerQuestion, questionMessage } from "../../io/openQuestions";
 
 function ingressBase(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";
@@ -90,8 +91,15 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
         role: string;
         content: string;
         attachments?: StoredAttachment[];
+        /** The question the row is, when the server's ledger still knows it. */
+        question?: Omit<LedgerQuestion, "agent">;
     }[];
     return stripInternalTurns(rows.reverse()).map(r => {
+        if (r.question) {
+            // By the question's own id: a live copy already shown is then the
+            // same message, and an answer names the question by it.
+            return questionMessage({ ...r.question, agent: agentName, asked_at: r.ts });
+        }
         const attachments = restoreAttachments(r.attachments);
         return {
             id: `hist-${agentName}-${r.id}`,
@@ -141,59 +149,4 @@ export async function fetchChatHistory(agentName: string): Promise<ChatMessage[]
     } catch {
         return null;
     }
-}
-
-/** How far apart the page's time for a message and the server's may be. */
-const SAME_MESSAGE_WINDOW_MS = 120_000;
-
-/** The copy of a persisted message the thread already shows, if it has one. */
-function alreadyShown(existing: ChatMessage[], m: ChatMessage): ChatMessage | undefined {
-    // A message that arrived while the page was open has an id the page made
-    // up ("user-…" for what was typed, "stream-…" for a reply), and its
-    // persisted copy has "hist-…": id de-dup misses the pair, and the message
-    // renders twice. History is fetched again when an agent goes and comes back
-    // under its name, as one that is moved to another machine does, so this is
-    // reached with replies already on screen and not only with the user's own
-    // turns. Match on who, what, and a tight timestamp window; and for the
-    // user's own turns on whom they were to, which is the thread they are in. A
-    // reply is in its sender's thread whoever it names, and the page and the
-    // server name different things there.
-    return existing.find(
-        x =>
-            !x.id.startsWith("hist-") &&
-            x.from === m.from &&
-            (m.from !== "user" || x.to === m.to) &&
-            x.content.trim() === m.content.trim() &&
-            Math.abs(x.timestampMs - m.timestampMs) < SAME_MESSAGE_WINDOW_MS,
-    );
-}
-
-/**
- * Reconcile `incoming` history against `existing`: returns the messages to
- * prepend, adopting persisted ids in place onto the messages already shown.
- */
-export function mergeChatHistory(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-    const ids = new Set(existing.map(m => m.id));
-    const toAdd: ChatMessage[] = [];
-    for (const raw of incoming) {
-        if (ids.has(raw.id)) {
-            continue;
-        }
-        // Strip the `@agent ` routing prefix IOManager adds on send so restored
-        // history matches the live thread AND the echo comparison can pair up.
-        // Normalise onto a copy — never mutate the caller's incoming messages.
-        const m: ChatMessage =
-            raw.from === "user" ? { ...raw, content: raw.content.replace(/^@[\w-]+\s+/, "") } : raw;
-        const shown = alreadyShown(existing, m);
-        if (shown) {
-            // Adopt the persisted id onto the message the thread already shows,
-            // in place — the caller relies on this to reconcile what it rendered,
-            // and a second persisted message with the same words then pairs
-            // with the next one shown, not with this one again.
-            shown.id = m.id;
-            continue;
-        }
-        toAdd.push(m);
-    }
-    return toAdd;
 }

@@ -3,17 +3,18 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * The chat thread's streaming concern: per-agent accumulation → live bubble →
- * committed message. Extracted from DashboardChat (which sits at the lint
- * size ceiling); buffers are keyed per agent so concurrent streams never merge.
+ * The chat thread's streaming concern: the reply so far → live bubble →
+ * committed message. The reply is put together once, where the stream arrives
+ * (`IOManager`): each piece's event carries the text so far and the end's
+ * carries all of it, kept here per agent so concurrent streams never merge.
+ * Whether a turn is under way is the turn tracker's (`src/chat/turnTracker.ts`);
+ * this only draws the row that says an agent is working.
  */
 import type { ChatMessage } from "../../types/agent";
 import { uid } from "../../ids";
 import { AgentStreams } from "../../io/agentStreams";
-import { MAIN_AGENT } from "../../agents/naming";
 import { stripActionBlocks } from "../../agents/actionBlocks";
 import { renderAgentMarkdown } from "./chatThread";
-import { TURN_IDLE_TIMEOUT_MS } from "./chatIobar";
 import { el, live, testId } from "../dom";
 
 /** Everything the stream UI needs from the chat controller. */
@@ -71,7 +72,6 @@ export class ChatStreamUI {
     /** Agent this turn is waiting on, or null when nothing is outstanding. */
     private _awaiting: string | null = null;
     private _waitingRow: HTMLElement | null = null;
-    private _waitTimer: ReturnType<typeof setTimeout> | undefined;
     private _row: HTMLElement | null = null;
     private _body: HTMLElement | null = null;
     /** Agent whose stream the visible row currently shows. */
@@ -87,18 +87,11 @@ export class ChatStreamUI {
         return this._streams;
     }
 
-    /** A turn is on the wire: show that `from` is working until it answers.
-     *
-     *  Bounded, because none of the endings arrive at all if the backend dies
-     *  mid-turn -- the row would then wait for the life of the page. The limit
-     *  is the same one the composer uses to release its own buttons, so the two
-     *  give up together rather than leaving one of them stranded.
-     */
+    /** A turn is on the wire: show that `from` is working until it answers, or the
+     *  turn ends without an answer (the tracker says so). */
     awaiting(from: string): void {
         this._awaiting = from;
         this._showWaiting();
-        clearTimeout(this._waitTimer);
-        this._waitTimer = setTimeout(() => this.endWait(), TURN_IDLE_TIMEOUT_MS);
     }
 
     /** Whether an outstanding turn belongs to the open thread, so the thread
@@ -126,7 +119,6 @@ export class ChatStreamUI {
     endWait(from?: string | null): void {
         if (from === undefined || this._awaiting === null || from === null || from === this._awaiting) {
             this._awaiting = null;
-            clearTimeout(this._waitTimer);
             this._clearWaiting();
         }
     }
@@ -161,16 +153,16 @@ export class ChatStreamUI {
         this._showWaiting();
     }
 
-    /** Latch the reply target on the first chunk, then accumulate per agent. */
-    onChunk(detail: { chunk: string; from: string }): void {
-        const { chunk, from } = detail;
+    /** Latch the reply target on the first chunk, then keep the reply so far. */
+    onChunk(detail: { chunk: string; from: string; text: string }): void {
+        const { from, text: soFar } = detail;
         // The first token answers the question the row was asking -- but only
         // for the agent that sent it.
         this.endWait(from);
         if (!this._streams.has(from)) {
             this._targets.set(from, this.host.lastSentTarget());
         }
-        this._streams.append(from, chunk);
+        this._streams.set(from, soFar);
         if (!this.host.isChatView()) {
             return;
         }
@@ -187,15 +179,16 @@ export class ChatStreamUI {
         this.host.scrollThread();
     }
 
-    /** Commit the ended stream's buffer as a message; swap its row for
-     *  rendered markdown (a concurrent stream's row stays put). */
-    onEnd(detail: { text: string | null; from: string } | null): void {
-        const from = detail?.from ?? this._streams.activeFrom ?? MAIN_AGENT;
+    /** Commit the ended reply as a message; swap its row for rendered markdown
+     *  (a concurrent stream's row stays put). */
+    onEnd(detail: { text: string; from: string }): void {
+        const { from } = detail;
         // Ends the wait on every ending, including one that produced no tokens
         // at all -- an error or a stop -- which would otherwise leave the row
         // waiting for something that is no longer coming.
-        this.endWait(detail?.from ?? null);
-        const shown = stripActionBlocks(this._streams.take(from));
+        this.endWait(from);
+        this._streams.take(from);
+        const shown = stripActionBlocks(detail.text);
         const text = shown.trim() ? shown : "";
         if (text) {
             this.host.commit({

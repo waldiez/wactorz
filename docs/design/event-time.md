@@ -1,8 +1,9 @@
 # Event time in the model loop
 
 A decision record, not a guide: which clock the model loop reads, where that
-time comes from, and what has to change for it. Nothing here is built yet; the
-"What follows" section says which step builds each part.
+time comes from, and what has to change for it. Labels and the provenance graph
+are kept in event time (`wactorz/core/labels.py`); the rest is not built yet,
+and the "What follows" section says which step builds each part.
 
 ## The problem
 
@@ -101,8 +102,8 @@ the clock.
   without a payload time behave as today.
 - **`StreamWindow`** gains an option to window by event time; the default stays
   the wall clock, so existing agents are unchanged.
-- **Labels and the provenance graph** are stored in event time from their first
-  version (`labels-and-provenance.md`).
+- **Labels and the provenance graph** (built) are stored in event time
+  (`labels-and-provenance.md`).
 - **The train step** takes its window and splits in event time, and records
   them with the version it stores.
 - **The simulator** replays recorded data with its original times in the

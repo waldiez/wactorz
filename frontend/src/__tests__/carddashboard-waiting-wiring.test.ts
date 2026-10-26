@@ -72,7 +72,7 @@ describe("a turn sent from elsewhere", () => {
     it("is cleared when the transport drops", () => {
         emit("af-send-message", { content: "what is the weather", target: "weather", attachments: [] });
 
-        emit("af-connection-status", { status: "disconnected" });
+        emit("af-socket", { open: false });
 
         expect(waitingRow()).toBeNull();
     });

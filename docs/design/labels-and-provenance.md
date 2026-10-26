@@ -2,9 +2,10 @@
 
 A decision record, not a guide: what a label is, how a later answer overrides
 an earlier one, how the model loop records what it did and why, and how that
-record is used when an answer changes. Nothing here is built yet; the "What
-follows" section says which step builds each part. Times are event times, as
-`event-time.md` decides.
+record is used when an answer changes. The graph's two tables, with its label
+and question nodes, are built (`wactorz/core/labels.py`, `wactorz/core/provenance.py`);
+the "What follows" section says which step builds each of the rest. Times are
+event times, as `event-time.md` decides.
 
 ## The problem
 
@@ -217,10 +218,13 @@ unverified label only within what the stream's policy allows without asking.
 
 ## What follows
 
-- **The labels pull request** creates both tables (a migration), label nodes
-  with `superseded_by` edges, the label spec on `ask_operator`, `agent.label`,
-  the rule action `label`, `labels.effective`, and `GET /api/labels`. Question
-  nodes and `answered_by` edges come with it.
+- **Labels** (built): both tables (a migration), label nodes with
+  `superseded_by` edges, the label spec on `ask_operator`, `agent.label`, the
+  rule action `label`, `labels.effective`, and `GET /api/labels`, with question
+  nodes and `answered_by` edges.
+- **Pointer moves** (built): each move of a model's `active` or `shadow` pointer is an
+  `action` node, written by main when it sees the change (`wactorz/core/pointer_moves.py`),
+  read back by `GET /api/models/{name}/moves`.
 - **The train step** writes an `action` for each run, a `model` node for the
   version it stores, `produced` and `trained` edges, and its window and splits
   in the action's payload.

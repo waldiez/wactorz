@@ -104,7 +104,7 @@ Every remote node main knows: whether it is online, its agents, its latest readi
 {
   "nodes": [
     {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
-     "version": "0.7.1", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "version": "0.7.2", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
      "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
      "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
      "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
@@ -207,6 +207,20 @@ Query the persistent chat log table. Query parameters:
 | `role` | filter by role (`user` or `assistant`) |
 | `since` | Unix timestamp float — only newer rows |
 | `limit` | max rows (default 200, max 1000) |
+
+An agent's question is stored as its words with the options numbered under them. A row that
+is a question the ledger still knows (`GET /api/questions`) carries it, so the dashboard can
+show it with its buttons, or with the pick once it is answered:
+
+```json
+{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "role": "assistant",
+ "content": "Did something change at 14:02?\n\n1. maintenance\n2. real problem",
+ "question": {"id": "3f2a…", "agent_id": "…", "text": "Did something change at 14:02?",
+              "options": ["maintenance", "real problem"], "answer": null}}
+```
+
+The same words asked more than once are told apart by time: a row is the question asked
+nearest it.
 
 ---
 
@@ -331,6 +345,25 @@ A pointer's `holds` is false when the version it names no longer holds the bytes
 ### `GET /api/models/{name}`
 
 One model: every version, oldest first, with what was said of it when it was stored (`metadata`), and its pointers as above. `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
+
+---
+
+### `GET /api/models/{name}/moves`
+
+Every move of the model's pointers, newest first: who made it, why, and from which version to which. Main records each one from its look at the store, whoever made it (the dashboard, the chat, the CLI beside the server), in the provenance graph. `limit` caps how many (default 200, at most 1000).
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector",
+ "moves": [
+   {"at": 1760000300.0, "pointer": "shadow", "change": "promoted", "version": null, "from": 4,
+    "by": "dashboard", "reason": null},
+   {"at": 1760000300.0, "pointer": "active", "change": "moved", "version": 4, "from": 3,
+    "by": "dashboard", "reason": "won the trial"}
+ ]}
+```
+
+`change` is `moved` (set to `version`), `cleared` (unset; `by` is empty when it was cleared outside main, as by the CLI), or `promoted` (the shadow cleared by a promotion). A move made while main was down is recorded when it starts, the last per pointer; a clear made then is not seen. The history outlives the versions, so a model whose versions were all removed still has its moves. `400` for a bad `name` or `limit`, `503` when persistence is not running.
 
 ---
 

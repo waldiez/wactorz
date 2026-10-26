@@ -74,6 +74,30 @@ describe("ToastManager (DOM)", () => {
         expect(document.querySelectorAll("#wz-toast-css").length).toBe(1);
     });
 
+    it("show() with a key replaces the toast shown with it rather than stacking", async () => {
+        const t = await freshToast();
+        t.show({ title: "triage", message: "first", key: "q-1", sticky: true });
+        t.show({ title: "other", message: "unkeyed" });
+        t.show({ title: "triage", message: "again", key: "q-1", sticky: true });
+
+        const live = [...document.querySelectorAll<HTMLElement>(".wz-toast:not(.wz-toast--out)")];
+        expect(live.map(el => el.dataset["key"] ?? "")).toEqual(["", "q-1"]);
+        expect(live[1]!.textContent).toContain("again");
+    });
+
+    it("a toast being dismissed is hidden from assistive technology while it fades", async () => {
+        const t = await freshToast();
+        t.show({ title: "triage", message: "asked", key: "q-1", sticky: true });
+        const shown = document.querySelector<HTMLElement>("[data-key='q-1']")!;
+        expect(shown.getAttribute("aria-hidden")).toBeNull();
+
+        t.close("q-1");
+
+        expect(shown.isConnected).toBe(true);
+        expect(shown.getAttribute("aria-hidden")).toBe("true");
+        expect(shown.inert).toBe(true);
+    });
+
     it("show() appends a .wz-toast element to the DOM", async () => {
         const t = await freshToast();
         t.show({ title: "Hello", message: "World" });

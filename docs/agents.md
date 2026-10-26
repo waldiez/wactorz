@@ -44,22 +44,9 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 
 #### Commands
 
-```
-/agents                   — list all running agents with type and status
-/agents <keyword>         — filter agents by capability keyword
-/agents stop <name>       — stop and remove an agent
-/rules                    — list active pipeline rules
-/rules delete <id>        — stop agents and remove rule
-/memory                   — show user facts and conversation summary
-/memory clear             — wipe all memory
-/memory forget <key>      — remove one fact
-/webhook discord <url>    — store a Discord webhook URL
-/webhook                  — list stored webhooks
-/topics                   — list MQTT topics published by known agents
-/nodes                    — list remote nodes and their agents
-/bus                      — list TopicBus — Reactive Pub/Sub Registry
-/help                     — show all commands
-```
+Main answers slash commands without a model call: agents, nodes, models, pipelines and
+plans, memory, notifications, diagnostics. `/help` on the dashboard lists them all, and the
+[reference's command table](reference.md#13-interfaces) is written from the same source.
 
 ---
 

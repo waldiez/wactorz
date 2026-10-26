@@ -8,8 +8,8 @@
  * the user something, whose thread opens so its question can be answered.
  * Selecting a row is delegated to the caller via `onSelect`.
  */
-import type { AgentInfo, ChatMessage } from "../../types/agent";
-import { askingAgents, canDirectMessage, canOpenThread, stateColor } from "./agentState";
+import type { AgentInfo } from "../../types/agent";
+import { canDirectMessage, canOpenThread, stateColor } from "./agentState";
 import { button, el } from "../dom";
 
 /** Create a sidebar row button that selects its agent on click. */
@@ -61,9 +61,8 @@ export function renderChatSidebar(
     sorted: AgentInfo[],
     chatTarget: string,
     onSelect: (name: string) => void,
-    messages: ChatMessage[] = [],
+    asking: ReadonlySet<string> = new Set(),
 ): void {
-    const asking = askingAgents(messages);
     const existing = new Map<string, HTMLElement>();
     list.querySelectorAll<HTMLElement>(".af-chat-agent-row").forEach(r => {
         if (r.dataset["name"]) {

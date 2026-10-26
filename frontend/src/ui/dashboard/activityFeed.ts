@@ -19,12 +19,21 @@ import { AppLogFeed } from "./appLogFeed";
 import { appendFeedItemToView, buildFeedView, DEFAULT_FILTERS, feedKey, type FeedFilters } from "./feedView";
 
 /**
- * Most agent events held.
+ * Most agent events held, heartbeats aside.
  *
  * The view trims what it draws; this bounds what is remembered, so a long
  * session does not accumulate every event the server ever sent.
  */
 export const MAX_ITEMS = 500;
+
+/**
+ * Most heartbeats held, apart from the other events.
+ *
+ * Every agent beats every few seconds, so under one shared cap a handful of
+ * agents would push every real event out within minutes. The newest beats are
+ * still there for the view's "show heartbeats" toggle.
+ */
+export const MAX_HEARTBEATS = 100;
 
 export interface ActivityHost {
     readonly root: HTMLElement;
@@ -66,14 +75,21 @@ export class ActivityFeed {
         }
         this._keys.add(key);
         this._items.push(item);
-        if (this._items.length > MAX_ITEMS) {
-            const dropped = this._items.shift();
-            if (dropped) {
-                this._keys.delete(feedKey(dropped));
-            }
-        }
+        this._trim(item.type === "heartbeat");
         if (this.host.isFeedView()) {
             appendFeedItemToView(this.host.root, item, this._filters);
+        }
+    }
+
+    /** Drop the oldest event of one kind, heartbeat or not, once that kind is over its cap. */
+    private _trim(heartbeats: boolean): void {
+        const ofKind = (held: FeedItem) => (held.type === "heartbeat") === heartbeats;
+        if (this._items.filter(ofKind).length <= (heartbeats ? MAX_HEARTBEATS : MAX_ITEMS)) {
+            return;
+        }
+        const [dropped] = this._items.splice(this._items.findIndex(ofKind), 1);
+        if (dropped) {
+            this._keys.delete(feedKey(dropped));
         }
     }
 
@@ -101,7 +117,13 @@ export class ActivityFeed {
         this.logs.wire();
     }
 
-    /** Stop following and drop the push subscription. */
+    /** Stop following while the view is closed. Pushed records keep arriving,
+     *  so the view shows what happened meanwhile when it opens again. */
+    pause(): void {
+        this.logs.stop();
+    }
+
+    /** Stop following and drop the push subscription, as the dashboard goes. */
     release(): void {
         this.logs.stop();
         this.logs.unwire();

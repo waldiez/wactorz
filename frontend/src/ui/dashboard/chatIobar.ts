@@ -15,7 +15,6 @@ import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
 import { el, iconButton, named } from "../dom";
-import { MAIN_AGENT } from "../../agents/naming";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
 export function composerPlaceholder(target: string): string {
@@ -107,88 +106,15 @@ function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
 }
 
 /**
- * How long a turn may go completely silent before the composer frees itself.
- * Every stream chunk restarts the clock, so this only fires when nothing at all
- * is arriving — a slow model still holding the line keeps its turn.
+ * Show Stop while a turn is under way, from what the turn tracker reports
+ * (`af-turn`). Send stays usable: a message sent during a turn is queued and
+ * goes when it ends (`src/chat/turnTracker.ts`), so there is nothing to block.
  */
-export const TURN_IDLE_TIMEOUT_MS = 60_000;
-
-/**
- * Toggle the send/stop buttons across a turn: reveal stop (and disable send) the
- * moment the user sends, restore it once the turn completes. Showing on send —
- * rather than on the first stream chunk — gives a usable stop window even when
- * the model "thinks" for a while before any tokens arrive. A turn ends with
- * `af-stream-end` (streamed reply) or `af-chat-message` (non-streamed reply,
- * e.g. slash commands), both dispatched in direct_ws and mqtt modes.
- *
- * A turn belongs to the agent it was sent to. Both terminating events also fire
- * for traffic the user had no part in — agent-to-agent chatter arrives as
- * `af-chat-message` like any other frame — so they only end the turn when they
- * come from its target. The key is the *sender*: a genuine reply is addressed
- * `to: "user"` just as a bystander's message may be, so `to` cannot distinguish
- * them.
- *
- * A command is the exception: main answers it whichever thread it was typed
- * in, and the server attributes its reply to main, so a command's turn waits
- * on main rather than on the agent the thread belongs to.
- *
- * Neither event arrives at all if the backend dies mid-turn, which would strand
- * the composer with send disabled and stop inert. Two independent escapes: the
- * transport dropping out of `live`, and a silence timeout as the backstop for a
- * terminating frame that is simply lost on a connection that still looks fine.
- */
-/** Who will answer what was sent to `target`: main for a command, else `target`. */
-function answererOf(content: string | undefined, target: string | undefined): string | undefined {
-    return content?.startsWith("/") ? MAIN_AGENT : target;
-}
-
-function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): void {
-    let turnTarget: string | null = null;
-    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const idle = () => {
-        turnTarget = null;
-        clearTimeout(silenceTimer);
-        sendBtn.disabled = false;
-        stopBtn.style.display = "none";
-    };
-    const armSilenceTimer = () => {
-        clearTimeout(silenceTimer);
-        silenceTimer = setTimeout(idle, TURN_IDLE_TIMEOUT_MS);
-    };
-    const busy = (target: string | undefined) => {
-        turnTarget = target ?? null;
-        sendBtn.disabled = true;
-        stopBtn.style.display = "flex";
-        armSilenceTimer();
-    };
-    /** Whether `from` is the agent this turn is waiting on. */
-    const endsTurn = (from: string | undefined) => turnTarget === null || from === turnTarget;
-
-    // Page-lifetime listeners: buildIobar runs once (CardDashboard is a single
-    // instance never remounted), so these are intentionally not removed. If that
-    // assumption ever changes, a second call here double-fires busy/idle.
-    listen("af-send-message", d => busy(answererOf(d?.content, d?.target)));
-    listen("af-stream-end", d => {
-        if (endsTurn(d?.from)) {
-            idle();
-        }
-    });
-    listen("af-chat-message", d => {
-        if (endsTurn(d?.msg?.from)) {
-            idle();
-        }
-    });
-    // Tokens are proof the turn is alive, but not that it is over.
-    listen("af-stream-chunk", d => {
-        if (turnTarget !== null && endsTurn(d?.from)) {
-            armSilenceTimer();
-        }
-    });
-    listen("af-connection-status", d => {
-        if (d?.status !== "live") {
-            idle();
-        }
+function wireTurnState(stopBtn: HTMLButtonElement): void {
+    // Page-lifetime listener: buildIobar runs once (CardDashboard is a single
+    // instance never remounted), so it is intentionally not removed.
+    listen("af-turn", d => {
+        stopBtn.style.display = d.agent === null ? "none" : "flex";
     });
 }
 
@@ -352,7 +278,7 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     }
     const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);
-    wireGenerationLifecycle(sendBtn, stopBtn);
+    wireTurnState(stopBtn);
     bar.append(sendBtn, stopBtn);
     return bar;
 }

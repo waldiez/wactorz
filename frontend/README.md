@@ -31,6 +31,7 @@ frontend/
 │   │       ├── TTSManager.ts
 │   │       └── types.ts
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
+│   ├── chat/              # The chat's state, no DOM: ChatLog, the one writer of its messages
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
 │   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
 │   │                      #   AmbientManager, logger
@@ -102,8 +103,10 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
 | `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
 | `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
-| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
+| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from, text }` |
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
+| `af-socket` | main.ts → DashboardChat | `{ open }` |
+| `af-turn` | DashboardChat → iobar | `{ agent, queued }` |
 | `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "disconnected" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
 | `af-send-failed` | IOManager → DashboardChat | `{ content, target }` |
@@ -113,6 +116,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `af-answer-option` | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }` |
 | `af-answered` | main.ts → DashboardChat | `{ id, option }` |
+| `af-questions-listed` | main.ts → DashboardChat | `{ open, answered }` |
 | `af-app-log` | WSClient → appLogFeed | `{ entries }` |
 | `af-route` | router → CardDashboard | `{ view, path }` (the address changed) |
 | `af-view-changed` | CardDashboard / viewRoutes → router | `{ view, path }` (the dashboard moved) |

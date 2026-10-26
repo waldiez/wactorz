@@ -3,13 +3,186 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — pending
+## [Unreleased]
+
+- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements and Python 3.11+ support; core Wactorz keeps Python 3.10 support. Dashboard STT and general Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
+
+- Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
 
 ### Added
 
 - **An operator's answer can become a label, and labels live in a provenance graph.** `ask_operator(..., label={"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance": "maintenance", "Real problem": "fault"}})` makes the answer a record that the source was doing something from `start` (to `end`, open when unsaid), in event time; an option the spec leaves out, such as "Not sure", makes none, and a spec that cannot be used is refused before the question is sent. The agent keeps the spec in its question book, and main writes the label once the book says the question was answered, for an agent on main or on a node; it takes a book only from where its agent is, as it takes a manifest, so a node cannot answer for another node's agent. A later label on the same source supersedes an earlier one wherever their windows overlap, without editing it: the earlier one is kept, `partly_superseded` or `superseded`, and what held when is the newest label at each moment. A label from an answer the dashboard sent is marked verified; one heard on the broker, where anything can publish an answer, is not. An agent on main can write its own with `agent.label(source, value, start=...)`, and a rule with the new `label` action, from when its trigger says it happened. `GET /api/labels` lists labels by source and event-time window, and `GET /api/labels/effective` resolves a source into what held when. Labels are nodes of a new provenance graph in main's database, two tables of nodes and of edges from cause to effect, which the rest of the model loop will record its decisions and actions in; the database migrates to it at start. See `docs/design/labels-and-provenance.md`.
 
 - **Event time, labels and the provenance graph are decided, before they are built.** `docs/design/event-time.md` records that the model loop reads when a thing happened, as the payload says (`ts`, then `timestamp`, then the arrival time marked as such), rather than when the message arrived; that clocks far in the future are reported rather than trusted; that "now" is per source; and what the collector and `StreamWindow` change for it. `docs/design/labels-and-provenance.md` records that a label covers a period of a source; that an answer becomes one when its question says how; that a later answer supersedes an earlier one over their overlap without editing it; that labels, questions, decisions, actions, model versions and outcomes are nodes of one graph in main's database, joined from cause to effect; that an overridden answer produces a plan for review rather than undoing what followed; who may write the graph; and what was decided against. The rest of the model loop builds on both; nothing changes until it is built.
+
+- **Reachy now has built-in, topic-aware help.** Typed or spoken requests such as `help`,
+  `what can you do?`, and `how do I use the camera?` return commands and keywords without
+  an LLM call or robot connection. Focused guides cover movement, voice, camera, connection,
+  volume, and Wactorz/Home Assistant.
+- **Reachy says what voice input is missing before it listens.** Without a Deepgram key, or with the chosen recognizer not installed, `start conversation` and `listen and ask Wactorz` now refuse with the fix instead of failing after someone has spoken. A conversation that ends by itself (nobody spoke, repeated failures) says why in chat. New guides in `docs/reachy/` for users, developers and demonstrators, and `scripts/reachy_sim_check.py` runs the agent against the SDK's simulated robot.
+
+- **The IMU example trains versions you can compare, and asks about what it finds.**
+  `train.py --seed --samples` stores each version with how it did on the same held-out
+  readings (`caught`, `false_alarms`), and `--set active` or `--set shadow` points at it;
+  the agent serves the active one. A new `triage` agent asks on the dashboard whether a
+  strong jolt was maintenance or a real problem, and with main running the answer is kept
+  as a label of the device (`GET /api/labels`). `publish_imu.py` uses the broker settings
+  and credentials Wactorz itself is configured with, so it reaches a broker with a password,
+  and each reading carries its device and time.
+
+- **A model keeps the history of its pointers.** Every move of `active` or `shadow` is
+  recorded with who made it, why, and from which version to which, whether it was made on
+  the dashboard, in chat or with `wactorz-artifacts`; `GET /api/models/{name}/moves` lists
+  them, newest first. A clear made on the dashboard or in chat says who cleared it too
+  (one made with the CLI beside the server is recorded without a name), and a shadow ended
+  by a promotion is recorded as part of it. Kept in the provenance graph in main's
+  database; the store's index format does not change.
+
+### Changed
+
+- **A message sent while an agent is still answering waits its turn instead of being blocked.**
+  It shows in the thread at once, marked "Waiting to send", and goes when the reply ends,
+  one at a time and in order. One written while the dashboard's connection to the server is
+  down, or that could not go out because it dropped, is kept the same way and goes once the
+  connection is back; a broker outage alone holds nothing back, since main answers without
+  it. Send and Enter both work during a turn; Stop shows while one is under way.
+
+- **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
+  first-run installation, connection checks, first commands, and recovery steps are presented
+  before the advanced MQTT, media, and motion reference. It says what to expect before
+  starting, which systems Reachy works on and what each supports, how to prepare Linux,
+  what the chat shows during a first install and what each outcome means, how to add voice
+  input, and what to do about the common problems. It also corrects two claims: an edited
+  `.env` needs Wactorz restarted, not just the agent; and streaming voice input handles
+  English and Greek together by default. Reachy is not supported in the Docker image or the
+  Home Assistant add-ons, whose images cannot install the robot SDK.
+- **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
+  API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
+  faster-whisper alternative without including any credential.
+- **Reachy distinguishes working audio from failed motor commands.** A movement-task timeout now
+  directs the user to reconnect instead of implying the robot is offline, animation presets say
+  when they are only saved for later, and health reports whether its live motor-fault monitor is
+  actually connected. “Overheating status” now reaches Reachy's local health check.
+- **Reachy understands natural volume adjustments locally.** “Raise,” “increase,” “lower,” and
+  “decrease” volume or voice wording now controls the robot speaker without falling through to
+  the general chat agent.
+- **The README now has a maker-first onboarding path.** It states the intended audience,
+  removes product comparisons, and gives a Docker Compose quick start that includes the
+  broker password required by current releases.
+- **Reachy routes framework, health, and Home Assistant questions more reliably.** Questions about
+  running Wactorz agents now bypass smart-home planning, natural connection-health wording reads
+  live robot diagnostics, and device-state questions use Home Assistant's information path rather
+  than an actuator. Reachy no longer claims to perform gestures with hands or arms it does not have,
+  and dashboard-formatted answers are cleaned before speech.
+- **Reachy's network media failures recover locally.** A dropped WebRTC microphone or speaker link
+  gets one bounded reconnect-and-retry with a cooldown. Empty Deepgram results no longer trigger a
+  second language request, Home Assistant status tables are reduced to their answer for speech,
+  repeated verified unknown device requests use a short-lived negative cache, and health replies
+  use conversational wording.
+- **Long Reachy speech is no longer canceled at the generated-agent timeout.** A catalogue
+  recipe can now declare its own `task_timeout_s`, and Reachy's allows for real-time playback
+  while staying below the dashboard gateway's own deadline. Every other agent keeps the default
+  limit.
+- **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
+  weather city are no longer converted into JSON text before local or remote dispatch, preventing
+  an agent from silently falling back to its default input.
+- **Reachy's lifecycle messages are concise and actionable.** The startup log collapses
+  connection, audio, and ambient-motion details into one ready message with the next voice
+  action. Setup-only internals now stay in debug logs; a failed connection names the recovery
+  action first.
+
+- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
+  conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor
+  noise, cancellation, and timeouts; Deepgram endpointing closes a turn sooner and interim text is
+  published as it arrives. A broken stream falls back to prerecorded transcription of the same
+  captured audio. Set `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local
+  `faster-whisper`, Whisper, and OpenAI transcription remain available through
+  `REACHY_STT_BACKEND`.
+- **Reachy's bilingual voice-control path is safer and more responsive.** Nova-3 streaming uses
+  multilingual English/Greek recognition, explicitly flushes a locally-ended turn before closing
+  the socket, and keeps prerecorded recognition as a same-audio fallback. A low-confidence
+  multilingual result gets one Greek retry using the same recording, while confident English stays
+  on the fast single-pass path.
+  Raw delegation blocks are removed from durable conversation history, and an unrelated voice turn
+  cannot replay an older Home Assistant action. Conversation state antenna cues can be enabled
+  independently from continuous listening motion, which remains opt-in because servo noise can
+  reach the live microphone.
+
+### Fixed
+
+- **Reachy cannot promote forwarded text to operator authority.** Main processes actor-forwarded interface turns through its existing restricted entry point. Package approval, node administration, executable spawn/delete actions, plan approval, and unrestricted delegation remain on the existing operator interfaces; payload labels and the robot microphone do not authenticate a person. Conversation, everyday device control and bounded delegation remain available.
+
+- **A required package restart cannot be bypassed by retrying a spawn.** Replacements of loaded packages remain recorded for the lifetime of the Python process, including when catalogue or installer actors are recreated. Strict recipes check this state even when all packages are installed; a fresh process clears it. Ordinary recipes retain best-effort installation.
+
+- **Node-hosted dynamic agents honor their configured task timeout.** Reachy receives the same 140-second limit locally and on a node; agents without an override retain the 60-second default.
+
+- `stop` holds the head where it is instead of snapping it to neutral in a tenth of a second.
+- `REACHY_IDLE_LIFE=1`, `{"idle_life": true}` and `{"cmd": "life", "enabled": true}` now move the robot (the `alive` mood) instead of reporting motion on while it stays still.
+- `health` reports the IMU temperature with the pinned SDK.
+- Motion commands over MQTT while Reachy is offline say it is not connected, not `'NoneType' object has no attribute`.
+- Speech synthesis gives up after 20 s without data instead of hanging a reply or conversation; OpenAI transcription honours `REACHY_STT_TIMEOUT_S`; shutdown closes the robot link off the event loop.
+- **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
+  `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
+  occasional attract beats, and word-timed movement while speaking. Ambient motion remains off
+  until explicitly enabled so motor noise cannot interfere with microphone capture.
+
+- Structured delegations - keep agent fields and supply JSON text when no prompt is provided.
+- Home Assistant history - remove delegation blocks while preserving surrounding conversation and outcomes.
+
+- Fix Reachy Mini presenter deployments getting stuck after a transient motor-link failure: failed animations now trigger continuous automatic reconnection with backoff, use a fast motion-only recovery while preserving live WebRTC media, health no longer reports a stale motor connection as live, and common presenter-volume phrasing is handled locally.
+
+- **Reachy moves and speaks when Wactorz runs on Linux.** The robot SDK streams Reachy's camera and microphone over WebRTC through a GStreamer plugin that Linux distributions do not package, so on Linux every connection attempt failed and Reachy did nothing at all. The agent now connects without the camera and microphone when that plugin is what is missing, says so once, and speaks through the robot daemon's own HTTP API, which needs no GStreamer. Movement, speech, volume and health work, and waking plays its chime through the daemon too; listening, conversation and the camera are refused up front with what is missing, rather than a conversation that announces itself and then ends. Earlier hardware testing covered Ubuntu 26.04 with Python 3.13 and SDK 1.8.4; movement and media on SDK 1.12.0 still need hardware validation. The SDK itself needs Python 3.13 or older on Linux.
+
+- **Every Reachy command answers in a sentence.** Commands that returned no text, `go to sleep` among them, reached chat as a raw dictionary, and so did any command that failed. A dropped motor link now says Reachy is already reconnecting instead of asking for a reconnect, and a planned move that wakes the robot first no longer answers "I'm awake."
+
+- **`pip install 'wactorz[reachy]'` installs Reachy with Wactorz, and its first spawn needs no restart.** The Reachy Mini SDK requires an older `websockets` than the one Wactorz loads at startup, so installing its packages from a running Wactorz meant one restart before Reachy could start. The new `reachy` extra lists the same packages the catalogue installs, so they resolve together with Wactorz's own before it starts; the first spawn then finds nothing to install. It stays out of `all`, because the Docker image and the Home Assistant add-ons cannot build the robot SDK. A spawn that does install at runtime says how to avoid it next time, and the Reachy guide now installs this way.
+
+- **Agents can install packages into an environment made by `uv venv`.** Such an environment has no pip, so every install an agent asked for failed, once per package, with pip's own error. Wactorz now installs with `uv` when the environment has no pip and `uv` is on the `PATH`; with neither, it says once how to add pip.
+
+- **A reply to `@agent` in chat shows the answer, not the dictionary it came in.** Asked through main, as the REST API, Discord and Telegram do, an agent's reply was shown only when it put its text in `result` or `response`; the catalog and most built-in agents use `message`, so `@catalog spawn` answered with a Python dictionary. Main now reads the same fields in the same order as the dashboard. `@catalog list` names the agents in its text, and `@catalog info` gives the agent's description and, for Reachy, its setup steps. Reachy answers `wake up` with "I'm awake.", understands `start listening`, which its own ready message suggests, and no longer shows an internal reason code when a conversation stops.
+
+- **A package an agent installs in the Docker image can be imported straight away.** The image points pip at a user site-packages folder in the state directory, and Python adds that folder to its path at startup only if it already exists. On a new container it did not, so the first agent to install anything got a successful install it could not import until Wactorz restarted. The folder is now added once an install creates it. Where a package is installed both there and in the image, the copy Python imports is the one Wactorz reports.
+
+- **Reachy explains a quiet voice, and is louder without ffmpeg.** Reachy's loudness boost needs the `ffmpeg` program, and when it was missing the only sign was one line in the log. Reachy now says once in chat, the first time it speaks, that its voice is quieter and why, with the install command for the system Wactorz runs on, the reminder to restart, and on the Home Assistant add-on, which cannot install it, how to turn Reachy up instead. `health` reports whether the boost is on. Without `ffmpeg`, speech is also synthesized at the loudest level the speech service offers, so it is louder than before even without the boost.
+
+- **Opted-in trusted catalogue recipes pick up reviewed code after an update.** Reachy refreshes its code on restore while retaining saved settings, state and placement. A changed dependency list requires a fresh approved catalogue spawn. Other recipes and model-written programs retain their saved code.
+
+- **Reachy no longer stops talking when its motor link recovers.** An automatic recovery from a dropped motor link ended by waking the robot, and waking plays a sound on the robot; the robot stops whatever it is playing to start a new sound, so a recovery that landed mid-sentence cut Reachy off with a chime and a head jerk. Recovery now waits for the current speech to end and brings the head and antennas to rest without the sound. Saying `wake up` or `reconnect` still plays it.
+
+- **A first `@catalog spawn reachy-mini` no longer needs a mystery restart, and says what it is doing.** Spawning an agent that declares packages waited two minutes for the installer and then started the agent regardless, but the Reachy Mini SDK alone takes about 2.5 minutes to install on a fast connection with no pip cache, and the installer gave each package only 3 minutes. The agent started against a half-finished install and crashed, while the chat stayed silent and then reported that the catalog did not respond. Installing the SDK also downgrades `websockets` (it requires `<16`), which Wactorz has already loaded, so even a finished install left Deepgram voice input failing with `cannot import name 'Proxy' from 'websockets.uri'` until a restart. Now the catalog replies at once that it is installing, the installer posts each package to chat as it starts, and spawning waits for the installer's actual answer: a package that failed is named with pip's error, and an install that replaced a package this process had loaded asks for one restart and keeps the agent, so it starts by itself afterwards. Each package may take up to 15 minutes. Installed packages are recognised by their metadata, version pins and ranges included, so `reachy-mini==1.12.0` and `pillow` are no longer sent to pip on every spawn and restore. A trusted catalogue agent whose `setup()` fails because a module is not installed reports the missing module instead of asking the model to rewrite its reviewed code. Untrusted programs retain validated repair.
+
+- **The docs list the chat commands `/help` lists.** The reference's command table is now
+  written from the commands themselves, so it names every command main answers and no
+  others (it listed `/cost` and `/clear`, which no chat answers). The agents and interfaces
+  pages point at it instead of keeping shorter lists of their own.
+
+- **A question asked before the dashboard was open is no longer lost.** Each time the
+  dashboard connects it shows every question still waiting as its toast, with the
+  buttons to answer it, and an agent's thread shows a question it asked earlier with its
+  buttons, or with the pick once answered. The thread no longer says "Reply with the
+  number." under a question: on the dashboard an answer is a button, and a typed reply
+  goes to the agent as a message. Discord and WhatsApp keep the hint.
+
+- **The Activity view keeps showing the server's log as it happens after you leave it and
+  come back.** It stopped taking pushed lines once left, and only its five-second refresh
+  brought new ones in.
+- **A message that could not be sent no longer leaves the chat box locked.** Send stayed
+  off and Stop stayed up for up to a minute after the dashboard reported it disconnected.
+- **A dashboard opened after its session ended asks you to sign in at once.** Its first
+  requests went out before it watched for a refused session, so the sign-in page waited
+  for a later poll.
+- **Heartbeats no longer push real events out of the Activity view.** They are held under a
+  cap of their own, so with a few agents running an event no longer disappears within
+  minutes; the newest beats are still there when heartbeats are shown.
+
+- **The chat keeps every thread whole and in order.** A question listed when the dashboard
+  connects goes where its time is in the agent's thread, not below everything since. A busy
+  agent no longer pushes another agent's restored history out of that agent's thread: each
+  thread keeps its own last 500 messages. A message delivered twice shows once.
+- **Questions settle when the dashboard reconnects.** One answered on another channel while
+  the dashboard was away shows its answer and loses its notice; one its agent no longer
+  lists goes from the thread and its notice with it.
+- **A notice being closed is no longer read out or reachable with Tab while it fades.**
 
 ## [0.7.2] - 2026-10-25
 

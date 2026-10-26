@@ -169,13 +169,24 @@ export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
     }
 
     row.append(from, buildMsgBubble(msg, isUser));
-    if (!isUser) {
-        // A question also sent on a chat channel says so, since the answer may
-        // come from there rather than from these buttons.
-        const via = msg.channel && msg.options?.length ? ` · also on ${msg.channel}` : "";
-        row.append(el("div", "af-chat-msg-time", `${timeLabel(msg.timestampMs)}${via}`));
+    const footer = buildMsgFooter(msg, isUser);
+    if (footer) {
+        row.append(footer);
     }
     return row;
+}
+
+/** The line under a message's bubble, or null for none: when an agent's was sent
+ *  (and where else a question went), or that the person's has not gone yet. */
+function buildMsgFooter(msg: ChatMessage, isUser: boolean): HTMLElement | null {
+    if (isUser) {
+        // Said in words: it has not gone yet.
+        return msg.queued ? el("div", "af-chat-msg-time", "Waiting to send") : null;
+    }
+    // A question also sent on a chat channel says so, since the answer may
+    // come from there rather than from these buttons.
+    const via = msg.channel && msg.options?.length ? ` · also on ${msg.channel}` : "";
+    return el("div", "af-chat-msg-time", `${timeLabel(msg.timestampMs)}${via}`);
 }
 
 /** Placeholder shown when a thread has no messages yet. */

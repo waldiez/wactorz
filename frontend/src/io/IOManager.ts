@@ -39,7 +39,9 @@ export class IOManager {
         ws.onStreamChunk((chunk, from) => {
             this._lastStreamFrom = from;
             this._streams.append(from, chunk);
-            emit("af-stream-chunk", { chunk, from });
+            // The reply so far travels with the piece, so this is the one place a
+            // stream is put together.
+            emit("af-stream-chunk", { chunk, from, text: this._streams.text(from) });
         });
 
         ws.onStreamEnd(frameFrom => {
@@ -89,10 +91,10 @@ export class IOManager {
             toast.show({
                 type: "alert-error",
                 title: "Disconnected",
-                message: "WebSocket disconnected — reconnecting, please retry.",
+                message: "Reconnecting — the message goes once the connection is back.",
             });
-            // The dashboard rendered an optimistic bubble before this attempt —
-            // tell it to roll that back (the pre-mention text matches the bubble).
+            // The dashboard rendered the bubble before this attempt: it keeps it
+            // waiting to send, or rolls it back (the pre-mention text matches it).
             emit("af-send-failed", { content: text, target: agent?.name ?? MAIN_AGENT });
             return;
         }

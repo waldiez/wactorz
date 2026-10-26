@@ -13,7 +13,7 @@
  * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { emit } from "../events";
+import { emit, listen } from "../events";
 import { toast } from "../ui/ToastManager";
 import type { FeedItem } from "../types/feed";
 
@@ -110,6 +110,26 @@ vi.mock("../agents/AgentStore", () => ({
     },
 }));
 
+// What had happened by the time main.ts installed the session-expiry hook.
+const mockAtExpiryInstall: { requests: number; stores: number }[] = [];
+vi.mock("../io/sessionExpiry", () => ({
+    installSessionExpiry: () => {
+        const requests = vi.isMockFunction(globalThis.fetch)
+            ? vi.mocked(globalThis.fetch).mock.calls.length
+            : 0;
+        mockAtExpiryInstall.push({ requests, stores: mockStores.length });
+    },
+}));
+
+// The ledger's open questions, as main.ts asks for them each time it goes live.
+const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
+vi.mock("../io/openQuestions", () => ({
+    fetchQuestionLedger: async (apiBase: string) => ({
+        open: await mockOpenQuestions(apiBase),
+        answered: [],
+    }),
+}));
+
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
 vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
@@ -134,6 +154,11 @@ describe("main.ts bootstrap", () => {
 
     afterAll(() => {
         globalThis.fetch = origFetch;
+    });
+
+    it("installs session expiry before any request, and before the dashboard mounts", () => {
+        // Mounting starts the dashboard's polling, so it too must come after.
+        expect(mockAtExpiryInstall).toEqual([{ requests: 0, stores: 0 }]);
     });
 
     it("registers every router handler and the WS handlers", () => {
@@ -209,6 +234,18 @@ describe("main.ts bootstrap", () => {
         routerHandler("status")({ agentId: "a", agentName: "A", state: "running", protected: false });
         routerHandler("status")({ agentId: "a", agentName: "A", state: "stopped" }); // stopped branch
         expect(true).toBe(true);
+    });
+
+    it("says when the socket opens and closes, whatever the broker is doing", () => {
+        const said: boolean[] = [];
+        const stop = listen("af-socket", detail => said.push(detail.open));
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("connected")();
+        wsHandler("disconnected")();
+        document.removeEventListener("af-socket", stop);
+
+        expect(said).toEqual([true, false]);
     });
 
     it("goes live only when both the /ws is open and the broker is up, then seeds once", () => {
@@ -311,6 +348,42 @@ describe("main.ts bootstrap", () => {
 
         routerHandler("answer")({ id: "q2", agentId: "i", option: "Refuse", index: 1, channel: "dashboard" });
         expect(toast.close).toHaveBeenCalledWith("q2");
+    });
+
+    it("going live shows each question still open as its toast, every time", async () => {
+        wsHandler("mqttStatus")(false);
+        vi.mocked(toast.show).mockClear();
+        mockOpenQuestions.mockResolvedValue([
+            {
+                id: "q3",
+                from: "triage",
+                to: "user",
+                content: "Maintenance?",
+                timestampMs: 1,
+                agentId: "t",
+                options: ["Maintenance", "Real problem"],
+            },
+            // Not a question: no options, so no toast to answer it with.
+            { id: "m1", from: "triage", to: "user", content: "hello", timestampMs: 1 },
+        ]);
+
+        const handed: { id: string }[] = [];
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
+        wsHandler("connected")();
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(1));
+        document.removeEventListener("af-questions-listed", stop);
+
+        const shown = vi.mocked(toast.show).mock.calls[0]![0];
+        expect(shown.key).toBe("q3");
+        expect(handed.map(m => m.id)).toEqual(["q3", "m1"]);
+        expect(shown.actions!.map(a => a.label)).toEqual(["Maintenance", "Real problem"]);
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(2));
+        expect(mockOpenQuestions).toHaveBeenLastCalledWith("");
+        mockOpenQuestions.mockResolvedValue([]);
     });
 
     it("handles the app-event listeners", () => {

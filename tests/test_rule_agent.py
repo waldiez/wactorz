@@ -99,16 +99,18 @@ class TestConfig:
             RuleConfig.from_dict({"triggers": "a/b"})
 
     @pytest.mark.parametrize(
-        "raw",
+        ("raw", "why"),
         [
-            {"type": "publish"},
-            {"type": "task"},
-            {"type": "webhook", "url": "ftp://x"},
-            {"type": "email"},
+            ({"type": "publish"}, "topic"),
+            ({"type": "task"}, "agent"),
+            ({"type": "webhook", "url": "ftp://x"}, "url"),
+            ({"type": "email"}, "unknown action"),
+            # A field that belongs to another kind does not complete this one.
+            ({"type": "publish", "agent": "notify"}, "topic"),
         ],
     )
-    def test_an_incomplete_action_is_refused(self, raw: dict) -> None:
-        with pytest.raises(ValueError):
+    def test_an_incomplete_action_is_refused(self, raw: dict, why: str) -> None:
+        with pytest.raises(ValueError, match=why):
             RuleAction.from_dict(raw)
 
     def test_round_trip(self) -> None:
@@ -320,6 +322,9 @@ class TestAskingTheOperator:
                 "chat channel",
             ),
             ({"type": "ask_operator", "text": "x", "options": ["a"], "timeout": -1}, "timeout"),
+            # With more than one thing wrong, the first in reading order is named.
+            ({"type": "ask_operator", "text": " "}, "text"),
+            ({"type": "ask_operator", "text": "x", "options": ["a", "a"], "timeout": -1}, "twice"),
         ],
     )
     def test_an_incomplete_question_is_refused(self, raw: dict, why: str) -> None:

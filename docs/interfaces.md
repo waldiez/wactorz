@@ -37,15 +37,10 @@ wactorz --interface cli --llm gemini
 
 #### Special commands
 
-```
-/help                    — list available commands
-/rules                   — show active pipeline rules
-/rules delete <id>       — stop and remove a pipeline rule
-/memory                  — show stored user facts
-/memory clear            — wipe memory
-/webhook discord <url>   — store a Discord webhook URL
-@agent-name <payload>    — send directly to a named agent
-```
+Every slash command main answers works here, and `@agent-name <message>` sends straight to
+an agent; the [reference's command table](reference.md#13-interfaces) lists them. The
+terminal also takes `/deploy-pkg <node> <package> …` and `quit` or `exit`, and its own
+`/help` is a short summary.
 
 ---
 

@@ -52,6 +52,26 @@ describe("CardDashboard behaviour", () => {
             expect(cd._activity.count).toBe(1);
         });
 
+        it("a log line pushed after leaving the activity view is there on coming back", () => {
+            cd.show([agent("main")]);
+            cd._setView("feed");
+            cd._setView("overview");
+
+            const entries = [
+                {
+                    source: "app",
+                    ts: 1_700_000_000,
+                    level: "INFO",
+                    origin: "wactorz.web",
+                    text: "while away",
+                },
+            ];
+            document.dispatchEvent(new CustomEvent("af-app-log", { detail: { entries } }));
+            cd._setView("feed");
+
+            expect(cd.root.querySelector(".af-feed")?.textContent).toContain("while away");
+        });
+
         it("af-feed-push while not on the feed view still records the item", () => {
             cd.show([agent("main")]);
             cd._setView("overview");

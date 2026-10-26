@@ -31,6 +31,7 @@ frontend/
 │   │       ├── TTSManager.ts
 │   │       └── types.ts
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
+│   ├── chat/              # The chat's state, no DOM: ChatLog, the one writer of its messages
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
 │   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
 │   │                      #   AmbientManager, logger
@@ -113,7 +114,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `af-answer-option` | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }` |
 | `af-answered` | main.ts → DashboardChat | `{ id, option }` |
-| `af-open-questions` | main.ts → DashboardChat | `{ msgs }` |
+| `af-questions-listed` | main.ts → DashboardChat | `{ open, answered }` |
 | `af-app-log` | WSClient → appLogFeed | `{ entries }` |
 | `af-route` | router → CardDashboard | `{ view, path }` (the address changed) |
 | `af-view-changed` | CardDashboard / viewRoutes → router | `{ view, path }` (the dashboard moved) |

@@ -47,16 +47,26 @@ export function questionMessage(question: LedgerQuestion, from = question.agent)
     return typeof question.answer === "string" ? { ...msg, answer: question.answer } : msg;
 }
 
-/** The open questions the ledger lists, oldest first; none when the request fails. */
-export async function fetchOpenQuestions(apiBase: string): Promise<ChatMessage[]> {
+/** The questions the ledger lists: those still open, oldest first, and the newest answered. */
+export interface QuestionLedger {
+    open: ChatMessage[];
+    answered: ChatMessage[];
+}
+
+/** The ledger as chat messages; both lists empty when the request fails, which
+ *  changes nothing where it is taken in. */
+export async function fetchQuestionLedger(apiBase: string): Promise<QuestionLedger> {
     try {
         const res = await fetch(`${apiBase}/api/questions`);
         if (!res.ok) {
-            return [];
+            return { open: [], answered: [] };
         }
-        const body = (await res.json()) as { open?: LedgerQuestion[] };
-        return (body.open ?? []).map(question => questionMessage(question));
+        const body = (await res.json()) as { open?: LedgerQuestion[]; answered?: LedgerQuestion[] };
+        return {
+            open: (body.open ?? []).map(question => questionMessage(question)),
+            answered: (body.answered ?? []).map(question => questionMessage(question)),
+        };
     } catch {
-        return [];
+        return { open: [], answered: [] };
     }
 }

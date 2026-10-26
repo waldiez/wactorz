@@ -61,7 +61,7 @@ export function renderChatSidebar(
     sorted: AgentInfo[],
     chatTarget: string,
     onSelect: (name: string) => void,
-    messages: ChatMessage[] = [],
+    messages: readonly ChatMessage[] = [],
 ): void {
     const asking = askingAgents(messages);
     const existing = new Map<string, HTMLElement>();

@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchOpenQuestions, questionMessage, type LedgerQuestion } from "../io/openQuestions";
+import { fetchQuestionLedger, questionMessage, type LedgerQuestion } from "../io/openQuestions";
 
 const asked: LedgerQuestion = {
     id: "q-1",
@@ -39,7 +39,7 @@ describe("questionMessage", () => {
     });
 });
 
-describe("fetchOpenQuestions", () => {
+describe("fetchQuestionLedger", () => {
     const origFetch = globalThis.fetch;
     afterEach(() => {
         globalThis.fetch = origFetch;
@@ -51,25 +51,30 @@ describe("fetchOpenQuestions", () => {
         return fake;
     }
 
-    it("reads the open questions from the ledger, as messages", async () => {
-        const fake = serving({ ok: true, json: async () => ({ open: [asked], answered: [] }) });
+    it("reads both lists from the ledger, as messages", async () => {
+        const fake = serving({
+            ok: true,
+            json: async () => ({ open: [asked], answered: [{ ...asked, id: "q-0", answer: "Not sure" }] }),
+        });
 
-        const open = await fetchOpenQuestions("/base");
+        const ledger = await fetchQuestionLedger("/base");
 
         expect(fake).toHaveBeenCalledWith("/base/api/questions");
-        expect(open.map(m => [m.id, m.agentId])).toEqual([["q-1", "agent-1"]]);
+        expect(ledger.open.map(m => [m.id, m.agentId])).toEqual([["q-1", "agent-1"]]);
+        expect(ledger.answered.map(m => [m.id, m.answer])).toEqual([["q-0", "Not sure"]]);
     });
 
-    it("is none when the server refuses, says nothing, or cannot be reached", async () => {
+    it("is two empty lists when the server refuses, says nothing, or cannot be reached", async () => {
+        const nothing = { open: [], answered: [] };
         serving({ ok: false });
-        expect(await fetchOpenQuestions("")).toEqual([]);
+        expect(await fetchQuestionLedger("")).toEqual(nothing);
 
         serving({ ok: true, json: async () => ({}) });
-        expect(await fetchOpenQuestions("")).toEqual([]);
+        expect(await fetchQuestionLedger("")).toEqual(nothing);
 
         globalThis.fetch = vi.fn(async () => {
             throw new TypeError("offline");
         }) as unknown as typeof fetch;
-        expect(await fetchOpenQuestions("")).toEqual([]);
+        expect(await fetchQuestionLedger("")).toEqual(nothing);
     });
 });

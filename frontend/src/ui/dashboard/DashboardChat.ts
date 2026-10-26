@@ -16,11 +16,11 @@ import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout"
 import { renderTargetSelect } from "./targetSelect";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
-import { fetchChatHistory, mergeChatHistory, missingQuestions } from "./chatHistory";
+import { fetchChatHistory } from "./chatHistory";
+import { ChatLog, threadOf } from "../../chat/chatLog";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import {
-    markAnswered,
     replacementTarget,
     resolveSendTarget,
     sendBlockedReason,
@@ -60,7 +60,8 @@ export class DashboardChat {
 
     /** Whether the target is the user's rather than a default filled for them. */
     private _targetSettled = false;
-    private chatMessages: ChatMessage[] = [];
+    /** Every message the chat holds; nothing else writes them. */
+    private _log = new ChatLog();
     private sidebarFilter = "";
 
     /** Stream accumulation, live bubble and commit — extracted (size + per-agent keying). */
@@ -72,7 +73,7 @@ export class DashboardChat {
         thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
         scrollThread: () => this._scrollThread(),
         commit: msg => {
-            this.chatMessages.push(msg);
+            this._log.add(msg);
         },
     });
     private _lastSentTarget = MAIN_AGENT;
@@ -84,7 +85,6 @@ export class DashboardChat {
      */
     private _listVisible = false;
 
-    private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
 
     private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
@@ -147,14 +147,13 @@ export class DashboardChat {
 
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
-        this.chatMessages = [];
-        this._historyLoaded.clear();
+        this._log.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
     /** Forget that an agent's history was loaded (so it re-fetches if re-added). */
     forgetHistory(name: string): void {
-        this._historyLoaded.delete(name);
+        this._log.forgetHistory(name);
     }
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
@@ -256,12 +255,12 @@ export class DashboardChat {
         const sorted = this.host
             .sortedAgents()
             .filter(a => !this.sidebarFilter || a.name.toLowerCase().includes(this.sidebarFilter));
-        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this.chatMessages);
+        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this._log.all);
     }
 
     private _selectAgent(name: string): void {
         const latest = [...this.host.agents.values()].find(a => a.name === name);
-        if (!latest || !canOpenThread(latest, askingAgents(this.chatMessages))) {
+        if (!latest || !canOpenThread(latest, askingAgents(this._log.all))) {
             return;
         }
         this.setTarget(name);
@@ -285,10 +284,7 @@ export class DashboardChat {
 
     /** True when `msg` belongs to the currently open agent thread. */
     private _msgBelongsHere(msg: ChatMessage): boolean {
-        if (msg.from === "user" || msg.from === IO_GATEWAY || msg.from === "system") {
-            return msg.to === this.chatTarget;
-        }
-        return msg.from === this.chatTarget;
+        return threadOf(msg) === this.chatTarget;
     }
 
     /** Render the message thread for the active target (empty state when no messages). */
@@ -302,7 +298,7 @@ export class DashboardChat {
         this._streamUI.dropRefs();
 
         const streamText = this._streamUI.streamHereText();
-        const msgs = this.chatMessages.filter(m => this._msgBelongsHere(m));
+        const msgs = this._log.thread(this.chatTarget);
         if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
             thread.appendChild(buildChatEmptyState(this.chatTarget));
         } else {
@@ -335,7 +331,7 @@ export class DashboardChat {
      *  (history is keyed by name, not actor id; subsequent calls no-op). */
     async loadHistory(agentName: string): Promise<void> {
         // No target chosen yet — there is no conversation to fetch.
-        if (!agentName || this._historyLoaded.has(agentName)) {
+        if (!agentName || this._log.historyLoaded(agentName)) {
             return;
         }
         const incoming = await fetchChatHistory(agentName);
@@ -343,14 +339,10 @@ export class DashboardChat {
         if (incoming === null) {
             return;
         }
-        this._historyLoaded.add(agentName);
-        if (!incoming.length) {
-            return;
+        this._log.addHistory(agentName, incoming);
+        if (incoming.length) {
+            this.renderChatThread();
         }
-        this.chatMessages.unshift(...mergeChatHistory(this.chatMessages, incoming));
-        // Cap to the most recent 500, matching the live feed.
-        this.chatMessages = this.chatMessages.slice(-500);
-        this.renderChatThread();
     }
 
     /** Build the chat input bar (textarea, target select, mic/attach/send controls). */
@@ -526,7 +518,7 @@ export class DashboardChat {
             timestampMs: Date.now(),
             ...(attachments.length ? { attachments: [...attachments] } : {}),
         };
-        this.chatMessages.push(msg);
+        this._log.add(msg);
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
         this._renderAttachTray();
         this._showSentMessage(msg, prevTarget !== target);
@@ -601,12 +593,11 @@ export class DashboardChat {
     /** Mark the question `id` answered with `option`, and redraw if it is on screen.
      *  The same for a press here and an answer from another channel: the buttons close either way. */
     private _markAnswered(id: string, option: string): void {
-        const answered = markAnswered(this.chatMessages, id, option);
-        if (!answered) {
+        const message = this._log.answer(id, option);
+        if (!message) {
             return;
         }
-        this.chatMessages = answered.messages;
-        if (this.host.getView() === "chat" && this._msgBelongsHere(answered.message)) {
+        if (this.host.getView() === "chat" && this._msgBelongsHere(message)) {
             this.renderChatThread();
         }
         // The row of an agent that cannot be messaged locks again once nothing it asked is open.
@@ -618,7 +609,10 @@ export class DashboardChat {
             const msg = detail.msg;
             const stored: ChatMessage =
                 msg.from === IO_GATEWAY || msg.from === "system" ? { ...msg, to: this._lastSentTarget } : msg;
-            this.chatMessages = [...this.chatMessages, stored].slice(-500);
+            // A frame delivered twice is one message.
+            if (!this._log.add(stored)) {
+                return;
+            }
             // Some agents answer with a single chat frame and no stream at all,
             // so for those turns this is the only ending there is. Attributed
             // like any other, so a bystander's message does not end a turn it has
@@ -634,15 +628,16 @@ export class DashboardChat {
             this.renderSidebar();
         });
 
-        // A question asked while the page was away: in its thread, and opening it.
-        // Not a message arriving now, so no turn ends on it as one would on af-chat-message.
-        this._listeners.on("af-open-questions", detail => {
-            const missing = missingQuestions(this.chatMessages, detail.msgs);
-            if (!missing.length) {
+        // The ledger, each time the page goes live: a question asked while it was
+        // away joins its thread, one answered meanwhile closes, one no longer
+        // listed goes. Not a message arriving now, so no turn ends on it.
+        this._listeners.on("af-questions-listed", detail => {
+            const { changed, closed } = this._log.reconcile(detail.open, detail.answered);
+            closed.forEach(id => toast.close(id));
+            if (!changed) {
                 return;
             }
-            this.chatMessages = [...this.chatMessages, ...missing].slice(-500);
-            if (this.host.getView() === "chat" && missing.some(m => this._msgBelongsHere(m))) {
+            if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }
             this.renderSidebar();
@@ -657,10 +652,7 @@ export class DashboardChat {
             const agent = detail.agent;
             // Scoped reset: drop that agent's replies and the user's messages
             // *to that agent* — user messages addressed to others survive.
-            this.chatMessages = agent
-                ? this.chatMessages.filter(m => m.from !== agent && !(m.from === "user" && m.to === agent))
-                : [];
-            this._historyLoaded.clear();
+            this._log.reset(agent);
             if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }
@@ -671,18 +663,9 @@ export class DashboardChat {
             this._streamUI.endWait();
             // The optimistic bubble was rendered before the transport attempt;
             // a failed send must not stay on screen looking delivered.
-            let idx = -1;
-            for (let i = this.chatMessages.length - 1; i >= 0; i--) {
-                const m = this.chatMessages[i];
-                if (m && m.from === "user" && m.content === detail.content) {
-                    idx = i;
-                    break;
-                }
-            }
-            if (idx === -1) {
+            if (!this._log.removeLast(m => m.from === "user" && m.content === detail.content)) {
                 return;
             }
-            this.chatMessages.splice(idx, 1);
             if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }
@@ -703,7 +686,7 @@ export class DashboardChat {
                 content,
                 timestampMs: Date.now(),
             };
-            this.chatMessages.push(msg);
+            this._log.add(msg);
             this._showSentMessage(msg, switched);
             if (!content.startsWith("/")) {
                 this._streamUI.awaiting(target);

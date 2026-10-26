@@ -124,7 +124,10 @@ vi.mock("../io/sessionExpiry", () => ({
 // The ledger's open questions, as main.ts asks for them each time it goes live.
 const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
 vi.mock("../io/openQuestions", () => ({
-    fetchOpenQuestions: (apiBase: string) => mockOpenQuestions(apiBase),
+    fetchQuestionLedger: async (apiBase: string) => ({
+        open: await mockOpenQuestions(apiBase),
+        answered: [],
+    }),
 }));
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
@@ -353,11 +356,11 @@ describe("main.ts bootstrap", () => {
         ]);
 
         const handed: { id: string }[] = [];
-        const stop = listen("af-open-questions", detail => handed.push(...detail.msgs));
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
         wsHandler("connected")();
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(1));
-        document.removeEventListener("af-open-questions", stop);
+        document.removeEventListener("af-questions-listed", stop);
 
         const shown = vi.mocked(toast.show).mock.calls[0]![0];
         expect(shown.key).toBe("q3");

@@ -29,7 +29,7 @@ import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { createOutageTracker } from "./io/outage";
-import { fetchOpenQuestions } from "./io/openQuestions";
+import { fetchQuestionLedger } from "./io/openQuestions";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
@@ -384,9 +384,9 @@ function recomputeLive(): void {
     }
     // A question asked while the page was closed, or the socket down, reached
     // neither a toast nor its thread: the ledger has it.
-    void fetchOpenQuestions(_apiBase).then(open => {
-        emit("af-open-questions", { msgs: open });
-        open.forEach(msg => {
+    void fetchQuestionLedger(_apiBase).then(ledger => {
+        emit("af-questions-listed", ledger);
+        ledger.open.forEach(msg => {
             const asking = questionToast(msg);
             if (asking) {
                 toast.show(asking);

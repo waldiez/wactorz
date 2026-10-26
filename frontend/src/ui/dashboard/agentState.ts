@@ -52,7 +52,7 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
 }
 
 /** The names of the agents with a question still waiting for an answer in `messages`. */
-export function askingAgents(messages: ChatMessage[]): Set<string> {
+export function askingAgents(messages: readonly ChatMessage[]): Set<string> {
     return new Set(
         messages
             .filter(m => m.from !== "user" && (m.options?.length ?? 0) > 0 && m.answer === undefined)

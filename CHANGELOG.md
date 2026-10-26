@@ -168,6 +168,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   cap of their own, so with a few agents running an event no longer disappears within
   minutes; the newest beats are still there when heartbeats are shown.
 
+- **The chat keeps every thread whole and in order.** A question listed when the dashboard
+  connects goes where its time is in the agent's thread, not below everything since. A busy
+  agent no longer pushes another agent's restored history out of that agent's thread: each
+  thread keeps its own last 500 messages. A message delivered twice shows once.
+- **Questions settle when the dashboard reconnects.** One answered on another channel while
+  the dashboard was away shows its answer and loses its notice; one its agent no longer
+  lists goes from the thread and its notice with it.
+- **A notice being closed is no longer read out or reachable with Tab while it fades.**
+
 ## [0.7.2] - 2026-10-25
 
 Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.

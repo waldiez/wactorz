@@ -3,122 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchChatHistory, mergeChatHistory, missingQuestions } from "../ui/dashboard/chatHistory";
-import type { ChatMessage } from "../types/agent";
-
-function msg(over: Partial<ChatMessage>): ChatMessage {
-    return { id: "x", from: "user", to: "main", content: "hi", timestampMs: 1000, ...over };
-}
-
-describe("missingQuestions", () => {
-    it("is the open questions not held yet, oldest first", () => {
-        const held = msg({ id: "q-1", timestampMs: 100 });
-        const later = msg({ id: "q-3", timestampMs: 300 });
-        const earlier = msg({ id: "q-2", timestampMs: 200 });
-
-        expect(missingQuestions([held], [later, held, earlier]).map(m => m.id)).toEqual(["q-2", "q-3"]);
-    });
-});
-
-describe("mergeChatHistory", () => {
-    it("skips messages whose id already exists", () => {
-        const existing = [msg({ id: "hist-main-1" })];
-        const out = mergeChatHistory(existing, [msg({ id: "hist-main-1" })]);
-        expect(out).toEqual([]);
-    });
-
-    it("strips the @agent routing prefix without mutating the incoming message", () => {
-        const incoming = msg({ id: "hist-main-2", content: "@main hello" });
-        const out = mergeChatHistory([], [incoming]);
-        expect(out).toHaveLength(1);
-        expect(out[0]!.content).toBe("hello");
-        expect(incoming.content).toBe("@main hello"); // caller's object untouched
-    });
-
-    it("adopts the persisted id onto a matching optimistic echo instead of duplicating", () => {
-        const echo = msg({ id: "user-123", content: "deploy", timestampMs: 5000 });
-        const existing = [echo];
-        const incoming = [msg({ id: "hist-main-3", content: "deploy", timestampMs: 5050 })];
-        const out = mergeChatHistory(existing, incoming);
-        expect(out).toEqual([]); // reconciled, not added
-        expect(echo.id).toBe("hist-main-3"); // id adopted in place
-    });
-
-    it("does not show a reply twice when history arrives after the reply did", () => {
-        // An agent that goes and comes back under its name has its history
-        // fetched again, with its replies already in the thread.
-        // As the page records a reply: addressed to the thread it was sent in.
-        const reply = msg({
-            id: "stream-7",
-            from: "counter",
-            to: "counter",
-            content: "counted 1",
-            timestampMs: 5000,
-        });
-        const existing = [
-            msg({ id: "hist-counter-1", to: "counter", content: "one", timestampMs: 4900 }),
-            reply,
-        ];
-        const incoming = [
-            msg({ id: "hist-counter-1", to: "counter", content: "one", timestampMs: 4900 }),
-            msg({
-                id: "hist-counter-2",
-                from: "counter",
-                to: "user",
-                content: "counted 1",
-                timestampMs: 5020,
-            }),
-        ];
-
-        expect(mergeChatHistory(existing, incoming)).toEqual([]);
-        expect(reply.id).toBe("hist-counter-2");
-    });
-
-    it("pairs two replies with the same words each with its own persisted copy", () => {
-        const first = msg({ id: "stream-1", from: "main", to: "user", content: "done", timestampMs: 1000 });
-        const second = msg({ id: "stream-2", from: "main", to: "user", content: "done", timestampMs: 3000 });
-        const incoming = [
-            msg({ id: "hist-main-1", from: "main", to: "user", content: "done", timestampMs: 1010 }),
-            msg({ id: "hist-main-2", from: "main", to: "user", content: "done", timestampMs: 3010 }),
-        ];
-
-        expect(mergeChatHistory([first, second], incoming)).toEqual([]);
-        expect([first.id, second.id]).toEqual(["hist-main-1", "hist-main-2"]);
-    });
-
-    it("still tells the user's turns apart by whom they were to", () => {
-        const toMain = msg({ id: "user-1", to: "main", content: "status", timestampMs: 1000 });
-        const toOther = msg({ id: "hist-other-1", to: "other", content: "status", timestampMs: 1010 });
-
-        expect(mergeChatHistory([toMain], [toOther])).toEqual([toOther]);
-        expect(toMain.id).toBe("user-1");
-    });
-
-    it("keeps a persisted reply from long before the one on screen with the same words", () => {
-        const shown = msg({
-            id: "stream-9",
-            from: "main",
-            to: "user",
-            content: "done",
-            timestampMs: 10_000_000,
-        });
-        const old = msg({ id: "hist-main-1", from: "main", to: "user", content: "done", timestampMs: 1000 });
-
-        expect(mergeChatHistory([shown], [old])).toEqual([old]);
-        expect(shown.id).toBe("stream-9");
-    });
-
-    it("adds assistant messages and non-matching user messages", () => {
-        const out = mergeChatHistory(
-            [],
-            [
-                msg({ id: "hist-main-4", from: "main", to: "user", content: "reply" }),
-                msg({ id: "hist-main-5", content: "new question" }),
-            ],
-        );
-        expect(out.map(m => m.id)).toEqual(["hist-main-4", "hist-main-5"]);
-    });
-});
+import { fetchChatHistory } from "../ui/dashboard/chatHistory";
 
 describe("fetchChatHistory", () => {
     const origFetch = globalThis.fetch;
@@ -162,14 +47,6 @@ describe("fetchChatHistory", () => {
             answer: "Maintenance",
             timestampMs: 1_700_000_000_000,
         });
-    });
-
-    it("does not show a question twice when its history arrives after it did", () => {
-        const live = msg({ id: "q-1", from: "triage", to: "user", content: "Maintenance?" });
-        const replayed = msg({ id: "q-1", from: "triage", to: "user", content: "Maintenance?" });
-
-        expect(mergeChatHistory([live], [replayed])).toEqual([]);
-        expect(live.id).toBe("q-1");
     });
 
     it("maps chat_log rows (newest-last) and scales second-based timestamps", async () => {

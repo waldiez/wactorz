@@ -33,10 +33,10 @@ export interface AppEventMap {
     "af-answer-option": { id: string; agentId: string; option: string; index: number };
     /** A question was answered, here or on another channel: show the pick, take the buttons off. */
     "af-answered": { id: string; option: string };
-    /** The questions still waiting for an answer, as the server's ledger lists them, each
-     *  time the page goes live: one asked while the page was away has no message here yet.
-     *  Not `af-chat-message`, which says a message arrived now and ends a turn on it. */
-    "af-open-questions": { msgs: ChatMessage[] };
+    /** The server's ledger of questions, each time the page goes live: the open ones, one
+     *  asked while the page was away among them, and the newest answered. Not
+     *  `af-chat-message`, which says a message arrived now and ends a turn on it. */
+    "af-questions-listed": { open: ChatMessage[]; answered: ChatMessage[] };
     /** Everything was wiped; `survivors` are the ids of the agents still running. */
     "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have

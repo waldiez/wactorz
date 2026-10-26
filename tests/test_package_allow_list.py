@@ -81,13 +81,13 @@ class _Installer:
             if topic.endswith("/chat") and isinstance(payload, dict) and payload.get("options"):
                 self.asked.set()
 
-        async def _pip(package: str) -> tuple[bool, str]:
+        async def _pip(package: str, **_options: Any) -> tuple[bool, str]:
             self.installed.append(package)
             return True, ""
 
         monkeypatch.setattr(self.agent, "_mqtt_publish", _publish)
         monkeypatch.setattr(self.agent, "_pip_install", _pip)
-        monkeypatch.setattr(self.agent, "_is_installed", lambda _name: False)
+        monkeypatch.setattr(installer_agent, "requirement_is_satisfied", lambda _name: False)
 
     async def ask(self, action: str, sender: str = MAIN_ID, **payload: Any) -> dict[str, Any]:
         msg = Message(

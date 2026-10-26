@@ -16,11 +16,17 @@ import pytest
 
 from wactorz import config, llm_factory
 from wactorz.agents import llm_agent
-from wactorz.core import mqtt
+from wactorz.core import mqtt, pip
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
 from wactorz.node import state as node_state
 from wactorz.web import runtime as web_runtime
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_package_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a fresh interpreter's package-restart state."""
+    monkeypatch.setattr(pip, "_RESTART_REQUIRED", set())
 
 
 @pytest.fixture(autouse=True)

@@ -8,23 +8,25 @@ what exists rather than guessed at.
 
 A spawn is recorded in main's spawn registry, marked trusted, so the agent comes
 back after a restart without going through the validator that generated code
-faces. Missing dependencies go to the installer first; an installer that is not
-running is not a reason to refuse the spawn.
+faces. Missing dependencies go to the installer first, and the agent is only
+started once the installer says they are in place: an agent started against a
+half-finished install crashes, and one started after pip replaced a package
+this process had already loaded cannot work until a restart.
 """
 
 import asyncio
-import importlib.metadata
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 from wactorz import catalogue_agents
-from wactorz.agents import catalog_agent
+from wactorz.agents import catalog_agent, dependency_install
 from wactorz.agents.catalog_agent import (
     CatalogAgent,
-    _dependency_is_satisfied,
     _load_embedded_recipe,
     _load_recipe,
     get_native_factory,
@@ -32,6 +34,13 @@ from wactorz.agents.catalog_agent import (
 from wactorz.agents.dynamic import DynamicAgent
 from wactorz.catalogue_agents.weather_agent import WeatherAgent
 from wactorz.core.actor import Message, MessageType
+
+
+def _available_off_loop(requirements: list[str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirements == ["aiomqtt"]
+    return []
 
 
 class _Actor:
@@ -47,9 +56,17 @@ class _Installer(_Actor):
     and never answers, or has no room for it in its mailbox.
     """
 
-    def __init__(self, asker: CatalogAgent, answers: bool = True, takes: bool = True) -> None:
+    def __init__(
+        self,
+        asker: CatalogAgent,
+        result: dict[str, Any] | None = None,
+        *,
+        answers: bool = True,
+        takes: bool = True,
+    ) -> None:
         super().__init__("installer")
         self._asker = asker
+        self.result = result if result is not None else {"success": True, "failed": []}
         self._answers = answers
         self._takes = takes
         self.requests: list[Message] = []
@@ -59,7 +76,7 @@ class _Installer(_Actor):
             return False
         self.requests.append(msg)
         if self._answers:
-            self._asker._result_futures[msg.payload["_task_id"]].set_result({"ok": True})
+            self._asker._result_futures[msg.payload["_task_id"]].set_result(self.result)
         return True
 
 
@@ -100,7 +117,10 @@ class _Broker:
 
 
 @pytest.fixture(name="catalog")
-def catalog_fixture(tmp_path: Path) -> CatalogAgent:
+def catalog_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CatalogAgent:
+    # Installer/actor fakes exercise policy on a supported robot runtime. The
+    # real Python floor is covered independently in test_reachy_core_integration.
+    monkeypatch.setattr(catalog_agent, "sys", SimpleNamespace(version_info=(3, 11, 0)))
     catalog = CatalogAgent(persistence_dir=str(tmp_path))
     catalog._mqtt_client = _Broker()
     return catalog
@@ -138,41 +158,6 @@ def _topics(catalog: CatalogAgent) -> list[str]:
     broker = catalog._mqtt_client
     assert isinstance(broker, _Broker)
     return broker.topics
-
-
-class TestDependencyCheck:
-    def test_an_importable_module_is_satisfied(self) -> None:
-        assert _dependency_is_satisfied("json")
-
-    def test_a_missing_module_is_not(self) -> None:
-        assert not _dependency_is_satisfied("definitely-not-installed-anywhere>=1.0")
-
-    def test_extras_and_markers_are_ignored_when_importing(self) -> None:
-        assert _dependency_is_satisfied("pytest[testing]>=1; python_version >= '3.8'")
-
-    def test_an_exact_pin_must_match_the_installed_version(self) -> None:
-        installed = importlib.metadata.version("pytest")
-
-        assert _dependency_is_satisfied(f"pytest=={installed}")
-        assert not _dependency_is_satisfied("pytest==0.0.1")
-
-    def test_a_pin_on_a_module_with_no_distribution_is_not_satisfied(self) -> None:
-        assert not _dependency_is_satisfied("json==1.0")
-
-    def test_a_distribution_name_maps_to_its_import_name(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        imported: list[str] = []
-
-        def _import(name: str) -> object:
-            imported.append(name)
-            return object()
-
-        monkeypatch.setattr(catalog_agent.importlib, "import_module", _import)
-
-        assert _dependency_is_satisfied("beautifulsoup4")
-        assert _dependency_is_satisfied("some-package")
-        assert imported == ["bs4", "some_package"]
 
 
 class TestRecipeLoading:
@@ -254,21 +239,33 @@ class TestRequestShapes:
     async def test_these_all_list_the_catalog(self, catalog: CatalogAgent, payload: Any) -> None:
         result = await catalog._handle(payload)
 
-        assert result["message"].endswith("agent(s) available in catalog")
+        assert "agent(s) available in catalog: weather-agent" in result["message"]
+        # Beta agents stay out of the text unless asked for, as in the dashboard.
+        assert "reachy-mini" not in result["message"]
+        assert "say `list experimental`" in result["message"]
         assert result["show_experimental"] is False
 
     @pytest.mark.parametrize("payload", [{"action": "list", "filter": "beta"}, "list all"])
     async def test_a_list_can_ask_for_experimental_agents(
         self, catalog: CatalogAgent, payload: Any
     ) -> None:
-        assert (await catalog._handle(payload))["show_experimental"] is True
+        result = await catalog._handle(payload)
+
+        assert result["show_experimental"] is True
+        assert "reachy-mini" in result["message"]
 
     @pytest.mark.parametrize("payload", [{"action": "info", "agent": "weather"}, "info weather"])
     async def test_info_by_action_or_text(self, catalog: CatalogAgent, payload: Any) -> None:
         result = await catalog._handle(payload)
 
         assert result["ok"] is True
-        assert result["message"] == "Recipe for 'weather-agent'"
+        assert result["message"].startswith("Recipe for 'weather-agent': Natural-language weather")
+
+    async def test_info_carries_the_setup_guide(self, catalog: CatalogAgent) -> None:
+        result = await catalog._handle("info reachy-mini")
+
+        assert "Setup:" in result["message"]
+        assert "@catalog spawn reachy-mini" in result["message"]
 
     async def test_an_unknown_action_is_refused(self, catalog: CatalogAgent) -> None:
         result = await catalog._handle({"action": "delete"})
@@ -290,17 +287,21 @@ class TestRequestShapes:
     async def test_spawn_by_action_key_or_text(
         self, catalog: CatalogAgent, payload: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        spawned: list[str] = []
+        spawned: list[tuple[str, bool]] = []
 
-        async def _spawn(name: str, _payload: dict[str, Any]) -> dict[str, Any]:
-            spawned.append(name)
+        async def _spawn(
+            name: str, _payload: dict[str, Any], *, background_install: bool = False
+        ) -> dict[str, Any]:
+            spawned.append((name, background_install))
             return {"ok": True}
 
         monkeypatch.setattr(catalog, "_action_spawn", _spawn)
 
         await catalog._handle(payload)
 
-        assert spawned == ["smart-energy"]
+        # Typed at the catalog, so an install runs behind the reply rather than
+        # outlasting the caller's reply deadline.
+        assert spawned == [("smart-energy", True)]
 
 
 class TestHandleMessage:
@@ -441,6 +442,18 @@ class TestNativeSpawn:
 
 
 class TestDynamicSpawn:
+    async def test_requirement_scans_run_off_the_event_loop(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", _available_off_loop)
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("timeseries-collector", {})
+
+        assert result["ok"] is True
+        assert len(spawner.calls) == 1
+
     async def test_a_recipe_without_dependencies_is_spawned_trusted(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -457,12 +470,26 @@ class TestDynamicSpawn:
         assert main.spawn_registry[0]["trusted"] is True
         assert _topics(catalog).count(f"agents/{catalog.actor_id}/logs") == 2
 
+    async def test_a_recipe_may_ask_for_a_longer_task_limit_for_its_agent(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: [])
+        spawner = _spawner(catalog, monkeypatch)
+
+        await catalog._action_spawn("reachy-mini", {})
+        await catalog._action_spawn("smart-energy", {})
+
+        (_, reachy), (_, energy) = spawner.calls
+        assert reachy["task_timeout_s"] == catalog._catalog["reachy-mini"]["task_timeout_s"]
+        assert energy["task_timeout_s"] is None
+
     async def test_installed_dependencies_skip_the_installer(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         installer = _Installer(catalog)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
-        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda _req: True)
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: [])
         _spawner(catalog, monkeypatch)
 
         await catalog._action_spawn("timeseries-collector", {})
@@ -474,7 +501,7 @@ class TestDynamicSpawn:
     ) -> None:
         installer = _Installer(catalog)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
-        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
         spawner = _spawner(catalog, monkeypatch)
 
         result = await catalog._action_spawn("anomaly-detector", {})
@@ -498,8 +525,8 @@ class TestDynamicSpawn:
         # install timeout out would only delay a spawn that goes ahead anyway.
         installer = _Installer(catalog, takes=False)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
-        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
-        monkeypatch.setattr(catalog_agent, "INSTALL_WAIT_S", 600.0)
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
+        monkeypatch.setattr(dependency_install, "install_wait_s", lambda _count: 600.0)
         spawner = _spawner(catalog, monkeypatch)
 
         result = await asyncio.wait_for(catalog._action_spawn("anomaly-detector", {}), timeout=5)
@@ -518,7 +545,7 @@ class TestDynamicSpawn:
     ) -> None:
         installer = _Installer(catalog, answers=False)
         catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
-        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
         monkeypatch.setattr(catalog_agent, "INSTALL_WAIT_S", 0.05)
         spawner = _spawner(catalog, monkeypatch)
 
@@ -529,23 +556,237 @@ class TestDynamicSpawn:
         assert result["ok"] is True
         assert len(spawner.calls) == 1
 
-    async def test_a_missing_installer_does_not_block_the_spawn(
+    async def test_a_missing_installer_is_reported_instead_of_spawning(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
-        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda _req: False)
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda reqs: list(reqs))
         spawner = _spawner(catalog, monkeypatch)
 
-        result = await catalog._action_spawn("anomaly-detector", {})
+        result = await catalog._action_spawn("reachy-mini", {})
 
-        assert result["ok"] is True
+        assert result["ok"] is False
+        assert "installer agent is not running" in result["message"]
+        assert spawner.calls == []
+
+    async def test_the_install_is_announced_in_chat_before_it_starts(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _Installer(catalog)
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
+        _spawner(catalog, monkeypatch)
+
+        await catalog._action_spawn("reachy-mini", {})
+
+        assert f"agents/{catalog.actor_id}/chat" in _topics(catalog)
+        (request,) = installer.requests
+        assert request.payload["notify"] is True
+        assert request.payload["for_agent"] == "reachy-mini"
+
+    async def test_a_failed_package_is_named_and_nothing_is_spawned(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _Installer(
+            catalog,
+            {"failed": ["numpy"], "results": {"numpy": "failed: ERROR: no wheel for numpy"}},
+        )
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("reachy-mini", {})
+
+        assert result["ok"] is False
+        assert "numpy: ERROR: no wheel for numpy" in result["message"]
+        assert spawner.calls == []
+        assert main.spawn_registry == []
+
+    async def test_one_cause_for_every_package_is_said_once(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _Installer(
+            catalog,
+            {
+                "failed": ["numpy", "pillow"],
+                "results": {"numpy": "failed: no pip here", "pillow": "failed: no pip here"},
+            },
+        )
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
+        _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("reachy-mini", {})
+
+        assert result["message"].count("no pip here") == 1
+
+    async def test_a_replaced_loaded_package_asks_for_a_restart_and_keeps_the_recipe(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _Installer(
+            catalog, {"failed": [], "restart_required": ["websockets 17.1 -> 15.0.1"]}
+        )
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["reachy-mini"])
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("reachy-mini", {})
+
+        assert result["ok"] is False
+        assert result["restart_required"] is True
+        assert "restart Wactorz" in result["message"]
+        assert "websockets 17.1 -> 15.0.1" in result["message"]
+        # ...and how to not meet it again.
+        assert "pip install 'wactorz[reachy]'" in result["message"]
+        assert spawner.calls == []
+        # Recorded, so the restart the message asks for brings it up.
+        assert [cfg["name"] for cfg in main.spawn_registry] == ["reachy-mini"]
+        assert main.spawn_registry[0]["trusted"] is True
+
+    @pytest.mark.parametrize("background", [False, True])
+    async def test_retries_cannot_bypass_a_required_restart(
+        self,
+        catalog: CatalogAgent,
+        main: _Main,
+        monkeypatch: pytest.MonkeyPatch,
+        background: bool,
+    ) -> None:
+        installer = _Installer(
+            catalog, {"failed": [], "restart_required": ["websockets 16.1.1 -> 15.0.1"]}
+        )
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(
+            catalog_agent,
+            "missing_requirements",
+            Mock(side_effect=[["reachy-mini"], [], [], [], []]),
+        )
+        spawner = _spawner(catalog, monkeypatch)
+
+        first = await catalog._action_spawn("reachy-mini", {}, background_install=background)
+        if background:
+            assert first["installing"] is True
+            await asyncio.gather(*list(catalog._tasks))
+        else:
+            assert first["restart_required"] is True
+
+        for _attempt in range(2):
+            result = await catalog._action_spawn("reachy-mini", {})
+            assert result["ok"] is False
+            assert result["restart_required"] is True
+            assert "restart Wactorz" in result["message"]
+        assert spawner.calls == []
+        assert len(installer.requests) == 1
+
+        ordinary = await catalog._action_spawn("anomaly-detector", {})
+        assert ordinary["ok"] is True
+        assert [kwargs["name"] for _cls, kwargs in spawner.calls] == ["anomaly-detector"]
+
+        recreated = CatalogAgent(persistence_dir=str(main._persistence_dir.parent))
+        recreated._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        recreated._mqtt_client = _Broker()
+        new_spawner = _spawner(recreated, monkeypatch)
+        retry = await recreated._action_spawn("reachy-mini", {})
+        assert retry["restart_required"] is True
+        assert new_spawner.calls == []
+
+    async def test_a_typed_request_replies_at_once_and_reports_the_outcome_later(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _Installer(catalog)
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
+        spawner = _spawner(catalog, monkeypatch)
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        monkeypatch.setattr(catalog, "notify_user", _notify)
+
+        reply = await catalog._handle("spawn reachy-mini")
+
+        assert reply["ok"] is True
+        assert reply["installing"] is True
+        assert "numpy" in reply["message"]
+        assert told == []  # the reply is the notice; not sent twice
+        await asyncio.gather(*list(catalog._tasks))
         assert len(spawner.calls) == 1
+        assert len(told) == 1
+        assert "'reachy-mini' spawned and running" in told[0]
+
+    async def test_an_agent_that_appeared_during_the_install_is_not_spawned_twice(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        running = _Actor("reachy-mini")
+        catalog._registry = _Registry(_Installer(catalog), running)  # pyright: ignore[reportAttributeAccessIssue]
+        spawner = _spawner(catalog, monkeypatch)
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        monkeypatch.setattr(catalog, "notify_user", _notify)
+
+        await catalog._install_then_spawn(
+            "reachy-mini", catalog._catalog["reachy-mini"], ["numpy"], ""
+        )
+
+        assert spawner.calls == []
+        assert told == ["'reachy-mini' is already running"]
+
+    async def test_a_background_install_that_breaks_is_reported_in_chat(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry(_Installer(catalog))  # pyright: ignore[reportAttributeAccessIssue]
+        catalog._installing.add("reachy-mini")
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        async def _broken(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(catalog, "notify_user", _notify)
+        monkeypatch.setattr(catalog_agent, "install_for_agent", _broken)
+
+        await catalog._install_then_spawn(
+            "reachy-mini", catalog._catalog["reachy-mini"], ["numpy"], ""
+        )
+
+        assert told == ["Failed to spawn 'reachy-mini': disk full"]
+        assert "reachy-mini" not in catalog._installing
+
+    async def test_the_heads_up_says_how_to_skip_the_install_next_time(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry(_Installer(catalog))  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["reachy-mini"])
+        monkeypatch.setattr(catalog, "run_detached", lambda coro, name=None: coro.close())
+
+        reply = await catalog._handle("spawn reachy-mini")
+
+        assert reply["installing"] is True
+        assert "pip install 'wactorz[reachy]'" in reply["message"]
+
+    async def test_a_second_request_during_an_install_does_not_start_another(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry(_Installer(catalog))  # pyright: ignore[reportAttributeAccessIssue]
+        catalog._installing.add("reachy-mini")
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("reachy-mini", {})
+
+        assert result["installing"] is True
+        assert "still installing" in result["message"]
+        assert spawner.calls == []
 
     async def test_an_experimental_agent_raises_an_alert_and_warns_in_the_reply(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
-        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda _req: True)
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: [])
         _spawner(catalog, monkeypatch)
 
         result = await catalog._action_spawn("reachy-mini", {})
@@ -617,3 +858,15 @@ class TestPublicSurface:
         count = len(catalog.list_recipes())
 
         assert catalog._current_task_description() == f"catalog ({count} recipes)"
+
+
+class TestTaskTimeout:
+    """A recipe's own handle_task() limit, and the default everyone else keeps."""
+
+    def test_an_agent_keeps_the_default_unless_its_recipe_says_otherwise(self) -> None:
+        default = DynamicAgent(code="", name="plain")
+        longer = DynamicAgent(code="", name="player", task_timeout_s=140.0)
+
+        assert default._HANDLE_TASK_TIMEOUT == DynamicAgent._HANDLE_TASK_TIMEOUT
+        assert longer._HANDLE_TASK_TIMEOUT == 140.0
+        assert DynamicAgent._HANDLE_TASK_TIMEOUT == 60.0

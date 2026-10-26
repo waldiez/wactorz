@@ -33,6 +33,7 @@ from ...core.packages import (
 )
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
+from ..catalog_agent import current_recipe_config
 from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type
 
 if TYPE_CHECKING:
@@ -412,6 +413,7 @@ class SpawnService:
         Never saves: this is reading the registry to rebuild from it, and
         writing as it goes would rewrite every entry on every startup.
         """
+        config = current_recipe_config(config)
         node = config.get("node", "").strip()
         if node:
             logger.info("[%s] Re-spawning remote agent %r on node %r", self.host.name, name, node)

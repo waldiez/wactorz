@@ -113,6 +113,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `af-answer-option` | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }` |
 | `af-answered` | main.ts → DashboardChat | `{ id, option }` |
+| `af-open-questions` | main.ts → DashboardChat | `{ msgs }` |
 | `af-app-log` | WSClient → appLogFeed | `{ entries }` |
 | `af-route` | router → CardDashboard | `{ view, path }` (the address changed) |
 | `af-view-changed` | CardDashboard / viewRoutes → router | `{ view, path }` (the dashboard moved) |

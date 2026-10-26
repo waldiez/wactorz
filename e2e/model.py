@@ -62,6 +62,25 @@ async def handle_task(agent, payload):
     return {"result": "the model said: " + said}
 """
 
+#: What the asker asks the person, once.
+QUESTION = "Is the probe in place?"
+
+#: An agent that asks the person one question when it starts, waits for the
+#: answer as long as it runs, and says what was picked.
+ASKS_THE_OPERATOR = f"""
+async def setup(agent):
+    agent.state["asked"] = bool(agent.recall("asked"))
+
+
+async def process(agent):
+    if agent.state["asked"]:
+        return
+    agent.state["asked"] = True
+    agent.persist("asked", True)
+    picked = await agent.ask_operator({QUESTION!r}, options=["Yes", "No"])
+    await agent.notify_user("picked " + picked)
+"""
+
 
 #: A moment already past when any journey asks. With its offset, so it means
 #: the same moment whatever time zone the server reads schedules in.
@@ -212,6 +231,16 @@ SCRIPT = {
         description="Counts the messages it is sent",
         capabilities=["tallying"],
         code=COUNTER,
+    ),
+    # Naming no node, after model code is sent to one: it asks from there.
+    "start an asker": _starts(
+        "Starting it.",
+        name="asker",
+        type="dynamic",
+        description="Asks the person one question",
+        capabilities=["asking"],
+        poll_interval=1,
+        code=ASKS_THE_OPERATOR,
     ),
     "start a finisher on the node": _starts(
         "Starting it there.",

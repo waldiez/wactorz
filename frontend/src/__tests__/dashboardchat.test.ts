@@ -395,6 +395,101 @@ describe("DashboardChat — target selection", () => {
         dc.unwire();
     });
 
+    it("takes a question asked while the page was away, once, and opens its thread", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        const row = () =>
+            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+        const asked: ChatMessage = {
+            id: "q7",
+            from: "installer",
+            to: "user",
+            content: "Install?",
+            timestampMs: Date.now() - 60_000,
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+
+        document.dispatchEvent(new CustomEvent("af-open-questions", { detail: { msgs: [asked] } }));
+        expect(row().disabled).toBe(false);
+        row().click();
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+
+        // Listed again on the next reconnect: still one question in the thread.
+        document.dispatchEvent(new CustomEvent("af-open-questions", { detail: { msgs: [asked] } }));
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+        dc.unwire();
+    });
+
+    it("draws a question asked while away straight into the thread it belongs to", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        dc.chatTarget = "installer";
+        dc.renderChatThread();
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(0);
+
+        const asked: ChatMessage = {
+            id: "q8",
+            from: "installer",
+            to: "user",
+            content: "Install?",
+            timestampMs: Date.now(),
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+        document.dispatchEvent(new CustomEvent("af-open-questions", { detail: { msgs: [asked] } }));
+
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+        document.dispatchEvent(new CustomEvent("af-open-questions", { detail: { msgs: [] } }));
+        dc.unwire();
+    });
+
+    it("does not end a turn on a question re-listed from the ledger", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        const asked: ChatMessage = {
+            id: "q9",
+            from: "main",
+            to: "user",
+            content: "Approve the plan?",
+            timestampMs: Date.now(),
+            agentId: "main-id",
+            options: ["Approve", "Reject"],
+        };
+        const ended = vi.fn();
+        document.addEventListener("af-chat-message", ended);
+
+        document.dispatchEvent(new CustomEvent("af-open-questions", { detail: { msgs: [asked] } }));
+
+        expect(ended).not.toHaveBeenCalled();
+        document.removeEventListener("af-chat-message", ended);
+        dc.unwire();
+    });
+
+    it("lets every listener go on unwire", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        dc.unwire();
+        const asked: ChatMessage = {
+            id: "q10",
+            from: "installer",
+            to: "user",
+            content: "Install?",
+            timestampMs: Date.now(),
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+
+        document.dispatchEvent(new CustomEvent("af-open-questions", { detail: { msgs: [asked] } }));
+
+        const row = host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+        expect(row.disabled).toBe(true);
+    });
+
     it("does not switch to a non-messageable (system) agent", () => {
         host = makeHost([agent("main"), agent("monitor-agent")]);
         const dc = mount(host);

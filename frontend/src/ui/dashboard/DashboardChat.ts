@@ -16,7 +16,7 @@ import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout"
 import { renderTargetSelect } from "./targetSelect";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
-import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
+import { fetchChatHistory, mergeChatHistory, missingQuestions } from "./chatHistory";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import {
@@ -34,7 +34,7 @@ import { postOrWarn } from "./mutate";
 import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
-import { emit, listen } from "../../events";
+import { emit, Listeners } from "../../events";
 import { rememberConversation, rememberedConversation } from "./viewRoutes";
 
 /** What the chat controller needs from its host (CardDashboard). */
@@ -95,15 +95,8 @@ export class DashboardChat {
         send: input => this._sendMessage(input),
     });
 
-    private _evChat: EventListener | null = null;
-    private _evChunk: EventListener | null = null;
-    private _evEnd: EventListener | null = null;
-    private _evResetChat: EventListener | null = null;
-    private _evSendMessage: EventListener | null = null;
-    private _evSendFailed: EventListener | null = null;
-    private _evAttach: EventListener | null = null;
-    private _evConnection: EventListener | null = null;
-    private _evAnswered: EventListener | null = null;
+    /** What `wire` subscribed to, dropped together by `unwire`. */
+    private _listeners = new Listeners();
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
     private _pendingAttachments: Attachment[] = [];
@@ -588,7 +581,7 @@ export class DashboardChat {
         // Wired unconditionally — `wire()` can run before /api/config answers.
         // The event only originates from the drop zone and the paste handler,
         // both of which check first, so with uploads off nothing ever arrives.
-        this._evAttach = listen("af-attachment-added", detail => {
+        this._listeners.on("af-attachment-added", detail => {
             this._pendingAttachments.push(detail.attachment);
             this._renderAttachTray();
             // Attaching a file is the first half of composing a message, so the
@@ -602,26 +595,7 @@ export class DashboardChat {
 
     /** Remove all event listeners added by wire() (call when the dashboard is hidden). */
     unwire(): void {
-        const pairs: [string, EventListener | null][] = [
-            ["af-chat-message", this._evChat],
-            ["af-stream-chunk", this._evChunk],
-            ["af-stream-end", this._evEnd],
-            ["af-reset-chat", this._evResetChat],
-            ["af-send-message", this._evSendMessage],
-            ["af-send-failed", this._evSendFailed],
-            ["af-connection-status", this._evConnection],
-            ["af-attachment-added", this._evAttach],
-            ["af-answered", this._evAnswered],
-            ["af-answer-option", this._evAnswered],
-        ];
-        pairs.forEach(([name, fn]) => {
-            if (fn) {
-                document.removeEventListener(name, fn);
-            }
-        });
-        this._evChat = this._evChunk = this._evEnd = this._evResetChat = this._evSendMessage = null;
-        this._evSendFailed = this._evAttach = this._evConnection = null;
-        this._evAnswered = null;
+        this._listeners.off();
     }
 
     /** Mark the question `id` answered with `option`, and redraw if it is on screen.
@@ -640,7 +614,7 @@ export class DashboardChat {
     }
 
     private _wireChatEvents(): void {
-        this._evChat = listen("af-chat-message", detail => {
+        this._listeners.on("af-chat-message", detail => {
             const msg = detail.msg;
             const stored: ChatMessage =
                 msg.from === IO_GATEWAY || msg.from === "system" ? { ...msg, to: this._lastSentTarget } : msg;
@@ -660,12 +634,26 @@ export class DashboardChat {
             this.renderSidebar();
         });
 
+        // A question asked while the page was away: in its thread, and opening it.
+        // Not a message arriving now, so no turn ends on it as one would on af-chat-message.
+        this._listeners.on("af-open-questions", detail => {
+            const missing = missingQuestions(this.chatMessages, detail.msgs);
+            if (!missing.length) {
+                return;
+            }
+            this.chatMessages = [...this.chatMessages, ...missing].slice(-500);
+            if (this.host.getView() === "chat" && missing.some(m => this._msgBelongsHere(m))) {
+                this.renderChatThread();
+            }
+            this.renderSidebar();
+        });
+
         // Marked at the press, not at the broker's echo, so a second press cannot answer twice.
         // One listener for both: a press here and an answer from elsewhere read the same.
-        this._evAnswered = listen("af-answered", detail => this._markAnswered(detail.id, detail.option));
-        document.addEventListener("af-answer-option", this._evAnswered);
+        this._listeners.on("af-answered", detail => this._markAnswered(detail.id, detail.option));
+        this._listeners.on("af-answer-option", detail => this._markAnswered(detail.id, detail.option));
 
-        this._evResetChat = listen("af-reset-chat", detail => {
+        this._listeners.on("af-reset-chat", detail => {
             const agent = detail.agent;
             // Scoped reset: drop that agent's replies and the user's messages
             // *to that agent* — user messages addressed to others survive.
@@ -678,7 +666,7 @@ export class DashboardChat {
             }
         });
 
-        this._evSendFailed = listen("af-send-failed", detail => {
+        this._listeners.on("af-send-failed", detail => {
             // Nothing went on the wire, so no reply is coming for anyone.
             this._streamUI.endWait();
             // The optimistic bubble was rendered before the transport attempt;
@@ -700,7 +688,7 @@ export class DashboardChat {
             }
         });
 
-        this._evSendMessage = listen("af-send-message", detail => {
+        this._listeners.on("af-send-message", detail => {
             if (this._selfDispatching) {
                 return;
             }
@@ -726,12 +714,12 @@ export class DashboardChat {
     private _wireStreamEvents(): void {
         // The transport dropping out of `live` means no reply is arriving for
         // anything outstanding, whichever agent it was sent to.
-        this._evConnection = listen("af-connection-status", detail => {
+        this._listeners.on("af-connection-status", detail => {
             if (detail?.status !== "live") {
                 this._streamUI.endWait();
             }
         });
-        this._evChunk = listen("af-stream-chunk", detail => this._streamUI.onChunk(detail));
-        this._evEnd = listen("af-stream-end", detail => this._streamUI.onEnd(detail));
+        this._listeners.on("af-stream-chunk", detail => this._streamUI.onChunk(detail));
+        this._listeners.on("af-stream-end", detail => this._streamUI.onEnd(detail));
     }
 }

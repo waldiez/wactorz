@@ -12,6 +12,7 @@
 import type { Attachment, ChatMessage } from "../../types/agent";
 import { toMs } from "../../time";
 import { stripActionBlocks } from "../../agents/actionBlocks";
+import { type LedgerQuestion, questionMessage } from "../../io/openQuestions";
 
 function ingressBase(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";
@@ -90,8 +91,15 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
         role: string;
         content: string;
         attachments?: StoredAttachment[];
+        /** The question the row is, when the server's ledger still knows it. */
+        question?: Omit<LedgerQuestion, "agent">;
     }[];
     return stripInternalTurns(rows.reverse()).map(r => {
+        if (r.question) {
+            // By the question's own id: a live copy already shown is then the
+            // same message, and an answer names the question by it.
+            return questionMessage({ ...r.question, agent: agentName, asked_at: r.ts });
+        }
         const attachments = restoreAttachments(r.attachments);
         return {
             id: `hist-${agentName}-${r.id}`,
@@ -166,6 +174,12 @@ function alreadyShown(existing: ChatMessage[], m: ChatMessage): ChatMessage | un
             x.content.trim() === m.content.trim() &&
             Math.abs(x.timestampMs - m.timestampMs) < SAME_MESSAGE_WINDOW_MS,
     );
+}
+
+/** The questions in `open` that `existing` does not hold yet, by id; oldest first. */
+export function missingQuestions(existing: ChatMessage[], open: ChatMessage[]): ChatMessage[] {
+    const ids = new Set(existing.map(m => m.id));
+    return open.filter(m => !ids.has(m.id)).sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
 /**

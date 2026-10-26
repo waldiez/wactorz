@@ -13,7 +13,7 @@
  * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { emit } from "../events";
+import { emit, listen } from "../events";
 import { toast } from "../ui/ToastManager";
 import type { FeedItem } from "../types/feed";
 
@@ -108,6 +108,12 @@ vi.mock("../agents/AgentStore", () => ({
         clearAll = vi.fn();
         dispose = vi.fn();
     },
+}));
+
+// The ledger's open questions, as main.ts asks for them each time it goes live.
+const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
+vi.mock("../io/openQuestions", () => ({
+    fetchOpenQuestions: (apiBase: string) => mockOpenQuestions(apiBase),
 }));
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
@@ -311,6 +317,42 @@ describe("main.ts bootstrap", () => {
 
         routerHandler("answer")({ id: "q2", agentId: "i", option: "Refuse", index: 1, channel: "dashboard" });
         expect(toast.close).toHaveBeenCalledWith("q2");
+    });
+
+    it("going live shows each question still open as its toast, every time", async () => {
+        wsHandler("mqttStatus")(false);
+        vi.mocked(toast.show).mockClear();
+        mockOpenQuestions.mockResolvedValue([
+            {
+                id: "q3",
+                from: "triage",
+                to: "user",
+                content: "Maintenance?",
+                timestampMs: 1,
+                agentId: "t",
+                options: ["Maintenance", "Real problem"],
+            },
+            // Not a question: no options, so no toast to answer it with.
+            { id: "m1", from: "triage", to: "user", content: "hello", timestampMs: 1 },
+        ]);
+
+        const handed: { id: string }[] = [];
+        const stop = listen("af-open-questions", detail => handed.push(...detail.msgs));
+        wsHandler("connected")();
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(1));
+        document.removeEventListener("af-open-questions", stop);
+
+        const shown = vi.mocked(toast.show).mock.calls[0]![0];
+        expect(shown.key).toBe("q3");
+        expect(handed.map(m => m.id)).toEqual(["q3", "m1"]);
+        expect(shown.actions!.map(a => a.label)).toEqual(["Maintenance", "Real problem"]);
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(2));
+        expect(mockOpenQuestions).toHaveBeenLastCalledWith("");
+        mockOpenQuestions.mockResolvedValue([]);
     });
 
     it("handles the app-event listeners", () => {

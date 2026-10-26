@@ -3,12 +3,22 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchChatHistory, mergeChatHistory } from "../ui/dashboard/chatHistory";
+import { fetchChatHistory, mergeChatHistory, missingQuestions } from "../ui/dashboard/chatHistory";
 import type { ChatMessage } from "../types/agent";
 
 function msg(over: Partial<ChatMessage>): ChatMessage {
     return { id: "x", from: "user", to: "main", content: "hi", timestampMs: 1000, ...over };
 }
+
+describe("missingQuestions", () => {
+    it("is the open questions not held yet, oldest first", () => {
+        const held = msg({ id: "q-1", timestampMs: 100 });
+        const later = msg({ id: "q-3", timestampMs: 300 });
+        const earlier = msg({ id: "q-2", timestampMs: 200 });
+
+        expect(missingQuestions([held], [later, held, earlier]).map(m => m.id)).toEqual(["q-2", "q-3"]);
+    });
+});
 
 describe("mergeChatHistory", () => {
     it("skips messages whose id already exists", () => {
@@ -118,6 +128,48 @@ describe("fetchChatHistory", () => {
     });
     beforeEach(() => {
         (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "";
+    });
+
+    it("gives a row that is a question the ledger knows its id, options and pick back", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => [
+                {
+                    id: 9,
+                    ts: 1_700_000_000,
+                    role: "assistant",
+                    content: "Maintenance?\n\n1. Maintenance\n2. Real problem",
+                    question: {
+                        id: "q-1",
+                        agent_id: "agent-1",
+                        text: "Maintenance?",
+                        options: ["Maintenance", "Real problem"],
+                        answer: "Maintenance",
+                    },
+                },
+            ],
+        })) as unknown as typeof fetch;
+
+        const out = await fetchChatHistory("triage");
+
+        expect(out).toHaveLength(1);
+        expect(out![0]).toMatchObject({
+            id: "q-1",
+            from: "triage",
+            content: "Maintenance?",
+            agentId: "agent-1",
+            options: ["Maintenance", "Real problem"],
+            answer: "Maintenance",
+            timestampMs: 1_700_000_000_000,
+        });
+    });
+
+    it("does not show a question twice when its history arrives after it did", () => {
+        const live = msg({ id: "q-1", from: "triage", to: "user", content: "Maintenance?" });
+        const replayed = msg({ id: "q-1", from: "triage", to: "user", content: "Maintenance?" });
+
+        expect(mergeChatHistory([live], [replayed])).toEqual([]);
+        expect(live.id).toBe("q-1");
     });
 
     it("maps chat_log rows (newest-last) and scales second-based timestamps", async () => {

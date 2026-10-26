@@ -29,6 +29,7 @@ import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { createOutageTracker } from "./io/outage";
+import { fetchOpenQuestions } from "./io/openQuestions";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
@@ -367,6 +368,17 @@ function recomputeLive(): void {
         // fetch the current actor list from REST so they appear immediately.
         refreshLiveActors();
     }
+    // A question asked while the page was closed, or the socket down, reached
+    // neither a toast nor its thread: the ledger has it.
+    void fetchOpenQuestions(_apiBase).then(open => {
+        emit("af-open-questions", { msgs: open });
+        open.forEach(msg => {
+            const asking = questionToast(msg);
+            if (asking) {
+                toast.show(asking);
+            }
+        });
+    });
 }
 
 router.on("qa-flag", payload => {

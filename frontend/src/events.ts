@@ -33,6 +33,10 @@ export interface AppEventMap {
     "af-answer-option": { id: string; agentId: string; option: string; index: number };
     /** A question was answered, here or on another channel: show the pick, take the buttons off. */
     "af-answered": { id: string; option: string };
+    /** The questions still waiting for an answer, as the server's ledger lists them, each
+     *  time the page goes live: one asked while the page was away has no message here yet.
+     *  Not `af-chat-message`, which says a message arrived now and ends a turn on it. */
+    "af-open-questions": { msgs: ChatMessage[] };
     /** Everything was wiped; `survivors` are the ids of the agents still running. */
     "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have
@@ -78,4 +82,26 @@ export function listen<K extends keyof AppEventMap>(
     };
     document.addEventListener(type, fn);
     return fn;
+}
+
+/**
+ * The listeners a component holds on the bus, dropped together when it is torn
+ * down. `on` subscribes as `listen` does and keeps the listener; `off` removes
+ * every one kept, so a component never has to name each again to let it go.
+ */
+export class Listeners {
+    private held: [keyof AppEventMap, EventListener][] = [];
+
+    /** Subscribe `handler` to `type`, as `listen` does, until `off`. */
+    on<K extends keyof AppEventMap>(type: K, handler: (detail: AppEventMap[K]) => void): void {
+        this.held.push([type, listen(type, handler)]);
+    }
+
+    /** Remove every listener `on` added. */
+    off(): void {
+        for (const [type, fn] of this.held) {
+            document.removeEventListener(type, fn);
+        }
+        this.held = [];
+    }
 }

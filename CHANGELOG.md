@@ -132,6 +132,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   others (it listed `/cost` and `/clear`, which no chat answers). The agents and interfaces
   pages point at it instead of keeping shorter lists of their own.
 
+- **A question asked before the dashboard was open is no longer lost.** Each time the
+  dashboard connects it shows every question still waiting as its toast, with the
+  buttons to answer it, and an agent's thread shows a question it asked earlier with its
+  buttons, or with the pick once answered. The thread no longer says "Reply with the
+  number." under a question: on the dashboard an answer is a button, and a typed reply
+  goes to the agent as a message. Discord and WhatsApp keep the hint.
+
 ## [0.7.2] - 2026-10-25
 
 Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.

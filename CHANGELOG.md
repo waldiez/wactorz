@@ -127,6 +127,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **A first `@catalog spawn reachy-mini` no longer needs a mystery restart, and says what it is doing.** Spawning an agent that declares packages waited two minutes for the installer and then started the agent regardless, but the Reachy Mini SDK alone takes about 2.5 minutes to install on a fast connection with no pip cache, and the installer gave each package only 3 minutes. The agent started against a half-finished install and crashed, while the chat stayed silent and then reported that the catalog did not respond. Installing the SDK also downgrades `websockets` (it requires `<16`), which Wactorz has already loaded, so even a finished install left Deepgram voice input failing with `cannot import name 'Proxy' from 'websockets.uri'` until a restart. Now the catalog replies at once that it is installing, the installer posts each package to chat as it starts, and spawning waits for the installer's actual answer: a package that failed is named with pip's error, and an install that replaced a package this process had loaded asks for one restart and keeps the agent, so it starts by itself afterwards. Each package may take up to 15 minutes. Installed packages are recognised by their metadata, version pins and ranges included, so `reachy-mini==1.12.0` and `pillow` are no longer sent to pip on every spawn and restore. A trusted catalogue agent whose `setup()` fails because a module is not installed reports the missing module instead of asking the model to rewrite its reviewed code. Untrusted programs retain validated repair.
 
+- **The docs list the chat commands `/help` lists.** The reference's command table is now
+  written from the commands themselves, so it names every command main answers and no
+  others (it listed `/cost` and `/clear`, which no chat answers). The agents and interfaces
+  pages point at it instead of keeping shorter lists of their own.
+
 ## [0.7.2] - 2026-10-25
 
 Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.

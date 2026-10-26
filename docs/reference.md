@@ -754,33 +754,108 @@ python -m wactorz --llm gemini --gemini-model gemini-2.5-pro
 python -m wactorz --interface discord --discord-token YOUR_TOKEN
 ```
 
-**CLI commands:**
+**Chat commands.** What main answers, as its `/help` lists them; the terminal chat passes
+them to main too. A social channel such as Discord runs only the everyday ones
+([Interfaces](interfaces.md)).
 
-| Command | Description |
-|---------|-------------|
-| `/agents` | List all running agents with type and status |
-| `/nodes` | List remote nodes with online/offline status and their agents |
-| `/rules` | List all active pipeline rules |
-| `/rules delete <id>` | Stop and delete a pipeline rule by its ID |
+<!-- commands:start: written by scripts/sync_command_docs.py from the commands' forms -->
+
+#### Agents
+
+| Command | What it does |
+|---|---|
+| `/agents` | List all known agents with descriptions and schemas |
+| `/agents <keyword>` | Filter agents by capability keyword |
+| `/agents delete <agent>` | The same as /delete |
+| `/agents remove <agent>` | The same as /delete |
+| `/agents restart <agent>` | Restart an agent, local or remote, state preserved |
+| `/agents stop <agent>` | The same as /stop |
+| `/capabilities` | The same as /agents |
+| `/delete <agent>` | Stop an agent and remove it from the spawn registry |
+| `/packages` | List the packages agents may install without asking |
+| `/packages allow <package> …` | Add packages to that list |
+| `/packages forget <package> …` | Take off packages you added |
+| `/start <agent>` | Start a stopped agent back up |
+| `/stop <agent>` | Stop an agent, keeping its state (reversible) |
+| `@agent-name <msg>` | Send a message directly to a named agent |
+| `@catalog list` | List available catalog recipes |
+| `@catalog spawn <name>` | Spawn a catalog agent |
+
+#### Nodes
+
+| Command | What it does |
+|---|---|
+| `/deploy <node>` | Deploy a node from DEPLOY_TARGETS; bare, list them (SSH credentials come from the environment, not chat) |
+| `/migrate <agent> <node> [--force]` | Move an agent to a different node (state preserved) |
+| `/nodes` | List local + remote nodes and their agents |
+| `/nodes remove <node>` | Stop all agents on a node and remove it |
+| `/nodes restart <node>` | Restart the runner process on a node |
+| `/nodes run <node> <command>` | Run a shell command on a node over SSH, as typed |
+| `/nodes shutdown <node>` | Stop all agents and shut down a node |
+
+#### Models
+
+| Command | What it does |
+|---|---|
+| `/artifacts` | List the models kept on main (wactorz-artifacts) |
+| `/artifacts <name>` | Every version of one model |
+| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve |
+| `/artifacts clear active\|shadow <name>` | Unset a pointer |
+| `/artifacts promote <name> [reason]` | Make the shadow version active |
+| `/artifacts shadow <name:version> [reason]` | Try a version beside the active one |
+
+#### Pipelines & Plans
+
+| Command | What it does |
+|---|---|
+| `/clear-plans` | Clear the plan cache |
+| `/plans` | List pending pipeline proposals (dry-run) |
+| `/plans approve <id>` | Execute a proposed pipeline |
+| `/plans reject <id>` | Discard a proposed pipeline |
+| `/plans show <id>` | Inspect a proposal's full code |
+| `/rules` | List active pipeline rules |
+| `/rules delete <id>` | Stop agents and remove a rule |
+| `pipeline! <task>` | Bypass approval and execute immediately (power users) |
+
+#### Memory
+
+| Command | What it does |
+|---|---|
 | `/memory` | Show stored user facts and conversation summary |
-| `/memory clear` | Wipe all stored memory |
-| `/memory forget <key>` | Remove a specific stored fact |
-| `/webhook <service> <url>` | Store a notification webhook URL |
-| `/topics` | List known MQTT topics and their publishing agents |
-| `/artifacts [name]` | List the models kept on main with `wactorz-artifacts`, or every version of one. Main's model is told the same list, so an agent it writes names a model that is there |
-| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve: what a spawn naming the model without a version gets. Activating an earlier version is the rollback |
-| `/artifacts shadow <name:version> [reason]` | Mark a version to try beside the active one; refused for the active version itself |
-| `/artifacts promote <name> [reason]` | Make the shadow version active and clear `shadow` |
-| `/artifacts clear active\|shadow <name>` | Unset a pointer; with `active` unset the bare name means the newest version again |
-| `/cost` | Show per-agent token usage and cost breakdown |
-| `/clear` | Clear the main agent's conversation history |
-| `/clear-plans` | Wipe the planner's plan cache |
-| `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
-| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node, allowing them first |
-| `/packages [allow\|forget <pkg...>]` | Show, add to or take from the packages installed without asking |
-| `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
-| `/help` | Show all available commands |
-| `@agent-name` | Route your next message directly to a specific agent |
+| `/memory clear` | Wipe all memory |
+| `/memory forget <key>` | Remove one stored fact |
+
+#### Notifications
+
+| Command | What it does |
+|---|---|
+| `/webhook` | List stored webhook URLs |
+| `/webhook <service> <url>` | Store a webhook URL for a service, such as discord or telegram |
+
+#### System & diagnostics
+
+| Command | What it does |
+|---|---|
+| `/bus` | TopicBus registry: contracts, data flows, wiring pairs |
+| `/help` | Show this help |
+| `/mqtt` | MQTT publisher status (connected, queue depth, outbox) |
+| `/registry` | Diagnostic: compare live registry, spawn registry, manifest cache |
+| `/topics` | List MQTT topics published by known agents |
+| `/topics <keyword>` | Filter topics by keyword |
+
+<!-- commands:end -->
+
+Beside the table:
+
+- `/artifacts` names the models kept on main with `wactorz-artifacts`; main's model is told
+  the same list, so an agent it writes names a model that is there. `activate` sets what a
+  spawn naming the model without a version gets, and activating an earlier version is the
+  rollback. `shadow` is refused for the active version itself. With `active` cleared, the
+  bare name means the newest version again.
+- `/migrate` is refused when an agent's state cannot travel as JSON; `--force` moves it
+  without those keys.
+- The terminal chat also takes `/deploy-pkg <node> <package> …`, which installs packages on
+  a configured node, allowing them first, and `quit` or `exit`.
 
 ### REST API
 

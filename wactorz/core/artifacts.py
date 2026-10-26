@@ -393,6 +393,10 @@ class Pointer:
         return asdict(self)
 
 
+#: Who cleared which pointer in this process, by store, name and pointer, until
+#: main reads it to record the change: a cleared pointer leaves no entry to say.
+_CLEARED_BY: dict[tuple[str, str, str], str] = {}
+
 #: What follows the name in a reference: None for a bare name, ``"latest"``, one
 #: of `POINTERS`, or a version number.
 Selector = int | str | None
@@ -729,12 +733,13 @@ class ArtifactStore:
             self._write_all(artifacts, pointers)
         return moved
 
-    def clear(self, which: str, name: str) -> Pointer:
+    def clear(self, which: str, name: str, *, by: str = "") -> Pointer:
         """Unset ``name``'s ``which`` pointer; what it was. Raises `ArtifactError` when it was unset.
 
-        Cleared, ``active`` leaves the bare name meaning the newest again.
-        Nothing is left to record who cleared it on; the caller says so where
-        it reports the change.
+        Cleared, ``active`` leaves the bare name meaning the newest again. A
+        cleared pointer has no entry left in the index to say who cleared it,
+        so ``by`` is kept in this process for main to read when it records the
+        change (`cleared_by`).
         """
         which = _pointer_name(which)
         error = name_error(name)
@@ -751,7 +756,17 @@ class ArtifactStore:
             else:
                 pointers.pop(name, None)
             self._write_all(artifacts, pointers)
+            if by:
+                _CLEARED_BY[(str(self.root.resolve()), name, which)] = by
         return _pointer(name, which, was)
+
+    def cleared_by(self, name: str, which: str) -> str:
+        """Who cleared ``name``'s ``which`` in this process, told once; "" when not known.
+
+        A clear made by another process -- the CLI beside the server -- is not
+        known here.
+        """
+        return _CLEARED_BY.pop((str(self.root.resolve()), name, which), "")
 
     def promote(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
         """Move ``name``'s ``active`` to where ``shadow`` points and clear ``shadow``, as one change.

@@ -30,6 +30,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and credentials Wactorz itself is configured with, so it reaches a broker with a password,
   and each reading carries its device and time.
 
+- **A model keeps the history of its pointers.** Every move of `active` or `shadow` is
+  recorded with who made it, why, and from which version to which, whether it was made on
+  the dashboard, in chat or with `wactorz-artifacts`; `GET /api/models/{name}/moves` lists
+  them, newest first. A clear made on the dashboard or in chat says who cleared it too
+  (one made with the CLI beside the server is recorded without a name), and a shadow ended
+  by a promotion is recorded as part of it. Kept in the provenance graph in main's
+  database; the store's index format does not change.
+
 ### Changed
 
 - **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,

@@ -195,7 +195,7 @@ def _promote(args: argparse.Namespace) -> None:
 
 
 def _clear(args: argparse.Namespace) -> None:
-    was = _store(args).clear(args.pointer, args.name)
+    was = _store(args).clear(args.pointer, args.name, by="cli")
     logger.info("%s has no %s version now (was %s)", was.name, was.pointer, was.reference)
 
 

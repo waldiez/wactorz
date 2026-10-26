@@ -105,7 +105,7 @@ async def clear_model_pointer(ctx: CommandContext, argument: str) -> str:
     if not name:
         return "Usage: /artifacts clear active|shadow <name>"
     try:
-        was = await asyncio.to_thread(_store().clear, which, name)
+        was = await asyncio.to_thread(_store().clear, which, name, by=BY)
     except ArtifactError as exc:
         return f"Cannot clear {which!r} of {name!r}: {exc}"
     await _announce(ctx)

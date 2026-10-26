@@ -209,6 +209,7 @@ def build_app() -> web.Application:
     # are kept for the clients that called them before the prefix.
     app.router.add_get("/api/models", api_models.models_handler)
     app.router.add_get("/api/models/{name}", api_models.model_handler)
+    app.router.add_get("/api/models/{name}/moves", api_models.moves_handler)
     app.router.add_post("/api/models/{name}/active", api_models.set_active_handler)
     app.router.add_post("/api/models/{name}/shadow", api_models.set_shadow_handler)
     app.router.add_delete("/api/models/{name}/shadow", api_models.clear_shadow_handler)

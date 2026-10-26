@@ -110,6 +110,17 @@ vi.mock("../agents/AgentStore", () => ({
     },
 }));
 
+// What had happened by the time main.ts installed the session-expiry hook.
+const mockAtExpiryInstall: { requests: number; stores: number }[] = [];
+vi.mock("../io/sessionExpiry", () => ({
+    installSessionExpiry: () => {
+        const requests = vi.isMockFunction(globalThis.fetch)
+            ? vi.mocked(globalThis.fetch).mock.calls.length
+            : 0;
+        mockAtExpiryInstall.push({ requests, stores: mockStores.length });
+    },
+}));
+
 // The ledger's open questions, as main.ts asks for them each time it goes live.
 const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
 vi.mock("../io/openQuestions", () => ({
@@ -140,6 +151,11 @@ describe("main.ts bootstrap", () => {
 
     afterAll(() => {
         globalThis.fetch = origFetch;
+    });
+
+    it("installs session expiry before any request, and before the dashboard mounts", () => {
+        // Mounting starts the dashboard's polling, so it too must come after.
+        expect(mockAtExpiryInstall).toEqual([{ requests: 0, stores: 0 }]);
     });
 
     it("registers every router handler and the WS handlers", () => {

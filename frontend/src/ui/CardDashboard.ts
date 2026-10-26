@@ -500,8 +500,9 @@ export class CardDashboard {
         }
         if (this.view === "feed" && v !== "feed") {
             // Leaving the activity view: stop polling for something nobody is
-            // looking at. The flag survives, so returning resumes it.
-            this._activity.release();
+            // looking at. The flag survives, so returning resumes it, and the
+            // pushed records are still taken in meanwhile.
+            this._activity.pause();
         }
         this.view = v;
         this._routes.moved();

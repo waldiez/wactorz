@@ -126,13 +126,27 @@ window.addEventListener("error", e => {
 });
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
+const router = new ServerEventRouter();
+const ws = new WSClient();
+// Started in section 7, stopped once the session is gone; clearing 0 does nothing.
+let _liveActorsTimer = 0;
+
+// Ahead of the first request this module makes: mounting the dashboard starts
+// its polling. A session that ended while the tab was closed refuses that one
+// too, and installing after it would leave the very first 401 unhandled and the
+// page waiting on a poll half a minute away.
+installSessionExpiry(window, () => {
+    // The socket is the one thing that would keep trying: it reconnects on a
+    // timer, and every attempt goes to the same revoked prefix.
+    ws.disconnect();
+    window.clearInterval(_liveActorsTimer);
+});
+
 // Before the dashboard mounts: the first view it opens sets the address.
 const stopRouter = startRouter();
 const agentStore = new AgentStore();
 agentStore.mount();
-const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
-const ws = new WSClient();
 // Online by the overview's measure, so the feed and the node cards agree.
 const nodePresence = new NodePresence(STALE_MS);
 
@@ -508,24 +522,13 @@ listen("af-clear-feed", () => {
 
 ws.connect(`${_wsBase}/ws`);
 refreshLiveActors();
-const _liveActorsTimer = window.setInterval(() => {
+_liveActorsTimer = window.setInterval(() => {
     if (document.hidden) {
         return;
     }
     refreshLiveActors();
     agentStore.pruneSilentRemoteAgents();
 }, 15000);
-
-// Ahead of the first request this module makes — the feed seed below. A session
-// that ended while the tab was closed refuses that one too, and installing after
-// it would leave the very first 401 unhandled and the page waiting on a poll
-// half a minute away.
-installSessionExpiry(window, () => {
-    // The socket is the one thing that would keep trying: it reconnects on a
-    // timer, and every attempt goes to the same revoked prefix.
-    ws.disconnect();
-    window.clearInterval(_liveActorsTimer);
-});
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).

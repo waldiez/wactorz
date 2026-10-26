@@ -148,6 +148,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   number." under a question: on the dashboard an answer is a button, and a typed reply
   goes to the agent as a message. Discord and WhatsApp keep the hint.
 
+- **The Activity view keeps showing the server's log as it happens after you leave it and
+  come back.** It stopped taking pushed lines once left, and only its five-second refresh
+  brought new ones in.
+- **A message that could not be sent no longer leaves the chat box locked.** Send stayed
+  off and Stop stayed up for up to a minute after the dashboard reported it disconnected.
+- **A dashboard opened after its session ended asks you to sign in at once.** Its first
+  requests went out before it watched for a refused session, so the sign-in page waited
+  for a later poll.
+- **Heartbeats no longer push real events out of the Activity view.** They are held under a
+  cap of their own, so with a few agents running an event no longer disappears within
+  minutes; the newest beats are still there when heartbeats are shown.
+
 ## [0.7.2] - 2026-10-25
 
 Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.

@@ -218,6 +218,18 @@ describe("buildIobar", () => {
             expect(stop.style.display).toBe("none");
         });
 
+        it("idles at once when a send could not go out", () => {
+            const bar = mount(makeDeps());
+            const send = bar.querySelector<HTMLButtonElement>(".af-send-btn")!;
+            const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
+
+            sendTo("main");
+            emit("af-send-failed", { content: "hi", target: "main" });
+
+            expect(send.disabled).toBe(false);
+            expect(stop.style.display).toBe("none");
+        });
+
         it("stays busy while the transport is still live", () => {
             const bar = mount(makeDeps());
             const send = bar.querySelector<HTMLButtonElement>(".af-send-btn")!;

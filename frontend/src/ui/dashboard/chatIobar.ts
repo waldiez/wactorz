@@ -190,6 +190,8 @@ function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButton
             idle();
         }
     });
+    // Nothing went out, so no reply is coming: the turn the send began is over.
+    listen("af-send-failed", () => idle());
 }
 
 async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {

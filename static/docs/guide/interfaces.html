@@ -237,15 +237,10 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 </code></pre></div>
 
 <h4 id="special-commands">Special commands</h4>
-<div class="highlight"><pre><span></span><code><span class="o">/</span><span class="n">help</span><span class="w">                    </span><span class="err">—</span><span class="w"> </span><span class="n">list</span><span class="w"> </span><span class="n">available</span><span class="w"> </span><span class="n">commands</span>
-<span class="o">/</span><span class="n">rules</span><span class="w">                   </span><span class="err">—</span><span class="w"> </span><span class="n">show</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="n">pipeline</span><span class="w"> </span><span class="n">rules</span>
-<span class="o">/</span><span class="n">rules</span><span class="w"> </span><span class="n">delete</span><span class="w"> </span><span class="o">&lt;</span><span class="n">id</span><span class="o">&gt;</span><span class="w">       </span><span class="err">—</span><span class="w"> </span><span class="n">stop</span><span class="w"> </span><span class="ow">and</span><span class="w"> </span><span class="n">remove</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">pipeline</span><span class="w"> </span><span class="n">rule</span>
-<span class="o">/</span><span class="n">memory</span><span class="w">                  </span><span class="err">—</span><span class="w"> </span><span class="n">show</span><span class="w"> </span><span class="n">stored</span><span class="w"> </span><span class="n">user</span><span class="w"> </span><span class="n">facts</span>
-<span class="o">/</span><span class="n">memory</span><span class="w"> </span><span class="n">clear</span><span class="w">            </span><span class="err">—</span><span class="w"> </span><span class="n">wipe</span><span class="w"> </span><span class="n">memory</span>
-<span class="o">/</span><span class="n">webhook</span><span class="w"> </span><span class="n">discord</span><span class="w"> </span><span class="o">&lt;</span><span class="n">url</span><span class="o">&gt;</span><span class="w">   </span><span class="err">—</span><span class="w"> </span><span class="n">store</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">Discord</span><span class="w"> </span><span class="n">webhook</span><span class="w"> </span><span class="n">URL</span>
-<span class="err">@</span><span class="n">agent</span><span class="o">-</span><span class="n">name</span><span class="w"> </span><span class="o">&lt;</span><span class="n">payload</span><span class="o">&gt;</span><span class="w">    </span><span class="err">—</span><span class="w"> </span><span class="n">send</span><span class="w"> </span><span class="n">directly</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">named</span><span class="w"> </span><span class="n">agent</span>
-</code></pre></div>
-
+<p>Every slash command main answers works here, and <code>@agent-name &lt;message&gt;</code> sends straight to
+an agent; the <a href="https://github.com/waldiez/wactorz/blob/main/docs/reference.md#13-interfaces">reference's command table</a> lists them. The
+terminal also takes <code>/deploy-pkg &lt;node&gt; &lt;package&gt; …</code> and <code>quit</code> or <code>exit</code>, and its own
+<code>/help</code> is a short summary.</p>
 <hr />
 <h2 id="rest-api-built-in">REST API <code>[built-in]</code></h2>
 <p><strong>Flag:</strong> <code>--interface rest</code></p>

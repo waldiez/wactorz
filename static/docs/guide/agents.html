@@ -215,6 +215,17 @@
 </tr>
 </tbody>
 </table>
+<h4 id="addressing-an-agent">Addressing an agent</h4>
+<p>An agent's full address is <code>name@node</code>: <code>@counter@pi-kitchen</code>, <code>@weather@main</code> (main is the
+node <code>main</code>, also spelled <code>local</code>). A bare name is enough while one agent has it. When agents
+on more than one node have the name, nothing is sent: a person is told the addresses, and a
+program (<code>send_to</code>, <code>delegate_task</code>, <code>POST /api/chat</code>, <code>POST /api/reset</code>) is refused with
+them. Main never picks one. The same address works in the terminal chat and in
+<code>/agents restart|stop|delete</code>, <code>/start</code> and <code>/migrate</code>, and one naming a node the agent is
+not on is refused. <code>@</code> is not allowed in a new agent's name or a new node's name.</p>
+<p>For now a task for an agent on a node is sent to its name, and every node running that name
+receives it. So while more than one node runs a name, a task for one of them is refused even
+by its full address, and so is a reset of that name, whose records main keeps by name.</p>
 <h4 id="memory">Memory</h4>
 <p>After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into <code>_user_facts</code>, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.</p>
 <h4 id="spawn-registry">Spawn registry</h4>

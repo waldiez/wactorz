@@ -63,6 +63,7 @@ from ..core.pip import (
     is_installable_name,
     make_user_site_importable,
     pending_restart,
+    refresh_import_caches,
     requirement_is_satisfied,
     stale_loaded_distributions,
 )
@@ -858,7 +859,7 @@ class InstallerAgent(Actor):
             if success:
                 # Refresh import machinery so the new package is visible immediately
                 make_user_site_importable()
-                importlib.invalidate_caches()
+                refresh_import_caches()
 
         except Exception as e:
             return False, f"Executor error: {type(e).__name__}: {e}"
@@ -867,7 +868,7 @@ class InstallerAgent(Actor):
 
     def _is_installed(self, import_name: str) -> bool:
         """Check importability, always refreshing the import cache first."""
-        importlib.invalidate_caches()
+        refresh_import_caches()
         try:
             importlib.import_module(import_name)
         except ImportError:

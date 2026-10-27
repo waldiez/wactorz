@@ -26,6 +26,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import ActorMetrics
 
 _RECIPE_FAILED = "recipe exploded"
 
@@ -124,6 +125,8 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        main.metrics = ActorMetrics(start_time=0.0)
         main.migration = Migration(main, main.nodes)
         main.spawns = SpawnService(main)
         main.delegation = DelegationManager(main)
@@ -319,6 +322,32 @@ class TestAnAgentOnAnotherMachine:
         await main.ask("@sensor status")
 
         assert not main.published
+
+
+class TestANameTwoNodesShare:
+    """Asked which one is meant, rather than sent to either."""
+
+    async def test_a_bare_name_is_answered_with_the_addresses(self) -> None:
+        main = _Main(nodes={"rpi": node("sensor"), "pc": node("sensor")})
+
+        answer = await main.ask("@sensor status")
+
+        assert "`@sensor@rpi` or `@sensor@pc`" in answer
+        assert not main.published
+
+    async def test_the_full_address_of_one_of_them_is_refused_too(self) -> None:
+        # The task would go on the name's topic, which both nodes run.
+        main = _Main(nodes={"rpi": node("sensor"), "pc": node("sensor")})
+
+        answer = await main.ask("@sensor@pc status")
+
+        assert "reaches every node that runs the name" in answer
+        assert not main.published
+
+    async def test_the_full_address_of_the_only_one_reaches_it(self) -> None:
+        main = _Main(nodes={"pc": node("sensor")}, remote_answer={"result": "on"})
+
+        assert await main.ask("@sensor@pc status") == "**sensor** (on pc): on"
 
 
 class TestAnAgentThatIsNowhere:

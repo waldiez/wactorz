@@ -10,7 +10,6 @@ import asyncio
 import inspect
 import json
 import logging
-import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -24,6 +23,7 @@ from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..agents.main.commands import registry as main_command_registry
 from ..agents.main.commands.dispatch import Form
 from ..core.actor import ActorState, Message, MessageType
+from ..core.addresses import MAIN_NODE, Address, Resolution, node_of, parse, resolve
 from ..core.identity import derive_actor_id, given_actor_id
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
@@ -85,63 +85,54 @@ NO_MAIN_FOR_NODES = (
 )
 
 
-def remote_node_for(name: str) -> str | None:
-    """The node running ``name``, or None if no node recently said it has it.
+def resolution_of(wanted: str) -> Resolution:
+    """Which agents ``wanted``, a bare name or ``name@node``, finds from here.
 
-    A node's heartbeat is what says so. Just after main starts no node has
-    reported yet, though the nodes kept running, so for that long the spawn
-    registry answers instead: an agent it places on a node main has not heard
-    from since starting is taken to be there. Once the node reports, or the
-    window passes, only the heartbeat counts -- a node that never comes back is
-    then said to have nothing, rather than every message to it waiting out the
-    reply timeout.
+    Main knows its own agents and the nodes'; a node counts only while it has
+    reported recently (see `NODE_FRESH_SECONDS`), so a message is not sent to
+    wait out its reply timeout on a node that is gone. Without main there are
+    no nodes, and only the agents in this process are found.
     """
-    # Main itself, not the orchestrator: the node table is main's.
     main_actor = find_main_actor(runtime.registry)
-    if not main_actor:
-        return None
-    known = main_actor._known_nodes
-    for node_name, nd in known.items():
-        if (
-            time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS
-            and name in nd.get("agents", [])
-            and main_actor.nodes.speaks_for(node_name, name)
-        ):
-            return node_name
-    if time.time() - main_actor.metrics.start_time >= NODE_FRESH_SECONDS:
-        return None
-    placed = str(main_actor._get_spawn_registry().get(name, {}).get("node") or "").strip()
-    return placed if placed and placed not in known else None
-
-
-def routable(name: str) -> bool:
-    """Whether a message addressed to ``name`` has somewhere to go."""
-    if not name:
-        return False
-    if runtime.registry is not None and runtime.registry.find_by_name(name):
-        return True
-    return remote_node_for(name) is not None
+    if main_actor is not None:
+        return main_actor.resolve_address(wanted, heard_within=NODE_FRESH_SECONDS)
+    registry = runtime.registry
+    names = dict.fromkeys((wanted.strip(), parse(wanted).name))
+    here = [
+        Address(name, MAIN_NODE)
+        for name in names
+        if name and registry is not None and registry.find_by_name(name)
+    ]
+    return resolve(wanted, here)
 
 
 def agent_id_of(name: str) -> str:
-    """The id of the agent called ``name``, for a turn or a message that names it.
+    """The id of the agent ``name``, a bare name or ``name@node``, addresses.
 
-    The agent running here first, then one this server has heard from, then
-    the id main's spawn registry keeps for it, and for a name none of them
-    knows, the one derived from it -- what such an agent would have had. A name
-    is unique while two agents cannot share one; an address that says which is
-    meant is what lets them.
+    The agent it finds, if it finds one: running here, or one this server has
+    heard from on that node. Otherwise, by its name alone: one this server has
+    heard from, then the id main's spawn registry keeps for it, and for a name
+    none of them knows, the one derived from it -- what such an agent would
+    have had.
     """
-    if runtime.registry is not None:
-        running = runtime.registry.find_by_name(name)
+    address = resolution_of(name).found or parse(name)
+    if address.node in ("", MAIN_NODE) and runtime.registry is not None:
+        running = runtime.registry.find_by_name(address.name)
         if running is not None:
             return str(running.actor_id)
     for actor_id, record in runtime.state["agents"].items():
-        if isinstance(record, dict) and record.get("name") == name:
+        if isinstance(record, dict) and _is_at(record, address):
             return str(actor_id)
     main_actor = find_main_actor(runtime.registry)
-    kept = main_actor._registered_actor_id(name) if main_actor is not None else None
-    return kept or derive_actor_id(name)
+    kept = main_actor._registered_actor_id(address.name) if main_actor is not None else None
+    return kept or derive_actor_id(address.name)
+
+
+def _is_at(record: dict[str, Any], address: Address) -> bool:
+    """Whether the agent ``record`` describes is the one ``address`` names; a bare name names any node."""
+    if record.get("name") != address.name:
+        return False
+    return not address.node or node_of(str(record.get("node") or MAIN_NODE)) == address.node
 
 
 class TurnOwner(NamedTuple):
@@ -155,34 +146,52 @@ def turn_owner(content: str, declared: str = "", declared_id: object = None) -> 
     """`turn_attribution`, with the id of the agent it names.
 
     The thread the sender says it is in comes with that thread's id, which is
-    taken as it is: it is what the page keyed the thread by. A mention names an
-    agent by name, and its id is looked up.
+    taken as it is: it is what the page keyed the thread by. A mention of
+    another agent gives that agent's id, on the node it was found on -- and so
+    does a mention that names a node, since an agent of the thread's name on
+    another node is another agent.
     """
     name = turn_attribution(content, declared)
     given = given_actor_id(declared_id)
-    if name == declared and given:
+    found = _mentioned(content)
+    names_a_node = found is not None and bool(parse(parse_mention(content)[0]).node)
+    if name == declared and given and not names_a_node:
         return TurnOwner(name, given)
-    return TurnOwner(name, agent_id_of(name))
+    return TurnOwner(name, agent_id_of(str(found) if found is not None else name))
 
 
 def turn_attribution(content: str, declared: str = "") -> str:
     """Which agent a turn belongs to — its reply frames and its ``chat_log`` rows.
 
-    The mention when it can be routed to, so a reply is filed with the agent that
-    answers it. Otherwise the thread the sender says it is in: a mention that
-    resolves to nothing is answered by the transport, and that answer belongs
-    where the user is looking rather than in a thread for an agent that does not
-    exist, which no view would ever show. ``declared`` is not checked against the
-    running agents on purpose — a node that has gone quiet leaves the dashboard
-    offering a thread this process will not route to, and that thread is still
-    where the exchange belongs.
+    The mention when it finds one agent, so a reply is filed with the agent
+    that answers it. Otherwise the thread the sender says it is in: a mention
+    that finds nothing, or more than one agent, is answered by the transport,
+    and that answer belongs where the user is looking rather than in a thread
+    for an agent that does not exist, which no view would ever show.
+    ``declared`` is not checked against the running agents on purpose — a
+    node that has gone quiet leaves the dashboard offering a thread this
+    process will not route to, and that thread is still where the exchange
+    belongs.
     """
     if content.startswith("/"):
         return MAIN_ACTOR_NAME
-    mentioned, _ = parse_mention(content)
-    if routable(mentioned):
-        return mentioned
+    found = _mentioned(content)
+    if found is not None:
+        return found.name
     return declared or MAIN_ACTOR_NAME
+
+
+def _mentioned(content: str) -> Address | None:
+    """The one agent ``content`` reaches, by its mention or main without one.
+
+    None for a command, and for a mention that reaches no agent: one that finds
+    none, finds several, or finds one a task cannot be sent to yet.
+    """
+    if content.startswith("/"):
+        return None
+    mentioned, _ = parse_mention(content)
+    found = resolution_of(mentioned).found if mentioned else None
+    return found if found is not None and not _task_refusal(found) else None
 
 
 # ── Catalog / experimental-agent presentation ──────────────────────────────
@@ -417,6 +426,8 @@ class Destination(NamedTuple):
     target: Any = None
     #: The node running it, when it is not here but a node is.
     remote_node: str | None = None
+    #: Why it goes nowhere, when the name fits more than one agent.
+    refusal: str = ""
 
 
 def command_word(content: str) -> str:
@@ -438,14 +449,26 @@ def destination_of(content: str) -> Destination:
     if not content.startswith("@") and runtime.orchestrator is not None:
         return Destination(chat_metrics.ORCHESTRATOR, MAIN_ACTOR_NAME, content)
     name, text = parse_mention(content)
-    target = runtime.registry.find_by_name(name) if runtime.registry else None
-    if target is not None:
-        return Destination(chat_metrics.LOCAL, name, text, target)
-    # None without main, which is what relays a message to a node.
-    remote_node = remote_node_for(name)
-    if remote_node:
-        return Destination(chat_metrics.REMOTE, name, text, remote_node=remote_node)
-    return Destination(chat_metrics.UNROUTED, name, text)
+    resolution = resolution_of(name)
+    found = resolution.found
+    if found is None:
+        refusal = resolution.refusal(mention=True) if resolution.ambiguous else ""
+        return Destination(chat_metrics.UNROUTED, name, text, refusal=refusal)
+    if found.node == MAIN_NODE:
+        target = runtime.registry.find_by_name(found.name) if runtime.registry else None
+        if target is not None:
+            return Destination(chat_metrics.LOCAL, found.name, text, target)
+        return Destination(chat_metrics.UNROUTED, found.name, text)
+    refusal = _task_refusal(found)
+    if refusal:
+        return Destination(chat_metrics.UNROUTED, found.name, text, refusal=refusal)
+    return Destination(chat_metrics.REMOTE, found.name, text, remote_node=found.node)
+
+
+def _task_refusal(found: Address) -> str:
+    """Why a task for the agent at ``found`` cannot be sent yet, or "": only main knows of nodes."""
+    main_actor = find_main_actor(runtime.registry)
+    return (main_actor.task_refusal(found) if main_actor is not None else None) or ""
 
 
 async def _answer_through(
@@ -659,7 +682,7 @@ async def _route_chat(
 
         # A turn nothing answered still ends: the caller waits on the ending
         # rather than on the reply, and holds its composer until one arrives.
-        await reply_fn(f"Agent @{target_name} not found.")
+        await reply_fn(destination.refusal or f"Agent @{target_name} not found.")
         await _end_fn()
         return
 
@@ -791,12 +814,20 @@ async def rest_chat_handler(request: web.Request) -> Response:
     agent_name = data.get("agent_name", MAIN_ACTOR_NAME)
     if not message:
         return web.json_response({"error": "message required"}, status=400)
-    target = runtime.registry.find_by_name(agent_name)
-    if target is None:
+    resolution = resolution_of(str(agent_name))
+    if resolution.ambiguous:
+        return web.json_response({"error": resolution.refusal()}, status=409)
+    found = resolution.found
+    if found is None:
         return web.json_response({"error": f"agent '{agent_name}' not found"}, status=404)
+    refusal = _task_refusal(found)
+    if refusal:
+        return web.json_response({"error": refusal}, status=409)
     # As above: route to the named agent, since route_chat would otherwise
-    # default to main when the message carries no @mention.
-    routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
+    # default to main when the message carries no @mention. Its whole address
+    # when it is on a node, so the route finds the same one.
+    mention = found.name if found.node == MAIN_NODE else str(found)
+    routed = message if message.startswith(("@", "/")) else f"@{mention} {message}"
     track_chat_task(asyncio.create_task(route_chat(routed, discard_reply)))
     return web.json_response({"status": "sent", "agent": agent_name})
 

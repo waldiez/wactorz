@@ -24,6 +24,7 @@ from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through, derive_actor_id
+from ...core.addresses import agent_name_error
 from ...core.artifacts import ArtifactError
 from ...core.bundles import BundleError, bundle_for
 from ...core.identity import given_actor_id
@@ -1006,9 +1007,11 @@ class SpawnService:
         itself back to running this agent without being told again. The spawn
         message deliberately is not: see the note on the publish itself.
         """
-        problem = topic_name_error(str(config.get("name", "remote-agent")))
+        name_check = topic_name_error if restoring or config.get("replace") else agent_name_error
+        problem = name_check(str(config.get("name", "remote-agent")))
         if problem:
-            # As for a local spawn: the name is a level of the agent's topics.
+            # As for a local spawn: the name is a level of the agent's topics,
+            # and a new one may not hold the address separator.
             logger.error(
                 "[%s] Cannot spawn %r on %s: %s",
                 self.host.name,

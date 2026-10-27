@@ -476,20 +476,17 @@ class NodeManager:
         """Whether a message from ``node_name`` may speak for ``agent_name``: see `voices`."""
         return self.host is None or speaks_for(self.host, node_name, agent_name)
 
-    def node_for(self, agent_name: str) -> str:
-        """The node a task for ``agent_name`` goes to, or "" when none has it.
+    def nodes_for(self, agent_name: str) -> list[str]:
+        """Every node a task for ``agent_name`` could go to; more than one makes the name ambiguous.
 
         One whose latest heartbeat lists the agent and that may speak for it:
         a node listing an agent main places elsewhere is not sent its tasks.
         """
-        return next(
-            (
-                node
-                for node, info in self.known.items()
-                if agent_name in info.get("agents", []) and self.speaks_for(node, agent_name)
-            ),
-            "",
-        )
+        return [
+            node
+            for node, info in self.known.items()
+            if agent_name in info.get("agents", []) and self.speaks_for(node, agent_name)
+        ]
 
     def refuses_tasks(self, node_name: str) -> str | None:
         """Why no task should go to ``node_name``, when its replies would be refused anyway.

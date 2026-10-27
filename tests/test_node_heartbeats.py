@@ -699,14 +699,14 @@ class TestWhereATaskGoes:
             spawn_registry={"camera": {"node": "rpi"}},
         )
 
-        assert run.main.nodes.node_for("camera") == "rpi"
+        assert run.main.nodes.nodes_for("camera") == ["rpi"]
 
     async def test_an_agent_main_placed_nowhere_goes_to_the_node_listing_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         run = await run_heartbeats(monkeypatch, [heartbeat("rpi", agents=["local-only"])])
 
-        assert run.main.nodes.node_for("local-only") == "rpi"
+        assert run.main.nodes.nodes_for("local-only") == ["rpi"]
 
     async def test_an_agent_on_main_goes_to_no_node(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_heartbeats(
@@ -715,7 +715,7 @@ class TestWhereATaskGoes:
             spawn_registry={"planner": {"node": ""}},
         )
 
-        assert run.main.nodes.node_for("planner") == ""
+        assert run.main.nodes.nodes_for("planner") == []
 
 
 class TestWithdrawingANotice:

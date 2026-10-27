@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
+from ...core.addresses import MAIN_NODE, parse
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
 from ..lookup import find_main_actor
@@ -201,14 +202,18 @@ class MessagingMixin(_Host):
         return [q.to_dict() for q in self._actor.open_questions()]
 
     async def _send_to_remote(
-        self, agent_name: str, payload: Any, timeout: float
+        self, agent_name: str, payload: Any, timeout: float, node: str = ""
     ) -> dict[str, Any] | None:
-        """Deliver to an agent on another node and wait for its reply topic."""
+        """Deliver to an agent on another node and wait for its reply topic.
+
+        ``node`` is the node main found it on; on a node, which cannot look, it
+        is "" and the agent is addressed by name.
+        """
         registry = self._actor._registry
         remote_node = None
         main = find_main_actor(registry)
         if main:
-            remote_node = main.nodes.node_for(agent_name) or None
+            remote_node = node or None
             refusal = main.nodes.refuses_tasks(remote_node) if remote_node else None
             if refusal:
                 return {"error": refusal}
@@ -308,7 +313,17 @@ class MessagingMixin(_Host):
             logger.warning("[%s] send_to: no registry", self.name)
             return None
 
-        target = registry.find_by_name(agent_name)
+        main = find_main_actor(registry)
+        resolution = main.resolve_address(agent_name) if main is not None else None
+        if resolution is not None and resolution.ambiguous:
+            return {"error": resolution.refusal()}
+        found = resolution.found if resolution is not None else None
+        refusal = main.task_refusal(found) if main is not None and found is not None else None
+        if refusal:
+            return {"error": refusal}
+        address = found or parse(agent_name)
+        agent_name = address.name
+        target = registry.find_by_name(agent_name) if address.node in ("", MAIN_NODE) else None
 
         if target:
             # ── Local path ────────────────────────────────────────────────────
@@ -331,7 +346,8 @@ class MessagingMixin(_Host):
                 )
                 return {"error": f"Timeout waiting for '{agent_name}'"}
 
-        return await self._send_to_remote(agent_name, payload, timeout)
+        node = found.node if found is not None and found.node != MAIN_NODE else ""
+        return await self._send_to_remote(agent_name, payload, timeout, node)
 
     async def send_to_many(self, tasks: list[tuple[str, Any]], timeout: float = 60.0) -> list[Any]:
         """Send tasks to multiple agents IN PARALLEL and collect all results.

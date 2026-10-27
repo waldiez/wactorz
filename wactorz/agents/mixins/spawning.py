@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
+from ...core.addresses import agent_name_error
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
@@ -180,6 +181,19 @@ else:
     _Host = object
 
 
+def _name_problem(name: str, config: dict, existing: bool) -> str | None:
+    """Why an agent cannot be spawned under ``name``, or None if it can.
+
+    A new agent's name is checked in full (`agent_name_error`). One that
+    already exists -- read back from the spawn registry, or replacing itself
+    -- keeps a name taken before the address separator was refused in one,
+    so it is held only to what its topics need.
+    """
+    if existing or config.get("replace"):
+        return topic_name_error(name)
+    return agent_name_error(name)
+
+
 class SpawnMixin(_Host):
     """Shared local-spawn behaviour. Mix into any ``Actor`` subclass."""
 
@@ -215,11 +229,11 @@ class SpawnMixin(_Host):
         ``SpawnPlaceholder`` (background install), or ``None`` on failure.
         """
         name = config.get("name", "spawned-agent")
-        problem = topic_name_error(str(name))
+        problem = _name_problem(str(name), config, from_registry)
         if problem:
             # The name becomes a level of every topic the agent uses, so an agent
             # built with it could never be reached — and a message to it that the
-            # outbox cannot send used to stall every message behind it.
+            # outbox cannot send would stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
             return None
         try:

@@ -34,6 +34,20 @@ Its prompts are assembled for the installation: a core every installation shares
 | `OTHER` | `main.chat()` | "what's the weather like?" |
 | `@mention` | named actor directly | `@my-agent {"action": "status"}` |
 
+#### Addressing an agent
+
+An agent's full address is `name@node`: `@counter@pi-kitchen`, `@weather@main` (main is the
+node `main`, also spelled `local`). A bare name is enough while one agent has it. When agents
+on more than one node have the name, nothing is sent: a person is told the addresses, and a
+program (`send_to`, `delegate_task`, `POST /api/chat`, `POST /api/reset`) is refused with
+them. Main never picks one. The same address works in the terminal chat and in
+`/agents restart|stop|delete`, `/start` and `/migrate`, and one naming a node the agent is
+not on is refused. `@` is not allowed in a new agent's name or a new node's name.
+
+For now a task for an agent on a node is sent to its name, and every node running that name
+receives it. So while more than one node runs a name, a task for one of them is refused even
+by its full address, and so is a reset of that name, whose records main keeps by name.
+
 #### Memory
 
 After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into `_user_facts`, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.

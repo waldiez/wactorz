@@ -14,6 +14,7 @@ import aiomqtt
 import pytest
 from aiomqtt import MqttError
 
+from wactorz.core.addresses import Address, Resolution
 from wactorz.web import chat, runtime
 
 
@@ -38,11 +39,15 @@ def said_fixture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         _mqtt_port=1883,
         # A node that signs, so the task is sent.
         nodes=SimpleNamespace(refuses_tasks=lambda _node: None),
+        # No other node runs the name, so the task can go.
+        task_refusal=lambda _address: None,
     )
     registry = SimpleNamespace(find_by_name=lambda _name: None)
     monkeypatch.setattr(runtime, "registry", registry)
     monkeypatch.setattr(chat, "find_main_actor", lambda _registry: main)
-    monkeypatch.setattr(chat, "remote_node_for", lambda _name: "edge")
+    monkeypatch.setattr(
+        chat, "resolution_of", lambda name: Resolution(name, (Address("counter", "edge"),))
+    )
     return []
 
 

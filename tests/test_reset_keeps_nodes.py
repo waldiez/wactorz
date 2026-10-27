@@ -29,10 +29,11 @@ class _Broker:
 
 
 class _Main:
-    """Main as the reset reads it: a spawn registry naming where each agent runs."""
+    """Main as the reset reads it: a spawn registry naming where each agent runs, and no node heard from."""
 
     def __init__(self, registry: dict[str, dict[str, Any]]) -> None:
         self._registry = registry
+        self._known_nodes: dict[str, dict[str, Any]] = {}
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
         return self._registry

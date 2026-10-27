@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import asyncio
 
     from ...core.actor import ActorState
+    from ...core.addresses import Address, Resolution
     from ..llm_agent import LLMProvider
     from ..prompts.assemble import PromptFragment
     from .artifact_service import ArtifactService
@@ -53,6 +54,21 @@ class VoiceHost(Protocol):
     @property
     def migration(self) -> Migration:
         """Where a move under way is taking an agent, before the registry says so."""
+        ...
+
+
+class AddressHost(VoiceHost, Protocol):
+    """What finding an agent by name or address reads: where main knows agents to be.
+
+    Its own process, the node table, and, while nodes have not yet reported
+    since main started, the spawn registry -- hence when main started.
+    """
+
+    metrics: Any
+
+    @property
+    def nodes(self) -> NodeManager:
+        """The node table, and who may speak for an agent."""
         ...
 
 
@@ -194,6 +210,10 @@ class DelegationHost(Protocol):
     ) -> None: ...
 
     async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]: ...
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = ...) -> Resolution: ...
+
+    def task_refusal(self, address: Address) -> str | None: ...
 
     def _current_interface_source(self) -> str: ...
 

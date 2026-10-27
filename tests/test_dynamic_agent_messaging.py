@@ -15,7 +15,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import aiomqtt
 import pytest
@@ -23,10 +23,13 @@ import pytest
 from wactorz.agents.dynamic import messaging
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
+from wactorz.agents.main.addresses import resolve_address, task_refusal
+from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.core import actor as actor_module
 from wactorz.core import topic_bus
-from wactorz.core.actor import Actor, Message, MessageType
+from wactorz.core.actor import Actor, ActorMetrics, Message, MessageType
+from wactorz.core.addresses import Address, Resolution
 from wactorz.core.registry import ActorRegistry
 from wactorz.core.topic_bus import TopicBus, TopicContract
 
@@ -50,11 +53,28 @@ class _Worker(Actor):
 
 
 class _Main:
-    """Only what the remote route reads from main: its node table, with no host behind it."""
+    """Only what the remote route reads from main: its node table, with no host behind it.
+
+    No agent runs in its process, and it started long ago, so only the node
+    table says where an agent is.
+    """
+
+    _registry: Any = None
 
     def __init__(self, known_nodes: dict[str, dict[str, Any]]) -> None:
         self.nodes = NodeManager()
         self.nodes.known = known_nodes
+        self.metrics = ActorMetrics(start_time=0.0)
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
+        return {}
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
+        # As main's: the real lookup, over this table.
+        return resolve_address(cast(AddressHost, self), wanted, heard_within=heard_within)
+
+    def task_refusal(self, address: Address) -> str | None:
+        return task_refusal(cast(AddressHost, self), address)
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
@@ -412,6 +432,30 @@ class TestSendToRemote:
         result = await api.send_to("ghost", {})
 
         assert result == {"error": "Agent 'ghost' not found"}
+        assert broker.published == []
+
+    async def test_a_name_two_nodes_report_is_refused_with_the_addresses(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main({"rpi": {"agents": ["counter"]}, "pc": {"agents": ["counter"]}})
+        monkeypatch.setattr(messaging, "find_main_actor", lambda _registry: main)
+
+        result = await api.send_to("counter", {})
+
+        assert result is not None
+        assert "`counter@rpi` or `counter@pc`" in result["error"]
+        assert broker.published == []
+
+    async def test_one_of_two_nodes_sharing_the_name_is_not_sent_it(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main({"rpi": {"agents": ["counter"]}, "pc": {"agents": ["counter"]}})
+        monkeypatch.setattr(messaging, "find_main_actor", lambda _registry: main)
+
+        result = await api.send_to("counter@pc", {})
+
+        assert result is not None
+        assert "reaches every node that runs the name" in result["error"]
         assert broker.published == []
 
     async def test_without_an_orchestrator_the_agent_is_not_found(

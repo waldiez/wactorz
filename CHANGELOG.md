@@ -55,6 +55,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   nothing. Each swap that landed is an `action` in the provenance graph, joined to the
   move that caused it, and one line on the feed. A node takes the new version only from
   a command main signed; the version is fetched the way the first was.
+- **An agent can be named by its full address, `name@node`.** `@counter@pi-kitchen` in
+  chat or the terminal, `send_to("counter@pi-kitchen", ...)`, `delegate_task`,
+  `POST /api/chat`, `POST /api/reset` and `/agents restart|stop|delete`, `/start` and
+  `/migrate` all take one; main is the node `main` (or `local`). A bare name works as
+  before while one agent has it. When agents on more than one node report the same name,
+  nothing is sent to either: a person is told the addresses, and a program is refused
+  with them (`409` from the REST routes). Until tasks are sent to a node rather than to a
+  name, a task for one of those agents is refused even by its full address, since every
+  node running the name would run it; and a reset of such a name is refused, since what
+  it clears is kept by name. An address naming a node the agent is not on is refused
+  rather than taken as the bare name. `@` is no longer allowed in the name of a new agent
+  or a new node; an agent that already has one keeps it and is still reached by its whole
+  name.
 
 ### Changed
 

@@ -652,6 +652,14 @@ class TestMigrate:
 
         assert await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor rpi") == reply
 
+    async def test_an_address_names_the_agent_it_moves(self, main: _Main) -> None:
+        main.migrate_result = {"success": True, "message": "moved"}
+        main.spawn_registry = {"sensor": {"node": "pc"}}
+
+        await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor@pc rpi")
+
+        assert ("migrate", ("sensor", "rpi", False)) in main.calls
+
     @pytest.mark.parametrize(
         ("argument", "force"),
         [("sensor rpi", False), ("sensor rpi --force", True), ("--force sensor rpi", True)],
@@ -679,6 +687,39 @@ class TestRestart:
 
         assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
         assert "on node 'rpi'" in text
+
+    async def test_the_full_address_restarts_the_agent_on_that_node(self, main: _Main) -> None:
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+
+        await agent_cmds.restart_agent(_ctx(main), "cam@rpi")
+
+        assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
+
+    async def test_an_address_naming_another_node_acts_on_nothing(self, main: _Main) -> None:
+        # Typed for an agent on the PC, it must not restart the Pi's.
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+
+        text = await agent_cmds.restart_agent(_ctx(main), "cam@pc")
+
+        assert text == "'cam' is on 'rpi', not on 'pc'."
+        assert main.published == []
+
+    async def test_an_address_on_a_node_that_keeps_no_such_agent_acts_on_nothing(
+        self, main: _Main
+    ) -> None:
+        text = await agent_cmds.stop_agent(_ctx(main), "weather@pc")
+
+        assert text == "No agent 'weather' is kept on node 'pc'."
+        assert main.published == []
+
+    async def test_an_agent_on_main_is_named_by_any_of_mains_names(self, main: _Main) -> None:
+        running = _Agent("weather")
+        main._registry = _Registry(running)
+        main.spawn_registry = {"weather": {"type": "native", "node": ""}}
+
+        assert await agent_cmds.restart_agent(_ctx(main), "weather@local") == (
+            "Agent 'weather' restarted locally."
+        )
 
     async def test_an_unknown_local_agent_is_refused(self, main: _Main) -> None:
         text = await agent_cmds.restart_agent(_ctx(main), "ghost")

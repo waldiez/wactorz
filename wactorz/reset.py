@@ -22,6 +22,7 @@ import logging
 import sys
 from pathlib import Path
 
+from wactorz.core.addresses import parse
 from wactorz.core.paths import resolve_state_dir
 from wactorz.web.uploads import UPLOADS_DIRNAME, discard
 
@@ -350,7 +351,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--spawns", action="store_true", help="Clear spawn registry")
     p.add_argument("--logs", action="store_true", help="Truncate wactorz.log and monitor.log")
     p.add_argument("--all", action="store_true", help="Clear everything (including logs)")
-    p.add_argument("--agent", metavar="NAME", help="Limit to a single agent by name")
+    p.add_argument("--agent", metavar="NAME", help="Limit to a single agent, by name or name@node")
     p.add_argument("--db", metavar="PATH", help="Path to wactorz.db (default: from config)")
     p.add_argument("--state-dir", metavar="PATH", help="Path to state/ dir (default: ./state)")
     return p
@@ -366,7 +367,8 @@ def main() -> None:
         _build_parser().print_help()
         sys.exit(1)
 
-    agent = args.agent or None
+    # What is stored here is kept by the agent's name, whichever node it runs on.
+    agent = parse(args.agent).name if args.agent else None
     db_path = args.db or None
     state_dir = args.state_dir or None
 

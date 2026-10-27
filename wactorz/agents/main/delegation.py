@@ -29,6 +29,7 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...core.actor import ReplyError, ask_through
+from ...core.addresses import MAIN_NODE, parse
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -236,8 +237,17 @@ class DelegationManager:
         if not self.host._registry:
             return None
 
-        target = self.host._registry.find_by_name(target_name)
-        if target:
+        resolution = self.host.resolve_address(target_name)
+        if resolution.ambiguous:
+            logger.warning("[%s] delegate_task: %s", self.host.name, resolution.refusal())
+            return {"error": resolution.refusal()}
+        found = resolution.found
+        refusal = self.host.task_refusal(found) if found is not None else None
+        if refusal:
+            logger.warning("[%s] delegate_task: %s", self.host.name, refusal)
+            return {"error": refusal}
+        target_name = found.name if found is not None else target_name
+        if found is not None and found.node == MAIN_NODE:
             # ── Local path (fast, in-process) ────────────────────────────────
             try:
                 return await ask_through(self.host, target_name, local, timeout=timeout)
@@ -250,8 +260,8 @@ class DelegationManager:
                 # agent that never replies, without the wait.
                 return None
 
-        # ── Remote path: check if agent is on a known node ───────────────────
-        remote_node = self.host.nodes.node_for(target_name)
+        # ── Remote path: the agent is on a known node ────────────────────────
+        remote_node = found.node if found is not None else ""
         if not remote_node:
             logger.warning(
                 "[%s] delegate_task: %r not found locally or remotely", self.host.name, target_name
@@ -629,19 +639,25 @@ class DelegationManager:
         # agent is given what was typed rather than an empty string.
         message = parts[1].strip() if len(parts) > 1 else text
 
-        registry = self.host._registry
-        target = registry.find_by_name(target_name) if registry else None
-        if not target:
-            target, refusal = await self._spawn_from_catalogue(target_name)
+        resolution = self.host.resolve_address(target_name)
+        if resolution.ambiguous:
+            return resolution.refusal(mention=True)
+        found = resolution.found
+        if found is not None and found.node != MAIN_NODE:
+            return self.host.task_refusal(found) or await self._ask_node(
+                found.name, found.node, message
+            )
+        if found is not None:
+            return await self._ask_here(found.name, message)
+
+        # A recipe is spawned here, so only for a name that asks for no other node.
+        address = parse(target_name)
+        if address.node in ("", MAIN_NODE):
+            target, refusal = await self._spawn_from_catalogue(address.name)
             if refusal is not None:
-                return f"Could not spawn '{target_name}': {refusal}"
-
-        if target:
-            return await self._ask_here(target_name, message)
-
-        node = self.host.nodes.node_for(target_name)
-        if node:
-            return await self._ask_node(target_name, node, message)
+                return f"Could not spawn '{address.name}': {refusal}"
+            if target:
+                return await self._ask_here(address.name, message)
 
         # Naming the agents that do exist turns "not found" into something the
         # reader can act on: the usual cause is a name typed from memory.

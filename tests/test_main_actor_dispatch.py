@@ -29,6 +29,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import ActorMetrics
 
 
 class _Registry:
@@ -65,6 +66,8 @@ class _Main:
         m._registry = _Registry(agents)  # pyright: ignore[reportAttributeAccessIssue]
         m.manifests = ManifestRegistry(m)
         m.nodes = NodeManager(m, m.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        m.metrics = ActorMetrics(start_time=0.0)
         m.delegation = DelegationManager(m)
         m.spawns = SpawnService(m)
         m.lifecycle = LifecycleService(m)

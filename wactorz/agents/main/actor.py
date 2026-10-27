@@ -19,6 +19,7 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.actor import Actor, Message, MessageType
+from ...core.addresses import Address, Resolution
 from ...core.node_signing import node_control_properties
 from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
@@ -29,6 +30,7 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
+from .addresses import resolve_address, task_refusal
 from .artifact_service import ArtifactService
 from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
@@ -1299,6 +1301,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     @_known_nodes.setter
     def _known_nodes(self, value: dict[str, dict[str, Any]]) -> None:
         self.nodes.known = value
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
+        """Which agents ``wanted``, a bare name or ``name@node``, finds: see `addresses`."""
+        return resolve_address(self, wanted, heard_within=heard_within)
+
+    def task_refusal(self, address: Address) -> str | None:
+        """Why a task for the agent at ``address`` cannot be sent yet: see `addresses`."""
+        return task_refusal(self, address)
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Return all known remote nodes with their last-seen time, running agents, and system metrics."""

@@ -201,5 +201,14 @@ Each step is a branch of its own, in this order:
 4. **Addresses.** The `name@node` resolver, the question on an ambiguous name,
    mentions, delegation, the CLI and the REST API, `agents/at/…` with `by-name` kept
    for older nodes, `alongside` on a spawn, and the refusals on placement and moves.
+   Four branches, in this order. The resolver is built: one lookup over main's own
+   agents and the nodes' heartbeats (`wactorz.core.addresses`,
+   `wactorz.agents.main.addresses`) that every way of naming an agent goes through, and
+   `@` refused in new agent and node names. Until the dashboard's branch, a person is
+   told the addresses in a plain reply rather than offered them to pick. Until tasks
+   go by node, a task for one of several nodes running a name is refused even by its
+   address, since every one of them would run it, and so is a reset of a name kept in
+   more than one place. Then the task topic by node, then `alongside` with the spawn
+   registry keyed by id, then the dashboard.
 5. **Namespaces.** Topics built in one place, then the prefix, the access list, the
    node's deploy environment, the heartbeat check and the second-install notice.

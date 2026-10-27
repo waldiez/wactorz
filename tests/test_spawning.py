@@ -864,6 +864,36 @@ def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
     assert published == []
 
 
+def test_a_new_name_holding_the_address_separator_is_refused_locally(main_host):
+    # `counter@pi` must split one way only: counter, on pi.
+    assert run(main_host._spawn_local_from_config({"name": "counter@pi"})) is None
+    assert main_host.spawn_calls == []
+
+
+def test_an_agent_already_kept_under_such_a_name_still_starts(main_host):
+    # Named before the separator was refused in a name, and read back from the
+    # spawn registry: it keeps running under the name it has.
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "counter@old", "type": "dynamic", "code": "x"}, from_registry=True
+        )
+    )
+
+    assert [kwargs["name"] for _cls, kwargs in main_host.spawn_calls] == ["counter@old"]
+
+
+def test_a_new_name_holding_the_address_separator_is_not_sent_to_a_node():
+    published: list[str] = []
+
+    async def _publish(topic, payload, **_kw):
+        published.append(topic)
+
+    host = SimpleNamespace(name="main", _mqtt_publish=_publish)
+    run(SpawnService(host)._spawn_remote({"name": "counter@pi"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
+
+    assert published == []
+
+
 def test_a_background_install_is_owned_by_the_host(main_host):
     # Kept by the host, so its stop cancels the install rather than leaving it
     # running against a system that has shut down.

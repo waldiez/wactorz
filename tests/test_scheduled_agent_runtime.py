@@ -408,7 +408,9 @@ class TestSelfDelete:
                 removed.append(actor_id)
 
         class _Main:
-            def _remove_from_spawn_registry(self, name: str) -> None:
+            def _remove_from_spawn_registry(
+                self, name: str, node: str | None = None, *, actor_id: str | None = None
+            ) -> None:
                 removed.append(name)
 
         async def _stop() -> None:
@@ -441,7 +443,9 @@ class TestSelfDelete:
                 raise RuntimeError("locked")
 
         class _Main:
-            def _remove_from_spawn_registry(self, name: str) -> None:
+            def _remove_from_spawn_registry(
+                self, name: str, node: str | None = None, *, actor_id: str | None = None
+            ) -> None:
                 raise RuntimeError("db gone")
 
         async def _stop() -> None:

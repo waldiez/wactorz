@@ -23,6 +23,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 
 from .node_messages import SignedMessage
@@ -131,7 +132,7 @@ async def run_listener(
     # Every producer runs on node `rpi`, as main placed it.
     placed = {name: {"node": "rpi"} for name in (producers or {}).values()}
     setattr(main, "_registry", None)
-    setattr(main, "_get_spawn_registry", lambda: placed)
+    setattr(main, "_get_spawn_registry", lambda: SpawnRegistry.from_names(placed))
 
     def _stop() -> None:
         main.state = ActorState.STOPPED

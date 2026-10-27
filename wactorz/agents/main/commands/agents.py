@@ -8,17 +8,19 @@ wrong agent is not recoverable by typing the right one afterwards.
 import logging
 
 from ....core.actor import ActorState
+from ....core.addresses import MAIN_NODE, node_of
 from ....core.state_snapshot import FORCE_FLAG
-from ..addresses import registered_name
+from ..addresses import Registered, registered_agent
+from ..turn_actions import TurnActions
 from .dispatch import CommandContext, command
 from .groups import AGENTS, NODES
 
 logger = logging.getLogger(__name__)
 
 
-def _named(ctx: CommandContext, argument: str) -> tuple[str, str | None]:
-    """The registered agent ``argument`` names, or why it names none: see `registered_name`."""
-    return registered_name(ctx.actor, argument)
+def _named(ctx: CommandContext, argument: str) -> tuple[Registered, str | None]:
+    """The registered agent ``argument`` names, or why it names none: see `registered_agent`."""
+    return registered_agent(ctx.actor, argument)
 
 
 @command(
@@ -52,12 +54,12 @@ async def migrate_agent_cmd(ctx: CommandContext, argument: str) -> str:
             "  /migrate temp-sensor rpi-a         — local to remote\n"
             "  --force moves it even if some of its state cannot travel, leaving that behind"
         )
-    agent_name, refusal = _named(ctx, parts[0])
+    named, refusal = _named(ctx, parts[0])
     if refusal:
         return refusal
-    target_node = parts[1]
+    agent_name, target_node = named.name, parts[1]
     try:
-        result = await ctx.actor.migrate_agent(agent_name, target_node, force=force)
+        result = await ctx.actor.migrate_agent(parts[0], target_node, force=force)
     except Exception as exc:
         logger.exception("[main] /migrate failed for %r → %r", agent_name, target_node)
         return f"Migrate failed: {exc}"
@@ -74,13 +76,12 @@ async def migrate_agent_cmd(ctx: CommandContext, argument: str) -> str:
 )
 async def restart_agent(ctx: CommandContext, argument: str) -> str:
     """Restart an agent, state preserved."""
-    agent_name, refusal = _named(ctx, argument)
+    named, refusal = _named(ctx, argument)
     if refusal:
         return refusal
+    agent_name, node = named.name, named.node
     if not agent_name:
         return "Usage: /agents restart <agent-name>"
-    reg = ctx.actor._get_spawn_registry()
-    node = reg.get(agent_name, {}).get("node", "").strip()
     if node:
         await ctx.actor._mqtt_publish(f"nodes/{node}/restart_agent", {"name": agent_name}, qos=1)
         return (
@@ -88,7 +89,7 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
             f"State is preserved — the agent will resume from its last saved state."
         )
     # Local agent — stop and re-spawn using config from spawn registry
-    config = reg.get(agent_name)
+    config = named.entry
     if not config:
         return f"Agent '{agent_name}' not found in spawn registry."
     if ctx.actor._registry:
@@ -110,19 +111,59 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
     return f"Agent '{agent_name}' restarted locally."
 
 
+@command(
+    "/agents copy",
+    prefixes=("/agents copy ",),
+    summary="run a second agent of a name on another node",
+    group=AGENTS,
+    forms=(
+        (
+            "/agents copy <agent> <node>",
+            "run a second agent of that name, from its config, on another node (alongside)",
+        ),
+    ),
+)
+async def copy_agent(ctx: CommandContext, argument: str) -> str:
+    """Run a second agent of a name on another host, spawned from the first one's config.
+
+    The copy is a new agent: an id of its own, and none of the first one's
+    state. Each is then reached by its address, ``name@node``.
+    """
+    parts = argument.split()
+    if len(parts) != 2:
+        return (
+            "Usage: /agents copy <agent> <node>\n"
+            "  Runs a second agent of that name, from the same config, on another node.\n"
+            "  Example: /agents copy counter rpi-kitchen   — counter@main and counter@rpi-kitchen"
+        )
+    named, refusal = _named(ctx, parts[0])
+    if refusal:
+        return refusal
+    if named.entry is None:
+        return f"'{named.name}' was not spawned by main, so main holds no config to copy."
+    target = node_of(parts[1])
+    config = {k: v for k, v in named.entry.items() if k not in ("actor_id", "node", "replace")}
+    config["alongside"] = True
+    if target != MAIN_NODE:
+        config["node"] = target
+    result = await ctx.actor.spawn_placed(config)
+    if not result:
+        return f"Copying '{named.name}' to '{target}' failed; the log says why."
+    return TurnActions((result,)).summary("")
+
+
 async def _start_agent(ctx: CommandContext, agent_name: str) -> str:
     """Start a stopped local agent."""
     if not agent_name:
         return "Usage: /start <agent-name>"
-    agent_name, refusal = _named(ctx, agent_name)
+    named, refusal = _named(ctx, agent_name)
     if refusal:
         return refusal
+    agent_name, node = named.name, named.node
 
     # Checked before anything else: a node runner accepts stop and restart and
     # nothing else, so there is no start to send and the agent would be reported
     # as started while it stayed down.
-    reg = ctx.actor._get_spawn_registry()
-    node = reg.get(agent_name, {}).get("node", "").strip()
     if node:
         return (
             f"'{agent_name}' is running on remote node '{node}'. "
@@ -159,16 +200,17 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
     """Stop or permanently delete an agent, local or remote."""
     if not agent_name:
         return f"Usage: /agents {verb} <agent-name>"
-    agent_name, refusal = _named(ctx, agent_name)
+    named, refusal = _named(ctx, agent_name)
     if refusal:
         return refusal
+    agent_name, node = named.name, named.node
     is_delete = verb in ("delete", "remove")
 
     if is_delete:
         # Delegate to the canonical permanent-delete helper so the
         # chat path and the LLM <delete> path behave identically.
         try:
-            await ctx.actor.delete_spawned_agent(agent_name)
+            await ctx.actor.delete_spawned_agent(agent_name, node if named.entry else None)
         except Exception as e:
             logger.exception("[%s] delete_spawned_agent(%r) failed", ctx.actor.name, agent_name)
             return f"Delete of '{agent_name}' failed: {e}"
@@ -178,8 +220,6 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
         )
 
     # A stop is reversible: keep the state and the spawn-registry entry.
-    reg = ctx.actor._get_spawn_registry()
-    node = reg.get(agent_name, {}).get("node", "").strip()
     past = "stopped"
 
     if node:

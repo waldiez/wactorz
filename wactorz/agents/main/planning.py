@@ -356,18 +356,19 @@ class PlanningMixin(_Host):
         agents = rule.get("agents", [])
         stopped = []
         for agent_name in agents:
-            self._remove_from_spawn_registry(agent_name)
-            if self._registry:
-                actor = self._registry.find_by_name(agent_name)
-                if actor:
-                    actor_id = actor.actor_id
-                    await actor.stop()
-                    await self._registry.unregister(actor_id)
-                    await self._clear_agent_manifest(agent_name, actor_id)
-                    self._record_agent_deletion(
-                        agent_name, reason=f"pipeline rule '{rule_id}' deleted"
-                    )
-                    stopped.append(agent_name)
+            # The running agent is named by its id, so a second agent of the
+            # name on a node neither keeps this one's entry nor loses its own.
+            actor = self._registry.find_by_name(agent_name) if self._registry else None
+            self._remove_from_spawn_registry(
+                agent_name, actor_id=actor.actor_id if actor is not None else None
+            )
+            if self._registry and actor is not None:
+                actor_id = actor.actor_id
+                await actor.stop()
+                await self._registry.unregister(actor_id)
+                await self._clear_agent_manifest(agent_name, actor_id)
+                self._record_agent_deletion(agent_name, reason=f"pipeline rule '{rule_id}' deleted")
+                stopped.append(agent_name)
         del rules[rule_id]
         self.persist(PIPELINE_RULES_KEY, rules)
         task_preview = rule.get("task", "")[:60]

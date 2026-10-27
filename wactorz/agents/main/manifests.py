@@ -26,6 +26,7 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from ...core.addresses import MAIN_NODE, Address, node_of
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -76,6 +77,14 @@ def _claimed_node(known_nodes: dict[str, dict[str, Any]], name: str, data: dict[
     if named:
         return named
     return next((node for node, info in known_nodes.items() if name in info.get("agents", [])), "")
+
+
+def is_agent(manifest: Mapping[str, Any], name: str, actor_id: Any) -> bool:
+    """Whether ``manifest`` is the agent ``name`` (``actor_id``): by id when both have one."""
+    if manifest.get("name") != name:
+        return False
+    theirs = manifest.get("actor_id")
+    return not (theirs and actor_id) or theirs == actor_id
 
 
 def _as_sent(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -191,12 +200,15 @@ class ManifestRegistry:
         if host is None or not name:
             return data
         local = host._registry.find_by_name(name) if host._registry is not None else None
-        if local is not None:
+        if local is not None and getattr(local, "actor_id", "") == self._actor_id_from(topic):
+            # Main's own agent, on its own topic: what it published, whatever
+            # arrived. A manifest under another id is weighed as a node's, as a
+            # node may run an agent of the same name.
             own = getattr(local, "_published_manifest", None)
             return _as_sent(own) if isinstance(own, dict) else None
         if properties is None:
             return data
-        placed = placed_node(host, name)
+        placed = placed_node(host, name, self._actor_id_from(topic))
         node = placed or _claimed_node(host._known_nodes, name, data)
         if not speaks_for(host, node, name):
             logger.warning(
@@ -233,29 +245,50 @@ class ManifestRegistry:
         """
         if not target_id:
             return
-        name = next(
-            (
-                n
-                for n, m in self.manifests.items()
-                if m.get("actor_id") == target_id or n == target_id
-            ),
-            "",
+        key = next(
+            (k for k, m in self.manifests.items() if m.get("actor_id") == target_id),
+            target_id if target_id in self.manifests else "",
         )
+        name = str(self.manifests[key].get("name") or key) if key else ""
         # With nothing in the cache — a withdrawal can arrive before this
         # process ever saw the manifest it withdraws, and after a restart the
         # retained message is gone — the id is enough: it derives from the name
         # and nothing else, so the lifecycle can still match it.
         if not await self._report_withdrawal(target_id, name) or not name:
             return
-        self.manifests.pop(name, None)
+        self.drop(key, target_id)
+        logger.info("[main] Manifest tombstone — removed %r", name)
+
+    def drop(self, key: str, actor_id: str | None = None) -> None:
+        """Forget the manifest kept under ``key``, and the topics and contract it declared.
+
+        ``actor_id`` says which agent it was. Another agent of the same name
+        keeps its own manifest and topics, and the planner's contract is
+        registered again from it.
+        """
+        held = self.manifests.pop(key, None) or {}
+        name = str(held.get("name") or key)
+        gone = actor_id or held.get("actor_id")
         for topic, entries in list(self.topic_registry.items()):
-            kept = [m for m in entries if m.get("name") != name]
+            kept = [m for m in entries if not is_agent(m, name, gone)]
             if kept:
                 self.topic_registry[topic] = kept
             else:
                 self.topic_registry.pop(topic, None)
         self._drop_contract(name)
-        logger.info("[main] Manifest tombstone — removed %r", name)
+        other = next((m for m in self.manifests.values() if m.get("name") == name), None)
+        if other is not None:
+            self._register_contract(name, other, other.get("publishes", []) or [])
+
+    def key_of(self, name: str, actor_id: str | None) -> str | None:
+        """Where the manifest of the agent ``name`` (``actor_id``) is kept, or None."""
+        if actor_id:
+            found = next(
+                (k for k, m in self.manifests.items() if m.get("actor_id") == actor_id), None
+            )
+            if found is not None:
+                return found
+        return name if name in self.manifests else None
 
     async def _report_withdrawal(self, actor_id: str, name: str = "") -> bool:
         """Tell the actor an agent withdrew, and whether the withdrawal stands.
@@ -280,18 +313,36 @@ class ManifestRegistry:
         manifests are retained, so every reconnect delivers them all again.
         """
         name = data.get("name", "?")
+        actor_id = data.get("actor_id")
         published = data.get("publishes", []) or []
         for topic in published:
             entries = self.topic_registry.setdefault(topic, [])
             for i, existing in enumerate(entries):
-                if existing.get("name") == name:
+                if is_agent(existing, name, actor_id):
                     entries[i] = data
                     break
             else:
                 entries.append(data)
-        self.manifests[name] = data
+        self.manifests[self._key_for(data)] = data
         self._register_contract(name, data, published)
         logger.debug("[main] Manifest from %r: %s", name, published)
+
+    def _key_for(self, data: dict[str, Any]) -> str:
+        """Where ``data`` is kept: under its agent's name, or its address when another agent has the name.
+
+        A name is unique on one host, so two agents of a name -- on main and on
+        a node, say -- are two entries; the first keeps the bare name every
+        reader looks it up by, and the second is kept as ``name@node``.
+        """
+        name = str(data.get("name", "?"))
+        actor_id = data.get("actor_id")
+        kept = self.key_of(name, actor_id)
+        if kept is not None and kept != name:
+            return kept
+        held = self.manifests.get(name)
+        if held is None or not actor_id or held.get("actor_id") in (None, actor_id):
+            return name
+        return str(Address(name, node_of(str(data.get("node") or MAIN_NODE))))
 
     def _register_contract(self, name: str, data: dict[str, Any], published: list[str]) -> None:
         """Mirror a manifest into the TopicBus so the planner can wire it.

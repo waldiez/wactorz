@@ -10,14 +10,15 @@ name finds; this module says what main knows of.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...core.addresses import MAIN_NODE, Address, Resolution, node_of, parse, resolve
+from ...core.addresses import MAIN_NODE, Address, Resolution, parse, resolve
 from ...core.topics import task_by_name_topic, task_topic
-from .voices import placed_node
+from .spawn_registry import address_of, placed_on
+from .voices import placed_nodes
 
 if TYPE_CHECKING:
-    from .hosts import AddressHost
+    from .hosts import AddressHost, SpawnRegistryHost
 
 #: How long after main starts a node it has not yet heard from is taken to run
 #: what the spawn registry places on it. Heartbeats arrive far more often.
@@ -44,9 +45,11 @@ def known_addresses(
         if heard_within is None or now - seen < heard_within:
             found.append(Address(name, node))
     if now - host.metrics.start_time < UNHEARD_GRACE_SECONDS:
-        placed = placed_node(host, name)
-        if placed and placed not in host.nodes.known:
-            found.append(Address(name, placed))
+        found.extend(
+            Address(name, placed)
+            for placed in placed_nodes(host, name)
+            if placed not in host.nodes.known
+        )
     return found
 
 
@@ -98,24 +101,48 @@ def task_refusal(host: AddressHost, address: Address) -> str | None:
     )
 
 
-def registered_name(host: AddressHost, wanted: str) -> tuple[str, str | None]:
-    """The name of the agent ``wanted`` (a name or ``name@node``) names in the spawn registry, or why none.
+class Registered(NamedTuple):
+    """The agent a command names in the spawn registry.
 
-    For what acts on what the spawn registry keeps, one entry per name, such
-    as restarting, stopping or moving an agent: a bare name names that entry.
-    An address has to agree with where the registry places it, so a command
+    ``node`` is where the registry places it, "" for main; ``entry`` is its
+    registry entry, None for an agent main runs that the registry does not
+    keep, such as a built-in one.
+    """
+
+    name: str
+    node: str = ""
+    entry: dict[str, Any] | None = None
+
+
+def registered_agent(host: SpawnRegistryHost, wanted: str) -> tuple[Registered, str | None]:
+    """The agent ``wanted`` (a name or ``name@node``) names in the spawn registry, or why none.
+
+    For what acts on one agent main keeps, such as restarting, stopping,
+    deleting or moving it. A bare name names its only entry, and a name kept
+    in more than one place names none: the refusal says the addresses. An
+    address has to agree with where the registry places it, so a command
     typed for an agent on one node never acts on the agent of that name
     somewhere else.
     """
     address = parse(wanted)
+    registry = host._get_spawn_registry()
+    entries = registry.named(address.name)
     if not address.node:
-        return address.name, None
-    entry = host._get_spawn_registry().get(address.name)
+        if len(entries) > 1:
+            found = Resolution(address.name, tuple(address_of(e) for e in entries))
+            return Registered(address.name), found.refusal()
+        entry = entries[0] if entries else None
+    else:
+        entry = registry.at(address.name, address.node)
+        if entry is None and (entries or address.node != MAIN_NODE):
+            if not entries:
+                return Registered(address.name), (
+                    f"No agent '{address.name}' is kept on node '{address.node}'."
+                )
+            places = " and ".join(f"'{address_of(e).node}'" for e in entries)
+            return Registered(address.name), (
+                f"'{address.name}' is on {places}, not on '{address.node}'."
+            )
     if entry is None:
-        if address.node == MAIN_NODE:
-            return address.name, None
-        return address.name, f"No agent '{address.name}' is kept on node '{address.node}'."
-    placed = node_of(str(entry.get("node") or MAIN_NODE))
-    if placed != address.node:
-        return address.name, f"'{address.name}' is on '{placed}', not on '{address.node}'."
-    return address.name, None
+        return Registered(address.name), None
+    return Registered(address.name, placed_on(entry), entry), None

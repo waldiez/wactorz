@@ -12,13 +12,15 @@ import pytest
 
 from wactorz.agents.main.addresses import (
     UNHEARD_GRACE_SECONDS,
+    Registered,
     known_addresses,
-    registered_name,
+    registered_agent,
     resolve_address,
     task_refusal,
 )
 from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import reserved_node_name_error
 from wactorz.core.actor import ActorMetrics
 from wactorz.core.addresses import (
@@ -148,6 +150,7 @@ class _Main:
         here: tuple[str, ...] = (),
         nodes: dict[str, dict[str, Any]] | None = None,
         placed: dict[str, str] | None = None,
+        kept: tuple[tuple[str, str], ...] = (),
         started: float = 0.0,
     ) -> None:
         self._registry = _Registry(*here)
@@ -156,9 +159,16 @@ class _Main:
         self.nodes.known = nodes or {}
         self.metrics = ActorMetrics(start_time=started)
         self._spawns = {name: {"name": name, "node": node} for name, node in (placed or {}).items()}
+        #: (name, node) for agents sharing a name, each kept under an id of its own.
+        self._kept = {
+            f"{name}-on-{node or 'main'}": {"name": name, "node": node} for name, node in kept
+        }
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self._spawns
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        registry = SpawnRegistry.from_names(self._spawns)
+        for actor_id, entry in self._kept.items():
+            registry = registry.with_entry({**entry, "actor_id": actor_id})
+        return registry
 
 
 def _host(main: _Main) -> AddressHost:
@@ -240,21 +250,51 @@ class TestWhatACommandActsOn:
     """Commands act on the spawn registry's entry, which an address has to agree with."""
 
     def test_a_bare_name_names_its_entry(self) -> None:
-        assert registered_name(_host(_Main()), "counter") == ("counter", None)
+        main = _Main(placed={"counter": "pi"})
+
+        named, refusal = registered_agent(_host(main), "counter")
+
+        assert (named.name, named.node, refusal) == ("counter", "pi", None)
+        assert named.entry is not None and named.entry["node"] == "pi"
+
+    def test_a_name_with_no_entry_names_an_agent_on_main(self) -> None:
+        named, refusal = registered_agent(_host(_Main()), "counter")
+
+        assert named == Registered("counter") and refusal is None
 
     def test_an_address_on_main_names_an_agent_main_keeps_no_entry_for(self) -> None:
         # A built-in agent: main runs it, and the registry has no entry for it.
-        assert registered_name(_host(_Main()), "catalog@main") == ("catalog", None)
+        assert registered_agent(_host(_Main()), "catalog@main") == (Registered("catalog"), None)
 
     def test_an_address_where_the_registry_places_it_names_it(self) -> None:
         main = _Main(placed={"counter": "pi"})
 
-        assert registered_name(_host(main), "counter@pi") == ("counter", None)
+        assert registered_agent(_host(main), "counter@pi")[0].node == "pi"
 
     def test_an_address_elsewhere_names_nothing(self) -> None:
         main = _Main(placed={"counter": "pi"})
 
-        assert registered_name(_host(main), "counter@pc") == (
-            "counter",
+        assert registered_agent(_host(main), "counter@pc") == (
+            Registered("counter"),
             "'counter' is on 'pi', not on 'pc'.",
+        )
+
+    def test_a_name_kept_in_two_places_names_neither_and_says_both(self) -> None:
+        main = _Main(kept=(("counter", ""), ("counter", "pi")))
+
+        named, refusal = registered_agent(_host(main), "counter")
+
+        assert named.entry is None
+        assert refusal is not None and "`counter@main` or `counter@pi`" in refusal
+
+    def test_an_address_names_one_of_a_shared_name(self) -> None:
+        main = _Main(kept=(("counter", ""), ("counter", "pi")))
+
+        on_pi = registered_agent(_host(main), "counter@pi")[0]
+        on_main = registered_agent(_host(main), "counter@main")[0]
+
+        assert (on_pi.node, on_pi.entry and on_pi.entry["actor_id"]) == ("pi", "counter-on-pi")
+        assert (on_main.node, on_main.entry and on_main.entry["actor_id"]) == (
+            "",
+            "counter-on-main",
         )

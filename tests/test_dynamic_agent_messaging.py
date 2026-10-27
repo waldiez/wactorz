@@ -26,6 +26,7 @@ from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.agents.main.addresses import resolve_address, task_refusal, task_topic_for
 from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core import actor as actor_module
 from wactorz.core import topic_bus
 from wactorz.core.actor import Actor, ActorMetrics, Message, MessageType
@@ -66,8 +67,8 @@ class _Main:
         self.nodes.known = known_nodes
         self.metrics = ActorMetrics(start_time=0.0)
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
     def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
         # As main's: the real lookup, over this table.

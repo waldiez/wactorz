@@ -38,6 +38,7 @@ from ...core.mqtt import (
 from ...core.node_publications import Stamp, admit, signed_stamp
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
+from .spawn_registry import SpawnRegistry
 from .voices import speaks_for
 
 logger = logging.getLogger(__name__)
@@ -149,14 +150,14 @@ def _unsigned_notice(node_name: str) -> str:
     return f"unsigned-node:{node_name}"
 
 
-def remote_actor_id(agent_name: str, spawn_registry: Mapping[str, Mapping[str, Any]]) -> str:
-    """The actor id a remote agent runs under: the one its spawn registry entry keeps.
+def remote_actor_id(agent_name: str, node: str, spawn_registry: SpawnRegistry) -> str:
+    """The actor id the agent ``agent_name`` on ``node`` runs under: the one its spawn registry entry keeps.
 
     A node's heartbeat names its agents but not their ids. An agent main has no
     entry for was not spawned by main, and runs under its name's derived id, as
     every agent did before ids were kept.
     """
-    entry = spawn_registry.get(agent_name) or {}
+    entry = spawn_registry.at(agent_name, node) or {}
     return given_actor_id(entry.get("actor_id")) or derive_actor_id(agent_name)
 
 
@@ -531,10 +532,9 @@ class NodeManager:
         if host is None or manifest.get("actor_ids") is True or node_name in self.ids_reported:
             return
         stranded = sorted(
-            name
-            for name, cfg in host._get_spawn_registry().items()
-            if (cfg.get("node") or "").strip() == node_name
-            and cfg.get("actor_id") != derive_actor_id(name)
+            cfg["name"]
+            for cfg in host._get_spawn_registry().on_node(node_name)
+            if cfg.get("actor_id") != derive_actor_id(cfg["name"])
         )
         if not stranded:
             return
@@ -677,7 +677,7 @@ class NodeManager:
             await host.settle_withdrawals(node_name, set(agents))
             host.node_reported(node_name)
         self._bootstrap_contracts(node_name, agents)
-        self._touch_monitor(agents)
+        self._touch_monitor(node_name, agents)
         await self.follow_signing(node_name, self.known[node_name], before)
         self.follow_restarts(node_name, self.known[node_name], before)
         await self._tell_watchers(node_name, data)
@@ -878,9 +878,8 @@ class NodeManager:
         if host is None or node_name in self.redeploying:
             return []
         to_prune: list[str] = []
-        for agent_name, cfg in list(host._get_spawn_registry().items()):
-            if (cfg.get("node", "") or "").strip() != node_name:
-                continue
+        for cfg in host._get_spawn_registry().on_node(node_name):
+            agent_name = cfg["name"]
             key = (node_name, agent_name)
             if agent_name in current:
                 self.agent_misses.pop(key, None)
@@ -910,7 +909,7 @@ class NodeManager:
                 agent_name,
                 node_name,
             )
-            host._remove_from_spawn_registry(agent_name)
+            host._remove_from_spawn_registry(agent_name, node_name)
             # The node's retained desired_state is what it reconciles against on
             # its next reboot. Dropping the spawn entry without rewriting it
             # leaves the instruction to start this agent in place, so the node
@@ -946,14 +945,12 @@ class NodeManager:
                     continue
                 if name in self.manifest_registry.manifests:
                     continue
-                cfg = spawn_registry.get(name)
+                cfg = spawn_registry.at(name, node_name)
                 if not cfg:
                     continue
                 if not (cfg.get("publishes") or cfg.get("subscribes")):
                     continue
-                contract = TopicContract.from_spawn_config(
-                    {**cfg, "node": node_name, "actor_id": remote_actor_id(name, spawn_registry)}
-                )
+                contract = TopicContract.from_spawn_config({**cfg, "node": node_name})
                 bus.register_contract(contract)
                 logger.debug(
                     "[main] Bootstrapped TopicContract for %r from spawn config "
@@ -963,7 +960,7 @@ class NodeManager:
         except Exception as exc:
             logger.debug("[main] TopicContract bootstrap failed: %s", exc)
 
-    def _touch_monitor(self, agents: list[str]) -> None:
+    def _touch_monitor(self, node_name: str, agents: list[str]) -> None:
         """Keep the monitor's heartbeat tracker current for remote agents.
 
         Without this the monitor raises a silence alert for every remote agent,
@@ -978,7 +975,7 @@ class NodeManager:
         now = time.time()
         spawn_registry = host._get_spawn_registry()
         for name in agents:
-            monitor._last_seen[remote_actor_id(name, spawn_registry)] = now
+            monitor._last_seen[remote_actor_id(name, node_name, spawn_registry)] = now
 
     def report_migration(self, data: dict[str, Any]) -> None:
         """Turn a node's failed migration into a notification.
@@ -1056,9 +1053,9 @@ class NodeManager:
             # Find all agents that belong to this node according to the
             # spawn registry (the heartbeat's last-known agent list may
             # be stale).
-            lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
+            lost = [cfg["name"] for cfg in reg.on_node(node_name)]
             for agent_name in lost:
-                host._remove_from_spawn_registry(agent_name)
+                host._remove_from_spawn_registry(agent_name, node_name)
                 # As in _prune_vanished: the retained desired_state has
                 # to lose the agent too, or the node resurrects it on
                 # its next reconcile into a main that has forgotten it.

@@ -240,7 +240,7 @@ Main sends the agent's code with the spawn: the folder its module is in, `.py` f
 
 An agent on a node runs under the id main keeps for it, which it keeps across restarts and moves; the node says it does so (`actor_ids`) in its manifest. A node from before ids were kept gives an agent the id derived from its name. Main gives a new agent there that id, and refuses to send it an agent that already has an id of its own, saying to deploy the node again.
 
-> **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh.
+> **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh. If the name runs on another host instead, `"replace": true` moves it to this node and `"alongside": true` runs a second one here (see *Two agents of one name* in the agents guide); with neither, nothing is spawned.
 
 ---
 

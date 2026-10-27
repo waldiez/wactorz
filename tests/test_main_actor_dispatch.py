@@ -28,6 +28,7 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import ActorMetrics
 
@@ -96,9 +97,9 @@ class _Main:
         m._drain_notifications = lambda: notification
         m.list_nodes = list
         m.list_topics = lambda keyword="": (self.calls["topics"].append(keyword), [])[1]
-        m._get_spawn_registry = dict
+        m._get_spawn_registry = SpawnRegistry
 
-        async def _delete(name: str) -> None:
+        async def _delete(name: str, node: str | None = None) -> None:
             self.calls["deleted"].append(name)
 
         m.delete_spawned_agent = _delete

@@ -18,6 +18,7 @@ from wactorz.agents.main import placement
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.placement import Placement, stays_on_main
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import DeployTarget
 
 NODE = "sandbox"
@@ -46,7 +47,10 @@ class _Migration:
         self.moved: list[tuple[str, str]] = []
         self.refuse = refuse or {}
 
-    async def migrate_agent(self, name: str, node: str, **_kw: Any) -> dict[str, Any]:
+    async def migrate_agent(self, address: str, node: str, **_kw: Any) -> dict[str, Any]:
+        # Named by its address: the agent of that name on main, which is what moves.
+        name, _, on = address.partition("@")
+        assert on == "main", address
         if name in self.refuse:
             return {"success": False, "message": self.refuse[name]}
         self.moved.append((name, node))
@@ -85,8 +89,8 @@ class _Host:
     async def _mqtt_publish(self, *_args: Any, **_kwargs: Any) -> None:
         return None
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.spawn_registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.spawn_registry)
 
     def _node_refuses_tasks(self, node_name: str) -> str | None:
         return None

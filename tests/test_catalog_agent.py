@@ -115,6 +115,9 @@ class _Main(_Actor):
     def _registered_actor_id(self, name: str) -> str | None:
         return self.kept_ids.get(name)
 
+    def _kept_actor_id(self, name: str, node: str, *, alongside: bool = False) -> str | None:
+        return None if alongside else self.kept_ids.get(name)
+
 
 class _Broker:
     def __init__(self) -> None:

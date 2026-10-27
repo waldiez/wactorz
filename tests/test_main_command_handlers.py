@@ -24,6 +24,7 @@ from wactorz.agents.main.commands import nodes as node_cmds
 from wactorz.agents.main.commands import packages as package_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import CONFIG
 from wactorz.core import topic_bus
 from wactorz.core.actor import ActorState
@@ -144,8 +145,8 @@ class _Main:
         return self.capability_list
 
     # agents
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.spawn_registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.spawn_registry)
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
@@ -161,7 +162,7 @@ class _Main:
             raise self.migrate_result
         return self.migrate_result
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         if self.delete_error:
             raise self.delete_error
         self.calls.append(("delete", name))
@@ -658,7 +659,8 @@ class TestMigrate:
 
         await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor@pc rpi")
 
-        assert ("migrate", ("sensor", "rpi", False)) in main.calls
+        # The move takes the address: which agent of the name, it decides there.
+        assert ("migrate", ("sensor@pc", "rpi", False)) in main.calls
 
     @pytest.mark.parametrize(
         ("argument", "force"),

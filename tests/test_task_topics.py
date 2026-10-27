@@ -12,6 +12,7 @@ from wactorz.agents.dynamic.messaging import Route, route_from_node
 from wactorz.agents.main.addresses import task_refusal, task_topic_for
 from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorMetrics
 from wactorz.core.addresses import Address
 from wactorz.core.agent_directory import AgentDirectory
@@ -71,8 +72,8 @@ class _Main:
         self.nodes.node_manifests = manifests
         self.metrics = ActorMetrics(start_time=0.0)
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
 
 def _host(main: _Main) -> AddressHost:

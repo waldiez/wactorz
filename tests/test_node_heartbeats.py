@@ -25,6 +25,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD, NodeManager
 from wactorz.agents.main.placement import Placement
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.mqtt import publish_properties
 from wactorz.core.node_publications import PublicationSigner
@@ -144,8 +145,14 @@ async def run_heartbeats(
 
     run = _Run(main, bus or _Bus())
 
-    setattr(main, "_get_spawn_registry", lambda: dict(spawn_registry or {}))
-    setattr(main, "_remove_from_spawn_registry", run.removed_from_registry.append)
+    setattr(
+        main, "_get_spawn_registry", lambda: SpawnRegistry.from_names(dict(spawn_registry or {}))
+    )
+    setattr(
+        main,
+        "_remove_from_spawn_registry",
+        lambda name, *_, **__: run.removed_from_registry.append(name),
+    )
     setattr(
         main, "_record_agent_deletion", lambda name, reason="": run.deletions.append((name, reason))
     )

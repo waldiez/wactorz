@@ -412,6 +412,15 @@ This stops the old agent and starts the new one immediately:
 }
 </spawn>
 
+== THE SAME NAME ON ANOTHER NODE ==
+A name is unique on one node, and two nodes may each run an agent of the same
+name; `name@node` is the full address of one (`counter@main`, `counter@pi`).
+A spawn naming a node where the name does not run, while it runs on another,
+must say which it means: "replace": true MOVES that agent there, and
+"alongside": true runs a SECOND agent of the name there. With neither, nothing
+is spawned and the user is asked. Use "alongside" only when the user asked for
+another one; "replace" when they asked to move it.
+
 == DELETING AN AGENT ==
 When the user explicitly asks to remove, stop, delete, or kill an agent, emit a
 <delete> block. The framework will stop the agent, remove it from the spawn
@@ -424,7 +433,7 @@ agent. Do NOT use it to "restart" an agent — use <spawn> with "replace": true
 for that. Do NOT use it just because the user is frustrated with output —
 ask for clarification first.
 
-Format (JSON):
+Format (JSON); name one agent of a shared name by its address, "math-agent@pi":
 <delete>
 {"name": "math-agent"}
 </delete>

@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
-from ...core.addresses import agent_name_error
+from ...core.addresses import MAIN_NODE, agent_name_error
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
@@ -108,12 +108,15 @@ def agent_type(config: dict) -> str:
     return kind
 
 
-def spawn_actor_id(registry: Any, name: str, running: str | None = None) -> str:
-    """The id a spawn of ``name`` runs under, by whoever spawns it.
+def spawn_actor_id(
+    registry: Any, name: str, running: str | None = None, *, alongside: bool = False
+) -> str:
+    """The id a spawn of ``name`` in main's process runs under, by whoever spawns it.
 
     Never the spawn config's own: a config is often written by a model, and an
     id taken from it could be another agent's. The id main's spawn registry
-    keeps for the name comes first, so a restart, a replace or a move keeps it;
+    keeps for the agent comes first, so a restart, a replace or a move keeps it
+    (``alongside``, a second agent of a name that runs on a node, keeps none);
     then the id of the agent being replaced (``running``); and only then a new
     one. With no main to keep an id, the name's derived id, which is the same
     at every start.
@@ -121,7 +124,8 @@ def spawn_actor_id(registry: Any, name: str, running: str | None = None) -> str:
     main = find_main_actor(registry) if registry is not None else None
     if main is None:
         return running or derive_actor_id(name)
-    return str(main._registered_actor_id(name) or running or uuid.uuid4())
+    kept = main._kept_actor_id(name, MAIN_NODE, alongside=alongside)
+    return str(kept or running or uuid.uuid4())
 
 
 class SpawnPlaceholder:
@@ -154,13 +158,16 @@ class PlacedOnNode:
 
 @dataclass(frozen=True)
 class KeptHere:
-    """A spawn not sent, because an agent of its name already runs here.
+    """A spawn not made, because an agent of its name already runs on another host.
 
-    ``node`` is where the spawn would have gone; ``replace`` moves it there.
+    ``node`` is where the spawn would have gone, and ``elsewhere`` the
+    addresses of the agents of the name: ``replace`` moves one there, and
+    ``alongside`` adds a second one there.
     """
 
     name: str
     node: str
+    elsewhere: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -270,7 +277,11 @@ class SpawnMixin(_Host):
         existing = self._find_existing(name)
         config = {
             **config,
-            "actor_id": self._spawn_actor_id(name, existing.actor_id if existing else None),
+            "actor_id": self._spawn_actor_id(
+                name,
+                existing.actor_id if existing else None,
+                alongside=bool(config.get("alongside")),
+            ),
         }
         if existing is not None:
             if getattr(existing, "protected", False):
@@ -645,7 +656,7 @@ class SpawnMixin(_Host):
                     # The entry was saved when the placeholder was returned, and
                     # a refused agent must not be restored at the next start. An
                     # entry this spawn did not save belongs to whoever saved it.
-                    self._unregister_spawn(name)
+                    self._unregister_spawn(name, config.get("actor_id"))
                 if publish is not None:
                     await publish(
                         f"agents/{self.actor_id}/logs",
@@ -914,24 +925,24 @@ class SpawnMixin(_Host):
                     return None
         return None
 
-    def _spawn_actor_id(self, name: str, running: str | None) -> str:
+    def _spawn_actor_id(self, name: str, running: str | None, *, alongside: bool = False) -> str:
         """The id a spawn of ``name`` here runs under; see `spawn_actor_id`."""
-        own = getattr(self, "_registered_actor_id", None)
+        own = getattr(self, "_kept_actor_id", None)
         if callable(own):
-            return str(own(name) or running or uuid.uuid4())
-        return spawn_actor_id(self._registry, name, running)
+            return str(own(name, MAIN_NODE, alongside=alongside) or running or uuid.uuid4())
+        return spawn_actor_id(self._registry, name, running, alongside=alongside)
 
-    def _unregister_spawn(self, name: str) -> None:
-        """Take ``name`` out of main's spawn registry, as `_register_spawn` put it in."""
+    def _unregister_spawn(self, name: str, actor_id: str | None = None) -> None:
+        """Take the agent ``name`` (``actor_id``) out of main's spawn registry, as `_register_spawn` put it in."""
         own_remover = getattr(self, "_remove_from_spawn_registry", None)
         if callable(own_remover):
-            own_remover(name)
+            own_remover(name, actor_id=actor_id)
             return
         if self._registry is None:
             return
         main = find_main_actor(self._registry)
         if main is not None:
-            main._remove_from_spawn_registry(name)  # pyright: ignore[reportAttributeAccessIssue]
+            main._remove_from_spawn_registry(name, actor_id=actor_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     def _register_spawn(self, config: dict) -> None:
         """Record a spawn in main's spawn registry so it survives restarts.

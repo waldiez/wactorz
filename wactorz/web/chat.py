@@ -124,7 +124,11 @@ def agent_id_of(name: str) -> str:
         if isinstance(record, dict) and _is_at(record, address):
             return str(actor_id)
     main_actor = find_main_actor(runtime.registry)
-    kept = main_actor._registered_actor_id(address.name) if main_actor is not None else None
+    kept = (
+        main_actor._registered_actor_id(address.name, address.node or None)
+        if main_actor is not None
+        else None
+    )
     return kept or derive_actor_id(address.name)
 
 

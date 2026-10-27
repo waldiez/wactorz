@@ -1116,7 +1116,7 @@ class Actor(ABC):
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
-                    main._remove_from_spawn_registry(self.name)  # pyright: ignore[reportAttributeAccessIssue]
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)  # pyright: ignore[reportAttributeAccessIssue]
                 await self._registry.unregister(self.actor_id)
             await self.stop()
         else:

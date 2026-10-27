@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from tests.node_messages import SignedMessage
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import api_reset, node_reset
 
 
@@ -222,8 +223,8 @@ class _SpawnedOnEdge:
     _known_nodes: ClassVar[dict[str, dict[str, Any]]] = {}
 
     @staticmethod
-    def _get_spawn_registry() -> dict[str, Any]:
-        return {"counter": {"name": "counter", "node": "edge"}}
+    def _get_spawn_registry() -> SpawnRegistry:
+        return SpawnRegistry.from_names({"counter": {"name": "counter", "node": "edge"}})
 
 
 class TestTheResetRoute:

@@ -211,7 +211,13 @@ Each step is a branch of its own, in this order:
    sends it tasks on `agents/at/<node>/<name>/task`, and an agent on a node finds the
    others from their retained manifests, which each agent on a node stamps with its
    node. A node not yet known to take them is still sent tasks by name, and a task
-   for it is refused while another node runs the name. Then `alongside` with the spawn
-   registry keyed by id, then the dashboard.
+   for it is refused while another node runs the name. The spawn registry is kept by
+   id, one entry per agent, and read from the name-keyed store once on upgrade, which
+   is left as it was. A spawn of a name that runs on another host says `replace` or
+   `alongside`, and one that says neither is answered with both; `/agents copy` adds
+   one from chat. A spawn, move or copy onto a host that runs the name is refused, as
+   is a second agent of a name on a node that derives ids. Every command acting on one
+   agent finds it by its address. What a reset clears is still kept by name, so a
+   reset of a shared name stays refused. Then the dashboard.
 5. **Namespaces.** Topics built in one place, then the prefix, the access list, the
    node's deploy environment, the heartbeat check and the second-install notice.

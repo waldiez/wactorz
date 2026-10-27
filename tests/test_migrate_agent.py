@@ -33,6 +33,7 @@ from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import BRIDGE_CODE_MARKER, Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.artifacts import ArtifactStore
 
@@ -153,7 +154,11 @@ class _Main:
 
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
-        setattr(main, "_get_spawn_registry", lambda: dict(self._spawn_registry))
+        setattr(
+            main,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names(dict(self._spawn_registry)),
+        )
         setattr(main, "_save_to_spawn_registry", self.saved.append)
         setattr(main, "_spawn_remote", _spawn_remote)
         setattr(main, "_spawn_from_config", _spawn_from_config)

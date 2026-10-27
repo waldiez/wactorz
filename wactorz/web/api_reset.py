@@ -18,6 +18,7 @@ from aiohttp.web import Response
 
 from ..agents.llm import cost as llm_cost
 from ..agents.lookup import find_main_actor
+from ..agents.main.spawn_registry import SpawnRegistry, placed_on
 from ..core.addresses import MAIN_NODE, SEPARATOR, Address, Resolution, parse
 from ..core.agent_reset import (
     LIVE_SCOPES,
@@ -99,11 +100,11 @@ def _agents_on_nodes(main_actor: Any) -> dict[str, set[str]]:
     dashboard was shown it, which can lag main's by a heartbeat.
     """
     on: dict[str, set[str]] = {}
-    registry = main_actor._get_spawn_registry() if main_actor is not None else None
-    for name, config in (registry or {}).items():
-        node = (config.get("node") or "").strip()
+    registry = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
+    for config in registry:
+        node = placed_on(config)
         if node:
-            on.setdefault(node, set()).add(name)
+            on.setdefault(node, set()).add(config["name"])
     for agent in runtime.state["agents"].values():
         if agent.get("node") and agent.get("name"):
             on.setdefault(agent["node"], set()).add(agent["name"])
@@ -164,10 +165,9 @@ def _places(main_actor: Any, name: str) -> list[Address]:
     node anything says runs it (see `_agents_on_nodes`).
     """
     places: list[Address] = []
-    registry = main_actor._get_spawn_registry() if main_actor is not None else {}
-    entry = registry.get(name)
+    registry = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
     here = runtime.registry is not None and runtime.registry.find_by_name(name) is not None
-    if here or (entry is not None and not (entry.get("node") or "").strip()):
+    if here or registry.at(name, MAIN_NODE) is not None:
         places.append(Address(name, MAIN_NODE))
     places += [
         Address(name, node)

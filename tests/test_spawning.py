@@ -147,7 +147,7 @@ class MainHost(_BaseHost):
     def _save_to_spawn_registry(self, config):
         self.registered.append(config)
 
-    def _remove_from_spawn_registry(self, name):
+    def _remove_from_spawn_registry(self, name, node=None, *, actor_id=None):
         self.registered = [c for c in self.registered if c.get("name") != name]
 
     def get_user_facts(self):

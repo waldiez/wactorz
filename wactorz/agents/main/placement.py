@@ -43,11 +43,13 @@ from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.refusals import REFUSED, UNANSWERED, RecentRefusals
 from ..dynamic.safety import parse_program
 from ..mixins import KeptHere, NotSpawned, PlacedOnNode
+from .spawn_registry import address_of
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from .migration import Migration
+    from .spawn_registry import SpawnRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +123,7 @@ class PlacementHost(Protocol):
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
     ) -> None: ...
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
     def _node_refuses_tasks(self, node_name: str) -> str | None: ...
 
@@ -218,18 +220,19 @@ class Placement:
         moved: list[str] = []
         kept: list[tuple[str, str]] = []
         registry = self.host._registry
-        for name, config in sorted(self.host._get_spawn_registry().items()):
+        here = self.host._get_spawn_registry().on_node("")
+        for config in sorted(here, key=lambda entry: entry["name"]):
+            name = config["name"]
             if (
                 not runs_model_code(config)
                 or config.get("trusted")
-                or str(config.get("node") or "").strip()
                 or registry is None
                 or registry.find_by_name(name) is None
             ):
                 continue
             why = stays_on_main(str(config.get("code") or ""))
             if why is None:
-                result = await self.host.migration.migrate_agent(name, node)
+                result = await self.host.migration.migrate_agent(str(address_of(config)), node)
                 if result.get("success"):
                     moved.append(name)
                     continue

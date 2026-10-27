@@ -25,6 +25,7 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import ActorMetrics
 
@@ -135,7 +136,7 @@ class _Main:
         main._known_nodes = dict(nodes or {})
         main._conversation_history = []
         setattr(main, "_registry", _Registry(running, catalogue, appears_after_spawn))
-        setattr(main, "_get_spawn_registry", dict)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
 
         self.delegated: list[tuple[str, str]] = []
         self.published: list[tuple[str, Any]] = []

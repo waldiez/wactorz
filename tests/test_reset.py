@@ -24,6 +24,7 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import WactorzDB
 from wactorz.reset import reset_chat
@@ -551,6 +552,35 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 reg = db.kv_get("main", "_spawned_agents", None)
                 self.assertEqual(reg, {"b": {"node": "n1"}})
 
+    def test_all_clears_the_registry_kept_by_id_and_the_one_by_name(self):
+        # Main reads the old one when the new one is absent, so both go, or a
+        # cleared registry would come back from the older store.
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}})
+                db.kv_set("main", "_spawned_agents_by_id", {"id-a": {"name": "a", "node": ""}})
+                reset_spawns(db_path=db_path)
+                self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
+                self.assertIsNone(db.kv_get("main", "_spawned_agents_by_id", None))
+
+    def test_single_agent_pops_every_entry_of_that_name_by_id(self):
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                db.kv_set(
+                    "main",
+                    "_spawned_agents_by_id",
+                    {"id-a": {"name": "a", "node": ""}, "id-b": {"name": "b", "node": "n1"}},
+                )
+                reset_spawns(agent_name="a", db_path=db_path)
+                reg = db.kv_get("main", "_spawned_agents_by_id", None)
+                self.assertEqual(reg, {"id-b": {"name": "b", "node": "n1"}})
+
     def test_restart_read_sees_empty_registry_after_wipe(self):
         """End-to-end of the actual symptom: after a wipe, the registry read
         that main._restore_spawned_agents() performs on the NEXT startup must
@@ -696,7 +726,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # publish. `recall` already answers None for an unset key.
         main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main._get_spawn_registry = lambda: {"agentX": {"node": "n1"}}  # type: ignore[method-assign]
+        main._get_spawn_registry = lambda: SpawnRegistry.from_names({"agentX": {"node": "n1"}})  # type: ignore[method-assign]
 
         fake_registry = MagicMock()
         fake_registry.all_actors.return_value = [main]

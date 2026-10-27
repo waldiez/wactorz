@@ -8,7 +8,7 @@ import threading
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...agents.main.addresses import registered_name
+from ...agents.main.addresses import registered_agent
 from ...config import (
     deploy_env_prefix,
     deploy_target,
@@ -379,15 +379,13 @@ class CLIInterface:
                         print()
                     elif not hasattr(self.agent, "migrate_agent"):
                         print("[error] migrate_agent not available on this actor.\n")
-                    elif refusal := registered_name(self.agent, parts[1])[1]:
+                    elif refusal := registered_agent(self.agent, parts[1])[1]:
                         print(f"[error] {refusal}\n")
                     else:
                         agent_name = parse(parts[1]).name
                         target_node = parts[2]
                         print(f"[Migrating @{agent_name} to {target_node}...]")
-                        result = await self.agent.migrate_agent(
-                            agent_name, target_node, force=force
-                        )
+                        result = await self.agent.migrate_agent(parts[1], target_node, force=force)
                         ok = result.get("success", False)
                         sym = "OK" if ok else "FAIL"
                         print(f"[{sym}] {result.get('message', '')}\n")

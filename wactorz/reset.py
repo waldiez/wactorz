@@ -21,6 +21,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from wactorz.core.addresses import parse
 from wactorz.core.paths import resolve_state_dir
@@ -176,39 +177,55 @@ def reset_memory(agent_name: str | None = None, db_path: str | None = None) -> N
     )
 
 
-_SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
+#: Where main keeps its spawn registry: by actor id, and, in a store from before
+#: ids were kept, by name. Main reads the second when the first is absent, so a
+#: reset clears both, or a cleared registry would come back from the older one.
+_SPAWN_REGISTRY_KV_KEYS = ("_spawned_agents_by_id", "_spawned_agents")
+
+
+def _without_agent(registry: dict[str, Any], agent_name: str) -> dict[str, Any] | None:
+    """``registry`` without the agent ``agent_name``, or None when it holds none.
+
+    Kept by id, an entry carries its name; kept by name, the key is the name.
+    """
+    kept = {
+        key: entry
+        for key, entry in registry.items()
+        if key != agent_name and not (isinstance(entry, dict) and entry.get("name") == agent_name)
+    }
+    return kept if len(kept) != len(registry) else None
 
 
 def reset_spawns(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear the spawn registry (optionally for one agent).
 
-    The registry lives in ``kv_store`` under (owner, "_spawned_agents"), which is
-    what ``main._restore_spawned_agents()`` reads at start, so an agent left in
-    it is spawned again on the next restart. ``agent_name`` here is the
-    *spawned* agent's name; the registry is keyed by that name inside the
-    owner's entry.
+    The registry lives in ``kv_store`` under (owner, key), which is what
+    ``main._restore_spawned_agents()`` reads at start, so an agent left in it is
+    spawned again on the next restart. ``agent_name`` here is the *spawned*
+    agent's name, and every entry of that name is cleared.
     """
     with _db(db_path) as db:
-        cleared = 0
+        cleared: set[str] = set()
         # One transaction: each owner's entry is read, edited and written back,
         # and an agent persisting its own registry between the read and the
         # write would otherwise have that write clobbered — or clobber this one.
         with db.transaction():
             for owner in _all_kv_agents(db):
-                reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
-                if not isinstance(reg, dict):
-                    continue
-                if agent_name:
-                    if agent_name in reg:
-                        reg.pop(agent_name, None)
-                        db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
-                        cleared += 1
-                else:
-                    db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
-                    cleared += 1
+                for key in _SPAWN_REGISTRY_KV_KEYS:
+                    reg = db.kv_get(owner, key, None)
+                    if not isinstance(reg, dict):
+                        continue
+                    if agent_name:
+                        kept = _without_agent(reg, agent_name)
+                        if kept is not None:
+                            db.kv_set(owner, key, kept)
+                            cleared.add(owner)
+                    else:
+                        db.kv_delete(owner, key)
+                        cleared.add(owner)
     logger.info(
         "[reset] kv spawn registry cleared for %d owner(s)%s",
-        cleared,
+        len(cleared),
         f" (agent {agent_name!r})" if agent_name else "",
     )
 

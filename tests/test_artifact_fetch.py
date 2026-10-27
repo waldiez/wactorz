@@ -23,6 +23,7 @@ from tests.waiting import until
 from wactorz.agents.main import artifact_service as service_module
 from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.hosts import ArtifactHost
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import (
     ArtifactError,
@@ -92,8 +93,8 @@ class _Host:
         #: Where what is published goes as well, standing in for the broker.
         self.deliver: Any = None
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0

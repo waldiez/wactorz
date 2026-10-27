@@ -28,6 +28,7 @@ import pytest
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import MessageType, derive_actor_id
 
@@ -105,7 +106,11 @@ class _Main:
 
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
-        setattr(main.spawns, "_get_spawn_registry", lambda: dict(self._spawn_registry))
+        setattr(
+            main.spawns,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names(dict(self._spawn_registry)),
+        )
         setattr(main.spawns, "_save_to_spawn_registry", self.saved.append)
         setattr(main, "send", _send)
         self.actor = main

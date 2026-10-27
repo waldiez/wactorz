@@ -15,7 +15,12 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
-from wactorz.agents.main.spawns import SpawnService, without_transient_keys
+from wactorz.agents.main.spawn_registry import (
+    NAME_KEYED_REGISTRY_KEY,
+    SPAWN_REGISTRY_KEY,
+    without_transient_keys,
+)
+from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import derive_actor_id
 
 SNAPSHOT = {"conversation_history": ["hello"], "count": 7}
@@ -69,7 +74,7 @@ class _Main:
 
     def seed_legacy(self, **config: Any) -> None:
         """A registry entry as it was recorded before the snapshot was stripped."""
-        self.host.store["_spawned_agents"] = {config["name"]: config}
+        self.host.store[NAME_KEYED_REGISTRY_KEY] = {config["name"]: config}
 
     def desired_agents(self) -> list[dict[str, Any]]:
         topic, payload = next(t for t in self.published if t[0].endswith("/desired_state"))
@@ -103,7 +108,7 @@ def test_the_registry_records_the_agent_without_its_arrival_snapshot() -> None:
 
     spawns._save_to_spawn_registry({"name": "collector", "node": "nuc", "_initial_state": SNAPSHOT})
 
-    stored = host.store["_spawned_agents"]["collector"]
+    (stored,) = host.store[SPAWN_REGISTRY_KEY].values()
     assert "_initial_state" not in stored, "a restart would rewind the agent to this snapshot"
     assert stored["node"] == "nuc"
 
@@ -122,12 +127,12 @@ def test_an_entry_recorded_before_the_fix_reads_back_clean() -> None:
     # Upgrading does not rewrite the store, so the agents that already hit this
     # are the ones whose entries still carry a snapshot.
     host = _Host()
-    host.store["_spawned_agents"] = {
+    host.store[NAME_KEYED_REGISTRY_KEY] = {
         "collector": {"name": "collector", "node": "nuc", "_initial_state": SNAPSHOT}
     }
     spawns = SpawnService(host)  # type: ignore[arg-type]
 
-    assert spawns._get_spawn_registry() == {"collector": COLLECTOR}
+    assert list(spawns._get_spawn_registry()) == [COLLECTOR]
 
 
 async def test_a_republish_does_not_carry_a_snapshot_left_by_an_older_version(main: _Main) -> None:

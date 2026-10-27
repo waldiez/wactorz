@@ -21,6 +21,7 @@ from typing import Any, cast
 import pytest
 
 from wactorz.agents.main import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.addresses import MAIN_NODE, Address, Resolution, parse, resolve
 from wactorz.core.registry import ActorRegistry
 from wactorz.core.turns import current_agent, current_turn
@@ -81,8 +82,8 @@ class _MainActor:
         here = [Address(n, MAIN_NODE) for n in (wanted, parse(wanted).name) if self._here(n)]
         return resolve(wanted, here)
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.spawn_registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.spawn_registry)
 
     def task_refusal(self, _address: Address) -> str | None:
         """With no node, every task can go."""
@@ -278,7 +279,8 @@ class TestMigrate:
 
         await drive(_cli(actor), ["/migrate temp@pc rpi"], capsys)
 
-        assert actor.migrated == ("temp", "rpi")
+        # The move takes the address: which agent of the name, it decides there.
+        assert actor.migrated == ("temp@pc", "rpi")
 
     async def test_an_address_naming_another_node_moves_nothing(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]

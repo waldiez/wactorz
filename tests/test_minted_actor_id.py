@@ -17,10 +17,13 @@ import pytest
 from tests.test_spawn_remote import _Main, llm_agent
 from wactorz import plugins
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.alongside import settle
 from wactorz.agents.main.nodes import NodeManager, remote_actor_id
-from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY, SpawnService, id_on_node, ids_refused
+from wactorz.agents.main.spawn_registry import NAME_KEYED_REGISTRY_KEY, SpawnRegistry
+from wactorz.agents.main.spawns import SpawnService, id_on_node, ids_refused
 from wactorz.agents.mixins import SpawnMixin
-from wactorz.core.actor import Actor, Message, build_actor, derive_actor_id
+from wactorz.core.actor import Actor, ActorMetrics, Message, build_actor, derive_actor_id
+from wactorz.core.addresses import Address
 from wactorz.core.identity import given_actor_id
 from wactorz.core.registry import ActorRegistry, Supervisor
 from wactorz.node.agent import NodeAgent
@@ -62,6 +65,8 @@ def _main(store: dict[str, Any], running: _Running | None = None) -> MainActor:
     main.name = "main"
     main.actor_id = "main-id"
     main.spawns = SpawnService(main)
+    main.nodes = NodeManager()
+    main.metrics = ActorMetrics()
     setattr(main, "_registry", running or _Running())
     setattr(main, "recall", lambda key, default=None: store.get(key, default))
     setattr(main, "persist", store.__setitem__)
@@ -116,14 +121,14 @@ class TestAnIdAsASpawnSaysIt:
 
 class TestTheRegistry:
     def test_an_entry_from_before_ids_reads_back_with_the_id_it_had(self) -> None:
-        store = {SPAWN_REGISTRY_KEY: {"counter": {"name": "counter", "code": "..."}}}
+        store = {NAME_KEYED_REGISTRY_KEY: {"counter": {"name": "counter", "code": "..."}}}
 
-        entry = _main(store).spawns._get_spawn_registry()["counter"]
+        entry = _main(store).spawns._get_spawn_registry().only("counter")
 
-        assert entry["actor_id"] == derive_actor_id("counter")
+        assert entry is not None and entry["actor_id"] == derive_actor_id("counter")
 
     def test_a_save_keeps_the_id_the_entry_has(self) -> None:
-        store = {SPAWN_REGISTRY_KEY: {"counter": {"name": "counter", "actor_id": MINTED}}}
+        store = {NAME_KEYED_REGISTRY_KEY: {"counter": {"name": "counter", "actor_id": MINTED}}}
         main = _main(store)
 
         # A code update, say, handing over a config read from somewhere else.
@@ -146,7 +151,7 @@ class TestTheRegistry:
         assert main._registered_actor_id("counter") == MINTED
 
     def test_an_agent_deleted_and_spawned_again_is_a_new_one(self) -> None:
-        store = {SPAWN_REGISTRY_KEY: {"counter": {"name": "counter", "actor_id": MINTED}}}
+        store = {NAME_KEYED_REGISTRY_KEY: {"counter": {"name": "counter", "actor_id": MINTED}}}
         main = _main(store)
         main._remove_from_spawn_registry("counter")
 
@@ -157,7 +162,7 @@ class TestTheRegistry:
 
 class TestTheIdASpawnHereRunsUnder:
     def test_the_registry_keeps_it_across_a_restart_or_replace(self) -> None:
-        store = {SPAWN_REGISTRY_KEY: {"counter": {"name": "counter", "actor_id": MINTED}}}
+        store = {NAME_KEYED_REGISTRY_KEY: {"counter": {"name": "counter", "actor_id": MINTED}}}
 
         assert _main(store)._spawn_actor_id("counter", running=None) == MINTED
 
@@ -240,10 +245,13 @@ class TestTheIdOnANode:
         assert nodes.takes_actor_ids("rpi") is says
 
     def test_a_remote_agents_id_is_its_entrys(self) -> None:
-        registry = {"counter": {"name": "counter", "actor_id": MINTED}}
+        registry = SpawnRegistry.from_names(
+            {"counter": {"name": "counter", "node": "rpi", "actor_id": MINTED}}
+        )
 
-        assert remote_actor_id("counter", registry) == MINTED
-        assert remote_actor_id("stranger", registry) == derive_actor_id("stranger")
+        assert remote_actor_id("counter", "rpi", registry) == MINTED
+        assert remote_actor_id("counter", "pc", registry) == derive_actor_id("counter")
+        assert remote_actor_id("stranger", "rpi", registry) == derive_actor_id("stranger")
 
 
 def _remote_main(manifest: dict[str, Any], registry: dict[str, Any] | None = None) -> _Main:
@@ -283,7 +291,7 @@ class TestASpawnOnANode:
 
 class TestAMoveOffMain:
     async def test_the_entry_stays_so_the_agent_keeps_its_id(self) -> None:
-        store = {SPAWN_REGISTRY_KEY: {"helper": {**llm_agent(), "actor_id": MINTED}}}
+        store = {NAME_KEYED_REGISTRY_KEY: {"helper": {**llm_agent(), "actor_id": MINTED}}}
         main = _main(store, _Running(helper=MINTED))
         stopped: list[str] = []
 
@@ -291,11 +299,14 @@ class TestAMoveOffMain:
             stopped.append(name)
 
         setattr(main, "_stop_for_replace", _stop)
-        asked = {**llm_agent(), "replace": True}
 
-        kept, moved = await main.spawns._kept_here(asked, {**asked, "node": "rpi"})
+        settled = await settle(main, {**llm_agent(), "replace": True, "node": "rpi"})
 
-        assert (kept, moved, stopped) == (None, True, ["helper"])
+        assert (settled.refused, settled.moved_from, stopped) == (
+            None,
+            Address("helper", "main"),
+            ["helper"],
+        )
         assert main._registered_actor_id("helper") == MINTED
 
 
@@ -325,8 +336,8 @@ class _NodeHost:
         self.registry = registry
         self.notices: list[dict[str, Any]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         self.notices.append(notice)

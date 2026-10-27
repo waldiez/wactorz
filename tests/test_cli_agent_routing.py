@@ -25,6 +25,7 @@ from wactorz.agents.main import MainActor
 from wactorz.agents.main.addresses import resolve_address, task_refusal, task_topic_for
 from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import DeployTarget
 from wactorz.core.actor import ActorMetrics
 from wactorz.core.addresses import Address, Resolution
@@ -62,8 +63,8 @@ class _Main:
         #: Started long ago: only the node table says where an agent is.
         self.metrics = ActorMetrics(start_time=0.0)
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
     def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
         # As main's: the real lookup, over this registry and node table.

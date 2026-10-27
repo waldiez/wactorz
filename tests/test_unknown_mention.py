@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.addresses import Address
 from wactorz.core.registry import ActorRegistry
 from wactorz.web import chat, runtime
@@ -84,7 +85,7 @@ def _main_with_nodes(
             if name in info["agents"] and speaks_for(node, name)
         ],
     )
-    main.spawns = SimpleNamespace(_get_spawn_registry=lambda: registry)
+    main.spawns = SimpleNamespace(_get_spawn_registry=lambda: SpawnRegistry.from_names(registry))
     main.metrics = SimpleNamespace(start_time=time.time() - 3600 if started is None else started)
     return main
 

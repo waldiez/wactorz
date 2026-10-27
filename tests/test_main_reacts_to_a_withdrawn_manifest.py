@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main.lifecycle import LifecycleService
-from wactorz.agents.main.spawns import with_actor_id
+from wactorz.agents.main.spawn_registry import SpawnRegistry, with_actor_id
 from wactorz.core.actor import derive_actor_id
 
 
@@ -32,11 +32,15 @@ class Host:
         self.desired_state_calls: list[tuple[str, str | None]] = []
         self.persisted: list[tuple[str, Any]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
+    def _get_spawn_registry(self) -> SpawnRegistry:
         # Each entry with its id, as the real registry hands them back.
-        return {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
+        return SpawnRegistry.from_names(
+            {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
+        )
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
         self._spawn_registry.pop(name, None)
 
     def _node_last_listing(self, _name: str) -> str:

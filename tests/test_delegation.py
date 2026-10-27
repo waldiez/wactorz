@@ -27,6 +27,7 @@ from wactorz.agents.main.delegation import DelegationManager
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorMetrics, MessageType
 
 from .node_messages import SignedMessage
@@ -152,7 +153,7 @@ class _Main:
         main._mqtt_port = 1883
         main._result_futures = {}
         setattr(main, "_registry", _Registry(running) if registry else None)
-        setattr(main, "_get_spawn_registry", dict)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
 
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
         self.published: list[tuple[str, Any]] = []
@@ -568,7 +569,11 @@ class TestWhoseReplyIsTheAnswer:
     ) -> None:
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
         main = _Main(known_nodes={"sandbox": {"agents": ["sensor"]}})
-        setattr(main.actor, "_get_spawn_registry", lambda: {"sensor": {"node": "rpi"}})
+        setattr(
+            main.actor,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names({"sensor": {"node": "rpi"}}),
+        )
 
         assert await main.delegate("sensor", timeout=0.05) is None
         assert not main.published

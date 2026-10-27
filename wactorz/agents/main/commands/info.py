@@ -14,6 +14,7 @@ from ...._version import __version__
 from ....core.artifacts import ArtifactError, ArtifactStore, human_size, summary
 from ....core.compatibility import compatible
 from ....core.paths import resolve_state_dir
+from ..spawn_registry import SpawnRegistry, placed_on
 from .dispatch import Command, CommandContext, Form, command, registry
 from .groups import AGENTS, MODELS, NODES, ORDER, PIPELINES, SYSTEM
 
@@ -389,7 +390,7 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
 
     # 2. Spawn registry — what main intends to have running (persisted)
     spawn_reg = ctx.actor._get_spawn_registry()
-    spawn_names = set(spawn_reg.keys())
+    spawn_names = spawn_reg.names()
 
     # 3. Manifest cache — every agent that has ever announced itself,
     #    including remote ones on other nodes
@@ -415,7 +416,7 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
 def _registry_sections(
     ctx: CommandContext,
     live_user: set[str],
-    spawn_reg: dict[str, Any],
+    spawn_reg: SpawnRegistry,
     spawn_names: set[str],
     manifest_names: set[str],
 ) -> list[str]:
@@ -436,10 +437,8 @@ def _registry_sections(
     lines.append("")
     lines.append("\U0001f4be **Spawn registry** (auto-restore on restart, persisted to disk):")
     if spawn_names:
-        for name in sorted(spawn_names):
-            cfg = spawn_reg.get(name, {})
-            node = cfg.get("node", "").strip() or "local"
-            lines.append(f"    {name}  on {node}")
+        for cfg in sorted(spawn_reg, key=lambda e: (e["name"], placed_on(e))):
+            lines.append(f"    {cfg['name']}  on {placed_on(cfg) or 'local'}")
     else:
         lines.append("    (none)")
 
@@ -460,7 +459,7 @@ def _registry_discrepancies(
     ctx: CommandContext,
     live_names: set[str],
     live_user: set[str],
-    spawn_reg: dict[str, Any],
+    spawn_reg: SpawnRegistry,
     spawn_names: set[str],
     manifest_names: set[str],
     heartbeat_names: set[str],
@@ -475,8 +474,7 @@ def _registry_discrepancies(
         )
     # Spawn registry says local but not live → main thinks it should be running
     for name in sorted(spawn_names - live_names):
-        cfg = spawn_reg.get(name, {})
-        if not cfg.get("node", "").strip():  # local-only check
+        if spawn_reg.at(name, "") is not None:  # local-only check
             issues.append(
                 f"\u26a0\ufe0f  '{name}' is in spawn registry but NOT running locally — start failed or was stopped without cleanup"
             )
@@ -488,8 +486,8 @@ def _registry_discrepancies(
         )
     # In spawn registry as remote, but the node is offline / not heartbeating
     online_nodes = set(ctx.actor.nodes.online_names())
-    for name, cfg in spawn_reg.items():
-        node = cfg.get("node", "").strip()
+    for cfg in spawn_reg:
+        name, node = cfg["name"], placed_on(cfg)
         if node and node not in online_nodes:
             issues.append(
                 f"\u26a0\ufe0f  '{name}' assigned to node '{node}' which is OFFLINE — agent unreachable"

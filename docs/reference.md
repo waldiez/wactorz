@@ -766,6 +766,7 @@ them to main too. A social channel such as Discord runs only the everyday ones
 |---|---|
 | `/agents` | List all known agents with descriptions and schemas |
 | `/agents <keyword>` | Filter agents by capability keyword |
+| `/agents copy <agent> <node>` | Run a second agent of that name, from its config, on another node (alongside) |
 | `/agents delete <agent>` | The same as /delete |
 | `/agents remove <agent>` | The same as /delete |
 | `/agents restart <agent>` | Restart an agent, local or remote, state preserved |

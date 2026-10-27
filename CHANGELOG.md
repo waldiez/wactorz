@@ -74,14 +74,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   refused rather than taken as the bare name. `@` is no longer allowed in the name of a
   new agent or a new node; an agent that already has one keeps it and is still reached
   by its whole name.
+- **Two agents may share a name, one per host.** A spawn naming a node where the name
+  does not run, while it runs on another host, says what it means: `"replace": true`
+  moves the agent there, keeping its id, and `"alongside": true` runs a second agent of
+  the name there, under an id of its own. One that says neither spawns nothing, and the
+  chat says both; before, a spawn onto a node left the first agent running where it was
+  and started another. `/agents copy <agent> <node>` runs a second one from chat, from the
+  first one's config and with none of its state. A spawn, move or copy onto a host that
+  already runs the name is refused, and so is a second agent of a name on a node from
+  before ids were kept, which would give it the first one's id. A move whose spawn is
+  refused puts the agent back where it was. `/agents restart|stop|delete`, `/start`,
+  `/migrate`, `/agents copy`, a `<delete>` block and a delete from the dashboard each act
+  on the one agent named, by its address; a bare name kept on more than one host acts on
+  none and says the addresses. Main keeps each one's manifest, so `/agents` lists both.
+  Main's spawn registry keeps each agent by its id: the
+  registry by name is read once on upgrade, every agent keeping its id, and left as it
+  was. A reset of a name kept in more than one place is still refused.
 
 ### Changed
 
 - **An agent's card says which node it runs on, and two agents may share a name on the dashboard.**
   A card for an agent on a node reads "on <node>", and follows it when it moves. A second
   agent with a name already shown gets a card of its own, each called `name@node`, rather
-  than replacing the first. The dashboard is ready for it; the server lets two agents share
-  a name in a later change. A heartbeat that changes an agent's state now shows on its card
+  than replacing the first. The dashboard is ready for it, and the server lets two agents
+  share a name, one per host (see Added). A heartbeat that changes an agent's state now shows on its card
   at once. The chat's agent picker no longer comes up blank when the agent you were talking
   to is not in the list. After a voice turn moves the chat to the agent spoken to (a
   robot), a reply the server does not name is credited to that agent in the notices and

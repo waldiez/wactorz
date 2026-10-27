@@ -21,6 +21,7 @@ import pytest
 from tests.node_messages import SignedMessage
 from wactorz.agents.main import labels as recorder_module
 from wactorz.agents.main.labels import BOOKS_TOPIC, LabelRecorder
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core import labels as core_labels
 from wactorz.core.actor import ActorState
 from wactorz.core.labels import Labels, vouch
@@ -80,8 +81,8 @@ class _Host:
         self._heartbeats = {node: {"agents": names} for node, names in (heartbeats or {}).items()}
         self.migration = _Moves()
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self._spawns
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self._spawns)
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:

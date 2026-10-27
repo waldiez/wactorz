@@ -51,13 +51,31 @@ for the agent on such a node is refused even by its full address; deploying the 
 lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
 a reset clears by name.
 
+#### Two agents of one name
+
+A name is unique on one host, so two hosts may each run an agent of the same name. A spawn
+naming a node where the name does not run, while it runs on another host, says what it
+means: `"replace": true` moves that agent there, keeping its id, and `"alongside": true`
+runs a second agent of the name there, under an id of its own. A spawn that says neither
+spawns nothing, and you are told both. `/agents copy <agent> <node>` does the second from
+chat: `/agents copy counter pi-kitchen` leaves `counter@main` running and starts
+`counter@pi-kitchen` from the same config, with none of its state.
+
+Two agents of one name on one host would share an address, so a spawn, a move or a copy
+onto a host that already runs the name is refused, and so is a second agent of a name on a
+node from before ids were kept, which would give it the first one's id; deploy that node
+again first. `"replace"` with the name on more than one host does not say which one moves:
+move one with `/migrate <agent>@<node> <node>`. Every command that acts on one agent —
+`/agents restart|stop|delete`, `/start`, `/migrate`, `/agents copy`, a `<delete>` block —
+takes the address, and a bare name kept on more than one host acts on none of them.
+
 #### Memory
 
 After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into `_user_facts`, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.
 
 #### Spawn registry
 
-Every DynamicAgent spawned during the session is saved to the `_spawned_agents` key in SQLite. On restart, MainActor re-spawns every entry so pipelines survive reboots. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.
+Every DynamicAgent spawned during the session is saved to the spawn registry in SQLite, one entry per agent, kept by its id (`_spawned_agents_by_id`). On restart, MainActor re-spawns every entry so pipelines survive reboots. A registry from before entries were kept by id (`_spawned_agents`, by name) is read once and left as it was. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.
 
 #### Commands
 

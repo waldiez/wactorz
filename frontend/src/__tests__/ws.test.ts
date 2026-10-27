@@ -250,6 +250,24 @@ describe("WSClient", () => {
         expect(relayed).toHaveBeenCalledWith("agents/r/chat", {}, "on-pi");
     });
 
+    it("takes a frame type that names something every object has as nothing at all", () => {
+        // The type picks what the frame becomes: one that names an inherited
+        // member (`hasOwnProperty`, `constructor`) must not call it.
+        const c = new WSClient();
+        const chat = vi.fn();
+        c.onChat(chat);
+        c.connect("ws://localhost/ws");
+
+        for (const type of ["hasOwnProperty", "constructor", "toString", "__proto__"]) {
+            expect(() =>
+                ws().emit("message", { data: JSON.stringify({ type, content: "x" }) }),
+            ).not.toThrow();
+        }
+        ws().emit("message", { data: JSON.stringify({ type: "chat", content: "still here" }) });
+
+        expect(chat).toHaveBeenCalledTimes(1);
+    });
+
     it("says which agent a message reached, as the server's turn frame names it", () => {
         const c = new WSClient();
         const reached: unknown[] = [];

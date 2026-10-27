@@ -70,20 +70,24 @@ interface StatePatch {
 /**
  * Frames that only tell the page something, each as the app event it becomes.
  * Emitted rather than handled here: WSClient owns the socket, not the views that
- * decide what follows.
+ * decide what follows. A Map, not an object: the frame's type is the key, and an
+ * object would also answer for what it inherits (`constructor`, `toString`).
  */
-const TOLD: Readonly<Record<string, (data: Record<string, unknown>) => void>> = {
+const TOLD: ReadonlyMap<string, (data: Record<string, unknown>) => void> = new Map([
     // The agent the person's message reached, which a mention can make another
     // than the thread it was typed in.
-    turn: data =>
-        emit("af-turn-reached", {
-            id: asStr(data["id"]),
-            agentId: asStr(data["agent_id"]),
-            name: asStr(data["name"]),
-        }),
+    [
+        "turn",
+        (data: Record<string, unknown>) =>
+            emit("af-turn-reached", {
+                id: asStr(data["id"]),
+                agentId: asStr(data["agent_id"]),
+                name: asStr(data["name"]),
+            }),
+    ],
     // Records the server wrote since the last frame.
-    app_log: data => emit("af-app-log", { entries: asArray(data["entries"]) }),
-};
+    ["app_log", (data: Record<string, unknown>) => emit("af-app-log", { entries: asArray(data["entries"]) })],
+]);
 
 export class WSClient {
     private ws: WebSocket | null = null;
@@ -350,7 +354,7 @@ export class WSClient {
             this._onServerEvent?.(asStr(data["topic"]), data["payload"], asStr(data["thread_id"]));
             return;
         }
-        const told = typeof type === "string" ? TOLD[type] : undefined;
+        const told = typeof type === "string" ? TOLD.get(type) : undefined;
         if (told) {
             told(data);
             return;

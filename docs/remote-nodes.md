@@ -366,9 +366,11 @@ Only for a node main does not know at all, such as one that was down when main
 started, is a withdrawal taken at once. What else a node can publish under
 another agent's topics, such as its status or logs, is taken as given.
 
-That includes tasks. A task on `agents/by-name/<name>/task` reaches the agent of
-that name on whichever node runs it, and any node may publish one, so an agent
-on a node is asked by whoever publishes there, another node included. Its
+That includes tasks. A task on `agents/at/<node>/<name>/task` reaches the agent
+of that name on that node, and one on `agents/by-name/<name>/task`, which nodes
+from before tasks went by node still use, the agent of that name on every node
+that runs it. Any node may publish either, so an agent on a node is asked by
+whoever publishes there, another node included. Its
 `handle_task` should treat the payload as untrusted input, as it would text from
 the web: check what it acts on, and never run or install what a task names.
 
@@ -681,10 +683,13 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/reset_done` | ← runner | The reset done, quoting `request` and naming the agents it cleared (`"cleared": [...]`); a scope the node does not reach into is answered with none. |
 | `nodes/{name}/swap_model` | → runner | Have an agent here serve another version of a model it names, because the pointer its pin follows moved. Payload: `{"agent": "...", "key": "...", "entry": {pinned artifact}, "token": "..."}`. The node fetches the version as it fetched the first, swaps it in place, and keeps the old one if the new one will not load. Signed. |
 | `nodes/{name}/swap_ack` | ← runner | How the swap went, quoting the token: `{"ok": true}` with `from` and `to`, or `{"ok": false, "reason": "..."}`. |
-| `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
+| `nodes/{name}/reply/{id}` | ← runner | Replies to what this node asks main, such as an LLM call. |
+| `agents/at/{name}/{agent}/reply/{id}` | ← runner | The reply to an `agent.send_to()` sent by an agent on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |
 | `agents/{id}/logs` | ← agent | Log messages from `agent.log()` and `agent.alert()`. |
-| `agents/by-name/{name}/task` | → agent | Task addressed to a named agent on any node. Runner routes to local agents by name. Any node may publish one, so its payload is untrusted input. |
+| `agents/at/{name}/+/task` | → agent | A task for an agent on this node, by its name. Any node may publish one, so its payload is untrusted input. The node's manifest says `"tasks_by_node": true`. |
+| `agents/by-name/+/task` | → agent | A task by name alone, from a sender that addresses no node; every node running the name takes it. Untrusted input, as above. |
+| `agents/+/manifest` | → runner | Every agent's retained manifest, read for where agents run, so `agent.send_to("name@node")` from this node reaches the right one. An agent here stamps its own with `"node"` and `"tasks_by_node": true`. |
 
 
 ### Why a repair travels in two steps

@@ -61,13 +61,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `/migrate` all take one; main is the node `main` (or `local`). A bare name works as
   before while one agent has it. When agents on more than one node report the same name,
   nothing is sent to either: a person is told the addresses, and a program is refused
-  with them (`409` from the REST routes). Until tasks are sent to a node rather than to a
-  name, a task for one of those agents is refused even by its full address, since every
-  node running the name would run it; and a reset of such a name is refused, since what
-  it clears is kept by name. An address naming a node the agent is not on is refused
-  rather than taken as the bare name. `@` is no longer allowed in the name of a new agent
-  or a new node; an agent that already has one keeps it and is still reached by its whole
-  name.
+  with them (`409` from the REST routes). A task for an agent on a node goes on that
+  node's own topic, `agents/at/<node>/<name>/task`, so the full address reaches that
+  agent alone, from main or from an agent on another node (which learns where agents
+  run from their retained manifests). A node says it takes tasks there with
+  `"tasks_by_node": true` in its manifest; one from before that is still sent tasks by
+  name, which every node running the name hears, so while another node runs the name a
+  task for it is refused until it is deployed again. An agent whose manifest names no
+  node, as main's own and those on older nodes do, is still sent tasks by name from a
+  node. A reset of a name kept in more than one place is refused,
+  since what it clears is kept by name. An address naming a node the agent is not on is
+  refused rather than taken as the bare name. `@` is no longer allowed in the name of a
+  new agent or a new node; an agent that already has one keeps it and is still reached
+  by its whole name.
 
 ### Changed
 

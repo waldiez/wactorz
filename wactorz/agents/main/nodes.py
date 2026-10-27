@@ -585,6 +585,17 @@ class NodeManager:
         manifest = self.node_manifests.get(node_name) or {}
         return manifest.get("code_bundles") is True
 
+    def takes_tasks_by_node(self, node_name: str) -> bool | None:
+        """Whether `node_name` takes a task on its own topic, ``agents/at/<node>/<name>/task``.
+
+        From its manifest; a node from a release before that takes tasks only by
+        name. None while no manifest has arrived, as for `takes_actor_ids`.
+        """
+        manifest = self.node_manifests.get(node_name)
+        if manifest is None:
+            return None
+        return manifest.get("tasks_by_node") is True
+
     def takes_actor_ids(self, node_name: str) -> bool | None:
         """Whether `node_name` runs an agent under the id its spawn names.
 

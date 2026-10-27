@@ -313,7 +313,7 @@ async def show_mqtt_status(ctx: CommandContext, _argument: str) -> str:
         f"  client_id   : {client_id}",
         f"  queue_depth : {queue_depth} message(s) pending",
         f"  outbox_db   : {db_path}",
-        "  QoS 1 topics: nodes/*, agents/by-name/*",
+        "  QoS 1 topics: nodes/*, agents/at/*, agents/by-name/*",
         "  QoS 0 topics: */logs, */metrics, */status, */heartbeat",
     ]
     if queue_depth > 0:

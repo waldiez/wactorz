@@ -621,7 +621,7 @@ async def _route_chat(
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
                         await main_actor._mqtt_publish(
-                            f"agents/by-name/{target_name}/task",
+                            main_actor.task_topic_for(Address(target_name, remote_node)),
                             payload,
                         )
                         logger.info(

@@ -214,9 +214,12 @@ class TestOnlyTheControlPlanePays:
         assert _rows(pub._db_path) == 0, "telemetry is forced to QoS 0 before the outbox"
         assert pub.queue_depth == 1
 
-    async def test_a_nodes_topic_is_forced_into_it(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "topic", ["nodes/alpha/spawn", "agents/at/alpha/lights/task", "agents/by-name/lights/task"]
+    )
+    async def test_a_control_topic_is_forced_into_it(self, tmp_path: Path, topic: str) -> None:
         pub = _ready(tmp_path)
 
-        await pub.publish("nodes/alpha/spawn", "payload", qos=0)
+        await pub.publish(topic, "payload", qos=0)
 
         assert _rows(pub._db_path) == 1, "the control plane is upgraded to QoS 1"

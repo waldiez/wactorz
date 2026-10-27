@@ -167,6 +167,7 @@ MANIFEST_FIELDS = frozenset(
         "resets",
         # That an agent runs under the id its spawn names.
         "actor_ids",
+        "tasks_by_node",
     }
 )
 

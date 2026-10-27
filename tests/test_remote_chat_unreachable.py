@@ -7,6 +7,7 @@ is no traceback of the code that found the broker gone.
 """
 
 import logging
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -41,6 +42,7 @@ def said_fixture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         nodes=SimpleNamespace(refuses_tasks=lambda _node: None),
         # No other node runs the name, so the task can go.
         task_refusal=lambda _address: None,
+        task_topic_for=lambda address: f"agents/at/{address.node}/{address.name}/task",
     )
     registry = SimpleNamespace(find_by_name=lambda _name: None)
     monkeypatch.setattr(runtime, "registry", registry)
@@ -112,3 +114,41 @@ async def test_the_reply_is_read_over_mqtt_5(
     await _ask(said)
 
     assert connected[0]["protocol"] == aiomqtt.ProtocolVersion.V5
+
+
+class _QuietBroker:
+    """A connection that subscribes and then hears nothing."""
+
+    async def __aenter__(self) -> "_QuietBroker":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def subscribe(self, _topic: str, **_kwargs: Any) -> None:
+        return None
+
+    @property
+    def messages(self) -> AsyncIterator[Any]:
+        return self._none()
+
+    async def _none(self) -> AsyncIterator[Any]:
+        return
+        yield
+
+
+async def test_the_task_goes_on_the_topic_main_picks_for_the_node(
+    said: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: list[str] = []
+
+    async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+        published.append(topic)
+
+    main = chat.find_main_actor(None)
+    monkeypatch.setattr(main, "_mqtt_publish", _publish, raising=False)
+    monkeypatch.setattr(chat, "mqtt_client", lambda *_a, **_k: _QuietBroker())
+
+    await _ask(said)
+
+    assert published == ["agents/at/edge/counter/task"]

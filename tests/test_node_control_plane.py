@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from wactorz.core import mqtt as core_mqtt
+from wactorz.core.addresses import Address
 from wactorz.node import runner as runner_mod
 from wactorz.node.runner import NodeRunner
 
@@ -92,6 +93,17 @@ class TestEveryControlTopicReachesItsHandler:
         seen: list[str] = []
         _all_recorded(runner, seen)
         topic = "agents/by-name/collector/task"
+
+        await runner._dispatch_control(topic, {}, _Message(topic))
+
+        assert seen == ["_on_task"]
+
+    async def test_a_task_on_this_nodes_own_topic_goes_to_the_task_handler(
+        self, runner: NodeRunner
+    ) -> None:
+        seen: list[str] = []
+        _all_recorded(runner, seen)
+        topic = "agents/at/rpi/collector/task"
 
         await runner._dispatch_control(topic, {}, _Message(topic))
 
@@ -207,8 +219,23 @@ class TestTheControlConnection:
             "nodes/rpi/swap_model",
             "nodes/rpi/reply/#",
             "nodes/rpi/blob/+",
+            "agents/at/rpi/+/task",
             "agents/by-name/+/task",
+            "agents/+/manifest",
         }
+
+    async def test_an_agents_manifest_tells_the_directory_and_reaches_no_handler(
+        self, runner: NodeRunner, broker: Any
+    ) -> None:
+        seen: list[str] = []
+        _all_recorded(runner, seen)
+        manifest = b'{"name": "counter", "node": "pc", "tasks_by_node": true}'
+        fake = broker(_Message("agents/c0ffee/manifest", manifest))
+
+        await _drive(runner, fake)
+
+        assert seen == []
+        assert runner.directory.resolve("counter").found == Address("counter", "pc")
 
     async def test_a_message_reaches_its_handler_decoded(
         self, runner: NodeRunner, broker: Any

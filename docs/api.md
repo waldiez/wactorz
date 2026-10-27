@@ -195,8 +195,8 @@ address, `name@node` (see [Addressing an agent](agents.md#addressing-an-agent)).
 ```
 
 `404` when no agent has the name; `409` when agents on more than one node have it, with an
-`error` that lists their addresses, and when the address names one of them (a task for one
-still reaches every node running the name; see
+`error` that lists their addresses, and when the address names one of them on a node from
+before tasks went by node, which would share the task with the others (see
 [Addressing an agent](agents.md#addressing-an-agent)).
 
 The reply is delivered asynchronously over MQTT (`agents/{id}/chat`) and via the `/ws` WebSocket bridge.

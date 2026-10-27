@@ -84,7 +84,8 @@ class MQTTPublisher:
     # Topics that must use QoS 1 regardless of caller setting
     _CRITICAL_TOPIC_PREFIXES = (
         "nodes/",  # spawn, stop, desired_state
-        "agents/by-name/",  # task routing
+        "agents/by-name/",  # tasks by name, and replies to them
+        "agents/at/",  # tasks by node, and replies to them
     )
     # Topics that are purely telemetry — always QoS 0 to avoid queue bloat
     _TELEMETRY_TOPIC_SUFFIXES = (
@@ -267,7 +268,7 @@ class MQTTPublisher:
         succeeds — and each used to open, write, commit and close its own
         connection. On the SD card a Raspberry Pi runs from, that cycle measures
         ~16ms, and it is paid on the control plane rather than on telemetry:
-        `nodes/` and `agents/by-name/` are forced up to QoS 1 in `publish`, so
+        `nodes/` and the task topics are forced up to QoS 1 in `publish`, so
         every spawn, stop and migration ack stops every actor in the process for
         that long, MQTT keepalive included.
 
@@ -349,9 +350,11 @@ class MQTTPublisher:
         rules: list[tuple[str, str, float, str]] = [
             (
                 "SELECT topic, COUNT(*) FROM outbox WHERE retain = 0 AND ts < ?"
-                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%') GROUP BY topic",
+                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%'"
+                " OR topic LIKE 'agents/at/%') GROUP BY topic",
                 "DELETE FROM outbox WHERE retain = 0 AND ts < ?"
-                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%')",
+                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%'"
+                " OR topic LIKE 'agents/at/%')",
                 now - self.COMMAND_EXPIRY_S,
                 f"{self.COMMAND_EXPIRY_S / 60:g} minutes",
             )

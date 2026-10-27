@@ -76,6 +76,8 @@ def _main_with_nodes(
     main.nodes = SimpleNamespace(
         known=nodes,
         speaks_for=speaks_for,
+        # No manifest has arrived: tasks go by name.
+        takes_tasks_by_node=lambda _node: None,
         nodes_for=lambda name: [
             node
             for node, info in nodes.items()
@@ -236,7 +238,7 @@ class TestANameTwoNodesShare:
         destination = chat.destination_of("@counter@pc five")
 
         assert destination.kind == "unrouted"
-        assert "reaches every node that runs the name" in destination.refusal
+        assert "takes a task only by name" in destination.refusal
         assert chat.turn_attribution("@counter@pc five", "main") == "main"
 
     def test_the_full_address_of_the_only_one_goes_to_that_node(self) -> None:
@@ -321,7 +323,7 @@ class TestThePostedMessage:
         )
 
         assert response.status == 409
-        assert "reaches every node that runs the name" in json.loads(response.body)["error"]
+        assert "takes a task only by name" in json.loads(response.body)["error"]
         assert routed == []
 
     async def test_an_agent_on_a_node_is_sent_its_whole_address(

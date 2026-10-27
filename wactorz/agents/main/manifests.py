@@ -48,7 +48,7 @@ OBSERVED_TOPIC_PATTERNS = ("agents/+/data/#", "custom/#", "sensors/#")
 
 #: Traffic that is machinery rather than data. Recording it would teach the
 #: planner that an agent publishes spawn commands.
-INTERNAL_TOPIC_PREFIXES = ("agents/by-name", "nodes/", "main/")
+INTERNAL_TOPIC_PREFIXES = ("agents/by-name/", "agents/at/", "nodes/", "main/")
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0

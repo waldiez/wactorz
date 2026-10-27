@@ -23,7 +23,7 @@ import pytest
 from wactorz.agents.dynamic import messaging
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
-from wactorz.agents.main.addresses import resolve_address, task_refusal
+from wactorz.agents.main.addresses import resolve_address, task_refusal, task_topic_for
 from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.core import actor as actor_module
@@ -75,6 +75,9 @@ class _Main:
 
     def task_refusal(self, address: Address) -> str | None:
         return task_refusal(cast(AddressHost, self), address)
+
+    def task_topic_for(self, address: Address) -> str:
+        return task_topic_for(cast(AddressHost, self), address)
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
@@ -455,8 +458,20 @@ class TestSendToRemote:
         result = await api.send_to("counter@pc", {})
 
         assert result is not None
-        assert "reaches every node that runs the name" in result["error"]
+        assert "takes a task only by name" in result["error"]
         assert broker.published == []
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main({"rpi": {"agents": ["counter"]}, "pc": {"agents": ["counter"]}})
+        main.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+        monkeypatch.setattr(messaging, "find_main_actor", lambda _registry: main)
+
+        await api.send_to("counter@pc", {}, timeout=0.05)
+
+        assert len(broker.on("agents/at/pc/counter/task")) == 1
+        assert broker.on("agents/by-name/counter/task") == []
 
     async def test_without_an_orchestrator_the_agent_is_not_found(
         self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
@@ -479,7 +494,7 @@ class TestSendToRemote:
         assert task["message"] == "snap"
         assert task["_remote_task"] is True
         assert client.subscribed == [task["_reply_topic"]]
-        assert task["_reply_topic"].startswith("agents/by-name/probe/reply/")
+        assert task["_reply_topic"].startswith("agents/at/main/probe/reply/")
         assert api._actor._result_futures == {}
 
     async def test_the_reply_is_read_over_mqtt_5(

@@ -30,7 +30,7 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
-from .addresses import resolve_address, task_refusal
+from .addresses import resolve_address, task_refusal, task_topic_for
 from .artifact_service import ArtifactService
 from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
@@ -1307,8 +1307,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return resolve_address(self, wanted, heard_within=heard_within)
 
     def task_refusal(self, address: Address) -> str | None:
-        """Why a task for the agent at ``address`` cannot be sent yet: see `addresses`."""
+        """Why a task for the agent at ``address`` cannot be sent: see `addresses`."""
         return task_refusal(self, address)
+
+    def task_topic_for(self, address: Address) -> str:
+        """The topic a task for the agent at ``address``, on a node, goes on: see `addresses`."""
+        return task_topic_for(self, address)
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Return all known remote nodes with their last-seen time, running agents, and system metrics."""

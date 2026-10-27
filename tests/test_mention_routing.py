@@ -341,8 +341,18 @@ class TestANameTwoNodesShare:
 
         answer = await main.ask("@sensor@pc status")
 
-        assert "reaches every node that runs the name" in answer
+        assert "takes a task only by name" in answer
         assert not main.published
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(self) -> None:
+        main = _Main(
+            nodes={"rpi": node("sensor"), "pc": node("sensor")}, remote_answer={"result": "on"}
+        )
+        main.actor.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+
+        assert await main.ask("@sensor@pc status") == "**sensor** (on pc): on"
+        topic, _payload = main.published[0]
+        assert topic == "agents/at/pc/sensor/task"
 
     async def test_the_full_address_of_the_only_one_reaches_it(self) -> None:
         main = _Main(nodes={"pc": node("sensor")}, remote_answer={"result": "on"})

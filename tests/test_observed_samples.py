@@ -211,7 +211,13 @@ class TestWhatItSkips:
     """Each skip is a different kind of thing that is not a data sample."""
 
     @pytest.mark.parametrize(
-        "topic", ["agents/by-name/weather/task", "nodes/rpi/spawn", "main/llm_request"]
+        "topic",
+        [
+            "agents/by-name/weather/task",
+            "agents/at/rpi/weather/task",
+            "nodes/rpi/spawn",
+            "main/llm_request",
+        ],
     )
     async def test_internal_topics_are_not_samples(
         self, monkeypatch: pytest.MonkeyPatch, topic: str

@@ -297,7 +297,7 @@ class TestChoosingWhereTheTaskGoes:
         answer = await main.delegate("sensor@pc")
 
         assert answer is not None
-        assert "reaches every node that runs the name" in answer["error"]
+        assert "takes a task only by name" in answer["error"]
         assert not main.published
 
     async def test_the_full_address_of_the_only_one_reaches_it(
@@ -310,6 +310,19 @@ class TestChoosingWhereTheTaskGoes:
 
         topic, _payload = main.published[0]
         assert topic == "agents/by-name/sensor/task"
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two nodes run the name, and pc is reached alone on its own topic.
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+        main.actor.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.delegate("sensor@pc", timeout=0.05)
+
+        topic, _payload = main.published[0]
+        assert topic == "agents/at/pc/sensor/task"
 
     async def test_an_agent_nobody_knows_answers_nothing(self) -> None:
         main = _Main()

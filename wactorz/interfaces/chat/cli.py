@@ -183,7 +183,7 @@ class CLIInterface:
         await asyncio.sleep(0.15)  # let subscriber connect first
 
         await main._mqtt_publish(
-            f"agents/by-name/{agent_name}/task",
+            main.task_topic_for(Address(agent_name, remote_node)),
             {
                 "text": message,
                 "payload": message,

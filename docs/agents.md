@@ -44,9 +44,12 @@ them. Main never picks one. The same address works in the terminal chat and in
 `/agents restart|stop|delete`, `/start` and `/migrate`, and one naming a node the agent is
 not on is refused. `@` is not allowed in a new agent's name or a new node's name.
 
-For now a task for an agent on a node is sent to its name, and every node running that name
-receives it. So while more than one node runs a name, a task for one of them is refused even
-by its full address, and so is a reset of that name, whose records main keeps by name.
+A task for an agent on a node goes on that node's own topic, `agents/at/<node>/<name>/task`,
+so it reaches that agent alone. A node from before that takes tasks only by name, and every
+node running the name hears a task sent by name, so while another node runs the name, a task
+for the agent on such a node is refused even by its full address; deploying the node again
+lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
+a reset clears by name.
 
 #### Memory
 
@@ -430,7 +433,7 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `async def process(agent)` | Every `poll_interval` seconds | For periodic work. Timeout: 120s per call. Only started after `setup()` returns (or immediately if no setup). |
 | `async def handle_task(agent, payload)` | On every inbound TASK message | Must return a dict. Timeout: 60s per call. Used for command/response interactions. |
 
-> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
+> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, on its node's topic (`agents/at/<node>/<name>/task`) or by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
 
 #### Agent API (`agent` object inside generated code)
 

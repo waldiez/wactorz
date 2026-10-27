@@ -13,6 +13,7 @@ import time
 from typing import TYPE_CHECKING
 
 from ...core.addresses import MAIN_NODE, Address, Resolution, node_of, parse, resolve
+from ...core.topics import task_by_name_topic, task_topic
 from .voices import placed_node
 
 if TYPE_CHECKING:
@@ -63,24 +64,37 @@ def resolve_address(
     return resolve(wanted, known)
 
 
-def task_refusal(host: AddressHost, address: Address) -> str | None:
-    """Why a task for the agent at ``address`` cannot be sent yet, or None if it can.
+def task_topic_for(host: AddressHost, address: Address) -> str:
+    """The topic a task for the agent at ``address``, on a node, goes on.
 
-    A task for an agent on a node goes on ``agents/by-name/<name>/task``, which
-    every node subscribes to, and each node runs its own agent of that name.
-    While more than one node runs the name, a task meant for one of them would
-    run on all of them, so none is sent. An agent in main's own process is
-    asked in-process and is never affected.
+    Its node's own, ``agents/at/<node>/<name>/task``, when the node's manifest
+    says it takes tasks there. Otherwise by name, as a node from before that
+    takes them -- and as one whose manifest has not arrived yet is taken to,
+    rather than holding the task until it does.
     """
-    if address.node in ("", MAIN_NODE):
+    if host.nodes.takes_tasks_by_node(address.node):
+        return task_topic(address.node, address.name)
+    return task_by_name_topic(address.name)
+
+
+def task_refusal(host: AddressHost, address: Address) -> str | None:
+    """Why a task for the agent at ``address`` cannot be sent, or None if it can.
+
+    A task that goes by name (see `task_topic_for`) reaches every node that
+    runs the name, each of which runs its own agent of that name -- a node on
+    a later release hears by name as well. So one is sent only while no other
+    node runs the name. An agent in main's own process is asked in-process, and
+    one whose node takes tasks on its own topic is reached alone.
+    """
+    if address.node in ("", MAIN_NODE) or host.nodes.takes_tasks_by_node(address.node):
         return None
     nodes = sorted({a.node for a in known_addresses(host, address.name)} - {MAIN_NODE})
     if len(nodes) <= 1:
         return None
     return (
-        f"Agents called '{address.name}' run on nodes {' and '.join(nodes)}, and a task for "
-        f"one of them still reaches every node that runs the name, so nothing was sent to "
-        f"{address}."
+        f"Agents called '{address.name}' run on nodes {' and '.join(nodes)}, and node "
+        f"'{address.node}' takes a task only by name, which every one of them would run, "
+        f"so nothing was sent to {address}. Deploy '{address.node}' again to address it alone."
     )
 
 

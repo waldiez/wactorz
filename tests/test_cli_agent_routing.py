@@ -22,7 +22,7 @@ import pytest
 
 from wactorz import config
 from wactorz.agents.main import MainActor
-from wactorz.agents.main.addresses import resolve_address, task_refusal
+from wactorz.agents.main.addresses import resolve_address, task_refusal, task_topic_for
 from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.config import DeployTarget
@@ -71,6 +71,9 @@ class _Main:
 
     def task_refusal(self, address: Address) -> str | None:
         return task_refusal(cast(AddressHost, self), address)
+
+    def task_topic_for(self, address: Address) -> str:
+        return task_topic_for(cast(AddressHost, self), address)
 
     @property
     def _known_nodes(self) -> dict[str, Any]:
@@ -264,6 +267,19 @@ class TestRemoteAgents:
         (topic, task) = main.published[0]
         assert topic == "agents/by-name/cam/task"
         assert client.subscribed == [task["_reply_topic"]]
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, monkeypatch: pytest.MonkeyPatch, quick: None
+    ) -> None:
+        main = _Main()
+        main._known_nodes = {"rpi": {"agents": ["cam"]}}
+        main.nodes.node_manifests = {"rpi": {"tasks_by_node": True}}
+        monkeypatch.setattr(cli, "mqtt_client", _Client(b"{}"))
+
+        await _cli(main)._get_remote_agent_response("cam", "snap", "rpi")
+
+        (topic, _task) = main.published[0]
+        assert topic == "agents/at/rpi/cam/task"
 
     async def test_the_reply_is_read_over_mqtt_5(
         self, monkeypatch: pytest.MonkeyPatch, quick: None

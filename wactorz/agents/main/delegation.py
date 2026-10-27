@@ -29,7 +29,7 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...core.actor import ReplyError, ask_through
-from ...core.addresses import MAIN_NODE, parse
+from ...core.addresses import MAIN_NODE, Address, parse
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -276,7 +276,7 @@ class DelegationManager:
 
         async with self._reply_topic(remote_node) as (reply_topic, future):
             await self.host._mqtt_publish(
-                f"agents/by-name/{target_name}/task",
+                self.host.task_topic_for(Address(target_name, remote_node)),
                 {**remote, "_reply_topic": reply_topic, "_remote_task": True},
             )
             try:
@@ -586,7 +586,7 @@ class DelegationManager:
             return f"{target_name} was not asked: {refusal}."
         async with self._reply_topic(node) as (reply_topic, future):
             await self.host._mqtt_publish(
-                f"agents/by-name/{target_name}/task",
+                self.host.task_topic_for(Address(target_name, node)),
                 {
                     "text": message,
                     "_reply_topic": reply_topic,

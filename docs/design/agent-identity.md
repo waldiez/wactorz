@@ -205,10 +205,13 @@ Each step is a branch of its own, in this order:
    agents and the nodes' heartbeats (`wactorz.core.addresses`,
    `wactorz.agents.main.addresses`) that every way of naming an agent goes through, and
    `@` refused in new agent and node names. Until the dashboard's branch, a person is
-   told the addresses in a plain reply rather than offered them to pick. Until tasks
-   go by node, a task for one of several nodes running a name is refused even by its
-   address, since every one of them would run it, and so is a reset of a name kept in
-   more than one place. Then the task topic by node, then `alongside` with the spawn
+   told the addresses in a plain reply rather than offered them to pick. A reset of a
+   name kept in more than one place is refused, since what it clears is kept by name.
+   The task topic by node is built: a node says `tasks_by_node` in its manifest, main
+   sends it tasks on `agents/at/<node>/<name>/task`, and an agent on a node finds the
+   others from their retained manifests, which each agent on a node stamps with its
+   node. A node not yet known to take them is still sent tasks by name, and a task
+   for it is refused while another node runs the name. Then `alongside` with the spawn
    registry keyed by id, then the dashboard.
 5. **Namespaces.** Topics built in one place, then the prefix, the access list, the
    node's deploy environment, the heartbeat check and the second-install notice.

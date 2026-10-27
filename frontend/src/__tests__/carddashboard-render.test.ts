@@ -3,137 +3,70 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { CardDashboard } from "../ui/CardDashboard";
+import { emit } from "../events";
+import type { CardDashboard } from "../ui/CardDashboard";
 import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
-import type { AgentInfo, ChatMessage } from "../types/agent";
+import { agent, buildDashboard, cardOf, goTo, openDashboard, pressView, shownView } from "./dashboard";
+import { allByRole, byRole, byTestId } from "./queries";
 
-// Characterization tests: they pin CardDashboard's observable render behaviour
-// (view containers, card structure, builders) so the upcoming module split can
-// be proven behaviour-preserving. They assert on stable structural anchors
-// rather than exact HTML.
+// What the dashboard puts on screen: its root, each view, the cards. Checked
+// by role, name and test id, so the views can be reorganised freely as long as
+// what a person finds on them stays.
 
-function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
-    return { id: name, name, state: "running", protected: false, ...over };
-}
+let dashboard: CardDashboard;
 
-function chatMsg(over: Partial<ChatMessage> = {}): ChatMessage {
-    return { id: "m1", from: "main", to: "user", content: "**hi**", timestampMs: 1_700_000_000_000, ...over };
-}
+beforeEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
+    history.replaceState(null, "", "#");
+});
+
+afterEach(() => {
+    dashboard?.destroy();
+});
 
 describe("CardDashboard render", () => {
-    let cd: any;
-
-    beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        cd = new CardDashboard() as any;
+    it("builds its root into the page, hidden until shown", () => {
+        ({ dashboard } = buildDashboard());
+        const root = document.getElementById("card-dashboard")!;
+        expect(root).toBeTruthy();
+        expect(root.classList.contains("cd-visible")).toBe(false);
+        dashboard.show();
+        expect(root.classList.contains("cd-visible")).toBe(true);
     });
 
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
-    });
-
-    it("moves an agent between the nodes panel's rows when it moves", () => {
-        // The store changes the agent it already holds and hands the same object
-        // back, so only the dashboard's own note of where it was can tell.
-        cd.show([]);
-        const moving = agent("counter", { node: "edge" });
-        cd.addAgent(moving);
-        const localRow = (): string =>
-            cd.root.querySelector("#af-node-list .af-node-item .af-node-meta")!.textContent;
-        expect(localRow()).not.toContain("counter");
-
-        moving.node = "";
-        cd.updateAgent(moving);
-
-        expect(localRow()).toContain("counter");
-    });
-
-    it("places an agent that moved while another view showed once the overview is back", () => {
-        cd.show([]);
-        const moving = agent("counter", { node: "edge" });
-        cd.addAgent(moving);
-        cd._setView("chat");
-
-        moving.node = "";
-        cd.updateAgent(moving);
-        cd._setView("overview");
-
-        expect(cd.root.querySelector("#af-node-list .af-node-item .af-node-meta")!.textContent).toContain(
-            "counter",
-        );
-    });
-
-    it("places an agent that moved while the dashboard was hidden once it is shown", () => {
-        const moving = agent("counter", { node: "edge" });
-        cd.addAgent(moving);
-
-        moving.node = "";
-        cd.updateAgent(moving);
-        cd.show([moving]);
-
-        expect(cd.root.querySelector("#af-node-list .af-node-item .af-node-meta")!.textContent).toContain(
-            "counter",
-        );
-    });
-
-    it("builds and mounts the root", () => {
-        expect(cd.root).toBeTruthy();
-        expect(cd.root.id).toBe("card-dashboard");
-        expect(cd.root.classList.contains("cd-root")).toBe(true);
-        expect(document.getElementById("card-dashboard")).toBe(cd.root);
-    });
-
-    it("show() makes the dashboard visible and renders agent cards", () => {
-        cd.show([agent("main"), agent("catalog")]);
-        expect(cd.root.classList.contains("cd-visible")).toBe(true);
-        const cards = cd.root.querySelectorAll(".af-card");
-        expect(cards.length).toBe(2);
-        expect(cd.root.textContent).toContain("catalog");
+    it("draws a card for each agent the store holds when shown", () => {
+        ({ dashboard } = openDashboard([agent("main"), agent("catalog")]));
+        expect(allByRole(byRole(document, "list", "Agents"), "listitem")).toHaveLength(2);
+        expect(cardOf("catalog").textContent).toContain("catalog");
     });
 
     it.each([
-        ["overview", ".af-overview"],
-        ["chat", ".af-chat-thread"],
-        ["feed", ".af-feed"],
-        ["settings", ".af-settings"],
-    ])("renders the %s view", (view, selector) => {
-        cd.show([agent("main")]);
-        cd._setView(view);
-        expect(cd.view).toBe(view);
-        expect(cd.root.querySelector(selector)).toBeTruthy();
+        ["overview", () => byRole(document, "list", "Agents")],
+        ["chat", () => byRole(document, "log", "Conversation")],
+        ["feed", () => byTestId(document, "view-feed")],
+        ["settings", () => byTestId(document, "view-settings")],
+    ])("renders the %s view", (view, landmark) => {
+        ({ dashboard } = openDashboard([agent("main")]));
+        goTo(view);
+        expect(shownView()).toBe(view);
+        expect(landmark()).toBeTruthy();
     });
 
-    it("overview builds a wactor card with the agent name", () => {
-        const card = cd._overview._buildCard(agent("alpha"));
-        expect(card.classList.contains("af-card")).toBe(true);
-        expect(card.querySelector(".af-card-name")?.textContent).toContain("alpha");
+    it("the chat view has the agents to talk to beside the conversation", () => {
+        ({ dashboard } = openDashboard([agent("main")]));
+        goTo("chat");
+        expect(byTestId(document, "chat-agent-list")).toBeTruthy();
+        expect(byRole(document, "log", "Conversation")).toBeTruthy();
     });
 
-    it("overview build includes the host bar and stats grid", () => {
-        cd.show([agent("main")]);
-        const ov = cd._overview.build();
-        expect(ov.querySelector(".af-host-bar")).toBeTruthy();
-        expect(ov.querySelector(".af-stats-grid")).toBeTruthy();
-    });
-
-    it("_buildChatView includes a thread and a sidebar", () => {
-        cd.show([agent("main")]);
-        const chat = cd._chat.buildChatView();
-        expect(chat.querySelector(".af-chat-thread")).toBeTruthy();
-        expect(chat.querySelector(".af-chat-sidebar")).toBeTruthy();
-    });
-
-    it("_appendChatMsgEl renders a markdown bubble", () => {
-        const container = document.createElement("div");
-        cd._chat._appendChatMsgEl(chatMsg({ content: "**bold**" }), container);
-        const bubble = container.querySelector(".af-chat-msg-bubble");
-        expect(bubble).toBeTruthy();
-        expect(bubble!.innerHTML).toContain("<strong>");
+    it("renders an agent's message as markdown", () => {
+        ({ dashboard } = openDashboard([agent("main")]));
+        goTo("chat", "main");
+        emit("af-chat-message", {
+            msg: { id: "m1", from: "main", to: "user", content: "**bold**", timestampMs: 1_700_000_000_000 },
+        });
+        expect(byRole(document, "log", "Conversation").querySelector("strong")?.textContent).toBe("bold");
     });
 
     it("builds the audio and reset popovers without throwing", () => {
@@ -143,59 +76,29 @@ describe("CardDashboard render", () => {
         expect(() => buildResetPopover()).not.toThrow();
     });
 
-    it("builds the settings view with the cost-limit section", () => {
-        const settings = cd._buildSettingsView();
-        expect(settings.classList.contains("af-settings")).toBe(true);
-        // Only the spend-limit section remains (HA config was removed).
-        expect(settings.querySelectorAll(".af-settings-section").length).toBe(1);
+    it("takes the totals and the host's readings", () => {
+        ({ dashboard } = openDashboard([agent("main")]));
+        dashboard.setHostStats(42, 1024, 4096);
+        dashboard.setTotalCostUsd(1.23);
+        dashboard.setTotalMessages(99);
+        dashboard.renderView();
+        expect(document.body.textContent).toContain("$1.2300");
+        expect(document.body.textContent).toContain("99");
     });
 
-    it("addAgent / updateAgent / removeAgent keep the agents map in sync", () => {
-        cd.show([agent("main")]);
-        cd.addAgent(agent("beta"));
-        expect(cd.agents.has("beta")).toBe(true);
-        cd.updateAgent(agent("beta", { state: "stopped" }));
-        expect(cd.agents.get("beta").state).toBe("stopped");
-        cd.removeAgent("beta");
-        expect(cd.agents.has("beta")).toBe(false);
+    it("renderView rebuilds the view that is open", () => {
+        ({ dashboard } = openDashboard([agent("A")]));
+        byTestId(document, "view-overview").remove();
+        dashboard.renderView();
+        expect(shownView()).toBe("overview");
     });
 
-    it("setHostStats / setTotalCostUsd / setTotalMessages do not throw", () => {
-        cd.show([agent("main")]);
-        expect(() => {
-            cd.setHostStats(42, 1024, 4096);
-            cd.setTotalCostUsd(1.23);
-            cd.setTotalMessages(99);
-        }).not.toThrow();
-    });
-
-    it("onChat / showAlert / onHeartbeat do not throw", () => {
-        cd.show([agent("main")]);
-        expect(() => {
-            cd.onChat("main", "user");
-            cd.showAlert("main", "error");
-            cd.onHeartbeat("main", Date.now());
-        }).not.toThrow();
-    });
-
-    it("renderView rebuilds the active view body", () => {
-        cd.show([agent("A")]);
-        const body = cd.root.querySelector(".af-body")!;
-        body.innerHTML = "";
-        cd.renderView();
-        // Body was cleared and rebuilt — should contain overview content.
-        expect(body.children.length).toBeGreaterThan(0);
-    });
-
-    it("registerView adds a nav button and view builder", () => {
-        cd.show([agent("A")]);
-        const el = document.createElement("div");
-        el.textContent = "custom-view";
-        cd.registerView("custom", "hexagon", "Custom", () => el);
-        expect(cd.root.querySelector('[data-view="custom"]')).not.toBeNull();
-        // Switch to the registered view — builder is called.
-        cd.view = "custom";
-        cd.renderView();
-        expect(cd.root.textContent).toContain("custom-view");
+    it("registerView adds a nav button that opens the view", () => {
+        ({ dashboard } = openDashboard([agent("A")]));
+        const content = document.createElement("div");
+        content.textContent = "custom-view";
+        dashboard.registerView("custom", "hexagon", "Custom", () => content);
+        pressView("Custom");
+        expect(document.body.textContent).toContain("custom-view");
     });
 });

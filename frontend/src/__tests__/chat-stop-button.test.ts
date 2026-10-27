@@ -3,7 +3,8 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { CardDashboard } from "../ui/CardDashboard";
+import { buildDashboard } from "./dashboard";
+import { byRole } from "./queries";
 
 // The stop button (cancel in-flight generation) must be usable for the whole
 // turn: it appears the moment the turn starts and is hidden once it ends, as
@@ -15,12 +16,10 @@ describe("chat stop button lifecycle", () => {
     let stop: HTMLButtonElement;
 
     beforeEach(() => {
-        document.body.innerHTML = "";
-        const cd = new CardDashboard() as any;
-        const bar = cd._chat.buildIobar();
-        document.body.appendChild(bar);
-        send = bar.querySelector(".af-send-btn") as HTMLButtonElement;
-        stop = bar.querySelector(".af-stop-btn") as HTMLButtonElement;
+        document.body.replaceChildren();
+        buildDashboard();
+        send = byRole(document, "button", "Send message") as HTMLButtonElement;
+        stop = byRole(document, "button", "Stop generating") as HTMLButtonElement;
     });
 
     it("hides stop and enables send before any turn starts", () => {

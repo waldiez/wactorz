@@ -305,6 +305,12 @@ class Dashboard:
         self.show("overview")
         return self._card(name).get_by_test_id("agent-state").inner_text().strip()
 
+    def card_node(self, name: str) -> str:
+        """The node the agent's card says it runs on; empty for one on main, which says none."""
+        self.show("overview")
+        line = self._card(name).get_by_test_id("agent-node")
+        return line.inner_text().strip() if line.is_visible() else ""
+
     def card_actions(self, name: str) -> list[str]:
         """The buttons the agent's card offers, by what each says."""
         self.show("overview")

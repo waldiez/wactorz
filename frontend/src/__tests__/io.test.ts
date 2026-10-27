@@ -25,7 +25,7 @@ interface FakeWS {
     onStreamChunk: ReturnType<typeof vi.fn>;
     onStreamEnd: ReturnType<typeof vi.fn>;
     chunkCb?: (chunk: string, from: string) => void;
-    endCb?: () => void;
+    endCb?: (from: string) => void;
 }
 
 function makeWS(sendResult = true): FakeWS {
@@ -34,7 +34,7 @@ function makeWS(sendResult = true): FakeWS {
         onStreamChunk: vi.fn((cb: (chunk: string, from: string) => void) => {
             ws.chunkCb = cb;
         }),
-        onStreamEnd: vi.fn((cb: () => void) => {
+        onStreamEnd: vi.fn((cb: (from: string) => void) => {
             ws.endCb = cb;
         }),
     };
@@ -117,7 +117,7 @@ describe("IOManager streaming", () => {
         ws.chunkCb!("lo", "alpha");
         expect(lastEvent("af-stream-chunk")?.detail).toEqual({ chunk: "lo", from: "alpha", text: "Hello" });
 
-        ws.endCb!();
+        ws.endCb!("alpha");
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "Hello", from: "alpha" });
         expect(tts.notify).toHaveBeenCalledWith("Hello");
         expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({ agentName: "alpha", label: "Hello" });
@@ -127,7 +127,7 @@ describe("IOManager streaming", () => {
         const io = new IOManager(makeRouter());
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
-        ws.endCb!();
+        ws.endCb!("main");
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main" });
         expect(tts.notify).not.toHaveBeenCalled();
         expect(lastEvent("af-feed-push")).toBeUndefined();
@@ -138,9 +138,9 @@ describe("IOManager streaming", () => {
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         ws.chunkCb!("one", "alpha");
-        ws.endCb!();
+        ws.endCb!("alpha");
         ws.chunkCb!("two", "beta");
-        ws.endCb!();
+        ws.endCb!("beta");
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "two", from: "beta" });
     });
 
@@ -152,7 +152,7 @@ describe("IOManager streaming", () => {
         for (let i = 0; i < 30; i++) {
             ws.chunkCb!(chunk, "alpha");
         }
-        ws.endCb!();
+        ws.endCb!("alpha");
         const text = lastEvent("af-stream-end")?.detail.text as string;
         expect(text.length).toBeLessThan(300_000);
         expect(text.length).toBeGreaterThan(0);

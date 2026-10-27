@@ -29,6 +29,9 @@ export interface AppEventMap {
     "af-send-message": { id: string; content: string; target: string; attachments: string[] };
     /** The send `id` did not go out: the socket was closed. */
     "af-send-failed": { id: string; content: string; target: string };
+    /** The person now talks to `agent`, by typing or by voice: a reply the server
+     *  stamps with the gateway's id is that agent's. */
+    "af-addressed": { agent: string };
     /** A piece of `from`'s streamed reply, and the reply so far (`text`). */
     "af-stream-chunk": { chunk: string; from: string; text: string };
     /** `from`'s streamed reply ended; `text` is all of it, empty when nothing came. */
@@ -64,6 +67,9 @@ export interface AppEventMap {
     "af-route": Route;
     /** The dashboard opened a view, or another conversation in the chat: the address follows. */
     "af-view-changed": Route;
+    /** An extension adds a view: a nav button showing `icon` and `label`, and `build` for its
+     *  content, opened at `#/<key>`. Sent once, during startup. */
+    "af-register-view": { key: string; icon: string; label: string; build: () => HTMLElement };
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;

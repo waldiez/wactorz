@@ -92,7 +92,9 @@ never lower it. New components and bug fixes should ship with a test in `src/__t
 
 ## Event bus
 
-Components communicate exclusively through **DOM `CustomEvent`s** — no shared mutable state, no framework store.
+Components communicate through **DOM `CustomEvent`s**. The state they share lives in models that hold no DOM —
+`AgentStore` for the agents and nodes, `ChatLog` for the messages — and a view reads a model and is told of its
+changes (`AgentStore.subscribe`); it never keeps a copy of its own.
 Use the typed helpers in `src/events.ts`: `emit(type, detail)` to dispatch and `listen(type, handler)` to
 subscribe. `AppEventMap` there is the single source of truth for every event name and its payload (the table
 below mirrors it); add new events to that map so dispatch and handlers stay type-checked.
@@ -100,7 +102,8 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | Event | Direction | Payload |
 | ------ | --------- | ------- |
 | `af-agent-command` | CardDashboard → main.ts (WSClient) | `{ command, agentId }` |
-| `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
+| `af-send-message` | DashboardChat → main.ts (IOManager) | `{ id, content, target, attachments }` |
+| `af-addressed` | DashboardChat → main.ts (WSClient) | `{ agent }` (whom the person now talks to, typed or by voice) |
 | `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
 | `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
 | `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from, text }` |
@@ -109,17 +112,18 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-turn` | DashboardChat → iobar | `{ agent, queued }` |
 | `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "disconnected" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
-| `af-send-failed` | IOManager → DashboardChat | `{ content, target }` |
+| `af-send-failed` | IOManager → DashboardChat | `{ id, content, target }` |
 | `af-reset-chat` | WSClient → DashboardChat | `{ agent: string \| null }` |
 | `af-agents-settled` | WSClient → CardDashboard | `{ reason: "reset" \| "deleted" }` |
 | `af-clear-feed` | WSClient / main.ts → CardDashboard | _(none)_ |
-| `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
+| `af-wipe-all` | WSClient / main.ts → CardDashboard | `{ survivors }` (ids of the agents still running) |
 | `af-answer-option` | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }` |
 | `af-answered` | main.ts → DashboardChat | `{ id, option }` |
 | `af-questions-listed` | main.ts → DashboardChat | `{ open, answered }` |
 | `af-app-log` | WSClient → appLogFeed | `{ entries }` |
 | `af-route` | router → CardDashboard | `{ view, path }` (the address changed) |
 | `af-view-changed` | CardDashboard / viewRoutes → router | `{ view, path }` (the dashboard moved) |
+| `af-register-view` | an extension → CardDashboard | `{ key, icon, label, build }` (a view of its own) |
 | `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |
 | `tts-audio-start` | TTSManager → AmbientManager | _(none)_ |
 | `tts-audio-end` | TTSManager → AmbientManager | _(none)_ |
@@ -161,7 +165,7 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
    `config/serverConfig.ts`; register your extension's fields from the barrel via
    `registerConfigEntry()` at module load
 5. **Registers custom icons** via `registerIcon(name, svgPaths)` from
-   `ui/dashboard/icons.ts` before calling `registerView` — core never needs to
+   `ui/dashboard/icons.ts` before asking for its view with `af-register-view` — core never needs to
    know your icon names
 6. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
 

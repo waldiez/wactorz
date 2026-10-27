@@ -162,12 +162,33 @@ describe("WSClient", () => {
         // Before any send, the gateway/absent sender falls back to the default agent.
         ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Hi" }) });
         expect(chatSpy.mock.calls[0]![1]).toBe("main");
-        // After addressing a specific agent, the gateway reply is re-attributed to it.
-        c.send("hello", "catalog");
+        // Once the chat says the person addresses another agent, the gateway reply is its.
+        c.addressed("catalog");
         ws().emit("message", {
             data: JSON.stringify({ type: "chat", content: "Yo", from: "io-gateway" }),
         });
         expect(chatSpy.mock.calls[1]![1]).toBe("catalog");
+    });
+
+    it("attributes a stream end that names nobody to the addressed agent", () => {
+        const c = new WSClient();
+        const endSpy = vi.fn();
+        c.onStreamEnd(endSpy);
+        c.connect("ws://localhost/ws");
+        c.addressed("catalog");
+        ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "" }) });
+        expect(endSpy).toHaveBeenCalledWith("catalog");
+    });
+
+    it("leaves who is addressed to the chat: sending does not change it", () => {
+        const c = new WSClient();
+        const chatSpy = vi.fn();
+        c.onChat(chatSpy);
+        c.connect("ws://localhost/ws");
+        c.addressed("weather");
+        c.send("hello", "catalog");
+        ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Yo", from: "io-gateway" }) });
+        expect(chatSpy.mock.calls[0]![1]).toBe("weather");
     });
 
     it("passes through a real agent sender unchanged", () => {

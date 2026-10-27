@@ -5,7 +5,7 @@
 /**
  * Chat concern of the dashboard, a composed sub-controller. Owns the chat
  * thread + streaming + send + history state and the iobar; reaches back to the
- * host only for the shared root element, the agent map, and view switching.
+ * host only for the shared root element, the agents (read-only), and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
@@ -41,7 +41,7 @@ import { rememberConversation, rememberedConversation } from "./viewRoutes";
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
     readonly root: HTMLElement;
-    readonly agents: Map<string, AgentInfo>;
+    readonly agents: ReadonlyMap<string, AgentInfo>;
     /** The currently active view (read live — it changes over time). */
     getView(): View;
     /** Switch the active dashboard view. */
@@ -550,7 +550,7 @@ export class DashboardChat {
     /** Put `send` on the wire, now the turn tracker says so: its bubble no longer
      *  waits, and the thread shows its agent working. */
     private _wire(send: PendingSend): void {
-        this._lastSentTarget = send.target;
+        this._address(send.target);
         const waited = this._log.get(send.id)?.queued === true;
         if (waited) {
             this._log.update(send.id, ({ queued: _sent, ...rest }) => rest);
@@ -565,6 +565,13 @@ export class DashboardChat {
             this._streamUI.awaiting(send.target);
         }
         emit("af-send-message", send);
+    }
+
+    /** The person now talks to `name`: replies the gateway stamps are its, here
+     *  and on the socket, which hears it from here rather than keeping its own. */
+    private _address(name: string): void {
+        this._lastSentTarget = name;
+        emit("af-addressed", { agent: name });
     }
 
     /** Say what the turn is now, and stop showing an agent working once it ends. */
@@ -657,7 +664,7 @@ export class DashboardChat {
             if (voiceTarget) {
                 // Speaking to an agent is choosing it, as typing to one is.
                 this._move(voiceTarget, "claim");
-                this._lastSentTarget = voiceTarget;
+                this._address(voiceTarget);
             }
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
                 this._showSentMessage(stored, Boolean(voiceTarget));

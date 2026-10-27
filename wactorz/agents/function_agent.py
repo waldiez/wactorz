@@ -136,14 +136,17 @@ class AgentSpec:
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
         actor_class: type[FunctionAgent] | None = None,
+        actor_id: str | None = None,
     ) -> FunctionAgent:
         """The actor for this specification, under ``name`` or the spec's own.
 
         ``actor_class`` is a subclass of :class:`FunctionAgent` to build
         instead, for a host that adds to what the actor does where it runs.
+        ``actor_id`` is the id its spawn registry keeps for it, when it has one.
         """
         return (actor_class or FunctionAgent)(
             self,
+            actor_id=actor_id,
             name=name or self.name,
             persistence_dir=persistence_dir,
             llm_provider=llm_provider,
@@ -259,12 +262,13 @@ class FunctionAgent(Actor):
         self,
         spec: AgentSpec,
         *,
+        actor_id: str | None = None,
         name: str | None = None,
         persistence_dir: str | None = None,
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(name=name or spec.name, persistence_dir=persistence_dir)
+        super().__init__(actor_id=actor_id, name=name or spec.name, persistence_dir=persistence_dir)
         self.spec = spec
         self.description = spec.description
         self.capabilities = list(spec.capabilities)

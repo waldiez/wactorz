@@ -19,6 +19,7 @@ from wactorz.agents.main.hosts import NodeHost
 from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawns import with_actor_id
 from wactorz.core.actor import derive_actor_id
 
 
@@ -54,7 +55,8 @@ class Host:
         self.published: list[str] = []
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self._spawn_registry
+        # Each entry with its id, as the real registry hands them back.
+        return {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
 
     def _remove_from_spawn_registry(self, name: str) -> None:
         self._spawn_registry.pop(name, None)

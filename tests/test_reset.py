@@ -24,6 +24,7 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.main.actor import MainActor
+from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import WactorzDB
 from wactorz.reset import reset_chat
 from wactorz.web import api_reset, cost, runtime
@@ -891,9 +892,30 @@ class ResetUploadsTest(unittest.TestCase):
             self._stored(uploads, unsent)
             db_path = str(Path(tmp) / "wactorz.db")
             db = WactorzDB(db_path)
-            db.write_chat_log(1.0, "counter", "user", "look", attachments=[{"id": mine}])
-            db.write_chat_log(2.0, "counter", "user", "and", attachments=[{"id": shared}])
-            db.write_chat_log(3.0, "main", "user", "this too", attachments=[{"id": shared}])
+            db.write_chat_log(
+                1.0,
+                "counter",
+                "user",
+                "look",
+                attachments=[{"id": mine}],
+                agent_id=derive_actor_id("counter"),
+            )
+            db.write_chat_log(
+                2.0,
+                "counter",
+                "user",
+                "and",
+                attachments=[{"id": shared}],
+                agent_id=derive_actor_id("counter"),
+            )
+            db.write_chat_log(
+                3.0,
+                "main",
+                "user",
+                "this too",
+                attachments=[{"id": shared}],
+                agent_id=derive_actor_id("main"),
+            )
             db.close()
 
             reset_chat(agent_name="counter", db_path=db_path, state_dir=tmp)

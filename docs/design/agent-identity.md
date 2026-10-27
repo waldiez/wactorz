@@ -2,8 +2,8 @@
 
 A decision record, not a guide. It covers what tells one agent from another, how a
 person or another agent addresses one, and how two installs share a broker without
-seeing each other's control traffic. Nothing here is built yet. The "What follows"
-section says which step builds each part.
+seeing each other's control traffic. The "What follows" section says which step
+builds each part.
 
 ## The problem
 
@@ -74,8 +74,8 @@ and answers only its own agents. The sender resolves the address first: from mai
 registry, or for an agent on a node, from the retained manifests it already reads.
 
 `agents/by-name/<name>/task` remains for nodes too old to know the new topic. Main
-sends there only when the name is unique and the target node's heartbeat reports a
-version from before this change. A node on the new version subscribes to both topics.
+sends there only when the name is unique and the target node's manifest says it
+predates this change. A node on the new version subscribes to both topics.
 A sender only ever uses one of them, so a node never receives the same task twice.
 
 ### Placement says whether it moves or adds
@@ -143,10 +143,14 @@ step to run:
   mechanically and needs no lookup.
 - **Topics.** With no namespace set, every topic stays as it is. The `by-name` topic
   stays for older nodes.
-- **Nodes.** A node on an older version ignores `actor_id` and derives the id from the
-  name. For the only agent of a name, the two ids are the same. Main refuses to place a
-  second agent of a name on a node older than this change, saying which version it
-  needs, rather than let that node take the first agent's id.
+- **Nodes.** A node says in its manifest (`actor_ids`) that it runs an agent under the id
+  its spawn names. A node without it ignores `actor_id` and derives the id from the name,
+  so main gives a new agent placed there the derived id, which both arrive at. An agent
+  that already has a minted id is not sent to such a node, since it would run there
+  under another id: main refuses, saying to deploy the node again. Main also refuses to
+  place a second agent of a name on such a node, rather than let it take the first
+  agent's id. A node main has had no manifest from yet, as at a restart before the
+  retained manifests arrive, is not refused.
 - **Add-on.** The add-on sets no namespace unless its options name one, so it is a
   no-op for every existing configuration.
 

@@ -387,6 +387,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.spawns._save_to_spawn_registry(config)
 
+    def _registered_actor_id(self, name: str) -> str | None:
+        """The id the spawn registry keeps for ``name``, which a spawn of it runs under."""
+        return self.spawns._registered_actor_id(name)
+
     def _remove_from_spawn_registry(self, name: str) -> None:
         self.spawns._remove_from_spawn_registry(name)
 
@@ -1323,6 +1327,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _node_takes_bundles(self, node_name: str) -> bool:
         """Whether ``node_name`` builds a library agent from code sent with its spawn."""
         return self.nodes.takes_bundles(node_name)
+
+    def _node_takes_actor_ids(self, node_name: str) -> bool | None:
+        """Whether ``node_name`` runs an agent under the id its spawn names; None if unknown."""
+        return self.nodes.takes_actor_ids(node_name)
 
     def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.

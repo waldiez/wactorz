@@ -253,16 +253,21 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # attributed to it instead of the generic "io-gateway" transport id, so the
     # UI (and persisted/reloaded history) shows the agent that actually answered
     # rather than the gateway. Set per turn from the user's @mention before
-    # routing; defaults to the gateway id until a chat turn arrives.
-    _reply_from = {"name": runtime.IO_GATEWAY_ID}
+    # routing; defaults to the gateway id until a chat turn arrives. Its id is
+    # what the page keys the thread by.
+    _reply_from = {
+        "name": runtime.IO_GATEWAY_ID,
+        "id": chat.agent_id_of(runtime.IO_GATEWAY_ID),
+    }
 
     def _persist_chat(
-        role: str,
-        content: str,
-        agent_name: str = "main",
-        attachments: list[dict[str, Any]] | None = None,
+        role: str, content: str, attachments: list[dict[str, Any]] | None = None
     ) -> None:
-        """Best-effort write to chat_log, and a line on the console. Never raises into the WS path."""
+        """Best-effort write to chat_log, and a line on the console. Never raises into the WS path.
+
+        Filed under the agent the current turn belongs to.
+        """
+        agent_name = _reply_from["name"]
         if content:
             log_chat_turn(role, content, agent_name)
         if runtime.db is None or not (content or attachments):
@@ -271,6 +276,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             runtime.db.write_chat_log(
                 ts=time.time(),
                 agent_name=agent_name,
+                agent_id=_reply_from["id"],
                 role=role,
                 attachments=attachments,
                 # The log outlives the conversation and is readable through the
@@ -288,6 +294,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     {
                         "type": "chat",
                         "from": _reply_from["name"],
+                        "agent_id": _reply_from["id"],
                         "content": text,
                         "timestamp": time.time(),
                     }
@@ -295,7 +302,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             )
             # Non-streamed replies (slash command output, errors, system
             # messages) — persist immediately.
-            _persist_chat("assistant", text, _reply_from["name"])
+            _persist_chat("assistant", text)
         except Exception:
             logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
 
@@ -306,6 +313,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     {
                         "type": "stream_chunk",
                         "from": _reply_from["name"],
+                        "agent_id": _reply_from["id"],
                         "content": chunk,
                         "timestamp": time.time(),
                     }
@@ -324,6 +332,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     {
                         "type": "stream_end",
                         "from": _reply_from["name"],
+                        "agent_id": _reply_from["id"],
                         "timestamp": time.time(),
                     }
                 )
@@ -332,14 +341,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             if _stream_buffer:
                 full = "".join(_stream_buffer)
                 _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
+                _persist_chat("assistant", full)
         except Exception:
             # Even if the send_str failed, flush anything we accumulated
             # so the user's session isn't lost on a transient ws hiccup.
             if _stream_buffer:
                 full = "".join(_stream_buffer)
                 _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
+                _persist_chat("assistant", full)
 
     try:
         async for msg in ws:
@@ -378,12 +387,30 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             # ("not found") arrives where the user is looking and
                             # ends the turn there; attributed to the mention, it
                             # would name an agent no view has a thread for.
-                            _reply_from["name"] = chat.turn_attribution(
-                                content, str(data.get("agent_name") or "")
+                            owner = chat.turn_owner(
+                                content,
+                                str(data.get("agent_name") or ""),
+                                data.get("agent_id"),
+                            )
+                            _reply_from["name"], _reply_from["id"] = owner
+                            # Said before anything else of the turn, so the page
+                            # files the user's own message with the agent it
+                            # reached: a mention names that agent by name, and
+                            # the page keeps its threads by id.
+                            await ws.send_str(
+                                json.dumps(
+                                    {
+                                        "type": "turn",
+                                        "agent_id": owner.agent_id,
+                                        "name": owner.name,
+                                        "id": data.get("id"),
+                                        "timestamp": time.time(),
+                                    }
+                                )
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
-                            _persist_chat("user", content, _reply_from["name"], files)
+                            _persist_chat("user", content, files)
 
                             async def _safe_route(c=content, files=files):
                                 # Both halves of this turn are stored here — the

@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS chat_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ts         REAL    NOT NULL,             -- Unix timestamp of the turn
     agent_name TEXT    NOT NULL,             -- agent that produced/received the message
+    agent_id   TEXT    NOT NULL DEFAULT '',  -- that agent's actor id, which the history is kept by
     role       TEXT    NOT NULL,             -- 'user' | 'assistant'
     content    TEXT    NOT NULL,
     session_id TEXT    DEFAULT '',           -- optional grouping (actor_id or custom)
@@ -202,3 +203,13 @@ CREATE INDEX IF NOT EXISTS idx_prov_edges_dst ON prov_edges (dst);
 """
 
 SCHEMA_SQL += PROVENANCE_SQL
+
+#: Indexes on columns a migration adds, one statement each. ``SCHEMA_SQL`` runs
+#: on every open, before any migration, and on an existing database such a
+#: column is not there until its migration has run, so these are created by
+#: that migration, and for a new database right after the schema. Statements
+#: rather than a script: a script commits whatever transaction is open, and a
+#: migration runs inside one.
+ADDED_COLUMN_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_chatlog_agent_id_ts ON chat_log (agent_id, ts)",
+)

@@ -25,6 +25,7 @@ from ..._version import __version__
 from ...config import NODE_SIGNING
 from ...core.actor import derive_actor_id
 from ...core.compatibility import compatible
+from ...core.identity import given_actor_id
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -148,13 +149,15 @@ def _unsigned_notice(node_name: str) -> str:
     return f"unsigned-node:{node_name}"
 
 
-def remote_actor_id(agent_name: str) -> str:
-    """The actor id a remote agent has, derived from its name.
+def remote_actor_id(agent_name: str, spawn_registry: Mapping[str, Mapping[str, Any]]) -> str:
+    """The actor id a remote agent runs under: the one its spawn registry entry keeps.
 
-    Deterministic so main and the node arrive at the same id without either
-    telling the other — the node builds it the same way for `_RemoteAgent`.
+    A node's heartbeat names its agents but not their ids. An agent main has no
+    entry for was not spawned by main, and runs under its name's derived id, as
+    every agent did before ids were kept.
     """
-    return derive_actor_id(agent_name)
+    entry = spawn_registry.get(agent_name) or {}
+    return given_actor_id(entry.get("actor_id")) or derive_actor_id(agent_name)
 
 
 class NodeManager:
@@ -546,6 +549,19 @@ class NodeManager:
         manifest = self.node_manifests.get(node_name) or {}
         return manifest.get("code_bundles") is True
 
+    def takes_actor_ids(self, node_name: str) -> bool | None:
+        """Whether `node_name` runs an agent under the id its spawn names.
+
+        From its manifest, which says so; a node from a release before ids
+        derives an id from the agent's name. None while no manifest has
+        arrived, which is not the same as no: at a restart, main restores its
+        agents before every node's retained manifest has reached it.
+        """
+        manifest = self.node_manifests.get(node_name)
+        if manifest is None:
+            return None
+        return manifest.get("actor_ids") is True
+
     def forget(self, node_name: str) -> None:
         """Forget a node altogether, as removing it does: its heartbeat and its machine."""
         self.known.pop(node_name, None)
@@ -888,7 +904,7 @@ class NodeManager:
                 if not (cfg.get("publishes") or cfg.get("subscribes")):
                     continue
                 contract = TopicContract.from_spawn_config(
-                    {**cfg, "node": node_name, "actor_id": remote_actor_id(name)}
+                    {**cfg, "node": node_name, "actor_id": remote_actor_id(name, spawn_registry)}
                 )
                 bus.register_contract(contract)
                 logger.debug(
@@ -912,8 +928,9 @@ class NodeManager:
         if not monitor or not hasattr(monitor, "_last_seen"):
             return
         now = time.time()
+        spawn_registry = host._get_spawn_registry()
         for name in agents:
-            monitor._last_seen[remote_actor_id(name)] = now
+            monitor._last_seen[remote_actor_id(name, spawn_registry)] = now
 
     def report_migration(self, data: dict[str, Any]) -> None:
         """Turn a node's failed migration into a notification.

@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main.lifecycle import LifecycleService
+from wactorz.agents.main.spawns import with_actor_id
 from wactorz.core.actor import derive_actor_id
 
 
@@ -32,7 +33,8 @@ class Host:
         self.persisted: list[tuple[str, Any]] = []
 
     def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self._spawn_registry
+        # Each entry with its id, as the real registry hands them back.
+        return {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
 
     def _remove_from_spawn_registry(self, name: str) -> None:
         self._spawn_registry.pop(name, None)
@@ -107,6 +109,15 @@ class TestTheNameIsRecoverable:
         svc, host = service({"worker": {"code": "..."}})
 
         await svc.agent_withdrew(derive_actor_id("worker"))  # no name given
+
+        assert "worker" not in host._spawn_registry
+
+    async def test_a_minted_id_is_found_in_its_entry(self) -> None:
+        # Spawned after ids were kept: no name derives it, the entry holds it.
+        minted = str(uuid.uuid4())
+        svc, host = service({"worker": {"code": "...", "actor_id": minted}})
+
+        await svc.agent_withdrew(minted)  # no name given
 
         assert "worker" not in host._spawn_registry
 

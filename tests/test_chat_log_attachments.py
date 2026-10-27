@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
+from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import migrations
 from wactorz.core.persistence.db import WactorzDB
 
@@ -37,7 +38,12 @@ def db_fixture(tmp_path: Path) -> Any:
 class TestStoringThem:
     def test_a_turn_remembers_what_was_attached(self, db: Any) -> None:
         db.write_chat_log(
-            ts=1.0, agent_name="main", role="user", content="look", attachments=ATTACHMENTS
+            ts=1.0,
+            agent_name="main",
+            role="user",
+            content="look",
+            attachments=ATTACHMENTS,
+            agent_id=derive_actor_id("main"),
         )
 
         row = db.query_chat_log()[0]
@@ -46,19 +52,29 @@ class TestStoringThem:
     def test_a_turn_without_any_reads_back_as_none_rather_than_junk(self, db: Any) -> None:
         # Every existing row has no attachments, so this is the common case and
         # the one a consumer written before this change will meet.
-        db.write_chat_log(ts=1.0, agent_name="main", role="user", content="hi")
+        db.write_chat_log(
+            ts=1.0, agent_name="main", role="user", content="hi", agent_id=derive_actor_id("main")
+        )
 
         assert db.query_chat_log()[0]["attachments"] == []
 
     def test_writing_them_is_optional(self, db: Any) -> None:
         # The call sites that know nothing about attachments must keep working.
-        db.write_chat_log(ts=1.0, agent_name="main", role="assistant", content="done")
+        db.write_chat_log(
+            ts=1.0,
+            agent_name="main",
+            role="assistant",
+            content="done",
+            agent_id=derive_actor_id("main"),
+        )
 
         assert db.query_chat_log()[0]["content"] == "done"
 
     def test_a_row_written_before_the_column_existed_still_reads(self, db: Any) -> None:
         # The upgrade path: an older row has NULL here, not '[]'.
-        db.write_chat_log(ts=1.0, agent_name="main", role="user", content="old")
+        db.write_chat_log(
+            ts=1.0, agent_name="main", role="user", content="old", agent_id=derive_actor_id("main")
+        )
         with db.transaction() as conn:
             conn.execute("UPDATE chat_log SET attachments = NULL")
 
@@ -67,7 +83,9 @@ class TestStoringThem:
     def test_unreadable_references_do_not_take_the_history_down(self, db: Any) -> None:
         # The column is JSON written by us, but a history request failing wholesale
         # because one row is malformed would lose every other turn with it.
-        db.write_chat_log(ts=1.0, agent_name="main", role="user", content="x")
+        db.write_chat_log(
+            ts=1.0, agent_name="main", role="user", content="x", agent_id=derive_actor_id("main")
+        )
         with db.transaction() as conn:
             conn.execute("UPDATE chat_log SET attachments = 'not json'")
 
@@ -105,7 +123,12 @@ class TestTheUpgrade:
         database = WactorzDB(path)
         migrations.run_migrations(database)
         database.write_chat_log(
-            ts=1.0, agent_name="main", role="user", content="x", attachments=ATTACHMENTS
+            ts=1.0,
+            agent_name="main",
+            role="user",
+            content="x",
+            attachments=ATTACHMENTS,
+            agent_id=derive_actor_id("main"),
         )
 
         assert database.query_chat_log()[0]["attachments"] == ATTACHMENTS
@@ -116,7 +139,9 @@ class TestTheUpgrade:
         migrations.run_migrations(database)
         migrations.run_migrations(database)
 
-        database.write_chat_log(ts=1.0, agent_name="main", role="user", content="x")
+        database.write_chat_log(
+            ts=1.0, agent_name="main", role="user", content="x", agent_id=derive_actor_id("main")
+        )
         assert database.query_chat_log()[0]["attachments"] == []
         database.conn.close()
 
@@ -126,7 +151,12 @@ class TestWhatIsStored:
         # Whatever a caller passes is written verbatim, so the shape is pinned
         # here rather than left to whoever calls it next.
         db.write_chat_log(
-            ts=1.0, agent_name="main", role="user", content="x", attachments=ATTACHMENTS
+            ts=1.0,
+            agent_name="main",
+            role="user",
+            content="x",
+            attachments=ATTACHMENTS,
+            agent_id=derive_actor_id("main"),
         )
 
         stored = db.query_chat_log()[0]["attachments"][0]

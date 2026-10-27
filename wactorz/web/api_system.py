@@ -123,7 +123,8 @@ async def chat_log_handler(request: web.Request) -> Response:
     """GET /api/chats — query the persistent chat_log table.
 
     Query params:
-      agent   — filter by agent name
+      agent_id — one agent's history, by its id
+      agent   — filter by agent name: every agent that went by it
       role    — filter by role (user | assistant)
       since   — Unix timestamp float, only return rows newer than this
       limit   — max rows to return (default 200, max 1000)
@@ -134,10 +135,13 @@ async def chat_log_handler(request: web.Request) -> Response:
         return web.json_response([], status=200)
     try:
         agent = request.rel_url.query.get("agent")
+        agent_id = request.rel_url.query.get("agent_id")
         role = request.rel_url.query.get("role")
         since = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
         limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
-        rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
+        rows = runtime.db.query_chat_log(
+            agent_name=agent, agent_id=agent_id, role=role, since=since, limit=limit
+        )
         return web.json_response([with_question(row) for row in rows])
     except Exception:
         logger.exception("[api] chat log query failed")

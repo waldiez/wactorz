@@ -15,7 +15,14 @@ import pytest
 
 from wactorz.agents.dynamic import listener as listener_module
 from wactorz.agents.dynamic.listener import SubscriptionHub
-from wactorz.core.actor import derive_actor_id
+from wactorz.core.actor import Actor, Message
+
+
+class _Probe(Actor):
+    """A real actor, for what `Actor.__init__` decides about its id."""
+
+    async def handle_message(self, msg: Message) -> None:
+        pass
 
 
 class FakeMessage:
@@ -80,6 +87,7 @@ class FakeActor:
     def __init__(self) -> None:
         self.name = "probe-agent"
         self.actor_id = "11111111-2222-3333-4444-555555555555"
+        self.stable_id = False
         self._mqtt_broker = "localhost"
         self._mqtt_port = 1883
         #: The node it runs on; empty on main.
@@ -164,19 +172,17 @@ class TestDurability:
     """
 
     def test_a_named_actor_is_durable(self) -> None:
-        actor = FakeActor()
-        actor.name = "kitchen-sensor"
-        actor.actor_id = derive_actor_id("kitchen-sensor")
+        assert listener_module.is_durable_actor(_Probe(name="kitchen-sensor"))
+
+    def test_an_actor_given_its_id_is_durable(self) -> None:
+        # An agent main spawned: its id is minted once and kept in the registry.
+        actor = _Probe(name="kitchen-sensor", actor_id=str(uuid.uuid4()))
 
         assert listener_module.is_durable_actor(actor)
 
     def test_an_anonymous_actor_is_not(self) -> None:
         # Actor() without a name: a uuid4 id and a name derived from it.
-        actor = FakeActor()
-        actor.actor_id = str(uuid.uuid4())
-        actor.name = f"actor-{actor.actor_id[:8]}"
-
-        assert not listener_module.is_durable_actor(actor)
+        assert not listener_module.is_durable_actor(_Probe())
 
     async def test_a_durable_hub_asks_for_a_v5_session_with_an_expiry(
         self, broker: FakeBroker

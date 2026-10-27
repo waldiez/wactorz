@@ -54,6 +54,7 @@ from ..core.blob_transfer import (
     wait_for,
 )
 from ..core.cancellation import cancel_all_until_done
+from ..core.identity import given_actor_id
 from ..core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -473,6 +474,7 @@ class NodeRunner:
         """The library agent ``plugin`` builds, made this node's before it starts."""
         options = config.get("options")
         actor = plugin.build(
+            actor_id=given_actor_id(config.get("actor_id")),
             name=str(config["name"]),
             persistence_dir=self.state_dir,
             options=dict(options) if isinstance(options, dict) else None,
@@ -783,6 +785,9 @@ class NodeRunner:
                 # it sends the agent's code with the spawn, which this node takes.
                 "agents": plugins.targets(),
                 "code_bundles": True,
+                # That an agent sent here runs under the id its spawn names,
+                # rather than one derived from its name.
+                "actor_ids": True,
                 # Whether this node clears its agents' chat, state or counters
                 # when main resets its own; main asks only a node that says so.
                 "resets": True,

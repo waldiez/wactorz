@@ -160,9 +160,9 @@ class LifecycleService:
         registry = self.host._get_spawn_registry() or {}
         if not name:
             # No manifest cached for it — a withdrawal can arrive before this
-            # process ever saw what it withdraws. The id is derived from the
-            # name, so the registry can be asked which name produces it.
-            name = next((n for n in registry if derive_actor_id(n) == actor_id), "")
+            # process ever saw what it withdraws. Every entry keeps its id, so
+            # the registry can be asked whose it is.
+            name = next((n for n, cfg in registry.items() if cfg["actor_id"] == actor_id), "")
         config = registry.get(name) if name else None
         if config is None:
             # Not a spawned agent, or already gone. Either way there is nothing
@@ -327,18 +327,17 @@ class LifecycleService:
         if not node:
             node = self.host._node_running_agent(name)
 
-        # Capture/derive the deterministic actor_id BEFORE we tear anything down,
-        # so we can purge per-agent retained topics even after the local actor
-        # is gone from the registry.
+        # The id BEFORE anything is torn down, so the agent's retained topics
+        # can be purged once it is gone: the running agent's, then the one its
+        # registry entry keeps, then -- for an agent main never spawned -- the
+        # one derived from its name.
         actor_id: str | None = None
         if self.host._registry:
             target = self.host._registry.find_by_name(name)
             if target:
                 actor_id = target.actor_id
         if not actor_id:
-            # Remote agents (and local ones missing from the registry) follow the
-            # same uuid5 scheme used by _RemoteAgent and Actor — derive it.
-            actor_id = derive_actor_id(name)
+            actor_id = reg.get(name, {}).get("actor_id") or derive_actor_id(name)
 
         self.host._remove_from_spawn_registry(name)
 

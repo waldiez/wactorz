@@ -16,14 +16,22 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService, without_transient_keys
+from wactorz.core.actor import derive_actor_id
 
 SNAPSHOT = {"conversation_history": ["hello"], "count": 7}
+
+
+#: The collector's entry as the registry gives it back: with the id it already
+#: had, derived from its name, filled in.
+COLLECTOR = {"name": "collector", "node": "nuc", "actor_id": derive_actor_id("collector")}
 
 
 class _Host:
     """The persistence surface `SpawnService` writes through."""
 
     name = "main"
+    #: No agent runs here: an entry's id comes from the config or the name.
+    _registry: Any = None
 
     def __init__(self) -> None:
         self.store: dict[str, Any] = {}
@@ -119,7 +127,7 @@ def test_an_entry_recorded_before_the_fix_reads_back_clean() -> None:
     }
     spawns = SpawnService(host)  # type: ignore[arg-type]
 
-    assert spawns._get_spawn_registry() == {"collector": {"name": "collector", "node": "nuc"}}
+    assert spawns._get_spawn_registry() == {"collector": COLLECTOR}
 
 
 async def test_a_republish_does_not_carry_a_snapshot_left_by_an_older_version(main: _Main) -> None:
@@ -129,4 +137,4 @@ async def test_a_republish_does_not_carry_a_snapshot_left_by_an_older_version(ma
     # hand the stale snapshot back to the node.
     await main.migration.update_desired_state("nuc", remove_name="other")
 
-    assert main.desired_agents() == [{"name": "collector", "node": "nuc"}]
+    assert main.desired_agents() == [COLLECTOR]

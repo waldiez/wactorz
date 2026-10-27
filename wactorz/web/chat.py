@@ -24,6 +24,7 @@ from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..agents.main.commands import registry as main_command_registry
 from ..agents.main.commands.dispatch import Form
 from ..core.actor import ActorState, Message, MessageType
+from ..core.identity import derive_actor_id, given_actor_id
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
 from ..core.task_text import reply_text, task_payload
@@ -120,6 +121,48 @@ def routable(name: str) -> bool:
     if runtime.registry is not None and runtime.registry.find_by_name(name):
         return True
     return remote_node_for(name) is not None
+
+
+def agent_id_of(name: str) -> str:
+    """The id of the agent called ``name``, for a turn or a message that names it.
+
+    The agent running here first, then one this server has heard from, then
+    the id main's spawn registry keeps for it, and for a name none of them
+    knows, the one derived from it -- what such an agent would have had. A name
+    is unique while two agents cannot share one; an address that says which is
+    meant is what lets them.
+    """
+    if runtime.registry is not None:
+        running = runtime.registry.find_by_name(name)
+        if running is not None:
+            return str(running.actor_id)
+    for actor_id, record in runtime.state["agents"].items():
+        if isinstance(record, dict) and record.get("name") == name:
+            return str(actor_id)
+    main_actor = find_main_actor(runtime.registry)
+    kept = main_actor._registered_actor_id(name) if main_actor is not None else None
+    return kept or derive_actor_id(name)
+
+
+class TurnOwner(NamedTuple):
+    """The agent a turn belongs to: its thread on the dashboard and its chat history."""
+
+    name: str
+    agent_id: str
+
+
+def turn_owner(content: str, declared: str = "", declared_id: object = None) -> TurnOwner:
+    """`turn_attribution`, with the id of the agent it names.
+
+    The thread the sender says it is in comes with that thread's id, which is
+    taken as it is: it is what the page keyed the thread by. A mention names an
+    agent by name, and its id is looked up.
+    """
+    name = turn_attribution(content, declared)
+    given = given_actor_id(declared_id)
+    if name == declared and given:
+        return TurnOwner(name, given)
+    return TurnOwner(name, agent_id_of(name))
 
 
 def turn_attribution(content: str, declared: str = "") -> str:

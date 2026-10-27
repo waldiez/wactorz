@@ -35,10 +35,11 @@ import hashlib
 import logging
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from ...core.actor import Actor, ActorState, ReplyError, ask_through
+from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
@@ -237,6 +238,10 @@ class SpawnMixin(_Host):
 
         # ── Idempotency / replace ──────────────────────────────────────────
         existing = self._find_existing(name)
+        config = {
+            **config,
+            "actor_id": self._spawn_actor_id(name, existing.actor_id if existing else None),
+        }
         if existing is not None:
             if getattr(existing, "protected", False):
                 # `replace: true` would stop the system actor holding this name,
@@ -358,7 +363,7 @@ class SpawnMixin(_Host):
         if llm is not None:
             kwargs["llm_provider"] = llm
         logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
-        return await self.spawn(factory, **kwargs)
+        return await self.spawn(factory, actor_id=config.get("actor_id"), **kwargs)
 
     async def _spawn_ha_actuator(self, config: dict, name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).
@@ -392,6 +397,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning HomeAssistantActuatorAgent '%s'", self.name, name)
         return await self.spawn(
             HomeAssistantActuatorAgent,
+            actor_id=config.get("actor_id"),
             config=actuator_cfg,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
@@ -416,6 +422,7 @@ class SpawnMixin(_Host):
         try:
             actor = await self.spawn(
                 ScheduledAgent,
+                actor_id=config.get("actor_id"),
                 name=name,
                 schedule=schedule_spec,
                 timezone=self._resolve_user_timezone(),
@@ -451,6 +458,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
         return await self.spawn(
             RuleAgent,
+            actor_id=config.get("actor_id"),
             config=rule,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
@@ -485,6 +493,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning %r from %s", self.name, name, target)
         return await self.spawn(
             cast("type[Actor]", plugin.build),
+            actor_id=config.get("actor_id"),
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
             llm_provider=self.llm,
@@ -502,6 +511,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning LLM agent '%s'", self.name, name)
         return await self.spawn(
             LLMAgent,
+            actor_id=config.get("actor_id"),
             name=name,
             llm_provider=self.llm,
             system_prompt=config.get("system_prompt", "You are a helpful assistant."),
@@ -665,6 +675,7 @@ class SpawnMixin(_Host):
 
         actor = await self.spawn(
             DynamicAgent,
+            actor_id=config.get("actor_id"),
             name=name,
             code=code,
             poll_interval=float(config.get("poll_interval") or 1.0),
@@ -872,6 +883,26 @@ class SpawnMixin(_Host):
                 except Exception:
                     return None
         return None
+
+    def _spawn_actor_id(self, name: str, running: str | None) -> str:
+        """The id a spawn of ``name`` here runs under.
+
+        Never the spawn config's own: a config is often written by a model, and
+        an id taken from it could be another agent's. The id main's spawn
+        registry keeps for the name comes first, so a restart, a replace or a
+        move keeps it; then the id of the agent being replaced; and only then a
+        new one. With no main to keep an id, the name's derived id, which is the
+        same at every start.
+        """
+        own = getattr(self, "_registered_actor_id", None)
+        if callable(own):
+            kept = own(name)
+        else:
+            main = find_main_actor(self._registry) if self._registry is not None else None
+            if main is None:
+                return running or derive_actor_id(name)
+            kept = main._registered_actor_id(name)  # pyright: ignore[reportAttributeAccessIssue]
+        return str(kept or running or uuid.uuid4())
 
     def _unregister_spawn(self, name: str) -> None:
         """Take ``name`` out of main's spawn registry, as `_register_spawn` put it in."""

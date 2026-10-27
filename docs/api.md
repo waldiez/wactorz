@@ -203,7 +203,8 @@ Query the persistent chat log table. Query parameters:
 
 | Param | Description |
 |---|---|
-| `agent` | filter by agent name |
+| `agent_id` | one agent's history, by its id |
+| `agent` | filter by agent name: every agent that went by it |
 | `role` | filter by role (`user` or `assistant`) |
 | `since` | Unix timestamp float — only newer rows |
 | `limit` | max rows (default 200, max 1000) |
@@ -213,7 +214,7 @@ is a question the ledger still knows (`GET /api/questions`) carries it, so the d
 show it with its buttons, or with the pick once it is answered:
 
 ```json
-{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "role": "assistant",
+{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "agent_id": "…", "role": "assistant",
  "content": "Did something change at 14:02?\n\n1. maintenance\n2. real problem",
  "question": {"id": "3f2a…", "agent_id": "…", "text": "Did something change at 14:02?",
               "options": ["maintenance", "real problem"], "answer": null}}
@@ -221,6 +222,10 @@ show it with its buttons, or with the pick once it is answered:
 
 The same words asked more than once are told apart by time: a row is the question asked
 nearest it.
+
+A row's `agent_id` is the id of the agent whose thread the turn is in, and the history is kept
+by it: two agents may share a name, and `agent` returns the rows of both. A row stored before
+ids were kept has the id its agent had then, derived from its name.
 
 ---
 
@@ -608,6 +613,18 @@ After connection the server streams every MQTT message as a JSON object. Field n
 ```
 
 The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
+
+### Chat frames
+
+A chat turn is sent as `{"type": "chat", "content": "...", "agent_name": "main", "agent_id": "…", "id": "…"}`: the thread the page is in, by name and id, and the page's id for the message. Only `content` is required.
+
+The server answers first with the agent the turn reached, which is the agent an `@mention` names when it can reach one, and otherwise the thread the page said:
+
+```json
+{"type": "turn", "agent_id": "…", "name": "catalog", "id": "…", "timestamp": 1760000000.4}
+```
+
+`id` is the message's own, so the page files the person's words in that agent's thread. Every reply frame that follows (`chat`, `stream_chunk`, `stream_end`) carries the same `from` (the agent's name) and `agent_id`.
 
 ---
 

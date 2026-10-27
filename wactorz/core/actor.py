@@ -27,6 +27,7 @@ from . import models
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .identity import derive_actor_id
 from .labels import Label, LabelError, Labels, LabelSpec
 from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
@@ -95,31 +96,45 @@ def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
     return (protected and command == "delete") or (essential and command == "stop")
 
 
-def derive_actor_id(name: str) -> str:
-    """The actor id a named actor gets, derived from its name and nothing else.
+def has_stable_id(actor: object) -> bool:
+    """Whether this actor's id survives a restart, and so can hold a broker session.
 
-    Deterministic on purpose: the same agent must come back as the same id
-    across restarts, because the broker keys a held session on it and the
-    registry keys everything else on it.
-
-    Exported because several places need to *recognise* a derived id rather than
-    mint one -- deciding whether an actor can hold a broker session, addressing
-    an agent by name. Spelled once so those cannot drift apart: if the formula
-    changed under a copy, nothing would raise, sessions would simply stop being
-    resumed and durability would quietly become clean.
+    An actor's id is stable when it was given one, as an agent main spawned is
+    given the id its spawn registry keeps, or when it derives one from its name.
+    Either way the same agent reconnects as the same client and resumes whatever
+    the broker held for it. An anonymous actor is given a fresh id every
+    incarnation, so a session kept under the old id is unreachable -- keeping
+    one is not harmful, it is pointless, and it costs the broker state until it
+    expires.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+    return bool(getattr(actor, "stable_id", False))
 
 
-def has_derived_id(name: str, actor_id: str) -> bool:
-    """Whether this identity comes from the name, and so survives a restart.
+def _takes_actor_id(actor_class: Callable[..., Any]) -> bool:
+    """Whether ``actor_class`` can be handed ``actor_id`` when it is called."""
+    try:
+        parameters = inspect.signature(actor_class).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "actor_id" or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
 
-    A named actor reconnects as the same client and resumes whatever the broker
-    held for it. An anonymous one is given a fresh id every incarnation, so a
-    session kept under the old id is unreachable -- keeping one is not harmful,
-    it is pointless, and it costs the broker state until it expires.
+
+def build_actor(
+    actor_class: Callable[..., Actor], actor_id: str | None, kwargs: Mapping[str, Any]
+) -> Actor:
+    """``actor_class(**kwargs)``, running under ``actor_id`` when one is given.
+
+    The id is handed to a constructor that takes it, and set on the actor once
+    built otherwise, before anything has started: a catalogue class or a
+    factory written without the parameter still runs under the id main keeps.
     """
-    return derive_actor_id(name) == str(actor_id)
+    if actor_id and _takes_actor_id(actor_class):
+        return actor_class(**kwargs, actor_id=actor_id)
+    actor = actor_class(**kwargs)
+    if actor_id:
+        actor.actor_id = actor_id
+        actor.stable_id = True
+    return actor
 
 
 class ActorState(str, Enum):
@@ -468,6 +483,9 @@ class Actor(ABC):
             self.actor_id = derive_actor_id(name)
         else:
             self.actor_id = str(uuid.uuid4())
+        #: Whether the id outlives this incarnation: given, or derived from the
+        #: name. See `has_stable_id`.
+        self.stable_id: bool = bool(actor_id or name)
         self.name = name or f"actor-{self.actor_id[:8]}"
         self.state = ActorState.IDLE
         self.metrics = ActorMetrics()
@@ -1132,7 +1150,7 @@ class Actor(ABC):
         # Same rule the subscription hub follows: only an identity that
         # survives a restart can resume a session, so an anonymous actor
         # connects clean rather than leaving one behind per incarnation.
-        durable = has_derived_id(self.name, self.actor_id)
+        durable = has_stable_id(self)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         # A `commands` purpose: SubscriptionHub already holds this agent's
         # unqualified id, and two connections sharing an id kick each other off
@@ -1288,8 +1306,10 @@ class Actor(ABC):
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
-    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
-        """Spawn a child actor. The child inherits:
+    async def spawn(
+        self, actor_class: type[Actor], *, actor_id: str | None = None, **kwargs: Any
+    ) -> Actor:
+        """Spawn a child actor, under ``actor_id`` when one is given. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
@@ -1302,7 +1322,7 @@ class Actor(ABC):
         # Default persistence to same root as parent
         kwargs.setdefault("persistence_dir", str(self._persistence_dir.parent))
 
-        child = actor_class(**kwargs)
+        child = build_actor(actor_class, actor_id, kwargs)
 
         # Inherit everything from parent
         child._mqtt_client = self._mqtt_client  # MQTT publish connection
@@ -1353,13 +1373,15 @@ class Actor(ABC):
                     # actor's settings have become since.
                     cls = actor_class
                     kw = dict(kwargs)
+                    # The id it runs under, not the one a rebuild would derive.
+                    kept_id = child.actor_id if child.stable_id else None
                     mc = self._mqtt_client
                     mb = self._mqtt_broker
                     mp = self._mqtt_port
                     papi = self._persistence_api
 
                     async def _child_factory() -> Actor:
-                        c = cls(**kw)
+                        c = build_actor(cls, kept_id, kw)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
                         c._mqtt_port = mp

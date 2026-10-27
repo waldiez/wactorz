@@ -136,6 +136,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   independently from continuous listening motion, which remains opt-in because servo noise can
   reach the live microphone.
 
+- **An agent keeps an id of its own, across restarts and moves, and its chat history follows the id.**
+  A new agent is given an id when it is first spawned, kept in main's spawn registry; a restart,
+  a `replace` or a move to another node keeps it, and a node runs the agent under it. Deleting an
+  agent and spawning one of the same name makes a new agent, whose history starts empty. Main's
+  own agents, and every agent spawned before this, keep the id derived from their name, so an
+  upgrade changes nothing: registry entries and stored chat turns read back with the id they
+  already had. Chat history is kept by that id (`GET /api/chats?agent_id=`; `?agent=` still
+  returns every agent that went by the name), and the dashboard's WebSocket frames carry it,
+  with a `turn` frame naming the agent a turn reached. A node says in its manifest that it
+  honours the id (`actor_ids`); one deployed before this gives a new agent the id derived from
+  its name, and main refuses to move an agent with an id of its own there until the node is
+  deployed again.
+
 ### Fixed
 
 - **Two package checks at once no longer fail with a `KeyError`.** Checking or installing packages for two agents at the same time could fail inside Python's import system, which is not safe to refresh from two threads at once; Wactorz now refreshes it from one thread at a time.

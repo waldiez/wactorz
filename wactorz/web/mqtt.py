@@ -152,6 +152,7 @@ async def _dispatch(topic: str, payload: str) -> None:
                 runtime.db.write_chat_log(
                     ts=push.get("timestamp", time.time()),
                     agent_name=agent_name,
+                    agent_id=push["thread_id"],
                     role=role,
                     # Same treatment as the WS path: an agent can quote back
                     # something a user typed, and this row outlives the turn.

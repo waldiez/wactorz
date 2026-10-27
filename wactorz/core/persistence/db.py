@@ -16,7 +16,7 @@ from typing import Any
 
 from .json_value import encode
 from .migrations import stamp_new_database
-from .schema import SCHEMA_SQL, SCHEMA_VERSION
+from .schema import ADDED_COLUMN_INDEXES, SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +208,8 @@ class WactorzDB:
         new = not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone()
         self.conn.executescript(SCHEMA_SQL)
         if new:
+            for statement in ADDED_COLUMN_INDEXES:
+                self.conn.execute(statement)
             stamp_new_database(self.conn)
         elif not self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone():
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -472,9 +474,16 @@ class WactorzDB:
         content: str,
         session_id: str = "",
         attachments: list[dict[str, Any]] | None = None,
+        *,
+        agent_id: str,
     ) -> None:
         """Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema lives in :mod:`.schema`.
+
+        ``agent_id`` is the id of the agent whose thread the turn is in, which
+        the history is kept by; ``agent_name`` is how the turn names it. Required:
+        a writer that knows only a name must look the id up, since two agents
+        may share a name.
 
         ``attachments`` are stored on the row rather than resolved from disk on
         read: the files are immutable, so there is nothing to keep in step, and a
@@ -483,11 +492,13 @@ class WactorzDB:
         """
         with self.transaction() as conn:
             conn.execute(
-                "INSERT INTO chat_log (ts, agent_name, role, content, session_id, attachments) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO chat_log "
+                "(ts, agent_name, agent_id, role, content, session_id, attachments) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     ts,
                     agent_name,
+                    agent_id,
                     role,
                     content,
                     session_id,
@@ -535,13 +546,24 @@ class WactorzDB:
         role: str | None = None,
         since: float | None = None,
         limit: int = 200,
+        *,
+        agent_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return chat_log rows newest-first as plain dicts. Used by the
         /api/chats endpoint and by feed_handler to seed the UI feed.
+
+        ``agent_id`` gives one agent's history; ``agent_name`` every agent's
+        that went by that name.
         """
-        sql = "SELECT id, ts, agent_name, role, content, session_id, attachments FROM chat_log"
+        sql = (
+            "SELECT id, ts, agent_name, agent_id, role, content, session_id, attachments "
+            "FROM chat_log"
+        )
         clauses: list[str] = []
         params: list = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
         if agent_name:
             clauses.append("agent_name = ?")
             params.append(agent_name)

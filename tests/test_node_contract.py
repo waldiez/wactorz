@@ -165,6 +165,8 @@ MANIFEST_FIELDS = frozenset(
         "code_bundles",
         # That it clears its own agents' copies when main resets them.
         "resets",
+        # That an agent runs under the id its spawn names.
+        "actor_ids",
     }
 )
 
@@ -178,6 +180,9 @@ MANIFEST_FIELDS = frozenset(
 SPAWN_CONFIG_FIELDS = frozenset(
     {
         "name",
+        # The id main's spawn registry keeps; a node too old for it derives
+        # one from the name.
+        "actor_id",
         "code",
         "poll_interval",
         "task_timeout_s",

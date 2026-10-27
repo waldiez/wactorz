@@ -19,6 +19,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from wactorz.core.identity import derive_actor_id
 from wactorz.web import chat, runtime, ws
 
 
@@ -27,7 +28,9 @@ class _Registry:
         return []
 
     def find_by_name(self, name: str) -> Any:
-        return SimpleNamespace(name=name) if name == "main" else None
+        return (
+            SimpleNamespace(name=name, actor_id=derive_actor_id(name)) if name == "main" else None
+        )
 
 
 class _Db:
@@ -60,12 +63,15 @@ async def client_fixture(db: _Db) -> AsyncIterator[TestClient[Any, Any]]:
 
 
 async def _frames_until(socket: Any, last_type: str) -> list[dict[str, Any]]:
-    """Frames after the opening two, up to and including the first of `last_type`."""
+    """Frames after the opening two, up to and including the first of `last_type`.
+
+    The frame saying whose turn it is is left out too: test_ws_handler covers it.
+    """
     frames: list[dict[str, Any]] = []
     while True:
         msg = await socket.receive(timeout=5)
         frame = json.loads(msg.data)
-        if frame["type"] in ("full_snapshot", "mqtt_status"):
+        if frame["type"] in ("full_snapshot", "mqtt_status", "turn"):
             continue
         frames.append(frame)
         if frame["type"] == last_type:
@@ -219,7 +225,9 @@ class TestAFailingSocket:
                 SimpleNamespace(type=WSMsgType.TEXT, data="{not json"),
                 SimpleNamespace(type=WSMsgType.CLOSE, data=None),
             ],
-            fail_after=3,
+            # The opening two, the frame naming the turn and the chunk go out;
+            # the end of the stream is what fails.
+            fail_after=4,
         )
         monkeypatch.setattr(ws.web, "WebSocketResponse", lambda heartbeat: socket)
         monkeypatch.setattr(ws.origins, "refuse", lambda request, strict_origin: None)

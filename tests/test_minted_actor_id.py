@@ -316,3 +316,55 @@ class TestTheNode:
         agent = NodeAgent({"name": "counter", "code": "", **config}, runner)
 
         assert agent.actor_id == derive_actor_id("counter")
+
+
+class _NodeHost:
+    """What `NodeManager` asks of main when a manifest arrives."""
+
+    def __init__(self, registry: dict[str, dict[str, Any]]) -> None:
+        self.registry = registry
+        self.notices: list[dict[str, Any]] = []
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
+        return self.registry
+
+    def _queue_notification(self, notice: dict[str, Any]) -> None:
+        self.notices.append(notice)
+
+
+def _manifest(**over: Any) -> dict[str, Any]:
+    return {"manifest_v": 1, "agents": [], **over}
+
+
+class TestANodeThatGivesAnotherId:
+    """A minted id sent before the node's manifest arrived, as at a restart, to a
+    node from before ids were kept: it runs the agent under the derived id."""
+
+    def _nodes(self, **registry: dict[str, Any]) -> tuple[NodeManager, _NodeHost]:
+        host = _NodeHost(registry)
+        return NodeManager(cast("Any", host)), host
+
+    def test_is_named_with_the_agents_once_its_manifest_says_so(self) -> None:
+        nodes, host = self._nodes(counter={"name": "counter", "node": "rpi", "actor_id": MINTED})
+
+        nodes.receive_manifest("rpi", _manifest())
+        nodes.receive_manifest("rpi", _manifest())
+
+        (notice,) = host.notices
+        assert "'counter'" in notice["message"]
+        assert "/deploy rpi" in notice["message"]
+
+    def test_says_nothing_of_an_agent_running_under_its_derived_id(self) -> None:
+        derived = derive_actor_id("counter")
+        nodes, host = self._nodes(counter={"name": "counter", "node": "rpi", "actor_id": derived})
+
+        nodes.receive_manifest("rpi", _manifest())
+
+        assert host.notices == []
+
+    def test_says_nothing_of_a_node_that_honours_ids(self) -> None:
+        nodes, host = self._nodes(counter={"name": "counter", "node": "rpi", "actor_id": MINTED})
+
+        nodes.receive_manifest("rpi", _manifest(actor_ids=True))
+
+        assert host.notices == []

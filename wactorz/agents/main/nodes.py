@@ -194,6 +194,8 @@ class NodeManager:
         self.heartbeat_counts: dict[str, OrderedDict[str, int]] = {}
         #: Nodes already said in chat to be sending unsigned heartbeats.
         self.unsigned_reported: set[str] = set()
+        #: Nodes already said in chat to run agents under ids other than theirs.
+        self.ids_reported: set[str] = set()
         #: Told of every heartbeat taken, as main took it: the dashboard shows a
         #: node from this, never from the broker, where anyone may publish one.
         self.watchers: list[HeartbeatWatcher] = []
@@ -517,6 +519,43 @@ class NodeManager:
             logger.warning("[main] Ignoring a manifest from node %r with no version.", node_name)
             return
         self.node_manifests[node_name] = data
+        self._say_ids_not_honoured(node_name, data)
+
+    def _say_ids_not_honoured(self, node_name: str, manifest: dict[str, Any]) -> None:
+        """Say in chat, once per node, which agents it runs under another id than theirs.
+
+        Main sends an agent with an id of its own only to a node that says it
+        honours one, or to a node whose manifest has not arrived yet, as at a
+        restart. A node from before ids were kept, sent one in that window, runs
+        it under the id derived from its name, so its chat history and retained
+        records are not where main keeps them. The manifest is when main can tell.
+        """
+        host = self.host
+        if host is None or manifest.get("actor_ids") is True or node_name in self.ids_reported:
+            return
+        stranded = sorted(
+            name
+            for name, cfg in host._get_spawn_registry().items()
+            if (cfg.get("node") or "").strip() == node_name
+            and cfg.get("actor_id") != derive_actor_id(name)
+        )
+        if not stranded:
+            return
+        self.ids_reported.add(node_name)
+        listed = ", ".join(f"'{name}'" for name in stranded)
+        logger.warning("[main] Node %r runs %s under ids other than theirs", node_name, listed)
+        host._queue_notification(
+            {
+                "severity": "warning",
+                "about": f"ids-not-honoured:{node_name}",
+                "message": (
+                    f"Node '{node_name}' runs {listed} under an id derived from the name rather "
+                    f"than the one main keeps, so their chat history and records are kept apart. "
+                    f"It was deployed before agents kept their ids. Deploy it again: "
+                    f"/deploy {node_name}"
+                ),
+            }
+        )
 
     def targets_of(self, node_name: str) -> list[str]:
         """The library agents `node_name` says it can build, by import path.
@@ -568,6 +607,7 @@ class NodeManager:
         self.node_manifests.pop(node_name, None)
         self.heartbeat_counts.pop(node_name, None)
         self.unsigned_reported.discard(node_name)
+        self.ids_reported.discard(node_name)
 
     async def receive_heartbeat(
         self, node_name: str, data: dict[str, Any], *, signed: bool = True

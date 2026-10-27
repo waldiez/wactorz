@@ -37,6 +37,7 @@ from ..core.pip import missing_requirements, pending_restart
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
 from .lookup import find_main_actor
+from .mixins import spawn_actor_id
 
 if TYPE_CHECKING:
     from .main import MainActor
@@ -985,7 +986,9 @@ class CatalogAgent(Actor):
                 }
                 if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
-                actor = await self.spawn(factory, **native_kwargs)
+                actor = await self.spawn(
+                    factory, actor_id=spawn_actor_id(self._registry, resolved), **native_kwargs
+                )
                 if actor:
                     if main:
                         # Persist a JSON-safe descriptor so the agent is restored
@@ -1137,6 +1140,7 @@ class CatalogAgent(Actor):
         main = find_main_actor(self._registry)
         actor = await self.spawn(
             DynamicAgent,
+            actor_id=spawn_actor_id(self._registry, name),
             name=name,
             code=recipe["code"],
             poll_interval=float(recipe.get("poll_interval", 3600)),

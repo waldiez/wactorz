@@ -37,7 +37,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
@@ -105,6 +105,22 @@ def agent_type(config: dict) -> str:
     ):
         return "llm"
     return kind
+
+
+def spawn_actor_id(registry: Any, name: str, running: str | None = None) -> str:
+    """The id a spawn of ``name`` runs under, by whoever spawns it.
+
+    Never the spawn config's own: a config is often written by a model, and an
+    id taken from it could be another agent's. The id main's spawn registry
+    keeps for the name comes first, so a restart, a replace or a move keeps it;
+    then the id of the agent being replaced (``running``); and only then a new
+    one. With no main to keep an id, the name's derived id, which is the same
+    at every start.
+    """
+    main = find_main_actor(registry) if registry is not None else None
+    if main is None:
+        return running or derive_actor_id(name)
+    return str(main._registered_actor_id(name) or running or uuid.uuid4())
 
 
 class SpawnPlaceholder:
@@ -885,24 +901,11 @@ class SpawnMixin(_Host):
         return None
 
     def _spawn_actor_id(self, name: str, running: str | None) -> str:
-        """The id a spawn of ``name`` here runs under.
-
-        Never the spawn config's own: a config is often written by a model, and
-        an id taken from it could be another agent's. The id main's spawn
-        registry keeps for the name comes first, so a restart, a replace or a
-        move keeps it; then the id of the agent being replaced; and only then a
-        new one. With no main to keep an id, the name's derived id, which is the
-        same at every start.
-        """
+        """The id a spawn of ``name`` here runs under; see `spawn_actor_id`."""
         own = getattr(self, "_registered_actor_id", None)
         if callable(own):
-            kept = own(name)
-        else:
-            main = find_main_actor(self._registry) if self._registry is not None else None
-            if main is None:
-                return running or derive_actor_id(name)
-            kept = main._registered_actor_id(name)  # pyright: ignore[reportAttributeAccessIssue]
-        return str(kept or running or uuid.uuid4())
+            return str(own(name) or running or uuid.uuid4())
+        return spawn_actor_id(self._registry, name, running)
 
     def _unregister_spawn(self, name: str) -> None:
         """Take ``name`` out of main's spawn registry, as `_register_spawn` put it in."""

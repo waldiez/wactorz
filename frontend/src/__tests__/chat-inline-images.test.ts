@@ -28,8 +28,7 @@ function inlineImage(root: ParentNode): HTMLImageElement | null {
 function makeHost(thread: HTMLElement): StreamHost {
     return {
         isChatView: () => true,
-        lastSentTarget: () => "camera",
-        belongsHere: () => true,
+        lastSentTarget: () => ({ name: "camera", id: "camera" }),
         isOpenThread: () => true,
         thread: () => thread,
         scrollThread: () => {},
@@ -48,7 +47,7 @@ describe("inline images from a finished stream", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
         chunk(ui, SNAPSHOT, "camera");
-        ui.onEnd({ text: SNAPSHOT, from: "camera" });
+        ui.onEnd({ text: SNAPSHOT, from: "camera", agentId: "camera" });
 
         const img = inlineImage(thread);
         expect(img).not.toBeNull();
@@ -65,7 +64,7 @@ describe("inline images from a finished stream", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
         chunk(ui, SNAPSHOT, "camera");
-        ui.onEnd({ text: SNAPSHOT, from: "camera" });
+        ui.onEnd({ text: SNAPSHOT, from: "camera", agentId: "camera" });
 
         const img = inlineImage(thread)!;
         expect(img.tabIndex).toBe(0);
@@ -80,6 +79,7 @@ describe("inline images replayed from history", () => {
             id: "1",
             from: "camera",
             to: "user",
+            threadId: "camera",
             content: SNAPSHOT,
             timestampMs: 1_700_000_000_000,
         };

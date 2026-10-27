@@ -229,11 +229,12 @@ function refreshLiveActors(): void {
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain) => {
+ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId) => {
     ingestChat({
         id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
         to,
+        threadId,
         content,
         timestampMs,
         ...(source ? { source } : {}),
@@ -343,7 +344,7 @@ router.on("status", payload => {
 
 // The /ws transport owns the connection; the router only decodes events. Feed it
 // the server_event frames, and derive "live" from the transport + broker state.
-ws.onServerEvent((topic, payload) => router.route(topic, payload));
+ws.onServerEvent((topic, payload, threadId) => router.route(topic, payload, threadId));
 ws.onConnected(() => {
     _wsOpen = true;
     emit("af-socket", { open: true });
@@ -487,8 +488,8 @@ listen("af-addressed", ({ agent }) => ws.addressed(agent));
 // af-iobar sends: route through ioManager (same as regular io-bar)
 listen("af-send-message", detail => {
     const { id, content, attachments } = detail;
-    // Only its name is read: the send is addressed by name, which the server resolves.
-    const agent = agentStore.byName(detail.target)[0] ?? null;
+    // The thread's agent, by its id: the send names it to the server by name and id.
+    const agent = agentStore.get(detail.target) ?? null;
     void ioManager.send(content, agent, attachments, id);
 });
 

@@ -27,11 +27,13 @@ import { MAIN_AGENT } from "../agents/naming";
 /** How long a turn may go without a sign of life before it is given up on. */
 export const TURN_IDLE_TIMEOUT_MS = 60_000;
 
-/** One message to send: the id of its bubble, its words, to whom, and what is attached. */
+/** One message to send: the id of its bubble, its words, the thread it is sent from
+ *  (`target`, an agent id), the name of the agent it is to, and what is attached. */
 export interface PendingSend {
     id: string;
     content: string;
     target: string;
+    name: string;
     attachments: string[];
 }
 
@@ -140,7 +142,7 @@ export class TurnTracker {
 
     private _start(send: PendingSend): void {
         this._inFlight = send;
-        this._agent = answererOf(send.content, send.target);
+        this._agent = answererOf(send.content, send.name);
         this._arm();
         this._notify();
         this.host.deliver(send);

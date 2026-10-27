@@ -80,8 +80,8 @@ function restoreAttachments(stored: StoredAttachment[] | undefined): Attachment[
 
 /** Primary source: chat_log table — carries real persisted timestamps.
  *  Returns null on a failed request so callers can retry later. */
-async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
-    const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentName)}&limit=200`);
+async function fromChatLog(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
+    const res = await fetch(`${ingressBase()}/api/chats?agent_id=${encodeURIComponent(agentId)}&limit=200`);
     if (!res.ok) {
         return null;
     }
@@ -102,9 +102,10 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
         }
         const attachments = restoreAttachments(r.attachments);
         return {
-            id: `hist-${agentName}-${r.id}`,
+            id: `hist-${agentId}-${r.id}`,
             from: r.role === "user" ? "user" : agentName,
             to: r.role === "user" ? agentName : "user",
+            threadId: agentId,
             content: shownContent(r),
             timestampMs: toMs(r.ts),
             // Spread rather than set: `exactOptionalPropertyTypes` refuses an
@@ -116,8 +117,8 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
 
 /** Fallback: actor kv_store history — no timestamps, so synthesise them.
  *  Returns null on a failed request so callers can retry later. */
-async function fromKvStore(agentName: string): Promise<ChatMessage[] | null> {
-    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentName)}/history`);
+async function fromKvStore(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
+    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentId)}/history`);
     if (!res.ok) {
         return null;
     }
@@ -125,27 +126,28 @@ async function fromKvStore(agentName: string): Promise<ChatMessage[] | null> {
     const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({
-        id: `hist-${agentName}-${i}`,
+        id: `hist-${agentId}-${i}`,
         from: m.role === "user" ? "user" : agentName,
         to: m.role === "user" ? agentName : "user",
+        threadId: agentId,
         content: shownContent(m),
         timestampMs: base + i * 2000,
     }));
 }
 
-/** Fetch an agent's persisted chat history by NAME — history is keyed by agent
- *  name (the chat target), not the actor id. Returns null on any failure (so
- *  the caller can retry) and [] only when the agent genuinely has no history. */
-export async function fetchChatHistory(agentName: string): Promise<ChatMessage[] | null> {
+/** Fetch the persisted chat history of the agent `agentId`, called `agentName` — kept
+ *  by id, since two agents may share a name. Returns null on any failure (so the
+ *  caller can retry) and [] only when the agent genuinely has no history. */
+export async function fetchChatHistory(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
     try {
-        const primary = await fromChatLog(agentName);
+        const primary = await fromChatLog(agentId, agentName);
         if (primary === null) {
             return null;
         }
         if (primary.length) {
             return primary;
         }
-        return await fromKvStore(agentName);
+        return await fromKvStore(agentId, agentName);
     } catch {
         return null;
     }

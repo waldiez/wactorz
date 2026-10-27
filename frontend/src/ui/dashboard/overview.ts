@@ -37,8 +37,8 @@ export interface OverviewHost {
     hostStats(): [number | null, number | null, number | null];
     /** Inputs for the summary stat cards. */
     statData(): StatCardData;
-    /** Open chat targeting the named agent. */
-    onChat(name: string): void;
+    /** Open chat with the agent `id`. */
+    onChat(id: string): void;
     /** Run a control command (start/stop/delete) on an agent. */
     onCommand(id: string, action: AgentAction, btn: HTMLButtonElement): void;
     /** An agent's messages per minute over the last hour, once fetched. */
@@ -207,7 +207,7 @@ export class OverviewView {
             agent,
             this.host.lastHb.get(agent.id) ?? 0,
             {
-                onChat: a => this.host.onChat(a.name),
+                onChat: a => this.host.onChat(a.id),
                 onCommand: (id, action, btn) => this.host.onCommand(id, action, btn),
                 onHistory: a => this.host.onOpenTrend("agents", a.name),
             },

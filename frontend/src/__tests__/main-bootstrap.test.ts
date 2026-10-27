@@ -448,11 +448,11 @@ describe("main.ts bootstrap", () => {
     });
 
     it("handles the app-event listeners", () => {
-        emit("af-stream-end", { text: "done", from: "A" });
-        emit("af-stream-end", { text: "", from: "A" }); // !text → return
+        emit("af-stream-end", { text: "done", from: "A", agentId: "a" });
+        emit("af-stream-end", { text: "", from: "A", agentId: "a" }); // !text → return
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
-        emit("af-send-message", { id: "s1", content: "hi", target: "A", attachments: [] }); // agent found
-        emit("af-send-message", { id: "s2", content: "hi", target: "nope", attachments: [] }); // null
+        emit("af-send-message", { id: "s1", content: "hi", target: "a", name: "A", attachments: [] }); // agent found
+        emit("af-send-message", { id: "s2", content: "hi", target: "nope", name: "nope", attachments: [] }); // null
         emit("af-wipe-all", { survivors: ["a"] });
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));

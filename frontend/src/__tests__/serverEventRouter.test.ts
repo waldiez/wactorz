@@ -239,6 +239,18 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         expect((sp[0] as { agentType: string }).agentType).toBe("worker");
     });
 
+    it("files a chat message in its sender's thread, unless the server names another", () => {
+        // A voice surface relays the person's words to another agent, which the
+        // server names by id; the page never works an id out from a name.
+        const r = new ServerEventRouter();
+        const ch = capture(r, "chat") as { threadId: string }[];
+
+        r.route("agents/a1/chat", { content: "hi", from: "alpha" });
+        r.route("agents/a1/chat", { content: "rain?", from: "user", to: "weather" }, "w1");
+
+        expect(ch.map(m => m.threadId)).toEqual(["a1", "w1"]);
+    });
+
     it("routes exact system topics", () => {
         const r = new ServerEventRouter();
         const qa = capture(r, "qa-flag");

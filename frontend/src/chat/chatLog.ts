@@ -28,7 +28,6 @@
  * says it changed something.
  */
 import type { ChatMessage } from "../types/agent";
-import { IO_GATEWAY } from "../agents/naming";
 
 /** Most messages one thread keeps; the oldest goes first. */
 export const MAX_PER_THREAD = 500;
@@ -38,10 +37,15 @@ const SAME_MESSAGE_WINDOW_MS = 120_000;
 
 const NONE: readonly ChatMessage[] = Object.freeze([]);
 
-/** The thread a message is in: the person's own turns, and the gateway's and the
- *  system's, are in the thread of whom they were to; anyone else's in its sender's. */
+/** The thread a message is in: its agent's id, as the server named it. Threads are
+ *  kept by id because two agents may share a name. */
 export function threadOf(msg: ChatMessage): string {
-    return msg.from === "user" || msg.from === IO_GATEWAY || msg.from === "system" ? msg.to : msg.from;
+    return msg.threadId;
+}
+
+/** The name of the agent whose thread `msg` is in: whom the person spoke to, or the sender. */
+function ownerName(msg: ChatMessage): string {
+    return msg.from === "user" ? msg.to : msg.from;
 }
 
 /** Whether `msg` asks something still open: options offered, none picked. */
@@ -57,13 +61,13 @@ export interface Reconciled {
 }
 
 export class ChatLog {
-    /** Each thread's messages, by thread name, in the order the threads began. */
+    /** Each thread's messages, by its agent's id, in the order the threads began. */
     private _threads = new Map<string, readonly ChatMessage[]>();
     /** Which thread each held id is in. */
     private _where = new Map<string, string>();
-    /** Per thread, the agents in it with a question still open. */
-    private _asking = new Map<string, ReadonlySet<string>>();
-    /** Threads whose persisted history was taken in, by agent name. */
+    /** The threads in which an agent has a question still open. */
+    private _asking = new Set<string>();
+    /** Threads whose persisted history was taken in, by agent id. */
     private _loaded = new Set<string>();
     private _all: readonly ChatMessage[] | null = null;
 
@@ -73,30 +77,26 @@ export class ChatLog {
         return this._all;
     }
 
-    /** The messages of `name`'s thread, in order: the thread itself, unchanged
+    /** The messages of the thread `id`, in order: the thread itself, unchanged
      *  until it is next written to. */
-    thread(name: string): readonly ChatMessage[] {
-        return this._threads.get(name) ?? NONE;
+    thread(id: string): readonly ChatMessage[] {
+        return this._threads.get(id) ?? NONE;
     }
 
     /** The message `id`, or undefined when none is held. */
     get(id: string): ChatMessage | undefined {
-        const name = this._where.get(id);
-        return name === undefined ? undefined : this.thread(name).find(m => m.id === id);
+        const thread = this._where.get(id);
+        return thread === undefined ? undefined : this.thread(thread).find(m => m.id === id);
     }
 
-    /** The agents asking the person something still open. */
+    /** The ids of the agents asking the person something still open. */
     asking(): Set<string> {
-        const agents = new Set<string>();
-        for (const inThread of this._asking.values()) {
-            inThread.forEach(agent => agents.add(agent));
-        }
-        return agents;
+        return new Set(this._asking);
     }
 
-    /** Whether `name`'s history has been taken in. */
-    historyLoaded(name: string): boolean {
-        return this._loaded.has(name);
+    /** Whether the history of the thread `id` has been taken in. */
+    historyLoaded(id: string): boolean {
+        return this._loaded.has(id);
     }
 
     /** Take a message as it arrives, after the rest; false when its id is held already. */
@@ -104,18 +104,18 @@ export class ChatLog {
         if (this._where.has(msg.id)) {
             return false;
         }
-        const name = threadOf(msg);
-        this._set(name, [...this.thread(name), msg]);
+        const thread = threadOf(msg);
+        this._set(thread, [...this.thread(thread), msg]);
         return true;
     }
 
     /**
-     * Take `name`'s persisted history, marking it loaded: each message where
-     * its time puts it, except one already shown, whose stored id it adopts
-     * instead. Returns how many were added.
+     * Take the persisted history of the thread `id`, marking it loaded: each
+     * message where its time puts it, except one already shown, whose stored id
+     * it adopts instead. Returns how many were added.
      */
-    addHistory(name: string, incoming: ChatMessage[]): number {
-        this._loaded.add(name);
+    addHistory(id: string, incoming: ChatMessage[]): number {
+        this._loaded.add(id);
         const threads = new Map<string, ChatMessage[]>();
         const seen = new Set<string>();
         let added = 0;
@@ -144,16 +144,41 @@ export class ChatLog {
     /** Replace the message `id` with what `change` makes of it; the message as it is
      *  now, or null when there is none. */
     update(id: string, change: (m: ChatMessage) => ChatMessage): ChatMessage | null {
-        const name = this._where.get(id);
+        const thread = this._where.get(id);
         const found = this.get(id);
-        if (name === undefined || !found) {
+        if (thread === undefined || !found) {
             return null;
         }
         const message = change(found);
         this._set(
-            name,
-            this.thread(name).map(m => (m === found ? message : m)),
+            thread,
+            this.thread(thread).map(m => (m === found ? message : m)),
         );
+        return message;
+    }
+
+    /**
+     * File the message `id` in the thread `threadId`, the agent called `name`, where
+     * its time puts it: the person's words reached an agent other than the thread
+     * they were typed in. The message as it is now, or null when none is held.
+     */
+    move(id: string, threadId: string, name: string): ChatMessage | null {
+        const from = this._where.get(id);
+        const found = this.get(id);
+        if (from === undefined || !found) {
+            return null;
+        }
+        if (from === threadId) {
+            return found;
+        }
+        const message = { ...found, threadId, to: name };
+        this._set(
+            from,
+            this.thread(from).filter(m => m !== found),
+        );
+        const into = [...this.thread(threadId)];
+        into.splice(insertionPoint(into, message), 0, message);
+        this._set(threadId, into);
         return message;
     }
 
@@ -181,17 +206,17 @@ export class ChatLog {
         let changed = false;
         for (const msg of open) {
             if (!this._where.has(msg.id)) {
-                const name = threadOf(msg);
-                const list = [...this.thread(name)];
+                const thread = threadOf(msg);
+                const list = [...this.thread(thread)];
                 list.splice(insertionPoint(list, msg), 0, msg);
-                this._set(name, list);
+                this._set(thread, list);
                 changed = true;
             }
         }
         const picks = new Map(answered.map(m => [m.id, m.answer]));
         const listed = new Set([...open, ...answered].map(m => m.id));
         const known = new Set([...open, ...answered].map(m => m.agentId ?? ""));
-        for (const [name, list] of [...this._threads]) {
+        for (const [thread, list] of [...this._threads]) {
             let touched = false;
             const next = list.flatMap(m => {
                 if (!isOpenQuestion(m) || !m.agentId || !known.has(m.agentId)) {
@@ -212,16 +237,16 @@ export class ChatLog {
                 return [m];
             });
             if (touched) {
-                this._set(name, next);
+                this._set(thread, next);
                 changed = true;
             }
         }
         return { changed, closed };
     }
 
-    /** Remove the newest message of `name`'s thread that `matches` picks; whether there was one. */
-    removeLast(name: string, matches: (m: ChatMessage) => boolean): boolean {
-        const list = this.thread(name);
+    /** Remove the newest message of the thread `id` that `matches` picks; whether there was one. */
+    removeLast(id: string, matches: (m: ChatMessage) => boolean): boolean {
+        const list = this.thread(id);
         const at = lastIndexWhere(list, matches);
         const gone = list[at];
         if (!gone) {
@@ -229,32 +254,38 @@ export class ChatLog {
         }
         this._where.delete(gone.id);
         this._set(
-            name,
+            id,
             list.filter((_, i) => i !== at),
         );
         return true;
     }
 
     /**
-     * Drop `agent`'s thread — its own messages and everything said to it — or
-     * every thread when `agent` is null. Every thread's history is to be
-     * fetched again either way: the server's copy may have been reset with it.
+     * Drop the threads of the agents called `agent` — their own messages and
+     * everything said to them — or every thread when `agent` is null. By name,
+     * as the server resets them: every agent that went by it. Every thread's
+     * history is to be fetched again either way: the server's copy may have
+     * been reset with it.
      */
     reset(agent: string | null): void {
         if (agent === null) {
             this._drop();
             return;
         }
-        this.thread(agent).forEach(m => this._where.delete(m.id));
-        this._threads.delete(agent);
-        this._asking.delete(agent);
+        for (const [id, list] of [...this._threads]) {
+            if (list.some(m => ownerName(m) === agent)) {
+                list.forEach(m => this._where.delete(m.id));
+                this._threads.delete(id);
+                this._asking.delete(id);
+            }
+        }
         this._all = null;
         this._loaded.clear();
     }
 
-    /** Forget that `name`'s history was taken in, so it is fetched again. */
-    forgetHistory(name: string): void {
-        this._loaded.delete(name);
+    /** Forget that the history of the thread `id` was taken in, so it is fetched again. */
+    forgetHistory(id: string): void {
+        this._loaded.delete(id);
     }
 
     /** Drop every message and what was loaded. */
@@ -265,14 +296,14 @@ export class ChatLog {
     private _drop(): void {
         this._threads = new Map();
         this._where = new Map();
-        this._asking = new Map();
+        this._asking = new Set();
         this._all = null;
         this._loaded.clear();
     }
 
-    /** Make `list` `name`'s thread, kept to its cap, with the index and who is asking
-     *  brought up to date for that thread alone. */
-    private _set(name: string, list: readonly ChatMessage[]): void {
+    /** Make `list` the thread `id`, kept to its cap, with the index and whether it
+     *  asks something brought up to date for that thread alone. */
+    private _set(id: string, list: readonly ChatMessage[]): void {
         const kept = list.length > MAX_PER_THREAD ? list.slice(-MAX_PER_THREAD) : list;
         for (let i = 0; i < list.length - kept.length; i++) {
             const dropped = list[i];
@@ -280,12 +311,13 @@ export class ChatLog {
                 this._where.delete(dropped.id);
             }
         }
-        kept.forEach(m => this._where.set(m.id, name));
-        this._threads.set(name, kept);
-        this._asking.set(
-            name,
-            new Set(kept.filter(m => m.from !== "user" && isOpenQuestion(m)).map(m => m.from)),
-        );
+        kept.forEach(m => this._where.set(m.id, id));
+        this._threads.set(id, kept);
+        if (kept.some(m => m.from !== "user" && isOpenQuestion(m))) {
+            this._asking.add(id);
+        } else {
+            this._asking.delete(id);
+        }
         this._all = null;
     }
 }
@@ -297,7 +329,7 @@ function sameMessage(shown: ChatMessage, restored: ChatMessage): boolean {
     return (
         !shown.id.startsWith("hist-") &&
         shown.from === restored.from &&
-        (restored.from !== "user" || shown.to === restored.to) &&
+        shown.threadId === restored.threadId &&
         shown.content.trim() === restored.content.trim() &&
         Math.abs(shown.timestampMs - restored.timestampMs) < SAME_MESSAGE_WINDOW_MS
     );

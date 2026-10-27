@@ -7,7 +7,15 @@ import { buildChatMessageEl, buildChatEmptyState } from "../ui/dashboard/chatThr
 import type { ChatMessage, Attachment } from "../types/agent";
 
 function msg(over: Partial<ChatMessage>): ChatMessage {
-    return { id: "1", from: "main", to: "user", content: "hi", timestampMs: 1_700_000_000_000, ...over };
+    return {
+        id: "1",
+        from: "main",
+        to: "user",
+        threadId: "main",
+        content: "hi",
+        timestampMs: 1_700_000_000_000,
+        ...over,
+    };
 }
 
 function att(over: Partial<Attachment>): Attachment {
@@ -57,6 +65,7 @@ describe("buildChatMessageEl", () => {
             msg({
                 from: "user",
                 to: "reachy-mini",
+                threadId: "reachy-mini",
                 source: "voice",
                 surface: "reachy-mini",
                 surfaceLabel: "Reachy",

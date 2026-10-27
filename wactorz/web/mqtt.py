@@ -29,15 +29,23 @@ from . import events, relay, runtime, ws
 logger = logging.getLogger(__name__)
 
 
-async def broadcast_mqtt_msg(topic: str, payload: str) -> None:
-    """Broadcast a received mqtt message."""
+async def broadcast_mqtt_msg(topic: str, payload: str, thread_id: str = "") -> None:
+    """Broadcast a received mqtt message.
+
+    ``thread_id`` is the thread a chat message is in, when the server knows it:
+    the page keeps its threads by id, and a message relayed for another agent
+    names that agent only by name.
+    """
     parsed: Any = payload
     try:
         parsed = json.loads(payload)
     except Exception:  # noqa: S110  # non-JSON payloads are passed through as text
         # non-JSON: pass the string through
         pass
-    await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
+    frame: dict[str, Any] = {"type": "server_event", "topic": topic, "payload": parsed}
+    if thread_id:
+        frame["thread_id"] = thread_id
+    await ws.broadcast(frame)
 
 
 # Server-broker connection state, mirrored to browsers so the dashboard's "live"
@@ -96,7 +104,8 @@ async def _dispatch(topic: str, payload: str) -> None:
     # State first, and for every message: the filter below decides only whether a
     # browser is shown the raw frame, not whether the server takes it in.
     if relay.is_relayed(topic):
-        await broadcast_mqtt_msg(topic, payload)
+        push = (event or {}).get("_push_chat") or {}
+        await broadcast_mqtt_msg(topic, payload, push.get("thread_id", ""))
     if not event or runtime.hard_resetting:
         return
 

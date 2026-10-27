@@ -96,6 +96,7 @@ export class CardDashboard {
             getView: () => this.view,
             setView: v => this._setView(v),
             sortedAgents: () => sortAgents(store.agents.values()),
+            label: agent => store.label(agent),
         });
         this._metrics = new MetricsController({
             root: this.root,
@@ -107,8 +108,9 @@ export class CardDashboard {
             view: () => this.view,
             setView: v => this._setView(v),
             render: () => this._renderView(),
-            chatTarget: () => this._chat.chatTarget,
-            setChatTarget: name => this._chat.setTarget(name),
+            // The address names the conversation by its agent's name.
+            chatTarget: () => this._chat.chatTargetName,
+            setChatTarget: name => this._chat.openByName(name),
         });
         this._overview = new OverviewView({
             root: this.root,
@@ -125,8 +127,8 @@ export class CardDashboard {
                 feedCount: this._activity.count,
                 costLimit: this._metrics.costLimitInfo,
             }),
-            onChat: name => {
-                this._chat.setTarget(name);
+            onChat: id => {
+                this._chat.setTarget(id);
                 this._setView("chat");
             },
             onCommand: (id, action, btn) => this._sendCommand(id, action, btn),
@@ -216,10 +218,7 @@ export class CardDashboard {
     /** Let go of what is kept for an agent that left, shown or not. */
     private _forget(id: string, agent: AgentInfo): void {
         this._heartbeats.forget(id); // else churned agents leak dead entries the refresh scans
-        // A thread is kept by name: while another agent of that name is here, it talks in it.
-        if (this.store.byName(agent.name).length === 0) {
-            this._chat.forgetHistory(agent.name);
-        }
+        this._chat.forgetHistory(agent.id);
     }
 
     private _drawChanges(changes: AgentChanges): void {

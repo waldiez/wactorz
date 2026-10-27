@@ -35,14 +35,14 @@ export class IOManager {
     setWSClient(ws: WSClient): void {
         this._ws = ws;
 
-        ws.onStreamChunk((chunk, from) => {
+        ws.onStreamChunk((chunk, from, _ts, agentId) => {
             this._streams.append(from, chunk);
             // The reply so far travels with the piece, so this is the one place a
             // stream is put together.
-            emit("af-stream-chunk", { chunk, from, text: this._streams.text(from) });
+            emit("af-stream-chunk", { chunk, from, agentId, text: this._streams.text(from) });
         });
 
-        ws.onStreamEnd(from => {
+        ws.onStreamEnd((from, agentId) => {
             // The socket names a sender for every frame, the addressed agent for
             // one without, so only that agent's buffer is taken and concurrent
             // streams never merge.
@@ -56,7 +56,7 @@ export class IOManager {
                     item: { type: "chat", label: text, agentName: from, timestamp: Date.now() },
                 });
             }
-            emit("af-stream-end", { text, from });
+            emit("af-stream-end", { text, from, agentId });
         });
     }
 
@@ -75,15 +75,8 @@ export class IOManager {
             content = `@${agent.name} ${text}`;
         }
 
-        const msg: ChatMessage = {
-            id: uid(),
-            from: "user",
-            to: agent?.name ?? MAIN_AGENT,
-            content, // routed form (`@agent …`), mirroring what goes on the wire
-            timestampMs: Date.now(),
-        };
-
-        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT, attachments);
+        const timestampMs = Date.now();
+        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT, attachments, agent?.id ?? "", id);
         if (!sent) {
             toast.show({
                 type: "alert-error",
@@ -92,7 +85,7 @@ export class IOManager {
             });
             // The dashboard rendered the bubble before this attempt, under `id`:
             // it keeps it waiting to go once the connection is back.
-            emit("af-send-failed", { id, content: text, target: agent?.name ?? MAIN_AGENT });
+            emit("af-send-failed", { id, content: text, target: agent?.id ?? "" });
             return;
         }
 
@@ -102,7 +95,7 @@ export class IOManager {
         // it. The routed form is used so the live row matches the persisted one
         // — the feed renders the `@agent` mention.
         emit("af-feed-push", {
-            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
+            item: { type: "chat", label: content, agentName: "user", timestamp: timestampMs },
         });
     }
 

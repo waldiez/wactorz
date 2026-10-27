@@ -64,7 +64,14 @@ describe("CardDashboard render", () => {
         ({ dashboard } = openDashboard([agent("main")]));
         goTo("chat", "main");
         emit("af-chat-message", {
-            msg: { id: "m1", from: "main", to: "user", content: "**bold**", timestampMs: 1_700_000_000_000 },
+            msg: {
+                id: "m1",
+                from: "main",
+                to: "user",
+                threadId: "main",
+                content: "**bold**",
+                timestampMs: 1_700_000_000_000,
+            },
         });
         expect(byRole(document, "log", "Conversation").querySelector("strong")?.textContent).toBe("bold");
     });

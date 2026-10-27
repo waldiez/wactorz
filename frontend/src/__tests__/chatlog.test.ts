@@ -6,8 +6,11 @@ import { describe, it, expect } from "vitest";
 import { ChatLog, MAX_PER_THREAD, isOpenQuestion, threadOf } from "../chat/chatLog";
 import type { ChatMessage } from "../types/agent";
 
+/** A message; its thread, unless given, is its agent's: whom the person spoke to, or the sender.
+ *  An agent's id here is its name. */
 function msg(over: Partial<ChatMessage>): ChatMessage {
-    return { id: "x", from: "main", to: "user", content: "hi", timestampMs: 1000, ...over };
+    const m = { id: "x", from: "main", to: "user", content: "hi", timestampMs: 1000, ...over };
+    return { threadId: m.from === "user" ? m.to : m.from, ...m };
 }
 
 function question(id: string, over: Partial<ChatMessage> = {}): ChatMessage {
@@ -24,11 +27,9 @@ function question(id: string, over: Partial<ChatMessage> = {}): ChatMessage {
 const ids = (list: readonly ChatMessage[]) => list.map(m => m.id);
 
 describe("which thread a message is in", () => {
-    it("is its sender's, or for the person's own turns and the gateway's, whom it was to", () => {
-        expect(threadOf(msg({ from: "worker", to: "user" }))).toBe("worker");
-        expect(threadOf(msg({ from: "user", to: "worker" }))).toBe("worker");
-        expect(threadOf(msg({ from: "io-gateway", to: "main" }))).toBe("main");
-        expect(threadOf(msg({ from: "system", to: "worker" }))).toBe("worker");
+    it("is the agent the server named, by its id, whatever the names say", () => {
+        expect(threadOf(msg({ from: "worker", to: "user", threadId: "w-1" }))).toBe("w-1");
+        expect(threadOf(msg({ from: "user", to: "worker", threadId: "w-2" }))).toBe("w-2");
     });
 
     it("tells a question still open from one answered or a plain message", () => {
@@ -92,11 +93,25 @@ describe("restoring history", () => {
 
     it("takes a restored copy of a message on screen as that message, under the stored id", () => {
         const log = new ChatLog();
-        const echo = msg({ id: "user-1", from: "user", to: "main", content: "deploy", timestampMs: 5000 });
+        const echo = msg({
+            id: "user-1",
+            from: "user",
+            to: "main",
+            threadId: "main",
+            content: "deploy",
+            timestampMs: 5000,
+        });
         log.add(echo);
 
         const added = log.addHistory("main", [
-            msg({ id: "hist-main-9", from: "user", to: "main", content: "@main deploy", timestampMs: 5050 }),
+            msg({
+                id: "hist-main-9",
+                from: "user",
+                to: "main",
+                threadId: "main",
+                content: "@main deploy",
+                timestampMs: 5050,
+            }),
         ]);
 
         expect(added).toBe(0);
@@ -107,12 +122,44 @@ describe("restoring history", () => {
 
     it("pairs a second restored copy of the same words with the next message shown", () => {
         const log = new ChatLog();
-        log.add(msg({ id: "user-1", from: "user", to: "main", content: "again", timestampMs: 1000 }));
-        log.add(msg({ id: "user-2", from: "user", to: "main", content: "again", timestampMs: 1100 }));
+        log.add(
+            msg({
+                id: "user-1",
+                from: "user",
+                to: "main",
+                threadId: "main",
+                content: "again",
+                timestampMs: 1000,
+            }),
+        );
+        log.add(
+            msg({
+                id: "user-2",
+                from: "user",
+                to: "main",
+                threadId: "main",
+                content: "again",
+                timestampMs: 1100,
+            }),
+        );
 
         log.addHistory("main", [
-            msg({ id: "hist-main-1", from: "user", to: "main", content: "again", timestampMs: 1000 }),
-            msg({ id: "hist-main-2", from: "user", to: "main", content: "again", timestampMs: 1100 }),
+            msg({
+                id: "hist-main-1",
+                from: "user",
+                to: "main",
+                threadId: "main",
+                content: "again",
+                timestampMs: 1000,
+            }),
+            msg({
+                id: "hist-main-2",
+                from: "user",
+                to: "main",
+                threadId: "main",
+                content: "again",
+                timestampMs: 1100,
+            }),
         ]);
 
         expect(ids(log.all)).toEqual(["hist-main-1", "hist-main-2"]);
@@ -138,7 +185,13 @@ describe("restoring history: messages already on screen", () => {
     };
 
     it("strips the @agent routing prefix without changing the restored message", () => {
-        const incoming = msg({ id: "hist-main-2", from: "user", to: "main", content: "@main hello" });
+        const incoming = msg({
+            id: "hist-main-2",
+            from: "user",
+            to: "main",
+            threadId: "main",
+            content: "@main hello",
+        });
 
         const { log } = restore([], [incoming]);
 
@@ -153,21 +206,37 @@ describe("restoring history: messages already on screen", () => {
             id: "stream-7",
             from: "counter",
             to: "counter",
+            threadId: "counter",
             content: "counted 1",
             timestampMs: 5000,
         });
         const log = new ChatLog();
         log.add(
-            msg({ id: "hist-counter-1", from: "user", to: "counter", content: "one", timestampMs: 4900 }),
+            msg({
+                id: "hist-counter-1",
+                from: "user",
+                to: "counter",
+                threadId: "counter",
+                content: "one",
+                timestampMs: 4900,
+            }),
         );
         log.add(reply);
 
         const added = log.addHistory("counter", [
-            msg({ id: "hist-counter-1", from: "user", to: "counter", content: "one", timestampMs: 4900 }),
+            msg({
+                id: "hist-counter-1",
+                from: "user",
+                to: "counter",
+                threadId: "counter",
+                content: "one",
+                timestampMs: 4900,
+            }),
             msg({
                 id: "hist-counter-2",
                 from: "counter",
                 to: "user",
+                threadId: "counter",
                 content: "counted 1",
                 timestampMs: 5020,
             }),
@@ -195,10 +264,26 @@ describe("restoring history: messages already on screen", () => {
 
     it("still tells the person's turns apart by whom they were to", () => {
         const log = new ChatLog();
-        log.add(msg({ id: "user-1", from: "user", to: "main", content: "status", timestampMs: 1000 }));
+        log.add(
+            msg({
+                id: "user-1",
+                from: "user",
+                to: "main",
+                threadId: "main",
+                content: "status",
+                timestampMs: 1000,
+            }),
+        );
 
         log.addHistory("other", [
-            msg({ id: "hist-other-1", from: "user", to: "other", content: "status", timestampMs: 1010 }),
+            msg({
+                id: "hist-other-1",
+                from: "user",
+                to: "other",
+                threadId: "other",
+                content: "status",
+                timestampMs: 1010,
+            }),
         ]);
 
         expect(ids(log.thread("main"))).toEqual(["user-1"]);
@@ -220,7 +305,13 @@ describe("restoring history: messages already on screen", () => {
             [],
             [
                 msg({ id: "hist-main-4", content: "reply" }),
-                msg({ id: "hist-main-5", from: "user", to: "main", content: "new question" }),
+                msg({
+                    id: "hist-main-5",
+                    from: "user",
+                    to: "main",
+                    threadId: "main",
+                    content: "new question",
+                }),
             ],
         );
 
@@ -332,8 +423,8 @@ describe("what one message costs", () => {
 describe("taking messages away", () => {
     it("removes the newest message a test picks", () => {
         const log = new ChatLog();
-        log.add(msg({ id: "1", from: "user", to: "main", content: "ping" }));
-        log.add(msg({ id: "2", from: "user", to: "main", content: "ping" }));
+        log.add(msg({ id: "1", from: "user", to: "main", threadId: "main", content: "ping" }));
+        log.add(msg({ id: "2", from: "user", to: "main", threadId: "main", content: "ping" }));
 
         expect(log.removeLast("main", m => m.content === "ping")).toBe(true);
         expect(ids(log.all)).toEqual(["1"]);
@@ -371,5 +462,59 @@ describe("taking messages away", () => {
         log.addHistory("main", []);
         log.clear();
         expect([log.all.length, log.historyLoaded("main")]).toEqual([0, false]);
+    });
+});
+
+describe("two agents of one name", () => {
+    it("keep a thread each", () => {
+        const log = new ChatLog();
+
+        log.add(msg({ id: "a", from: "counter", threadId: "on-main" }));
+        log.add(msg({ id: "b", from: "counter", threadId: "on-the-pi" }));
+
+        expect(ids(log.thread("on-main"))).toEqual(["a"]);
+        expect(ids(log.thread("on-the-pi"))).toEqual(["b"]);
+    });
+
+    it("are both cleared by a reset of the name, as the server clears them", () => {
+        const log = new ChatLog();
+        log.add(msg({ id: "a", from: "counter", threadId: "on-main" }));
+        log.add(msg({ id: "b", from: "user", to: "counter", threadId: "on-the-pi" }));
+        log.add(msg({ id: "c", from: "weather", threadId: "weather-id" }));
+
+        log.reset("counter");
+
+        expect(ids(log.all)).toEqual(["c"]);
+    });
+
+    it("say by id which is asking something", () => {
+        const log = new ChatLog();
+        log.add(question("q", { threadId: "on-the-pi" }));
+
+        expect(log.asking()).toEqual(new Set(["on-the-pi"]));
+    });
+});
+
+describe("moving a message to the agent it reached", () => {
+    it("files it in that thread where its time puts it, named for that agent", () => {
+        const log = new ChatLog();
+        log.add(msg({ id: "early", from: "catalog", threadId: "catalog-id", timestampMs: 1 }));
+        log.add(msg({ id: "late", from: "catalog", threadId: "catalog-id", timestampMs: 3 }));
+        log.add(msg({ id: "sent", from: "user", to: "main", threadId: "main-id", timestampMs: 2 }));
+
+        const moved = log.move("sent", "catalog-id", "catalog");
+
+        expect(moved).toMatchObject({ threadId: "catalog-id", to: "catalog" });
+        expect(ids(log.thread("main-id"))).toEqual([]);
+        expect(ids(log.thread("catalog-id"))).toEqual(["early", "sent", "late"]);
+        expect(log.get("sent")?.threadId).toBe("catalog-id");
+    });
+
+    it("leaves one already there as it is, and knows nothing of one it does not hold", () => {
+        const log = new ChatLog();
+        log.add(msg({ id: "here", threadId: "main-id" }));
+
+        expect(log.move("here", "main-id", "main")).toBe(log.get("here"));
+        expect(log.move("absent", "main-id", "main")).toBeNull();
     });
 });

@@ -626,6 +626,8 @@ The server answers first with the agent the turn reached, which is the agent an 
 
 `id` is the message's own, so the page files the person's words in that agent's thread. Every reply frame that follows (`chat`, `stream_chunk`, `stream_end`) carries the same `from` (the agent's name) and `agent_id`.
 
+A relayed `server_event` for an agent's chat message carries `thread_id`, the id of the agent whose thread it is in, when that is not the agent whose topic it came on: a voice surface relays the person's words to the agent that answers them, which it names only by name.
+
 ---
 
 ## MQTT

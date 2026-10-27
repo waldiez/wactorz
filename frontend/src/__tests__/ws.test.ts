@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WSClient } from "../io/WSClient";
+import { listen } from "../events";
 
 class MockWebSocket {
     static OPEN = 1;
@@ -96,7 +97,7 @@ describe("WSClient", () => {
                 payload: { cpu: 5 },
             }),
         });
-        expect(spy).toHaveBeenCalledWith("agents/a1/heartbeat", { cpu: 5 });
+        expect(spy).toHaveBeenCalledWith("agents/a1/heartbeat", { cpu: 5 }, "");
     });
 
     it("server_event with a non-string topic falls back to ''", () => {
@@ -105,7 +106,7 @@ describe("WSClient", () => {
         c.onServerEvent(spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "server_event", payload: { x: 1 } }) });
-        expect(spy).toHaveBeenCalledWith("", { x: 1 });
+        expect(spy).toHaveBeenCalledWith("", { x: 1 }, "");
     });
 
     it("dispatches mqtt_status frames to onMqttStatus(connected)", () => {
@@ -138,6 +139,7 @@ describe("WSClient", () => {
             1_700_000_000_000,
             "user",
             "voice",
+            "",
             "",
             "",
             "",
@@ -177,7 +179,7 @@ describe("WSClient", () => {
         c.connect("ws://localhost/ws");
         c.addressed("catalog");
         ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "" }) });
-        expect(endSpy).toHaveBeenCalledWith("catalog");
+        expect(endSpy).toHaveBeenCalledWith("catalog", "");
     });
 
     it("leaves who is addressed to the chat: sending does not change it", () => {
@@ -210,7 +212,7 @@ describe("WSClient", () => {
         ws().emit("message", {
             data: JSON.stringify({ type: "stream_chunk", content: "part", from: "main" }),
         });
-        expect(spy).toHaveBeenCalledWith("part", "main", expect.any(Number));
+        expect(spy).toHaveBeenCalledWith("part", "main", expect.any(Number), "");
     });
 
     it("calls onStreamEnd for type='stream_end'", () => {
@@ -219,7 +221,47 @@ describe("WSClient", () => {
         c.onStreamEnd(spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "main" }) });
-        expect(spy).toHaveBeenCalledWith("main");
+        expect(spy).toHaveBeenCalledWith("main", "");
+    });
+
+    it("hands on the thread each frame names, by its agent's id", () => {
+        const c = new WSClient();
+        const chat = vi.fn();
+        const chunk = vi.fn();
+        const end = vi.fn();
+        const relayed = vi.fn();
+        c.onChat(chat);
+        c.onStreamChunk(chunk);
+        c.onStreamEnd(end);
+        c.onServerEvent(relayed);
+        c.connect("ws://localhost/ws");
+
+        const frames = [
+            { type: "chat", content: "Hi", from: "counter", agent_id: "on-pi" },
+            { type: "stream_chunk", content: "x", from: "counter", agent_id: "on-pi" },
+            { type: "stream_end", from: "counter", agent_id: "on-pi" },
+            { type: "server_event", topic: "agents/r/chat", payload: {}, thread_id: "on-pi" },
+        ];
+        frames.forEach(f => ws().emit("message", { data: JSON.stringify(f) }));
+
+        expect(chat.mock.calls[0]!.at(-1)).toBe("on-pi");
+        expect(chunk.mock.calls[0]!.at(-1)).toBe("on-pi");
+        expect(end).toHaveBeenCalledWith("counter", "on-pi");
+        expect(relayed).toHaveBeenCalledWith("agents/r/chat", {}, "on-pi");
+    });
+
+    it("says which agent a message reached, as the server's turn frame names it", () => {
+        const c = new WSClient();
+        const reached: unknown[] = [];
+        const listener = listen("af-turn-reached", detail => reached.push(detail));
+        c.connect("ws://localhost/ws");
+
+        ws().emit("message", {
+            data: JSON.stringify({ type: "turn", id: "m1", agent_id: "catalog-id", name: "catalog" }),
+        });
+        document.removeEventListener("af-turn-reached", listener);
+
+        expect(reached).toEqual([{ id: "m1", agentId: "catalog-id", name: "catalog" }]);
     });
 
     it("calls onStatePatch when state field is present", () => {
@@ -288,6 +330,21 @@ describe("WSClient", () => {
             type: "chat",
             content: "hello",
             agent_name: "main",
+        });
+    });
+
+    it("send() names the thread by its agent's id, and the message by its own", () => {
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+
+        c.send("hello", "counter", [], "on-pi", "m1");
+
+        expect(JSON.parse(ws().sent[0]!)).toEqual({
+            type: "chat",
+            content: "hello",
+            agent_name: "counter",
+            agent_id: "on-pi",
+            id: "m1",
         });
     });
 

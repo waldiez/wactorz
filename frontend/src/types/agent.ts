@@ -185,6 +185,9 @@ export interface ChatMessage {
     id: string;
     from: string; // "user" or agent name
     to: string; // agent name or "user"
+    /** The id of the agent whose thread the message is in, as the server names it:
+     *  the agent's own for its replies, the one spoken to for the person's words. */
+    threadId: string;
     content: string;
     timestampMs: number;
     /** Origin channel for special routing, such as an embodied voice turn. */

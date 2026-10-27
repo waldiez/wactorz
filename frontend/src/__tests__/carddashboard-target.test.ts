@@ -391,7 +391,8 @@ describe("the composer names the target on a fresh tab", () => {
     // The composer is built before any chat view exists and so before there is
     // a target, and only something that runs later can tell it what that target
     // turned out to be.
-    beforeEach(() => localStorage.setItem("wactorz-chat-target", "home-assistant-agent"));
+    // Kept by the agent's id, which is its name in these tests.
+    beforeEach(() => localStorage.setItem("wactorz-chat-agent-id", "home-assistant-agent"));
 
     it("names it when the agents arrive over the socket, on the overview", async () => {
         open([]); // fresh tab: visible, on the overview, nobody here yet
@@ -451,9 +452,12 @@ describe("an @mention", () => {
         open([agent("main"), agent("catalog")]);
         goTo("chat");
 
-        send("@catalog spawn weather-agent");
+        const sent = send("@catalog spawn weather-agent");
+        // The server routes the mention, and says which agent it reached.
+        const { id } = (sent.mock.calls[0]![0] as CustomEvent<{ id: string }>).detail;
+        emit("af-turn-reached", { id, agentId: "catalog", name: "catalog" });
 
         expect(addressee()).toBe("catalog");
-        expect(localStorage.getItem("wactorz-chat-target")).toBe("catalog");
+        expect(localStorage.getItem("wactorz-chat-agent-id")).toBe("catalog");
     });
 });

@@ -24,8 +24,7 @@ interface Host extends StreamHost {
 function makeHost(over: Partial<Host> = {}): Host {
     return {
         isChatView: () => true,
-        lastSentTarget: () => "main",
-        belongsHere: () => true,
+        lastSentTarget: () => ({ name: "main", id: "main" }),
         isOpenThread: () => true,
         thread: () => document.createElement("div"),
         scrollThread: vi.fn(),
@@ -74,7 +73,7 @@ describe("streamHereText", () => {
     it("is null when the active stream belongs to another thread", () => {
         // Someone else's agent is answering; its text must not drive this
         // thread's empty-state or get reattached into it.
-        const ui = new ChatStreamUI(makeHost({ belongsHere: () => false }));
+        const ui = new ChatStreamUI(makeHost({ isOpenThread: () => false }));
         chunk(ui, "not for you", "other");
 
         expect(ui.streamHereText()).toBeNull();

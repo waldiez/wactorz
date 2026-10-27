@@ -39,14 +39,14 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
 /**
  * Whether the user may open this agent's thread: any agent they may message,
  * and one that may not be messaged while it is asking them something
- * (`asking` holds the names of agents with a question still open), so its
+ * (`asking` holds the ids of agents with a question still open), so its
  * question can be answered there.
  */
 export function canOpenThread(
-    agent: { name: string; protected?: boolean },
+    agent: { id: string; name: string; protected?: boolean },
     asking: ReadonlySet<string>,
 ): boolean {
-    return canDirectMessage(agent) || asking.has(agent.name);
+    return canDirectMessage(agent) || asking.has(agent.id);
 }
 
 /**

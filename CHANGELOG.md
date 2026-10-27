@@ -144,10 +144,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   upgrade changes nothing: registry entries and stored chat turns read back with the id they
   already had. Chat history is kept by that id (`GET /api/chats?agent_id=`; `?agent=` still
   returns every agent that went by the name), and the dashboard's WebSocket frames carry it,
-  with a `turn` frame naming the agent a turn reached. A node says in its manifest that it
+  with a `turn` frame naming the agent a turn reached. The dashboard keeps its chat threads by
+  that id: two agents of one name have a thread each, the chat list and the target picker name
+  them `name@node`, and a message whose `@mention` reaches another agent moves to that agent's
+  thread, the view with it. The chat's address still names the agent (`#/chat/<name>`); the
+  browser remembers the open conversation by id. A node says in its manifest that it
   honours the id (`actor_ids`); one deployed before this gives a new agent the id derived from
   its name, and main refuses to move an agent with an id of its own there until the node is
-  deployed again.
+  deployed again. One restored onto such a node before its manifest arrived, as at a restart,
+  runs there under the derived id: main says so in chat once the manifest comes, naming the
+  agents and saying to deploy the node again.
 
 ### Fixed
 

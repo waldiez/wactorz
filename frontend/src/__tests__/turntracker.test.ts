@@ -12,7 +12,7 @@ import {
 } from "../chat/turnTracker";
 
 function send(content: string, target = "main", id = content): PendingSend {
-    return { id, content, target, attachments: [] };
+    return { id, content, target, name: target, attachments: [] };
 }
 
 /** A tracker with a host that records what it was told. */

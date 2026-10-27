@@ -9,13 +9,13 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } 
 import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { TURN_IDLE_TIMEOUT_MS } from "../chat/turnTracker";
-import { allByRole, byRole } from "./queries";
+import { allByRole, byRole, byTestId } from "./queries";
 import { rememberedConversation } from "../ui/dashboard/viewRoutes";
 import { listen } from "../events";
 import {
     defaultChatTarget,
+    leadingMention,
     preferredChatTarget,
-    resolveSendTarget,
     sendBlockedReason,
     stripLeadingMention,
 } from "../ui/dashboard/chatRouting";
@@ -44,7 +44,7 @@ interface FakeChatHost extends ChatHost {
 }
 
 function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: View = "chat"): FakeChatHost {
-    const map = new Map(agents.map(a => [a.name, a]));
+    const map = new Map(agents.map(a => [a.id, a]));
     let current = view;
     return {
         root: document.createElement("div"),
@@ -54,6 +54,7 @@ function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: 
             current = v;
         }),
         sortedAgents: () => [...map.values()],
+        label: a => a.name,
     };
 }
 
@@ -91,6 +92,22 @@ function sendFromComposer(host: ChatHost, chat: DashboardChat, words: string): v
     }
     host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!.value = words;
     host.root.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+}
+
+/**
+ * Send `words`, then answer as the server does once it has routed them: the message
+ * reached the agent `name` (whose id, in these fakes, is its name). A mention names
+ * an agent by name, so only the server can say which agent that is.
+ */
+function sendReaching(host: ChatHost, chat: DashboardChat, words: string, name: string): void {
+    let sent = "";
+    const record = (e: Event) => {
+        sent = (e as CustomEvent<{ id: string }>).detail.id;
+    };
+    document.addEventListener("af-send-message", record);
+    sendFromComposer(host, chat, words);
+    document.removeEventListener("af-send-message", record);
+    document.dispatchEvent(new CustomEvent("af-turn-reached", { detail: { id: sent, agentId: name, name } }));
 }
 
 // A raw UUID agent id — the backend uses these (not WIDs), and one that never
@@ -160,41 +177,41 @@ describe("preferredChatTarget", () => {
     });
 });
 
-describe("resolveSendTarget", () => {
+describe("leadingMention", () => {
     const names = ["main", "catalog", "worker"];
 
-    it("routes to a leading @mention over the picker target", () => {
-        expect(resolveSendTarget("@catalog do the thing", names, "main")).toBe("catalog");
+    it("names the agent a leading @mention is to", () => {
+        expect(leadingMention("@catalog do the thing", names)).toBe("catalog");
     });
 
-    it("matches the mention case-insensitively", () => {
-        expect(resolveSendTarget("@Catalog hi", names, "main")).toBe("catalog");
+    it("matches the mention case-insensitively, spelled as the agent spells it", () => {
+        expect(leadingMention("@Catalog hi", names)).toBe("catalog");
     });
 
-    it("falls back to the picker when there is no mention", () => {
-        expect(resolveSendTarget("do the thing", names, "main")).toBe("main");
+    it("is null with no mention", () => {
+        expect(leadingMention("do the thing", names)).toBeNull();
     });
 
-    it("falls back when the mention names no known agent", () => {
-        expect(resolveSendTarget("@ghost hi", names, "main")).toBe("main");
+    it("is null when the mention names no known agent", () => {
+        expect(leadingMention("@ghost hi", names)).toBeNull();
     });
 });
 
 describe("sendBlockedReason", () => {
     it("passes a running agent", () => {
-        expect(sendBlockedReason([agent("worker")], "worker")).toBeNull();
+        expect(sendBlockedReason(agent("worker"), "worker")).toBeNull();
     });
 
     it("tells a stopped agent apart from one that is gone", () => {
         // "start it and try again" is actively wrong for an agent that no longer
         // exists — there is nothing to start.
-        expect(sendBlockedReason([agent("worker", { state: "stopped" })], "worker")).toContain("start it");
-        expect(sendBlockedReason([], "worker")).not.toContain("start it");
-        expect(sendBlockedReason([], "worker")).toContain("worker");
+        expect(sendBlockedReason(agent("worker", { state: "stopped" }), "worker")).toContain("start it");
+        expect(sendBlockedReason(undefined, "worker")).not.toContain("start it");
+        expect(sendBlockedReason(undefined, "worker")).toContain("worker");
     });
 
     it("blocks a message to an agent that cannot be messaged, opened for its question", () => {
-        const reason = sendBlockedReason([agent("installer", { protected: true })], "installer");
+        const reason = sendBlockedReason(agent("installer", { protected: true }), "installer");
         expect(reason).toContain("can't be messaged");
     });
 });
@@ -279,7 +296,7 @@ describe("DashboardChat — resolveDefaultTarget", () => {
         // A fresh page lands on the chat it was left on, before the first
         // agent has registered: the view is drawn for nobody, and the target
         // the arriving agents give it must reach the header and thread too.
-        localStorage.setItem("wactorz-chat-target", "catalog");
+        localStorage.setItem("wactorz-chat-agent-id", "catalog");
         const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => [] }));
         globalThis.fetch = fetchSpy as unknown as typeof fetch;
         const host = makeHost([]);
@@ -334,9 +351,7 @@ describe("DashboardChat — view construction", () => {
         const search = host.root.querySelector<HTMLInputElement>(".af-chat-sidebar-search input")!;
         search.value = "work";
         search.dispatchEvent(new Event("input"));
-        const names = [...list.querySelectorAll<HTMLElement>(".af-chat-agent-row")].map(
-            r => r.dataset["name"],
-        );
+        const names = [...list.querySelectorAll<HTMLElement>(".af-chat-agent-row")].map(r => r.dataset["id"]);
         expect(names).toEqual(["worker"]);
     });
 
@@ -374,7 +389,7 @@ describe("DashboardChat — target selection", () => {
 
     it("selecting a sidebar agent switches the open thread", () => {
         const dc = mount(host);
-        const workerRow = host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="worker"]')!;
+        const workerRow = host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-id="worker"]')!;
         workerRow.click();
         expect(dc.chatTarget).toBe("worker");
         expect(host.root.querySelector(".af-chat-pane-title")!.textContent).toBe("@worker");
@@ -385,13 +400,14 @@ describe("DashboardChat — target selection", () => {
         const dc = mount(host);
         dc.wire();
         const row = () =>
-            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-id="installer"]')!;
         expect(row().disabled).toBe(true);
 
         const msg: ChatMessage = {
             id: "q1",
             from: "installer",
             to: "user",
+            threadId: "installer",
             content: "Install?",
             timestampMs: Date.now(),
             agentId: "installer-id",
@@ -415,11 +431,12 @@ describe("DashboardChat — target selection", () => {
         const dc = mount(host);
         dc.wire();
         const row = () =>
-            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-id="installer"]')!;
         const asked: ChatMessage = {
             id: "q7",
             from: "installer",
             to: "user",
+            threadId: "installer",
             content: "Install?",
             timestampMs: Date.now() - 60_000,
             agentId: "installer-id",
@@ -452,6 +469,7 @@ describe("DashboardChat — target selection", () => {
             id: "q8",
             from: "installer",
             to: "user",
+            threadId: "installer",
             content: "Install?",
             timestampMs: Date.now(),
             agentId: "installer-id",
@@ -476,6 +494,7 @@ describe("DashboardChat — target selection", () => {
             id: "q9",
             from: "main",
             to: "user",
+            threadId: "main",
             content: "Approve the plan?",
             timestampMs: Date.now(),
             agentId: "main-id",
@@ -502,6 +521,7 @@ describe("DashboardChat — target selection", () => {
             id: "q10",
             from: "installer",
             to: "user",
+            threadId: "installer",
             content: "Install?",
             timestampMs: Date.now(),
             agentId: "installer-id",
@@ -512,14 +532,14 @@ describe("DashboardChat — target selection", () => {
             new CustomEvent("af-questions-listed", { detail: { open: [asked], answered: [] } }),
         );
 
-        const row = host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+        const row = host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-id="installer"]')!;
         expect(row.disabled).toBe(true);
     });
 
     it("does not switch to a non-messageable (system) agent", () => {
         host = makeHost([agent("main"), agent("monitor-agent")]);
         const dc = mount(host);
-        host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="monitor-agent"]')?.click();
+        host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-id="monitor-agent"]')?.click();
         expect(dc.chatTarget).toBe("main"); // unchanged
     });
 
@@ -584,6 +604,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "m1",
             from: "main",
             to: "user",
+            threadId: "main",
             content: "hi back",
             timestampMs: Date.now(),
         };
@@ -596,6 +617,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "q1",
             from: "main",
             to: "user",
+            threadId: "main",
             content: "Changed?",
             timestampMs: Date.now(),
             options: ["yes", "no"],
@@ -630,6 +652,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "voice-1",
             from: "user",
             to: "reachy-mini",
+            threadId: "reachy-mini",
             content: "turn on the light",
             timestampMs: Date.now(),
             source: "voice",
@@ -658,6 +681,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "voice-2",
             from: "user",
             to: "reachy-mini",
+            threadId: "reachy-mini",
             content: "lights off",
             timestampMs: Date.now(),
             source: "voice",
@@ -687,6 +711,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "voice-3",
             from: "user",
             to: "reachy-mini",
+            threadId: "reachy-mini",
             content: "lights on",
             timestampMs: Date.now(),
             source: "voice",
@@ -729,7 +754,14 @@ describe("DashboardChat — sending & live events", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "m", from: "main", to: "user", content: "x", timestampMs: 1 },
+                    msg: {
+                        id: "m",
+                        from: "main",
+                        to: "user",
+                        threadId: "main",
+                        content: "x",
+                        timestampMs: 1,
+                    },
                 },
             }),
         );
@@ -742,7 +774,14 @@ describe("DashboardChat — sending & live events", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "m2", from: "main", to: "user", content: "ignored", timestampMs: 1 },
+                    msg: {
+                        id: "m2",
+                        from: "main",
+                        to: "user",
+                        threadId: "main",
+                        content: "ignored",
+                        timestampMs: 1,
+                    },
                 },
             }),
         );
@@ -773,11 +812,18 @@ describe("DashboardChat — thread integrity", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "r1", from: "main", to: "user", content: "reply", timestampMs: 1 },
+                    msg: {
+                        id: "r1",
+                        from: "main",
+                        to: "user",
+                        threadId: "main",
+                        content: "reply",
+                        timestampMs: 1,
+                    },
                 },
             }),
         );
-        sendFromComposer(host, dc, "@worker hi worker");
+        sendReaching(host, dc, "@worker hi worker", "worker");
 
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "main" } }));
 
@@ -806,10 +852,14 @@ describe("DashboardChat — thread integrity", () => {
         const chunk = (c: string, from: string) => {
             const text = (soFar.get(from) ?? "") + c;
             soFar.set(from, text);
-            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: c, from, text } }));
+            document.dispatchEvent(
+                new CustomEvent("af-stream-chunk", { detail: { chunk: c, from, agentId: from, text } }),
+            );
         };
         const end = (from: string, text: string) =>
-            document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text, from } }));
+            document.dispatchEvent(
+                new CustomEvent("af-stream-end", { detail: { text, from, agentId: from } }),
+            );
 
         chunk("A1", "alpha");
         chunk("B1", "beta");
@@ -842,6 +892,7 @@ describe("DashboardChat — one place for its messages", () => {
         id,
         from: "triage",
         to: "user",
+        threadId: over.from ?? "triage",
         content: `${id}?`,
         timestampMs: 1_000,
         agentId: "triage-id",
@@ -863,7 +914,14 @@ describe("DashboardChat — one place for its messages", () => {
     });
 
     it("puts a question the ledger lists where its time is, above what came after it", () => {
-        arrive({ id: "later", from: "triage", to: "user", content: "since then", timestampMs: 5_000 });
+        arrive({
+            id: "later",
+            from: "triage",
+            to: "user",
+            threadId: "triage",
+            content: "since then",
+            timestampMs: 5_000,
+        });
 
         listed([asked("asked-earlier")]);
 
@@ -881,7 +939,14 @@ describe("DashboardChat — one place for its messages", () => {
         dc.setTarget("worker");
 
         for (let i = 0; i <= 500; i++) {
-            arrive({ id: `m${i}`, from: "main", to: "user", content: `reply ${i}`, timestampMs: 10 + i });
+            arrive({
+                id: `m${i}`,
+                from: "main",
+                to: "user",
+                threadId: "main",
+                content: `reply ${i}`,
+                timestampMs: 10 + i,
+            });
         }
 
         expect(shown("worker")).toEqual(["from history"]);
@@ -904,7 +969,14 @@ describe("DashboardChat — one place for its messages", () => {
     });
 
     it("takes a frame delivered twice as one message", () => {
-        const twice = { id: "r1", from: "main", to: "user", content: "once", timestampMs: 1 };
+        const twice = {
+            id: "r1",
+            from: "main",
+            to: "user",
+            threadId: "main",
+            content: "once",
+            timestampMs: 1,
+        };
         arrive(twice);
         arrive({ ...twice });
 
@@ -1241,7 +1313,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
-        const seen: Array<{ target: string; attachments: unknown[] }> = [];
+        const seen: Array<{ name: string; attachments: unknown[] }> = [];
         const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
         document.addEventListener("af-send-message", onSend);
 
@@ -1251,7 +1323,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         document.removeEventListener("af-send-message", onSend);
         dc.unwire();
         expect(seen).toHaveLength(1);
-        expect(seen[0]!.target).toBe("worker");
+        expect(seen[0]!.name).toBe("worker");
         expect(seen[0]!.attachments).toHaveLength(1);
     });
 
@@ -1331,9 +1403,9 @@ describe("DashboardChat — stop, attachments, external events", () => {
         dc.wire();
         const arrive = (msg: ChatMessage) =>
             document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
-        arrive({ id: "1", from: "worker", to: "user", content: "w", timestampMs: 1 });
-        arrive({ id: "2", from: "main", to: "user", content: "m", timestampMs: 2 });
-        sendFromComposer(host, dc, "@worker u");
+        arrive({ id: "1", from: "worker", to: "user", threadId: "worker", content: "w", timestampMs: 1 });
+        arrive({ id: "2", from: "main", to: "user", threadId: "main", content: "m", timestampMs: 2 });
+        sendReaching(host, dc, "@worker u", "worker");
 
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "worker" } }));
 
@@ -1382,13 +1454,10 @@ describe("DashboardChat — @mention target stickiness", () => {
         const host = makeHost([agent("main"), agent("catalog")], "chat");
         const dc = mount(host);
         dc.wire();
-        const iobar = dc.buildIobar();
-        host.root.appendChild(iobar);
-        const input = iobar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        host.root.appendChild(dc.buildIobar());
 
-        input.value = "@catalog spawn weather agent";
-        iobar.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
-        // the @mention switched the open thread to catalog
+        sendReaching(host, dc, "@catalog spawn weather agent", "catalog");
+        // the @mention reached catalog, and the open thread followed it
         expect(dc.chatTarget).toBe("catalog");
 
         // arriving at the view resolves a default — it must NOT revert to main
@@ -1480,7 +1549,7 @@ describe("mobile master–detail: which pane is showing", () => {
         const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
         chat.wire();
 
-        sendFromComposer(host, chat, "@catalog spawn weather agent");
+        sendReaching(host, chat, "@catalog spawn weather agent", "catalog");
 
         expect(input.placeholder).toBe("Message @catalog…");
     });
@@ -1505,5 +1574,95 @@ describe("mobile master–detail: which pane is showing", () => {
         host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
         chat.afterMount();
         expect(el()?.classList.contains("agent-selected")).toBe(false);
+    });
+});
+
+describe("two agents of one name", () => {
+    // One on main and one on a Pi: told apart by id, and on screen by `name@node`.
+    const twins = (): FakeChatHost => {
+        const host = makeHost([
+            agent("main", { id: "main-id" }),
+            agent("counter", { id: "on-main" }),
+            agent("counter", { id: "on-pi" }),
+        ]);
+        return {
+            ...host,
+            label: a => (a.name === "counter" ? `counter@${a.id === "on-pi" ? "pi" : "main"}` : a.name),
+        };
+    };
+    const said = (host: ChatHost) =>
+        [...thread(host).querySelectorAll('[data-testid="message-body"]')].map(n => n.textContent);
+    const arrive = (msg: ChatMessage) =>
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+    let fetched: string[];
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        fetched = [];
+        globalThis.fetch = vi.fn(async (url: string) => {
+            fetched.push(url);
+            return { ok: true, json: async () => [] };
+        }) as unknown as typeof fetch;
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it("lists each under the name the page gives it", () => {
+        const host = twins();
+        mount(host);
+
+        const list = byTestId(host.root, "chat-agent-list");
+        expect(allByRole(list, "button").map(b => b.textContent)).toEqual([
+            "main",
+            "counter@main",
+            "counter@pi",
+        ]);
+    });
+
+    it("keeps a thread for each, and fetches each one's history by its id", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        arrive({
+            id: "a",
+            from: "counter",
+            to: "user",
+            threadId: "on-main",
+            content: "here",
+            timestampMs: 1,
+        });
+        arrive({ id: "b", from: "counter", to: "user", threadId: "on-pi", content: "there", timestampMs: 2 });
+
+        byRole(byTestId(host.root, "chat-agent-list"), "button", "counter@pi").click();
+
+        expect(dc.chatTarget).toBe("on-pi");
+        expect(said(host)).toEqual(["there"]);
+        expect(fetched.some(url => url.includes("agent_id=on-pi"))).toBe(true);
+
+        byRole(byTestId(host.root, "chat-agent-list"), "button", "counter@main").click();
+
+        expect(said(host)).toEqual(["here"]);
+    });
+
+    it("moves a message to the one the server says it reached, and follows it", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("main-id");
+        let sent = "";
+        const record = (e: Event) => {
+            sent = (e as CustomEvent<{ id: string }>).detail.id;
+        };
+        document.addEventListener("af-send-message", record);
+        sendFromComposer(host, dc, "@counter count");
+        document.removeEventListener("af-send-message", record);
+
+        document.dispatchEvent(
+            new CustomEvent("af-turn-reached", { detail: { id: sent, agentId: "on-pi", name: "counter" } }),
+        );
+
+        expect(dc.chatTarget).toBe("on-pi");
+        expect(said(host)).toEqual(["count"]);
+        dc.setTarget("main-id");
+        expect(said(host)).toEqual([]);
     });
 });

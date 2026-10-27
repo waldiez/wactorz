@@ -59,17 +59,18 @@ describe("IOManager.send", () => {
         const io = new IOManager(makeRouter());
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
-        await io.send("hello", agentInfo);
-        expect(ws.send).toHaveBeenCalledWith("@alpha hello", "alpha", []);
+        await io.send("hello", agentInfo, [], "m1");
+        // By name and by id: the server keeps the thread by the id.
+        expect(ws.send).toHaveBeenCalledWith("@alpha hello", "alpha", [], "a1", "m1");
     });
 
     it("leaves a slash command unaddressed, whichever thread it was typed in", async () => {
         const io = new IOManager(makeRouter());
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
-        await io.send("/help", agentInfo);
+        await io.send("/help", agentInfo, [], "m1");
         // Addressed to the thread's agent it would reach it as the text "/help".
-        expect(ws.send).toHaveBeenCalledWith("/help", "alpha", []);
+        expect(ws.send).toHaveBeenCalledWith("/help", "alpha", [], "a1", "m1");
     });
 
     it("toasts when the WebSocket send fails", async () => {
@@ -103,7 +104,7 @@ describe("IOManager.send", () => {
         io.setWSClient(makeWS(false) as unknown as WSClient);
         await io.send("hi", null, [], "m1");
         // under the id of the bubble rendered before the attempt, which waits to go again
-        expect(lastEvent("af-send-failed")?.detail).toEqual({ id: "m1", content: "hi", target: "main" });
+        expect(lastEvent("af-send-failed")?.detail).toEqual({ id: "m1", content: "hi", target: "" });
     });
 });
 
@@ -164,6 +165,7 @@ describe("IOManager.receiveAgentMessage", () => {
         id: "m",
         from: "alpha",
         to: "user",
+        threadId: "alpha",
         content: "hi",
         timestampMs: 1,
         ...over,
@@ -197,8 +199,8 @@ describe("IOManager.send — attachments", () => {
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
 
-        await io.send("look at this", agentInfo, ["f1", "f2"]);
+        await io.send("look at this", agentInfo, ["f1", "f2"], "m1");
 
-        expect(ws.send).toHaveBeenCalledWith("@alpha look at this", "alpha", ["f1", "f2"]);
+        expect(ws.send).toHaveBeenCalledWith("@alpha look at this", "alpha", ["f1", "f2"], "a1", "m1");
     });
 });

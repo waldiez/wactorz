@@ -461,7 +461,7 @@ class Dashboard:
     def read_thread_of(self, agent: str) -> Dashboard:
         """Address the composer to ``agent``, which puts its thread on screen."""
         self.show("chat")
-        self._target_select().select_option(agent)
+        self._target_select().select_option(label=f"@{agent}")
         return self
 
     def _target_select(self) -> Locator:
@@ -469,12 +469,17 @@ class Dashboard:
 
     @property
     def talking_to(self) -> str:
-        """The agent whose thread is on screen."""
-        return self._target_select().input_value()
+        """The agent whose thread is on screen, as the dropdown names it."""
+        chosen = self._target_select().evaluate("s => s.selectedOptions[0]?.text ?? ''")
+        return str(chosen).removeprefix("@")
 
     def _targets(self) -> list[str]:
+        """The agents the dropdown offers, as it names them: an option's value is
+        the agent's id, which no person reads.
+        """
         options = self._target_select().locator("option")
-        return list(options.evaluate_all("options => options.map(o => o.value)"))
+        names = options.evaluate_all("options => options.map(o => o.text)")
+        return [str(name).removeprefix("@") for name in names]
 
     def sent(self) -> list[str]:
         """What the user has said, as the thread shows it."""
@@ -516,7 +521,7 @@ class Dashboard:
             if agent not in self._targets():
                 continue
             try:
-                self._target_select().select_option(agent, timeout=GONE_MS)
+                self._target_select().select_option(label=f"@{agent}", timeout=GONE_MS)
             except PlaywrightTimeoutError:
                 continue
             threads[agent] = self.said()

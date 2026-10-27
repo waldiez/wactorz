@@ -21,12 +21,10 @@ import { el, live, testId } from "../dom";
 export interface StreamHost {
     /** The open view is "chat" (rows only render there). */
     isChatView(): boolean;
-    /** The agent the user last sent to (fallback reply attribution). */
-    lastSentTarget(): string;
-    /** Would a message from `from` to `to` belong to the open thread? */
-    belongsHere(from: string, to: string): boolean;
-    /** Is `name` the agent whose thread is currently open? */
-    isOpenThread(name: string): boolean;
+    /** The agent the user last sent to, by name and id (fallback reply attribution). */
+    lastSentTarget(): { name: string; id: string };
+    /** Is the thread `id` the one open now? */
+    isOpenThread(id: string): boolean;
     /** The open thread element (null when the chat view isn't mounted). */
     thread(): HTMLElement | null;
     /** Keep the newest content in view as chunks land. */
@@ -71,14 +69,18 @@ function shownWhileStreaming(text: string): string {
 export class ChatStreamUI {
     /** Agent this turn is waiting on, or null when nothing is outstanding. */
     private _awaiting: string | null = null;
+    /** The thread the turn waited on was sent to. */
+    private _awaitingThread = "";
     private _waitingRow: HTMLElement | null = null;
     private _row: HTMLElement | null = null;
     private _body: HTMLElement | null = null;
     /** Agent whose stream the visible row currently shows. */
     private _rowFrom: string | null = null;
     private _streams = new AgentStreams();
-    /** Which target each active stream is replying to (latched at first chunk). */
+    /** Which target each active stream is replying to, by name (latched at first chunk). */
     private _targets = new Map<string, string>();
+    /** The thread each active stream is in, as its frames name it (latched at first chunk). */
+    private _threads = new Map<string, string>();
 
     constructor(private host: StreamHost) {}
 
@@ -87,17 +89,18 @@ export class ChatStreamUI {
         return this._streams;
     }
 
-    /** A turn is on the wire: show that `from` is working until it answers, or the
-     *  turn ends without an answer (the tracker says so). */
-    awaiting(from: string): void {
+    /** A turn is on the wire to the thread `threadId`: show that `from` is working
+     *  until it answers, or the turn ends without an answer (the tracker says so). */
+    awaiting(from: string, threadId: string): void {
         this._awaiting = from;
+        this._awaitingThread = threadId;
         this._showWaiting();
     }
 
     /** Whether an outstanding turn belongs to the open thread, so the thread
      *  keeps room for its row instead of showing its empty state. */
     awaitingHere(): boolean {
-        return this._awaiting !== null && this.host.isOpenThread(this._awaiting);
+        return this._awaiting !== null && this.host.isOpenThread(this._awaitingThread);
     }
 
     /** Whether a turn is outstanding at all, wherever it belongs. */
@@ -131,7 +134,7 @@ export class ChatStreamUI {
         // The turn belongs to the conversation it was sent to. Without this the
         // row follows the reader: send to one agent, open another's thread, and
         // that one appears to be working.
-        if (!this.host.isOpenThread(this._awaiting)) {
+        if (!this.host.isOpenThread(this._awaitingThread)) {
             return;
         }
         const thread = this.host.thread();
@@ -154,13 +157,15 @@ export class ChatStreamUI {
     }
 
     /** Latch the reply target on the first chunk, then keep the reply so far. */
-    onChunk(detail: { chunk: string; from: string; text: string }): void {
+    onChunk(detail: { chunk: string; from: string; agentId: string; text: string }): void {
         const { from, text: soFar } = detail;
         // The first token answers the question the row was asking -- but only
         // for the agent that sent it.
         this.endWait(from);
         if (!this._streams.has(from)) {
-            this._targets.set(from, this.host.lastSentTarget());
+            const sent = this.host.lastSentTarget();
+            this._targets.set(from, sent.name);
+            this._threads.set(from, detail.agentId || sent.id);
         }
         this._streams.set(from, soFar);
         if (!this.host.isChatView()) {
@@ -181,7 +186,7 @@ export class ChatStreamUI {
 
     /** Commit the ended reply as a message; swap its row for rendered markdown
      *  (a concurrent stream's row stays put). */
-    onEnd(detail: { text: string; from: string }): void {
+    onEnd(detail: { text: string; from: string; agentId: string }): void {
         const { from } = detail;
         // Ends the wait on every ending, including one that produced no tokens
         // at all -- an error or a stop -- which would otherwise leave the row
@@ -191,15 +196,18 @@ export class ChatStreamUI {
         const shown = stripActionBlocks(detail.text);
         const text = shown.trim() ? shown : "";
         if (text) {
+            const sent = this.host.lastSentTarget();
             this.host.commit({
                 id: uid("stream"),
                 from,
-                to: this._targets.get(from) ?? this.host.lastSentTarget(),
+                to: this._targets.get(from) ?? sent.name,
+                threadId: this._threads.get(from) || detail.agentId || sent.id,
                 content: text,
                 timestampMs: Date.now(),
             });
         }
         this._targets.delete(from);
+        this._threads.delete(from);
         if (this._body && this._rowFrom === from) {
             if (text) {
                 this._body.textContent = "";
@@ -224,8 +232,8 @@ export class ChatStreamUI {
         if (!text) {
             return null;
         }
-        const to = this._targets.get(active) ?? this.host.lastSentTarget();
-        return this.host.belongsHere(active, to) ? text : null;
+        const thread = this._threads.get(active) ?? this.host.lastSentTarget().id;
+        return this.host.isOpenThread(thread) ? text : null;
     }
 
     /** Rebuild the live row inside `thread` (after a full thread re-render). */

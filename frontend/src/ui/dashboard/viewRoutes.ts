@@ -15,8 +15,8 @@ import type { Route } from "../../router";
 import { safeStorage } from "../../safeStorage";
 import { BUILTIN_VIEWS, SETTINGS_VIEW, type View } from "./types";
 
-/** The browser's memory of the conversation the user last chose. */
-const CHAT_TARGET_KEY = "wactorz-chat-target";
+/** The browser's memory of the conversation the user last chose, by the agent's id. */
+const CHAT_TARGET_KEY = "wactorz-chat-agent-id";
 
 /** What opening a route needs from the dashboard. */
 export interface ViewRoutesHost {
@@ -89,12 +89,14 @@ export function rememberedConversation(): string | null {
 }
 
 /**
- * Remember that the user chose `agent`'s conversation, and with the chat open
- * (`view`), put it in the address.
+ * Remember that the user chose the conversation of the agent `id`, called `name`,
+ * and with the chat open (`view`), put it in the address. The browser keeps the
+ * id, which says which agent exactly; the address says the name, which a person
+ * can read and which outlives the agent spawned again.
  */
-export function rememberConversation(agent: string, view: View): void {
-    safeStorage.set(CHAT_TARGET_KEY, agent);
+export function rememberConversation(id: string, name: string, view: View): void {
+    safeStorage.set(CHAT_TARGET_KEY, id);
     if (view === "chat") {
-        emit("af-view-changed", { view: "chat", path: [agent] });
+        emit("af-view-changed", { view: "chat", path: [name] });
     }
 }

@@ -25,11 +25,14 @@ export type ChatHandler = (
     surface: string,
     surfaceLabel: string,
     brain: string,
+    threadId: string,
 ) => void;
-export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
-export type StreamEndHandler = (from: string) => void;
-/** A live `server_event` frame carrying a topic-addressed payload. */
-export type ServerEventHandler = (topic: string, payload: unknown) => void;
+/** A piece of a streamed reply; `agentId` is the thread it is in. */
+export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number, agentId: string) => void;
+export type StreamEndHandler = (from: string, agentId: string) => void;
+/** A live `server_event` frame carrying a topic-addressed payload, and for a chat
+ *  message the thread the server says it is in. */
+export type ServerEventHandler = (topic: string, payload: unknown, threadId: string) => void;
 /** The /ws connection opened or dropped. */
 export type ConnectionHandler = () => void;
 /** Server↔broker connection state — combined with the /ws state to drive "live". */
@@ -63,6 +66,24 @@ interface StatePatch {
     total_messages?: number;
     log_feed?: LogFeedItem[];
 }
+
+/**
+ * Frames that only tell the page something, each as the app event it becomes.
+ * Emitted rather than handled here: WSClient owns the socket, not the views that
+ * decide what follows.
+ */
+const TOLD: Readonly<Record<string, (data: Record<string, unknown>) => void>> = {
+    // The agent the person's message reached, which a mention can make another
+    // than the thread it was typed in.
+    turn: data =>
+        emit("af-turn-reached", {
+            id: asStr(data["id"]),
+            agentId: asStr(data["agent_id"]),
+            name: asStr(data["name"]),
+        }),
+    // Records the server wrote since the last frame.
+    app_log: data => emit("af-app-log", { entries: asArray(data["entries"]) }),
+};
 
 export class WSClient {
     private ws: WebSocket | null = null;
@@ -193,10 +214,17 @@ export class WSClient {
     }
 
     /**
-     * Send a chat message over the WebSocket.
+     * Send a chat message over the WebSocket: to the thread of `agentName` (`agentId`),
+     * as the message `id`, which the server's `turn` frame names back.
      * Returns false when the socket is not open.
      */
-    send(content: string, agentName = MAIN_AGENT, attachments: string[] = []): boolean {
+    send(
+        content: string,
+        agentName = MAIN_AGENT,
+        attachments: string[] = [],
+        agentId = "",
+        id = "",
+    ): boolean {
         if (!this.connected) {
             return false;
         }
@@ -207,6 +235,8 @@ export class WSClient {
                 type: "chat",
                 content,
                 agent_name: agentName,
+                ...(agentId ? { agent_id: agentId } : {}),
+                ...(id ? { id } : {}),
                 ...(attachments.length ? { attachments } : {}),
             }),
         );
@@ -317,14 +347,12 @@ export class WSClient {
     private _handleFrame(data: Record<string, unknown>): void {
         const type = data["type"];
         if (type === "server_event") {
-            this._onServerEvent?.(asStr(data["topic"]), data["payload"]);
+            this._onServerEvent?.(asStr(data["topic"]), data["payload"], asStr(data["thread_id"]));
             return;
         }
-        if (type === "app_log") {
-            // Records the server wrote since the last frame. Emitted rather
-            // than handled here: WSClient owns the socket, not the view that
-            // decides what a new row does.
-            emit("af-app-log", { entries: asArray(data["entries"]) });
+        const told = typeof type === "string" ? TOLD[type] : undefined;
+        if (told) {
+            told(data);
             return;
         }
         if (type === "mqtt_status") {
@@ -336,11 +364,7 @@ export class WSClient {
             return;
         }
         if (type === "delete_agent") {
-            // Server explicitly deleted an agent — remove it and apply rest of patch
-            this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
-            // The frame names the agent, so this is a fact, not reset churn: the
-            // chat target can be judged against the list that is left.
-            emit("af-agents-settled", { reason: "deleted" });
+            this._handleDelete(data);
             return;
         }
         // Any message with a "state" field is a state patch broadcast; it may
@@ -349,6 +373,14 @@ export class WSClient {
             this._applyStatePatch(data["state"]);
         }
         this._dispatchContent(data);
+    }
+
+    /** The server deleted an agent: remove it and apply the rest of the patch. */
+    private _handleDelete(data: Record<string, unknown>): void {
+        this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
+        // The frame names the agent, so this is a fact, not reset churn: the
+        // chat target can be judged against the list that is left.
+        emit("af-agents-settled", { reason: "deleted" });
     }
 
     /** State reset broadcast — apply the state patch then clear UI as needed. */
@@ -404,6 +436,7 @@ export class WSClient {
         const rawFrom = asStr(data["from"]) || IO_GATEWAY;
         const from = rawFrom === IO_GATEWAY ? this._lastAgentName : rawFrom;
         const ts = toMs(data["timestamp"]);
+        const agentId = asStr(data["agent_id"]);
 
         if (data["type"] === "chat") {
             this._onChat?.(
@@ -415,11 +448,12 @@ export class WSClient {
                 asStr(data["surface"]),
                 asStr(data["surface_label"]),
                 asStr(data["brain"]),
+                agentId,
             );
         } else if (data["type"] === "stream_chunk") {
-            this._onStreamChunk?.(asStr(data["content"]), from, ts);
+            this._onStreamChunk?.(asStr(data["content"]), from, ts, agentId);
         } else if (data["type"] === "stream_end") {
-            this._onStreamEnd?.(from);
+            this._onStreamEnd?.(from, agentId);
         }
     }
 

@@ -13,43 +13,42 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { CardDashboard } from "../ui/CardDashboard";
+import type { CardDashboard } from "../ui/CardDashboard";
 import { emit } from "../events";
+import { agent, composer, goTo, openDashboard } from "./dashboard";
+import { allByTestId, byRole } from "./queries";
 
-let cd: any;
+let cd: CardDashboard;
 
 function waitingRow(): HTMLElement | null {
-    return cd.root.querySelector(".af-chat-waiting");
+    return allByTestId(document, "message-waiting")[0] ?? null;
 }
 
 beforeEach(() => {
-    document.body.innerHTML = "";
-    cd = new CardDashboard() as any;
-    cd.show([
-        { id: "a1", name: "main", state: "running", protected: true },
-        { id: "a2", name: "weather", state: "running", protected: false },
-    ]);
-    cd._setView("chat");
-    cd._chat.setTarget("weather");
+    document.body.replaceChildren();
+    localStorage.clear();
+    ({ dashboard: cd } = openDashboard([
+        agent("main", { id: "a1", protected: true }),
+        agent("weather", { id: "a2" }),
+    ]));
+    goTo("chat", "weather");
 });
 
 afterEach(() => {
+    cd.destroy();
     vi.useRealTimers();
-    document.body.innerHTML = "";
+    document.body.replaceChildren();
 });
 
 /** Send `words` from the composer, as the person does; the send event it puts out. */
 function send(words: string): { id: string; content: string; target: string } {
-    if (!cd.root.querySelector("#af-iobar-input")) {
-        cd.root.appendChild(cd._chat.buildIobar());
-    }
     let sent: { id: string; content: string; target: string } | undefined;
     const record = (e: Event) => {
         sent = (e as CustomEvent<{ id: string; content: string; target: string }>).detail;
     };
     document.addEventListener("af-send-message", record);
-    cd.root.querySelector("#af-iobar-input").value = words;
-    cd.root.querySelector(".af-send-btn").click();
+    composer().value = words;
+    byRole(document, "button", "Send message").click();
     document.removeEventListener("af-send-message", record);
     if (!sent) {
         throw new Error(`nothing went out for ${words}`);

@@ -85,8 +85,9 @@ export class WSClient {
     private _lastFrameAt = 0;
     private _url = "";
     private _closed = false;
-    /** The agent the last chat was addressed to — used to attribute replies,
-     *  which the server stamps with the generic transport id "io-gateway". */
+    /** The agent the person last addressed — used to attribute replies, which
+     *  the server stamps with the generic transport id "io-gateway". The chat
+     *  decides who that is (it also knows of a voice turn); see `addressed`. */
     private _lastAgentName = MAIN_AGENT;
 
     /**
@@ -186,6 +187,11 @@ export class WSClient {
         this._onDisconnected?.();
     }
 
+    /** The person now talks to `agentName`: a reply the gateway stamps is theirs. */
+    addressed(agentName: string): void {
+        this._lastAgentName = agentName;
+    }
+
     /**
      * Send a chat message over the WebSocket.
      * Returns false when the socket is not open.
@@ -194,7 +200,6 @@ export class WSClient {
         if (!this.connected) {
             return false;
         }
-        this._lastAgentName = agentName;
         // Ids only — the server holds the name, type and size it stored, so a
         // turn cannot claim a file is something other than what was uploaded.
         this.ws!.send(
@@ -396,7 +401,7 @@ export class WSClient {
         // agent the user addressed. Re-attribute it to that agent so the thread,
         // feed and toasts are consistent live and after a reload. The proper fix
         // is server-side — the reply frame should carry the real agent name.
-        const rawFrom = asStr(data["from"], IO_GATEWAY);
+        const rawFrom = asStr(data["from"]) || IO_GATEWAY;
         const from = rawFrom === IO_GATEWAY ? this._lastAgentName : rawFrom;
         const ts = toMs(data["timestamp"]);
 

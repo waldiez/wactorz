@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OverviewView, type OverviewHost } from "../ui/dashboard/overview";
-import type { AgentInfo } from "../types/agent";
+import type { AgentInfo, RemoteNode } from "../types/agent";
 import type { StatCardData, AgentAction } from "../ui/dashboard/cards";
 import type { TrendKind } from "../ui/dashboard/trendPanel";
 
@@ -12,7 +12,13 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): OverviewHost {
+/** A host whose agents and nodes a test changes, as the store would. */
+interface FakeOverviewHost extends OverviewHost {
+    readonly agents: Map<string, AgentInfo>;
+    readonly remoteNodes: Map<string, RemoteNode>;
+}
+
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): FakeOverviewHost {
     const map = new Map(agents.map(a => [a.id, a]));
     const statData = (): StatCardData => ({
         agents: [...map.values()],
@@ -27,6 +33,7 @@ function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): Overv
         lastHb: new Map(),
         remoteNodes: new Map(),
         removingIds: new Set(),
+        label: a => a.name,
         hostStats: () => [10, 512, 1024],
         statData,
         onChat: vi.fn<(name: string) => void>(),

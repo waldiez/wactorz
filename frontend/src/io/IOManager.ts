@@ -25,7 +25,6 @@ import { AgentStreams } from "./agentStreams";
 import { MAIN_AGENT } from "../agents/naming";
 
 export class IOManager {
-    private _lastStreamFrom = "";
     /** Per-agent stream accumulation (stream-end emits the full text per agent). */
     private _streams = new AgentStreams();
     private _ws: WSClient | null = null;
@@ -37,18 +36,16 @@ export class IOManager {
         this._ws = ws;
 
         ws.onStreamChunk((chunk, from) => {
-            this._lastStreamFrom = from;
             this._streams.append(from, chunk);
             // The reply so far travels with the piece, so this is the one place a
             // stream is put together.
             emit("af-stream-chunk", { chunk, from, text: this._streams.text(from) });
         });
 
-        ws.onStreamEnd(frameFrom => {
-            // The frame names its own sender; the last chunk's agent is the
-            // fallback for a frame that arrives without one. Either way only
-            // that agent's buffer is taken, so concurrent streams never merge.
-            const from = frameFrom || this._lastStreamFrom || MAIN_AGENT;
+        ws.onStreamEnd(from => {
+            // The socket names a sender for every frame, the addressed agent for
+            // one without, so only that agent's buffer is taken and concurrent
+            // streams never merge.
             const text = this._streams.take(from);
             // A stream_end with no streamed text (e.g. agents that reply via a
             // single non-streamed `chat` frame) must NOT create a feed row —

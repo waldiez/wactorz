@@ -41,6 +41,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **An agent's card says which node it runs on, and two agents may share a name on the dashboard.**
+  A card for an agent on a node reads "on <node>", and follows it when it moves. A second
+  agent with a name already shown gets a card of its own, each called `name@node`, rather
+  than replacing the first. The dashboard is ready for it; the server lets two agents share
+  a name in a later change. A heartbeat that changes an agent's state now shows on its card
+  at once. The chat's agent picker no longer comes up blank when the agent you were talking
+  to is not in the list. After a voice turn moves the chat to the agent spoken to (a
+  robot), a reply the server does not name is credited to that agent in the notices and
+  the activity feed too, not only in the chat.
+
 - **A message sent while an agent is still answering waits its turn instead of being blocked.**
   It shows in the thread at once, marked "Waiting to send", and goes when the reply ends,
   one at a time and in order. One written while the dashboard's connection to the server is

@@ -8,33 +8,28 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { CardDashboard } from "../ui/CardDashboard";
+import type { CardDashboard } from "../ui/CardDashboard";
 import { emit, listen } from "../events";
 import { VIEW_KEY, type Route } from "../router";
-import type { AgentInfo } from "../types/agent";
-
-interface Internals {
-    view: string;
-    _setView(v: string): void;
-    _chat: { chatTarget: string; setTarget(name: string): void };
-}
-
-function agent(name: string): AgentInfo {
-    return { id: name, name, state: "running", protected: false };
-}
+import { addressee, agent, openDashboard, pressView, shownView } from "./dashboard";
+import { byRole } from "./queries";
 
 const AGENTS = [agent("main"), agent("weather")];
+
+/** Pick `name` in the chat's target dropdown, as a person does. */
+function pick(name: string): void {
+    const select = byRole(document, "combobox", "Chat target agent") as HTMLSelectElement;
+    select.value = name;
+    select.dispatchEvent(new Event("change"));
+}
 
 describe("CardDashboard and the address", () => {
     let cd: CardDashboard;
     let changes: Route[];
     let heard: EventListener;
 
-    const internals = (): Internals => cd as unknown as Internals;
-
     function open(): void {
-        cd = new CardDashboard();
-        cd.show(AGENTS);
+        ({ dashboard: cd } = openDashboard(AGENTS));
     }
 
     beforeEach(() => {
@@ -55,7 +50,7 @@ describe("CardDashboard and the address", () => {
 
         open();
 
-        expect(internals().view).toBe("feed");
+        expect(shownView()).toBe("feed");
         expect(changes.at(-1)).toEqual({ view: "feed", path: [] });
     });
 
@@ -64,8 +59,8 @@ describe("CardDashboard and the address", () => {
 
         open();
 
-        expect(internals().view).toBe("chat");
-        expect(internals()._chat.chatTarget).toBe("weather");
+        expect(shownView()).toBe("chat");
+        expect(addressee()).toBe("weather");
         expect(changes.at(-1)).toEqual({ view: "chat", path: ["weather"] });
     });
 
@@ -74,39 +69,39 @@ describe("CardDashboard and the address", () => {
 
         open();
 
-        expect(internals().view).toBe("settings");
+        expect(shownView()).toBe("settings");
     });
 
     it("opens the overview on a first visit", () => {
         open();
 
-        expect(internals().view).toBe("overview");
+        expect(shownView()).toBe("overview");
     });
 
     it("follows the address when it changes", () => {
         open();
 
         emit("af-route", { view: "feed", path: [] });
-        expect(internals().view).toBe("feed");
+        expect(shownView()).toBe("feed");
         emit("af-route", { view: "chat", path: ["main"] });
-        expect([internals().view, internals()._chat.chatTarget]).toEqual(["chat", "main"]);
+        expect([shownView(), addressee()]).toEqual(["chat", "main"]);
         emit("af-route", { view: "chat", path: ["weather"] });
-        expect(internals()._chat.chatTarget).toBe("weather");
+        expect(addressee()).toBe("weather");
     });
 
     it("says where it is when the user moves", () => {
         open();
 
-        internals()._setView("settings");
+        pressView("Settings");
 
         expect(changes.at(-1)).toEqual({ view: "settings", path: [] });
     });
 
     it("says which conversation the user picks while the chat is open", () => {
         open();
-        internals()._setView("chat");
+        pressView("Chat");
 
-        internals()._chat.setTarget("weather");
+        pick("weather");
 
         expect(changes.at(-1)).toEqual({ view: "chat", path: ["weather"] });
     });
@@ -114,37 +109,37 @@ describe("CardDashboard and the address", () => {
     it("keeps an extension's view waiting until it registers, the current view shown meanwhile", () => {
         history.replaceState(null, "", "#/models");
         open();
-        expect(internals().view).toBe("overview");
+        expect(shownView()).toBe("overview");
         // Not reported, so the address keeps naming the view asked for.
         expect(changes).toEqual([]);
 
         cd.registerView("models", "grid", "Models", () => document.createElement("div"));
 
-        expect(internals().view).toBe("models");
+        expect(shownView()).toBe("models");
         expect(changes).toEqual([{ view: "models", path: [] }]);
     });
 
     it("remembers an agent a link names even when it does not exist, and opens a real one next time", () => {
         history.replaceState(null, "", "#/chat/nobody-by-that-name");
         open();
-        expect(internals()._chat.chatTarget).toBe("nobody-by-that-name");
+        expect(addressee()).toBe("nobody-by-that-name");
         cd.destroy();
 
         history.replaceState(null, "", "#");
         localStorage.setItem(VIEW_KEY, "chat");
         open();
 
-        expect(internals()._chat.chatTarget).toBe("main");
+        expect(addressee()).toBe("main");
     });
 
     it("drops the wait when the user opens something else first", () => {
         history.replaceState(null, "", "#/models");
         open();
 
-        internals()._setView("feed");
+        pressView("Feed");
         cd.registerView("models", "grid", "Models", () => document.createElement("div"));
 
-        expect(internals().view).toBe("feed");
+        expect(shownView()).toBe("feed");
     });
 
     it("stops following the address once hidden", () => {
@@ -153,6 +148,6 @@ describe("CardDashboard and the address", () => {
 
         emit("af-route", { view: "feed", path: [] });
 
-        expect(internals().view).toBe("overview");
+        expect(shownView()).toBe("overview");
     });
 });

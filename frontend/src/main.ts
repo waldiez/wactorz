@@ -11,8 +11,9 @@
  * config/serverConfig); the handlers below are thin delegators. Keep it that
  * way — if a handler grows real logic, extract it (see CONTRIBUTING).
  *
- * The chat lives entirely in CardDashboard's in-card bar (DashboardChat), which
- * renders from the af-chat-message / af-stream-* events IOManager emits.
+ * The agents live in AgentStore, which CardDashboard observes; the chat lives
+ * entirely in CardDashboard's in-card bar (DashboardChat), which renders from
+ * the af-chat-message / af-stream-* events IOManager emits.
  *
  * Sections below run top-to-bottom in this order:
  *   1. Deployment env & service URLs   5. Wiring — Home Assistant feed
@@ -39,6 +40,7 @@ import { toast } from "./ui/ToastManager";
 import { questionToast } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
+import { CardDashboard } from "./ui/CardDashboard";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
 import type { AgentInfo, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
@@ -67,7 +69,7 @@ import {
 import { createDeletionGuard } from "./agents/deletionGuard";
 import { NodePresence } from "./agents/nodePresence";
 import { startRouter } from "./router";
-import { STALE_MS } from "./ui/dashboard/agentState";
+import { STALE_MS } from "./agents/liveness";
 
 // ═══ 1 · Deployment env & service URLs ══════════════════════════════════════
 //
@@ -145,7 +147,8 @@ installSessionExpiry(window, () => {
 // Before the dashboard mounts: the first view it opens sets the address.
 const stopRouter = startRouter();
 const agentStore = new AgentStore();
-agentStore.mount();
+const dashboard = new CardDashboard(agentStore);
+dashboard.show();
 const ioManager = new IOManager(router);
 // Online by the overview's measure, so the feed and the node cards agree.
 const nodePresence = new NodePresence(STALE_MS);
@@ -186,7 +189,7 @@ function ingestChat(msg: ChatMessage): void {
         );
     }
     ioManager.receiveAgentMessage(msg);
-    agentStore.onChat(msg.from, msg.to);
+    agentStore.onChat(msg.from);
     emit("af-chat-message", { msg });
     pushFeed(chatFeedItem(msg));
 }
@@ -251,10 +254,10 @@ ws.onStatePatch((agents, deletedId, stats) => {
         agentStore.removeAgent(deletedId);
     }
     if (stats?.totalCostUsd !== undefined) {
-        agentStore.setTotalCostUsd(stats.totalCostUsd);
+        dashboard.setTotalCostUsd(stats.totalCostUsd);
     }
     if (stats?.totalMessages !== undefined) {
-        agentStore.setTotalMessages(stats.totalMessages);
+        dashboard.setTotalMessages(stats.totalMessages);
     }
     agents.forEach(a => {
         if (!a.agent_id || isDeleted(a.agent_id)) {
@@ -272,8 +275,7 @@ ws.onLogFeed(items => {
     // `spawned` entry in the same batch, then from the live agent store — so
     // reloads attribute them by name instead of a raw id.
     const nameIndex = buildNameIndex(items);
-    const resolveName = (id: string): string | undefined =>
-        nameIndex.get(id) ?? agentStore.getAgents().find(a => a.id === id)?.name;
+    const resolveName = (id: string): string | undefined => nameIndex.get(id) ?? agentStore.get(id)?.name;
     // Replay/dedup bookkeeping (first-batch backlog vs. high-water mark vs.
     // skip-while-ws-live) lives in selectLogFeedReplay so it stays tested.
     selectLogFeedReplay(items, _logFeedState, _feedLive, resolveName).forEach(pushFeed);
@@ -394,7 +396,7 @@ router.on("qa-flag", payload => {
 
 router.on("metrics", payload => {
     // Merge cost/message metrics into the agent record so dashboards can display them.
-    const existing = agentStore.getAgents().find(a => a.id === payload.agentId);
+    const existing = agentStore.get(payload.agentId);
     if (!existing) {
         return;
     }
@@ -419,7 +421,7 @@ router.on("node-heartbeat", payload => {
 
 router.on("host-stats", stats => {
     if (stats.cpu !== undefined || stats.memUsedMb !== undefined) {
-        agentStore.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
+        dashboard.setHostStats(stats.cpu ?? 0, stats.memUsedMb ?? 0, stats.memTotalMb);
     }
 });
 
@@ -437,7 +439,7 @@ router.on("raw", ({ topic, payload }) => {
     }
     // Other feed-only agent topics (actuations, anomaly, …) via the extensible
     // registry in mapping.ts — resolve the friendly name from the live store.
-    const item = rawFeedItem(topic, payload, id => agentStore.getAgents().find(a => a.id === id)?.name);
+    const item = rawFeedItem(topic, payload, id => agentStore.get(id)?.name);
     if (item) {
         pushFeed(item);
     }
@@ -479,10 +481,14 @@ listen("af-answer-option", detail => {
     });
 });
 
+// The chat says who is addressed; the socket attributes the gateway's replies to it.
+listen("af-addressed", ({ agent }) => ws.addressed(agent));
+
 // af-iobar sends: route through ioManager (same as regular io-bar)
 listen("af-send-message", detail => {
     const { id, content, attachments } = detail;
-    const agent = agentStore.getAgents().find(a => a.name === detail.target) ?? null;
+    // Only its name is read: the send is addressed by name, which the server resolves.
+    const agent = agentStore.byName(detail.target)[0] ?? null;
     void ioManager.send(content, agent, attachments, id);
 });
 
@@ -492,7 +498,7 @@ listen("af-wipe-all", ({ survivors }) => {
     // is, so a heartbeat still on its way cannot put its card back. Cards are
     // otherwise kept until a delete says so, and a wipe sends none per agent.
     const kept = new Set(survivors);
-    for (const agent of agentStore.getAgents()) {
+    for (const agent of agentStore.list()) {
         if (!kept.has(agent.id)) {
             markDeleted(agent.id);
         }
@@ -573,7 +579,7 @@ function teardown(): void {
     _tornDown = true;
     window.clearInterval(_liveActorsTimer);
     ws.disconnect();
-    agentStore.dispose();
+    dashboard.destroy();
     stopRouter();
     // Detaches the window drag listeners it put up; null when uploads are off.
     _dropZone?.destroy();

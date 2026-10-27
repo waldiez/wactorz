@@ -11,6 +11,7 @@ import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { TURN_IDLE_TIMEOUT_MS } from "../chat/turnTracker";
 import { allByRole, byRole } from "./queries";
 import { rememberedConversation } from "../ui/dashboard/viewRoutes";
+import { listen } from "../events";
 import {
     defaultChatTarget,
     preferredChatTarget,
@@ -37,7 +38,12 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: View = "chat"): ChatHost {
+/** A host whose agents a test changes, as the store would. */
+interface FakeChatHost extends ChatHost {
+    readonly agents: Map<string, AgentInfo>;
+}
+
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: View = "chat"): FakeChatHost {
     const map = new Map(agents.map(a => [a.name, a]));
     let current = view;
     return {
@@ -306,7 +312,7 @@ describe("DashboardChat — resolveDefaultTarget", () => {
 });
 
 describe("DashboardChat — view construction", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     beforeEach(() => {
         document.body.innerHTML = "";
         host = makeHost();
@@ -358,7 +364,7 @@ describe("DashboardChat — view construction", () => {
 });
 
 describe("DashboardChat — target selection", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     beforeEach(() => {
         document.body.innerHTML = "";
         host = makeHost();
@@ -544,7 +550,7 @@ describe("DashboardChat — target selection", () => {
 });
 
 describe("DashboardChat — sending & live events", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     let dc: DashboardChat;
     beforeEach(() => {
         document.body.innerHTML = "";
@@ -667,6 +673,31 @@ describe("DashboardChat — sending & live events", () => {
         );
     });
 
+    it("says whom the person addresses, typed or spoken, for the socket to attribute replies to", () => {
+        dc.unwire();
+        host = makeHost([agent("main"), agent("reachy-mini")]);
+        dc = mount(host);
+        dc.setTarget("main");
+        dc.wire();
+        const heard: string[] = [];
+        const hear = listen("af-addressed", d => heard.push(d.agent));
+
+        sendFromComposer(host, dc, "hello");
+        const msg: ChatMessage = {
+            id: "voice-3",
+            from: "user",
+            to: "reachy-mini",
+            content: "lights on",
+            timestampMs: Date.now(),
+            source: "voice",
+            surface: "reachy-mini",
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+
+        document.removeEventListener("af-addressed", hear);
+        expect(heard).toEqual(["main", "reachy-mini"]);
+    });
+
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
             new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main", text: "Hel" } }),
@@ -720,7 +751,7 @@ describe("DashboardChat — sending & live events", () => {
 });
 
 describe("DashboardChat — thread integrity", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     let dc: DashboardChat;
     /** What `name`'s thread shows, message by message, once it is the one open. */
     const said = (name: string): string[] => {
@@ -794,7 +825,7 @@ describe("DashboardChat — thread integrity", () => {
 });
 
 describe("DashboardChat — one place for its messages", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     let dc: DashboardChat;
     const origFetch = globalThis.fetch;
     const shown = (name: string): string[] => {
@@ -882,7 +913,7 @@ describe("DashboardChat — one place for its messages", () => {
 });
 
 describe("DashboardChat — one turn at a time", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     let dc: DashboardChat;
     let input: HTMLTextAreaElement;
     const sent: string[] = [];
@@ -1036,7 +1067,7 @@ describe("DashboardChat — one turn at a time", () => {
 });
 
 describe("DashboardChat — history & misc state", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     beforeEach(() => {
         document.body.innerHTML = "";
         host = makeHost();

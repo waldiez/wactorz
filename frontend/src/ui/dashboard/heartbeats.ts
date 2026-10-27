@@ -14,7 +14,8 @@
  * Owns the timestamps because it is what reads them. The overview asks for one
  * when it draws a card, which is the only other use.
  */
-import { QUIET_MS, relTime, STALE_MS } from "./agentState";
+import { QUIET_MS, STALE_MS } from "../../agents/liveness";
+import { relTime } from "./agentState";
 
 /** How a card's dot says how long since its agent was heard from. */
 const QUIET = "af-card-quiet";

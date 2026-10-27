@@ -182,12 +182,15 @@ Each step is a branch of its own, in this order:
 1. **This record.**
 2. **The dashboard keyed by id (R1).** Ids are already distinct for every agent that
    can exist today, so this needs nothing from the backend. The store is keyed by id,
-   a card and its thread belong to an id, the node is shown on the card, and
-   `name@node` is shown wherever a name is shared. A second agent of a name is no
-   longer taken as a restart. It also takes the CardDashboard tests off private
-   members, as the frontend review asks.
+   a card belongs to an id, the node is shown on the card, and `name@node` is shown
+   on the cards wherever a name is shared. A second agent of a name is no longer
+   taken as a restart. It also takes the CardDashboard tests off private members,
+   as the frontend review asks. A chat thread stays keyed by name here: what the
+   page is sent names the agent but not its id, and the page does not work an id
+   out from a name.
 3. **The minted id.** `actor_id` in the spawn config and the registry, nodes honouring
-   it, the migration of existing entries, and chat history keyed by id.
+   it, the migration of existing entries, and chat history keyed by id. The
+   dashboard's threads move to the id with it, from the id the server then sends.
 4. **Addresses.** The `name@node` resolver, the question on an ambiguous name,
    mentions, delegation, the CLI and the REST API, `agents/at/…` with `by-name` kept
    for older nodes, `alongside` on a spawn, and the refusals on placement and moves.

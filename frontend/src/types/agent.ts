@@ -111,6 +111,20 @@ export interface RemoteNode {
     manifest?: Record<string, unknown> | null;
 }
 
+/** What a node's listing entry carries that the dashboard reads. */
+export interface NodeListing {
+    /** The node's name. */
+    node: string;
+    /** Whether main has heard from it lately. */
+    online: boolean;
+    /** Seconds since the epoch it was last heard from. */
+    last_seen?: number;
+    /** What its machine is, or null from a node that has not said. */
+    manifest?: Record<string, unknown> | null;
+    /** Its latest readings, under the names its heartbeat uses. */
+    [reading: string]: unknown;
+}
+
 /** Status update payload. */
 export interface StatusPayload {
     agentId: string;

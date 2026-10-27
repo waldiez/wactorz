@@ -10,12 +10,13 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { CardDashboard } from "../ui/CardDashboard";
+import type { CardDashboard } from "../ui/CardDashboard";
 import type { AgentInfo } from "../types/agent";
 import type { FeedItem } from "../types/feed";
 import { emit } from "../events";
 import { blockingFindings, isAccepted } from "./axe";
 import { byRole } from "./queries";
+import { goTo, openDashboard } from "./dashboard";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
@@ -25,6 +26,8 @@ const AGENTS = [
     agent("main", { essential: true, protected: true }),
     agent("weather", { task: "the forecast", messagesProcessed: 3, costUsd: 0.01 }),
     agent("flic", { state: "stopped" }),
+    // A name two agents share: each card names its node.
+    agent("weather", { id: "weather-pi", node: "pi" }),
 ];
 
 describe("the dashboard passes axe", () => {
@@ -33,8 +36,7 @@ describe("the dashboard passes axe", () => {
     beforeEach(() => {
         document.body.replaceChildren();
         localStorage.clear();
-        cd = new CardDashboard();
-        cd.show(AGENTS);
+        ({ dashboard: cd } = openDashboard(AGENTS));
         // A reply long enough to open in place, from a turn: a row holding
         // buttons of its own, which a row that is itself a button cannot.
         const reply = { type: "chat", label: "Here is the plan:\n1. pair it\n2. wire it", agentName: "main" };
@@ -46,7 +48,7 @@ describe("the dashboard passes axe", () => {
     });
 
     it.each(["overview", "feed", "chat", "settings"])("on the %s view", async view => {
-        (cd as unknown as { _setView(v: string): void })._setView(view);
+        goTo(view);
 
         // Something to judge: an empty page passes every rule.
         expect(document.querySelector(`[data-testid="view-${view}"]`)).not.toBeNull();
@@ -69,7 +71,7 @@ describe("the dashboard passes axe", () => {
             ),
         );
         try {
-            (cd as unknown as { _setView(v: string): void })._setView("chat");
+            goTo("chat");
             const input = document.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
             input.value = "/pl";
             input.dispatchEvent(new Event("input"));

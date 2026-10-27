@@ -223,9 +223,12 @@ program (<code>send_to</code>, <code>delegate_task</code>, <code>POST /api/chat<
 them. Main never picks one. The same address works in the terminal chat and in
 <code>/agents restart|stop|delete</code>, <code>/start</code> and <code>/migrate</code>, and one naming a node the agent is
 not on is refused. <code>@</code> is not allowed in a new agent's name or a new node's name.</p>
-<p>For now a task for an agent on a node is sent to its name, and every node running that name
-receives it. So while more than one node runs a name, a task for one of them is refused even
-by its full address, and so is a reset of that name, whose records main keeps by name.</p>
+<p>A task for an agent on a node goes on that node's own topic, <code>agents/at/&lt;node&gt;/&lt;name&gt;/task</code>,
+so it reaches that agent alone. A node from before that takes tasks only by name, and every
+node running the name hears a task sent by name, so while another node runs the name, a task
+for the agent on such a node is refused even by its full address; deploying the node again
+lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
+a reset clears by name.</p>
 <h4 id="memory">Memory</h4>
 <p>After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into <code>_user_facts</code>, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.</p>
 <h4 id="spawn-registry">Spawn registry</h4>
@@ -831,7 +834,7 @@ plans, memory, notifications, diagnostics. <code>/help</code> on the dashboard l
 </tbody>
 </table>
 <blockquote>
-<p><strong>A task's payload is untrusted input.</strong> On main, any agent may send one; on a node, any node on the broker may, by name (<code>agents/by-name/&lt;name&gt;/task</code>); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what <code>handle_task</code> acts on, and never run, install or fetch what a payload names without checking it.</p>
+<p><strong>A task's payload is untrusted input.</strong> On main, any agent may send one; on a node, any node on the broker may, on its node's topic (<code>agents/at/&lt;node&gt;/&lt;name&gt;/task</code>) or by name (<code>agents/by-name/&lt;name&gt;/task</code>); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what <code>handle_task</code> acts on, and never run, install or fetch what a payload names without checking it.</p>
 </blockquote>
 <h4 id="agent-api-agent-object-inside-generated-code">Agent API (<code>agent</code> object inside generated code)</h4>
 <table>

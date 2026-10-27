@@ -503,9 +503,11 @@ main gives up on it after its grace period, which removes its agents anyway.
 Only for a node main does not know at all, such as one that was down when main
 started, is a withdrawal taken at once. What else a node can publish under
 another agent's topics, such as its status or logs, is taken as given.</p>
-<p>That includes tasks. A task on <code>agents/by-name/&lt;name&gt;/task</code> reaches the agent of
-that name on whichever node runs it, and any node may publish one, so an agent
-on a node is asked by whoever publishes there, another node included. Its
+<p>That includes tasks. A task on <code>agents/at/&lt;node&gt;/&lt;name&gt;/task</code> reaches the agent
+of that name on that node, and one on <code>agents/by-name/&lt;name&gt;/task</code>, which nodes
+from before tasks went by node still use, the agent of that name on every node
+that runs it. Any node may publish either, so an agent on a node is asked by
+whoever publishes there, another node included. Its
 <code>handle_task</code> should treat the payload as untrusted input, as it would text from
 the web: check what it acts on, and never run or install what a task names.</p>
 <p>Two settings shape the list, both read by whatever writes it (the server, and
@@ -858,7 +860,12 @@ sent all the same and starts when the node does; the chat says so.</p>
 <tr>
 <td><code>nodes/{name}/reply/{id}</code></td>
 <td>← runner</td>
-<td>Reply routing for <code>agent.send_to()</code> calls originating on this node.</td>
+<td>Replies to what this node asks main, such as an LLM call.</td>
+</tr>
+<tr>
+<td><code>agents/at/{name}/{agent}/reply/{id}</code></td>
+<td>← runner</td>
+<td>The reply to an <code>agent.send_to()</code> sent by an agent on this node.</td>
 </tr>
 <tr>
 <td><code>agents/{id}/heartbeat</code></td>
@@ -871,9 +878,19 @@ sent all the same and starts when the node does; the chat says so.</p>
 <td>Log messages from <code>agent.log()</code> and <code>agent.alert()</code>.</td>
 </tr>
 <tr>
-<td><code>agents/by-name/{name}/task</code></td>
+<td><code>agents/at/{name}/+/task</code></td>
 <td>→ agent</td>
-<td>Task addressed to a named agent on any node. Runner routes to local agents by name. Any node may publish one, so its payload is untrusted input.</td>
+<td>A task for an agent on this node, by its name. Any node may publish one, so its payload is untrusted input. The node's manifest says <code>"tasks_by_node": true</code>.</td>
+</tr>
+<tr>
+<td><code>agents/by-name/+/task</code></td>
+<td>→ agent</td>
+<td>A task by name alone, from a sender that addresses no node; every node running the name takes it. Untrusted input, as above.</td>
+</tr>
+<tr>
+<td><code>agents/+/manifest</code></td>
+<td>→ runner</td>
+<td>Every agent's retained manifest, read for where agents run, so <code>agent.send_to("name@node")</code> from this node reaches the right one. An agent here stamps its own with <code>"node"</code> and <code>"tasks_by_node": true</code>.</td>
 </tr>
 </tbody>
 </table>

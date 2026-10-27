@@ -68,26 +68,30 @@ interface StatePatch {
 }
 
 /**
- * Frames that only tell the page something, each as the app event it becomes.
- * Emitted rather than handled here: WSClient owns the socket, not the views that
- * decide what follows. A Map, not an object: the frame's type is the key, and an
- * object would also answer for what it inherits (`constructor`, `toString`).
+ * Tell the page what a frame that only informs it says, as the app event it
+ * becomes; whether `type` is such a frame. Emitted rather than handled here:
+ * WSClient owns the socket, not the views that decide what follows. A switch
+ * over the types it knows, so the frame's own text never picks what is called.
  */
-const TOLD: ReadonlyMap<string, (data: Record<string, unknown>) => void> = new Map([
-    // The agent the person's message reached, which a mention can make another
-    // than the thread it was typed in.
-    [
-        "turn",
-        (data: Record<string, unknown>) =>
+function told(type: unknown, data: Record<string, unknown>): boolean {
+    switch (type) {
+        case "turn":
+            // The agent the person's message reached, which a mention can make
+            // another than the thread it was typed in.
             emit("af-turn-reached", {
                 id: asStr(data["id"]),
                 agentId: asStr(data["agent_id"]),
                 name: asStr(data["name"]),
-            }),
-    ],
-    // Records the server wrote since the last frame.
-    ["app_log", (data: Record<string, unknown>) => emit("af-app-log", { entries: asArray(data["entries"]) })],
-]);
+            });
+            return true;
+        case "app_log":
+            // Records the server wrote since the last frame.
+            emit("af-app-log", { entries: asArray(data["entries"]) });
+            return true;
+        default:
+            return false;
+    }
+}
 
 export class WSClient {
     private ws: WebSocket | null = null;
@@ -354,9 +358,7 @@ export class WSClient {
             this._onServerEvent?.(asStr(data["topic"]), data["payload"], asStr(data["thread_id"]));
             return;
         }
-        const told = typeof type === "string" ? TOLD.get(type) : undefined;
-        if (told) {
-            told(data);
+        if (told(type, data)) {
             return;
         }
         if (type === "mqtt_status") {

@@ -229,10 +229,25 @@ node running the name hears a task sent by name, so while another node runs the 
 for the agent on such a node is refused even by its full address; deploying the node again
 lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
 a reset clears by name.</p>
+<h4 id="two-agents-of-one-name">Two agents of one name</h4>
+<p>A name is unique on one host, so two hosts may each run an agent of the same name. A spawn
+naming a node where the name does not run, while it runs on another host, says what it
+means: <code>"replace": true</code> moves that agent there, keeping its id, and <code>"alongside": true</code>
+runs a second agent of the name there, under an id of its own. A spawn that says neither
+spawns nothing, and you are told both. <code>/agents copy &lt;agent&gt; &lt;node&gt;</code> does the second from
+chat: <code>/agents copy counter pi-kitchen</code> leaves <code>counter@main</code> running and starts
+<code>counter@pi-kitchen</code> from the same config, with none of its state.</p>
+<p>Two agents of one name on one host would share an address, so a spawn, a move or a copy
+onto a host that already runs the name is refused, and so is a second agent of a name on a
+node from before ids were kept, which would give it the first one's id; deploy that node
+again first. <code>"replace"</code> with the name on more than one host does not say which one moves:
+move one with <code>/migrate &lt;agent&gt;@&lt;node&gt; &lt;node&gt;</code>. Every command that acts on one agent —
+<code>/agents restart|stop|delete</code>, <code>/start</code>, <code>/migrate</code>, <code>/agents copy</code>, a <code>&lt;delete&gt;</code> block —
+takes the address, and a bare name kept on more than one host acts on none of them.</p>
 <h4 id="memory">Memory</h4>
 <p>After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into <code>_user_facts</code>, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.</p>
 <h4 id="spawn-registry">Spawn registry</h4>
-<p>Every DynamicAgent spawned during the session is saved to the <code>_spawned_agents</code> key in SQLite. On restart, MainActor re-spawns every entry so pipelines survive reboots. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.</p>
+<p>Every DynamicAgent spawned during the session is saved to the spawn registry in SQLite, one entry per agent, kept by its id (<code>_spawned_agents_by_id</code>). On restart, MainActor re-spawns every entry so pipelines survive reboots. A registry from before entries were kept by id (<code>_spawned_agents</code>, by name) is read once and left as it was. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.</p>
 <h4 id="commands">Commands</h4>
 <p>Main answers slash commands without a model call: agents, nodes, models, pipelines and
 plans, memory, notifications, diagnostics. <code>/help</code> on the dashboard lists them all, and the

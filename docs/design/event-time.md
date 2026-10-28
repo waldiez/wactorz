@@ -99,7 +99,9 @@ the clock.
 
 - **The collector** stores the event time in `ts` and the arrival time in a new
   column, with `time_source`; a schema migration adds the column. Readings
-  without a payload time behave as today.
+  without a payload time behave as today. The recorder that keeps readings for
+  the model loop writes the same three columns to Parquet; where each store is
+  used is decided in `data-storage.md`.
 - **`StreamWindow`** gains an option to window by event time; the default stays
   the wall clock, so existing agents are unchanged.
 - **Labels and the provenance graph** (built) are stored in event time

@@ -7,6 +7,7 @@ arrives over this socket.
 """
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -287,7 +288,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         except Exception as exc:
             logger.warning("[ws] chat_log write failed: %s", exc)
 
-    async def ws_reply(text: str):
+    async def ws_reply(text: str, **offered: Any):
         try:
             await ws.send_str(
                 json.dumps(
@@ -297,6 +298,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                         "agent_id": _reply_from["id"],
                         "content": text,
                         "timestamp": time.time(),
+                        **offered,
                     }
                 )
             )
@@ -305,6 +307,13 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             _persist_chat("assistant", text)
         except Exception:
             logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
+
+    async def ws_offer(text: str, addresses: tuple[str, ...], *, retry_of: str):
+        """Answer a mention that fits more than one agent.
+
+        The words, the addresses it fits, and the message (``retry_of``) a pick re-sends.
+        """
+        await ws_reply(text, choices=list(addresses), retry_of=retry_of)
 
     async def ws_stream_chunk(chunk: str):
         try:
@@ -412,7 +421,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             # request even if the assistant reply errors out.
                             _persist_chat("user", content, files)
 
-                            async def _safe_route(c=content, files=files):
+                            async def _safe_route(
+                                c=content, files=files, sent=str(data.get("id") or "")
+                            ):
                                 # Both halves of this turn are stored here — the
                                 # user's above, the reply once it has finished —
                                 # so an agent that also stores its own turns must
@@ -427,6 +438,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                         stream_fn=ws_stream_chunk,
                                         stream_end_fn=ws_stream_end,
                                         attachments=files,
+                                        choices_fn=functools.partial(ws_offer, retry_of=sent),
                                     )
                                 except asyncio.CancelledError:
                                     # Stop button: finalize the partial stream so

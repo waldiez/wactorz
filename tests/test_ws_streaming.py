@@ -90,7 +90,12 @@ class TestStreaming:
         self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def _route(
-            text: str, reply: Any, stream_fn: Any, stream_end_fn: Any, attachments: Any
+            text: str,
+            reply: Any,
+            stream_fn: Any,
+            stream_end_fn: Any,
+            attachments: Any,
+            choices_fn: Any,
         ) -> None:
             await stream_fn("Hel")
             await stream_fn("")
@@ -119,7 +124,12 @@ class TestStreaming:
         self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def _route(
-            text: str, reply: Any, stream_fn: Any, stream_end_fn: Any, attachments: Any
+            text: str,
+            reply: Any,
+            stream_fn: Any,
+            stream_end_fn: Any,
+            attachments: Any,
+            choices_fn: Any,
         ) -> None:
             await stream_fn("partial")
             raise asyncio.CancelledError
@@ -210,7 +220,12 @@ class TestAFailingSocket:
         done = asyncio.Event()
 
         async def _route(
-            text: str, reply: Any, stream_fn: Any, stream_end_fn: Any, attachments: Any
+            text: str,
+            reply: Any,
+            stream_fn: Any,
+            stream_end_fn: Any,
+            attachments: Any,
+            choices_fn: Any,
         ) -> None:
             await stream_fn("kept")
             await stream_end_fn()

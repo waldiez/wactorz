@@ -24,6 +24,91 @@ function target(agents: AgentInfo[], view: View = "chat"): { t: ChatTarget; map:
 
 beforeEach(() => localStorage.clear());
 
+describe("a name two agents share", () => {
+    const TWO = () => [
+        agent("main", "main-id"),
+        agent("counter", "counter-on-main"),
+        agent("counter", "counter-on-pi", { node: "pi" }),
+    ];
+
+    it("names neither on its own, and offers both", () => {
+        const { t } = target(TWO());
+
+        expect(t.named("counter")).toBeUndefined();
+        expect(t.choices("counter").map(a => a.id)).toEqual(["counter-on-main", "counter-on-pi"]);
+    });
+
+    it("by an address names that one, and leaves no choice", () => {
+        const { t } = target(TWO());
+
+        expect(t.named("counter@pi")?.id).toBe("counter-on-pi");
+        expect(t.named("counter@main")?.id).toBe("counter-on-main");
+        expect(t.choices("counter@pi")).toEqual([]);
+    });
+
+    it("chosen, is put in the conversation's address as name@node", () => {
+        const { t } = target(TWO());
+        const paths: string[][] = [];
+        const listener = listen("af-view-changed", route => paths.push(route.path));
+
+        t.move("counter-on-pi", "claim");
+        document.removeEventListener("af-view-changed", listener);
+
+        expect(t.address).toBe("counter@pi");
+        expect(paths).toEqual([["counter@pi"]]);
+    });
+
+    it("asked for by name alone stays asked for, and its address is what was asked", () => {
+        const { t } = target(TWO());
+
+        t.want("counter");
+
+        expect([t.id, t.waiting, t.address]).toEqual(["", true, "counter"]);
+        expect(t.arrived()).toBeUndefined();
+        expect(t.offered()).toEqual(["counter@main", "counter@pi"]);
+    });
+
+    it("offers nothing once one is chosen, or for a name no agent has", () => {
+        const { t } = target(TWO());
+
+        t.want("ghost");
+        expect(t.offered()).toEqual([]);
+
+        t.move("counter-on-pi", "claim");
+        expect(t.offered()).toEqual([]);
+    });
+
+    it("says when the one chosen is called by another address, once", () => {
+        const { t, map } = target([agent("main", "main-id"), agent("counter", "counter-on-main")]);
+        t.move("counter-on-main", "claim");
+        expect(t.relabelled()).toBeNull();
+
+        map.set("counter-on-pi", agent("counter", "counter-on-pi", { node: "pi" }));
+        expect(t.relabelled()).toBe("counter@main");
+        expect(t.relabelled()).toBeNull();
+
+        map.delete("counter-on-pi");
+        expect(t.relabelled()).toBe("counter");
+    });
+
+    it("says nothing for a name asked for, nor for a move, which chooses anew", () => {
+        const { t, map } = target(TWO());
+        t.want("counter");
+        expect(t.relabelled()).toBeNull();
+
+        t.move("counter-on-pi", "claim");
+        map.delete("counter-on-main");
+        t.move("counter-on-pi", "claim");
+        expect(t.relabelled()).toBeNull();
+    });
+
+    it("leaves main to the agent called main on main itself", () => {
+        const { t } = target([...TWO(), agent("main", "main-on-pi", { node: "pi" })]);
+
+        expect(t.mainId()).toBe("main-id");
+    });
+});
+
 describe("a choice", () => {
     it("is kept by id, named by the agent's name, and remembered by id", () => {
         const { t } = target([agent("counter", "on-pi")]);

@@ -204,8 +204,8 @@ Each step is a branch of its own, in this order:
    Four branches, in this order. The resolver is built: one lookup over main's own
    agents and the nodes' heartbeats (`wactorz.core.addresses`,
    `wactorz.agents.main.addresses`) that every way of naming an agent goes through, and
-   `@` refused in new agent and node names. Until the dashboard's branch, a person is
-   told the addresses in a plain reply rather than offered them to pick. A reset of a
+   `@` refused in new agent and node names. A person is told the addresses, which the
+   dashboard offers to pick from. A reset of a
    name kept in more than one place is refused, since what it clears is kept by name.
    The task topic by node is built: a node says `tasks_by_node` in its manifest, main
    sends it tasks on `agents/at/<node>/<name>/task`, and an agent on a node finds the
@@ -218,6 +218,11 @@ Each step is a branch of its own, in this order:
    one from chat. A spawn, move or copy onto a host that runs the name is refused, as
    is a second agent of a name on a node that derives ids. Every command acting on one
    agent finds it by its address. What a reset clears is still kept by name, so a
-   reset of a shared name stays refused. Then the dashboard.
+   reset of a shared name stays refused. The dashboard is built: it keeps a turn, a
+   streaming reply and the "is working" row by the agent's id, calls each agent of a
+   shared name by its address wherever it names one, sends a thread's message to its
+   own agent by address, and offers the addresses of an ambiguous mention as buttons
+   that send the message again to the one pressed. `#/chat/<name>@<node>` opens one
+   conversation; a shared name alone opens neither and links both.
 5. **Namespaces.** Topics built in one place, then the prefix, the access list, the
    node's deploy environment, the heartbeat check and the second-install notice.

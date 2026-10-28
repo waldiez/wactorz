@@ -178,22 +178,25 @@ describe("preferredChatTarget", () => {
 });
 
 describe("leadingMention", () => {
-    const names = ["main", "catalog", "worker"];
+    const agents = [agent("main"), agent("catalog"), agent("worker")];
 
     it("names the agent a leading @mention is to", () => {
-        expect(leadingMention("@catalog do the thing", names)).toBe("catalog");
+        expect(leadingMention("@catalog do the thing", agents)).toEqual({
+            spelled: "catalog",
+            found: [agents[1]],
+        });
     });
 
     it("matches the mention case-insensitively, spelled as the agent spells it", () => {
-        expect(leadingMention("@Catalog hi", names)).toBe("catalog");
+        expect(leadingMention("@Catalog hi", agents)?.spelled).toBe("catalog");
     });
 
     it("is null with no mention", () => {
-        expect(leadingMention("do the thing", names)).toBeNull();
+        expect(leadingMention("do the thing", agents)).toBeNull();
     });
 
-    it("is null when the mention names no known agent", () => {
-        expect(leadingMention("@ghost hi", names)).toBeNull();
+    it("finds nothing when the mention names no known agent", () => {
+        expect(leadingMention("@ghost hi", agents)?.found).toEqual([]);
     });
 });
 
@@ -1583,7 +1586,7 @@ describe("two agents of one name", () => {
         const host = makeHost([
             agent("main", { id: "main-id" }),
             agent("counter", { id: "on-main" }),
-            agent("counter", { id: "on-pi" }),
+            agent("counter", { id: "on-pi", node: "pi" }),
         ]);
         return {
             ...host,
@@ -1643,6 +1646,79 @@ describe("two agents of one name", () => {
         expect(said(host)).toEqual(["here"]);
     });
 
+    it("opened by the name alone, opens neither and offers each by its address", () => {
+        const host = twins();
+        const dc = mount(host);
+
+        dc.openByName("counter");
+
+        expect(dc.chatTarget).toBe("");
+        const links = [...thread(host).querySelectorAll("a")];
+        expect(links.map(a => [a.textContent, a.getAttribute("href")])).toEqual([
+            ["@counter@main", "#/chat/counter@main"],
+            ["@counter@pi", "#/chat/counter@pi"],
+        ]);
+    });
+
+    it("opened by an address, opens that one", () => {
+        const host = twins();
+        const dc = mount(host);
+
+        dc.openByName("counter@pi");
+
+        expect(dc.chatTarget).toBe("on-pi");
+        expect(dc.chatTargetAddress).toBe("counter@pi");
+    });
+
+    it("keeps a turn sent to one waiting through the other's reply", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("on-pi");
+        const turns: (string | null)[] = [];
+        const stop = listen("af-turn", t => turns.push(t.agent));
+        sendFromComposer(host, dc, "count");
+
+        arrive({ id: "a", from: "counter", to: "user", threadId: "on-main", content: "1", timestampMs: 1 });
+        expect(turns.at(-1)).toBe("on-pi");
+
+        arrive({ id: "b", from: "counter", to: "user", threadId: "on-pi", content: "2", timestampMs: 2 });
+        document.removeEventListener("af-turn", stop);
+        expect(turns.at(-1)).toBeNull();
+        dc.unwire();
+    });
+
+    it("offers the addresses a bare name fits, and sends the message again to the one picked", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("main-id");
+        const sends: { id: string; content: string; answerer: string }[] = [];
+        const record = (e: Event) => sends.push((e as CustomEvent<(typeof sends)[number]>).detail);
+        document.addEventListener("af-send-message", record);
+        sendFromComposer(host, dc, "@counter five");
+        arrive({
+            id: "r1",
+            from: "main",
+            to: "user",
+            threadId: "main-id",
+            content: "More than one agent is called 'counter'.",
+            timestampMs: 2,
+            addressChoice: { addresses: ["counter@main", "counter@pi"], retryOf: sends[0]!.id },
+        });
+
+        byRole(thread(host), "button", "@counter@pi").click();
+        byRole(thread(host), "button", "@counter@main").click();
+        document.removeEventListener("af-send-message", record);
+
+        expect(sends.map(s => [s.content, s.answerer])).toEqual([
+            ["@counter five", "main-id"],
+            ["@counter@pi five", "on-pi"],
+        ]);
+        expect((byRole(thread(host), "button", "@counter@main") as HTMLButtonElement).disabled).toBe(true);
+        dc.unwire();
+    });
+
     it("moves a message to the one the server says it reached, and follows it", () => {
         const host = twins();
         const dc = mount(host);
@@ -1653,7 +1729,7 @@ describe("two agents of one name", () => {
             sent = (e as CustomEvent<{ id: string }>).detail.id;
         };
         document.addEventListener("af-send-message", record);
-        sendFromComposer(host, dc, "@counter count");
+        sendFromComposer(host, dc, "@counter@pi count");
         document.removeEventListener("af-send-message", record);
 
         document.dispatchEvent(

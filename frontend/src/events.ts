@@ -26,7 +26,14 @@ export interface AppEventMap {
     "af-agent-command": { command: string; agentId: string };
     /** The chat puts a message on the wire: `id` is its bubble's, and comes back on
      *  `af-send-failed` should the send not go out. */
-    "af-send-message": { id: string; content: string; target: string; name: string; attachments: string[] };
+    "af-send-message": {
+        id: string;
+        content: string;
+        target: string;
+        name: string;
+        answerer: string;
+        attachments: string[];
+    };
     /** The send `id` did not go out: the socket was closed. */
     "af-send-failed": { id: string; content: string; target: string };
     /** The person now talks to `agent`, by typing or by voice: a reply the server
@@ -49,6 +56,8 @@ export interface AppEventMap {
     "af-reset-chat": { agent: string | null };
     /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
     "af-answer-option": { id: string; agentId: string; option: string; index: number };
+    /** The person picked one of the addresses a reply (`id`) offered for a name several agents share. */
+    "af-pick-address": { id: string; address: string };
     /** A question was answered, here or on another channel: show the pick, take the buttons off. */
     "af-answered": { id: string; option: string };
     /** The server's ledger of questions, each time the page goes live: the open ones, one
@@ -69,8 +78,9 @@ export interface AppEventMap {
     "af-app-log": { entries: unknown[] };
     /** The address changed (Back, a link, a typed hash): open what it names. */
     "af-route": Route;
-    /** The dashboard opened a view, or another conversation in the chat: the address follows. */
-    "af-view-changed": Route;
+    /** The dashboard opened a view, or another conversation in the chat: the address follows.
+     *  `replace` when it is the same place under another name, which is no step for Back. */
+    "af-view-changed": Route & { replace?: boolean };
     /** An extension adds a view: a nav button showing `icon` and `label`, and `build` for its
      *  content, opened at `#/<key>`. Sent once, during startup. */
     "af-register-view": { key: string; icon: string; label: string; build: () => HTMLElement };

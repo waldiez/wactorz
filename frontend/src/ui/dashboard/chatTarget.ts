@@ -8,13 +8,15 @@
  * The chat keeps its threads by id, since two agents may share a name, so the
  * target is an id. Its name is kept beside it for what shows it — the composer,
  * the header, the address — and for when the agent has gone from the list. An
- * address names a conversation by name (`#/chat/<name>`), and one that names an
- * agent not on the list stays the choice by name alone until it arrives.
+ * address names a conversation by name (`#/chat/<name>`), or by `name@node`
+ * where two agents share the name. One that names no agent on the list, or
+ * several, stays the choice as it was written until it names one.
  *
  * No DOM: the chat draws from `id` and `name`, and is told when they change.
  */
 import type { AgentInfo } from "../../types/agent";
 import { MAIN_AGENT } from "../../agents/naming";
+import { labelAmong, resolveAmong } from "../../agents/addresses";
 import type { View } from "./types";
 import { rememberConversation, rememberedConversation } from "./viewRoutes";
 import { replacementTarget, settlingTarget } from "./chatRouting";
@@ -35,10 +37,12 @@ export interface TargetHost {
 export class ChatTarget {
     private _id = "";
     private _name = "";
-    /** A name an address asked for, whose agent is not on the list. */
+    /** A name or an address asked for, which names no one agent on the list. */
     private _wanted: string | null = null;
     /** Whether the target is the person's rather than a default filled for them. */
     private _settled = false;
+    /** The target's address as it was when it was chosen, or when `relabelled` last looked. */
+    private _labelled = "";
 
     constructor(private readonly host: TargetHost) {}
 
@@ -57,7 +61,18 @@ export class ChatTarget {
         return this._settled;
     }
 
-    /** Whether the target is a name whose agent has not arrived. */
+    /** What the conversation's address calls the target: its name, its address where the
+     *  name is shared, or what was asked for while that names no one agent. */
+    get address(): string {
+        if (this._wanted !== null) {
+            return this._wanted;
+        }
+        const agents = this.host.agents();
+        const agent = agents.get(this._id);
+        return agent ? labelAmong(agent, agents.values()) : this._name;
+    }
+
+    /** Whether the target is a name whose agent has not arrived, or one several agents share. */
     get waiting(): boolean {
         return this._wanted !== null;
     }
@@ -81,21 +96,49 @@ export class ChatTarget {
         this._wanted = null;
         this._id = id;
         this._name = name ?? this.host.agents().get(id)?.name ?? "";
+        this._labelled = this.address;
         if (how !== "default") {
             this._settled = true;
         }
         if (how === "claim" && id) {
-            rememberConversation(id, this._name, this.host.getView());
+            rememberConversation(id, this.address, this.host.getView());
         }
         this.host.changed();
     }
 
-    /** The agent called `name`, as an address names one: one while names are unique. */
-    named(name: string): AgentInfo | undefined {
-        return [...this.host.agents().values()].find(a => a.name === name);
+    /** The one agent `wanted`, a name or `name@node`, names: undefined for none, or for several. */
+    named(wanted: string): AgentInfo | undefined {
+        const found = resolveAmong(wanted, this.host.agents().values());
+        return found.length === 1 ? found[0] : undefined;
     }
 
-    /** Hold `name`, whose agent is not on the list, as the person's choice. */
+    /** The agents `wanted` names when it names more than one: the choice it leaves open. */
+    choices(wanted: string): AgentInfo[] {
+        const found = resolveAmong(wanted, this.host.agents().values());
+        return found.length > 1 ? found : [];
+    }
+
+    /**
+     * The target's address, if it changed since the target was chosen or this
+     * was last asked: another agent of its name came or went. Null when it is
+     * called as before, and while the target is a name asked for.
+     */
+    relabelled(): string | null {
+        const was = this._labelled;
+        this._labelled = this.address;
+        return this._id && this._labelled !== was ? this._labelled : null;
+    }
+
+    /** The addresses of the agents a name asked for fits, when it fits more than one: what to offer. */
+    offered(): string[] {
+        if (this._wanted === null) {
+            return [];
+        }
+        const agents = [...this.host.agents().values()];
+        return this.choices(this._wanted).map(agent => labelAmong(agent, agents));
+    }
+
+    /** Hold `name`, which names no one agent on the list, as the person's choice. */
     want(name: string): void {
         this._wanted = name;
         this._id = "";
@@ -141,6 +184,6 @@ export class ChatTarget {
 
     /** The id of main, which takes what is said to no one in particular, or "". */
     mainId(): string {
-        return this.named(MAIN_AGENT)?.id ?? "";
+        return [...this.host.agents().values()].find(a => a.name === MAIN_AGENT && !a.node)?.id ?? "";
     }
 }

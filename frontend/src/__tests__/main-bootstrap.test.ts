@@ -107,6 +107,7 @@ vi.mock("../agents/AgentStore", () => ({
         list = () => mockStoreAgents;
         get = (id: string) => mockStoreAgents.find(a => a.id === id);
         byName = (name: string) => mockStoreAgents.filter(a => a.name === name);
+        label = (agent: { name: string }) => agent.name;
         onHeartbeat = vi.fn();
         onSpawn = vi.fn();
         onAlert = vi.fn();
@@ -451,8 +452,22 @@ describe("main.ts bootstrap", () => {
         emit("af-stream-end", { text: "done", from: "A", agentId: "a" });
         emit("af-stream-end", { text: "", from: "A", agentId: "a" }); // !text → return
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
-        emit("af-send-message", { id: "s1", content: "hi", target: "a", name: "A", attachments: [] }); // agent found
-        emit("af-send-message", { id: "s2", content: "hi", target: "nope", name: "nope", attachments: [] }); // null
+        emit("af-send-message", {
+            id: "s1",
+            content: "hi",
+            target: "a",
+            name: "A",
+            answerer: "a",
+            attachments: [],
+        }); // agent found
+        emit("af-send-message", {
+            id: "s2",
+            content: "hi",
+            target: "nope",
+            name: "nope",
+            answerer: "nope",
+            attachments: [],
+        }); // null
         emit("af-wipe-all", { survivors: ["a"] });
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));

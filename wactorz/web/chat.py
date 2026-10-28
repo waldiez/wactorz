@@ -432,6 +432,8 @@ class Destination(NamedTuple):
     remote_node: str | None = None
     #: Why it goes nowhere, when the name fits more than one agent.
     refusal: str = ""
+    #: The addresses the name fits, for a sender that can offer them to pick from.
+    choices: tuple[str, ...] = ()
 
 
 def command_word(content: str) -> str:
@@ -456,8 +458,15 @@ def destination_of(content: str) -> Destination:
     resolution = resolution_of(name)
     found = resolution.found
     if found is None:
-        refusal = resolution.refusal(mention=True) if resolution.ambiguous else ""
-        return Destination(chat_metrics.UNROUTED, name, text, refusal=refusal)
+        if not resolution.ambiguous:
+            return Destination(chat_metrics.UNROUTED, name, text)
+        return Destination(
+            chat_metrics.UNROUTED,
+            name,
+            text,
+            refusal=resolution.refusal(mention=True),
+            choices=tuple(str(address) for address in resolution.matches),
+        )
     if found.node == MAIN_NODE:
         target = runtime.registry.find_by_name(found.name) if runtime.registry else None
         if target is not None:
@@ -502,6 +511,7 @@ async def route_chat(
     stream_fn=None,
     stream_end_fn=None,
     attachments: list[dict[str, Any]] | None = None,
+    choices_fn=None,
 ) -> None:
     """Route one chat turn, and record how long the person waited for it.
 
@@ -509,6 +519,10 @@ async def route_chat(
     passes through, and every one of them ends by sending the reply. A turn the
     person stops is cancelled, and not recorded; nor is one that raises, which
     the caller reports as the failure it is.
+
+    ``choices_fn(text, addresses)``, when given, answers a mention that fits more
+    than one agent in place of ``reply_fn``: a sender that can offer the
+    addresses to pick from says the same words with them.
     """
     destination = destination_of(content)
     timer = chat_metrics.TurnTimer(destination.kind)
@@ -522,6 +536,7 @@ async def route_chat(
             timer.watch(stream_fn) if stream_fn is not None else None,
             stream_end_fn,
             attachments,
+            timer.watch(choices_fn) if choices_fn is not None else None,
         )
     timer.finish()
 
@@ -533,6 +548,7 @@ async def _route_chat(
     stream_fn=None,
     stream_end_fn=None,
     attachments: list[dict[str, Any]] | None = None,
+    choices_fn=None,
 ) -> None:
     """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
@@ -540,6 +556,7 @@ async def _route_chat(
     stream_fn(chunk)      — send one streaming chunk (optional; falls back to reply_fn)
     stream_end_fn()       — signal that streaming is done (optional)
     attachments           — stored records for this turn, resolved by the caller
+    choices_fn(text, addresses) — say a refusal with the addresses to pick from (optional)
 
     The records are read into content blocks here rather than by the agent: the
     files are the web layer's, and only this side knows how to reach them. Every
@@ -686,7 +703,10 @@ async def _route_chat(
 
         # A turn nothing answered still ends: the caller waits on the ending
         # rather than on the reply, and holds its composer until one arrives.
-        await reply_fn(destination.refusal or f"Agent @{target_name} not found.")
+        if destination.choices and choices_fn is not None:
+            await choices_fn(destination.refusal, destination.choices)
+        else:
+            await reply_fn(destination.refusal or f"Agent @{target_name} not found.")
         await _end_fn()
         return
 

@@ -66,15 +66,20 @@ export function isReachable(agent: { state: AgentState }): boolean {
 }
 
 /**
- * Names of the agents the user may directly message. Single source for both the
- * target `<select>` and the `@mention` suggestions, so a mention can never offer
- * an agent the picker can't target (which would silently fail to switch target).
+ * What the agents the user may directly message are called, by `label`: the
+ * `@mention` suggestions, spelled as the target `<select>` spells them, so a
+ * mention can never offer an agent the picker can't target (which would
+ * silently fail to switch target). With the page's label, a name two agents
+ * share is offered as each one's address.
  */
-export function messageableNames(agents: Iterable<{ name: string; protected?: boolean }>): string[] {
+export function messageableNames<T extends { name: string; protected?: boolean }>(
+    agents: Iterable<T>,
+    label: (agent: T) => string = agent => agent.name,
+): string[] {
     return [...agents]
         .filter(canDirectMessage)
-        .map(a => a.name)
-        .filter(Boolean);
+        .filter(a => Boolean(a.name))
+        .map(label);
 }
 
 /** Accent colour for an agent state (object state = failed/red). */

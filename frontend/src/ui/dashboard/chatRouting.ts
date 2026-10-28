@@ -11,6 +11,8 @@
 import type { AgentInfo, ChatMessage } from "../../types/agent";
 import { IO_GATEWAY, looksLikeAgentId, MAIN_AGENT } from "../../agents/naming";
 import { canDirectMessage, isReachable } from "./agentState";
+import { resolveAmong, SEPARATOR } from "../../agents/addresses";
+import { answererOf } from "../../chat/turnTracker";
 
 /**
  * The id of the agent to open on when nothing has been chosen yet, or "" if there is none.
@@ -35,18 +37,34 @@ export function defaultChatTarget(agents: AgentInfo[]): string {
     return main?.id ?? named[0]?.id ?? "";
 }
 
+/** What a leading mention spells, `name` or `name@node`: the name a person types up to a space, and a node. */
+const MENTION = /^@([A-Za-z0-9_-]+(?:@[^\s@/#+]*)?)/;
+
+/** A leading `@name` or `@name@node`: as the agents spell it, and the agents it finds. */
+export interface Mention {
+    /** The name or address, spelled as the agent spells its name. */
+    spelled: string;
+    /** The agents it finds: none, one, or several to choose between. */
+    found: AgentInfo[];
+}
+
 /**
- * The name a leading `@name` mention gives, spelled as the agent spells it, or
- * null when there is none or it names no known agent. The server routes by the
- * mention, and says which agent it reached; until then the message stays in the
- * thread it was typed in.
+ * The leading mention of `content` among `agents`, or null when there is none.
+ * The name in it matches case-insensitively, as a person types it. The server
+ * routes by the mention, and says which agent it reached; until then the
+ * message stays in the thread it was typed in.
  */
-export function leadingMention(content: string, agentNames: string[]): string | null {
-    const mention = /^@([A-Za-z0-9_-]+)/.exec(content.trimStart())?.[1];
-    if (!mention) {
+export function leadingMention(content: string, agents: AgentInfo[]): Mention | null {
+    const typed = MENTION.exec(content.trimStart())?.[1];
+    if (!typed) {
         return null;
     }
-    return agentNames.find(n => n.toLowerCase() === mention.toLowerCase()) ?? null;
+    const lower = typed.toLowerCase();
+    const named = agents.find(
+        a => lower === a.name.toLowerCase() || lower.startsWith(`${a.name.toLowerCase()}${SEPARATOR}`),
+    );
+    const spelled = named ? `${named.name}${typed.slice(named.name.length)}` : typed;
+    return { spelled, found: resolveAmong(spelled, agents) };
 }
 
 /**
@@ -77,6 +95,8 @@ export interface SendPlan {
     thread: string;
     /** The name of the agent it is for: the one a mention names, or the target. */
     name: string;
+    /** The id of the agent expected to answer: main's for a command, the one a mention names, else the thread's. */
+    answerer: string;
     /** Why it cannot go now, or null. */
     blocked: string | null;
     /** What the bubble shows: without a mention of its own agent. */
@@ -87,8 +107,11 @@ export interface SendPlan {
 
 /**
  * Plan a send of `content` from the conversation with `target` (an id, "" while a
- * named agent has not arrived, and its name). A mention names an agent by name:
- * the server says which agent it reached, and the message moves there.
+ * named agent has not arrived, and its name). A mention that finds one agent is
+ * to that agent; one that finds several goes out as it was typed, and the
+ * server answers with the addresses to choose from; one that finds none is
+ * text for the thread's agent. The server says which agent a send reached, and
+ * the message moves there.
  */
 export function planSend(
     content: string,
@@ -96,26 +119,30 @@ export function planSend(
     agents: AgentInfo[],
     mainId: string,
 ): SendPlan {
-    const mention = leadingMention(
-        content,
-        agents.map(a => a.name),
-    );
+    const mention = leadingMention(content, agents);
+    const one = mention?.found.length === 1 ? mention.found[0] : undefined;
     const thread = target.id || mainId;
-    const name = mention ?? (target.name || MAIN_AGENT);
+    const name = one?.name ?? (target.name || MAIN_AGENT);
     // Say so rather than sending somewhere else. Routing a message the user
     // addressed to a stopped agent onwards to main is what the original
     // complaint was, and a quiet fallback here would reproduce it.
-    const addressed = mention
-        ? agents.find(a => a.name === mention)
-        : agents.find(a => a.id === (target.id || (target.name ? "" : mainId)));
-    const shown = stripLeadingMention(content, name) || content;
+    const addressed = one ?? agents.find(a => a.id === (target.id || (target.name ? "" : mainId)));
+    const shown = (mention && one && stripLeadingMention(content, mention.spelled)) || content;
     return {
         thread,
         name,
+        answerer: answererOf(content, one?.id ?? thread, mainId),
         blocked: sendBlockedReason(addressed, name),
         shown,
-        routed: mention && mention !== target.name ? content : shown,
+        routed: one && one.id !== thread ? content : shown,
     };
+}
+
+/** `content` with its leading mention, if any, made `@address`; else `content` mentioning `address` first. */
+export function readdressed(content: string, address: string): string {
+    const typed = MENTION.exec(content.trimStart());
+    const rest = typed ? content.trimStart().slice(typed[0].length).trimStart() : content;
+    return rest ? `@${address} ${rest}` : `@${address}`;
 }
 
 /**
@@ -127,6 +154,18 @@ export function planSend(
 export function stripLeadingMention(content: string, target: string): string {
     const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return content.replace(new RegExp(`^@${escaped}\\b\\s*`, "i"), "");
+}
+
+/**
+ * The id of the agent `msg` is from, or "" for the person's own words and for
+ * the gateway's and the system's, which are no agent's reply. An agent's own
+ * message names its id; a reply over the socket is in its sender's thread.
+ */
+export function senderOf(msg: ChatMessage): string {
+    if (msg.from === "user" || msg.from === IO_GATEWAY || msg.from === "system") {
+        return "";
+    }
+    return msg.agentId || msg.threadId;
 }
 
 /**

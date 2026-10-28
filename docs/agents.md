@@ -40,7 +40,10 @@ An agent's full address is `name@node`: `@counter@pi-kitchen`, `@weather@main` (
 node `main`, also spelled `local`). A bare name is enough while one agent has it. When agents
 on more than one node have the name, nothing is sent: a person is told the addresses, and a
 program (`send_to`, `delegate_task`, `POST /api/chat`, `POST /api/reset`) is refused with
-them. Main never picks one. The same address works in the terminal chat and in
+them. Main never picks one. The dashboard offers the addresses as buttons, and sends the
+message again to the one pressed; it calls each agent of a shared name by its address, in
+the chat list, the target picker and the `@mention` suggestions, and `#/chat/<name>@<node>`
+opens that one's conversation. The same address works in the terminal chat and in
 `/agents restart|stop|delete`, `/start` and `/migrate`, and one naming a node the agent is
 not on is refused. `@` is not allowed in a new agent's name or a new node's name.
 

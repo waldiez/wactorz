@@ -34,7 +34,7 @@ import type {
 } from "../types/agent";
 import { readingsFrom } from "./nodeReadings";
 import { NODE_EVICT_MS, STALE_MS } from "./liveness";
-import { MAIN_NODE } from "./naming";
+import { addressOf } from "./addresses";
 
 /** A moment worth showing on an agent's card, as it happened. */
 export type AgentActivity =
@@ -125,7 +125,7 @@ export class AgentStore {
         if (this.byName(agent.name).length < 2) {
             return agent.name;
         }
-        return `${agent.name}@${agent.node || MAIN_NODE}`;
+        return addressOf(agent);
     }
 
     /** Be told each batch of changes; returns the way to stop. */

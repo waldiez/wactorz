@@ -143,7 +143,26 @@ describe("WSClient", () => {
             "",
             "",
             "",
+            null,
         );
+    });
+
+    it("hands on the addresses a reply offers to pick from, and the message a pick re-sends", () => {
+        const c = new WSClient();
+        const chatSpy = vi.fn();
+        c.onChat(chatSpy);
+        c.connect("ws://localhost/ws");
+        const frame = { type: "chat", content: "Which?", from: "main", agent_id: "main-id" };
+        ws().emit("message", {
+            data: JSON.stringify({ ...frame, choices: ["counter@pi", 3, "", "counter@pc"], retry_of: "m-7" }),
+        });
+        // Offered with nothing to re-send, there is nothing to pick.
+        ws().emit("message", { data: JSON.stringify({ ...frame, choices: ["counter@pi"] }) });
+
+        expect(chatSpy.mock.calls.map(call => call.at(-1))).toEqual([
+            { addresses: ["counter@pi", "counter@pc"], retryOf: "m-7" },
+            null,
+        ]);
     });
 
     it("converts ms timestamp correctly in chat", () => {
@@ -244,7 +263,7 @@ describe("WSClient", () => {
         ];
         frames.forEach(f => ws().emit("message", { data: JSON.stringify(f) }));
 
-        expect(chat.mock.calls[0]!.at(-1)).toBe("on-pi");
+        expect(chat.mock.calls[0]!.at(-2)).toBe("on-pi");
         expect(chunk.mock.calls[0]!.at(-1)).toBe("on-pi");
         expect(end).toHaveBeenCalledWith("counter", "on-pi");
         expect(relayed).toHaveBeenCalledWith("agents/r/chat", {}, "on-pi");

@@ -11,8 +11,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { CardDashboard } from "../ui/CardDashboard";
 import { emit, listen } from "../events";
 import { VIEW_KEY, type Route } from "../router";
-import { addressee, agent, openDashboard, pressView, shownView } from "./dashboard";
-import { byRole } from "./queries";
+import type { AgentStore } from "../agents/AgentStore";
+import { addressee, agent, openDashboard, pressView, settled, shownView } from "./dashboard";
+import { byRole, byTestId } from "./queries";
 
 const AGENTS = [agent("main"), agent("weather")];
 
@@ -62,6 +63,38 @@ describe("CardDashboard and the address", () => {
         expect(shownView()).toBe("chat");
         expect(addressee()).toBe("weather");
         expect(changes.at(-1)).toEqual({ view: "chat", path: ["weather"] });
+    });
+
+    it("renames the open conversation when another agent takes its name, and back when it goes", async () => {
+        history.replaceState(null, "", "#/chat/weather");
+        let store: AgentStore;
+        ({ dashboard: cd, store } = openDashboard(AGENTS));
+        const title = () => byTestId(document, "chat-title").textContent;
+        expect(title()).toBe("@weather");
+
+        store.addOrUpdateAgent(agent("weather", { id: "weather-on-pi", node: "pi" }));
+        await settled();
+
+        expect(title()).toBe("@weather@main");
+        expect(changes.at(-1)).toEqual({ view: "chat", path: ["weather@main"], replace: true });
+
+        store.removeAgent("weather-on-pi");
+        await settled();
+
+        expect(title()).toBe("@weather");
+        expect(changes.at(-1)).toEqual({ view: "chat", path: ["weather"], replace: true });
+    });
+
+    it("leaves the address alone when an agent of another name comes", async () => {
+        history.replaceState(null, "", "#/chat/weather");
+        let store: AgentStore;
+        ({ dashboard: cd, store } = openDashboard(AGENTS));
+        const said = changes.length;
+
+        store.addOrUpdateAgent(agent("counter", { node: "pi" }));
+        await settled();
+
+        expect(changes).toHaveLength(said);
     });
 
     it("opens the view last open in this browser when the address names none", () => {

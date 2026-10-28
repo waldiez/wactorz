@@ -7,12 +7,13 @@
  * committed message. The reply is put together once, where the stream arrives
  * (`IOManager`): each piece's event carries the text so far and the end's
  * carries all of it, kept here per agent so concurrent streams never merge.
+ * An agent is its id (`streamKey`), since two agents may share a name.
  * Whether a turn is under way is the turn tracker's (`src/chat/turnTracker.ts`);
  * this only draws the row that says an agent is working.
  */
 import type { ChatMessage } from "../../types/agent";
 import { uid } from "../../ids";
-import { AgentStreams } from "../../io/agentStreams";
+import { AgentStreams, streamKey } from "../../io/agentStreams";
 import { stripActionBlocks } from "../../agents/actionBlocks";
 import { renderAgentMarkdown } from "./chatThread";
 import { el, live, testId } from "../dom";
@@ -67,16 +68,21 @@ function shownWhileStreaming(text: string): string {
 }
 
 export class ChatStreamUI {
-    /** Agent this turn is waiting on, or null when nothing is outstanding. */
+    /** The id of the agent this turn is waiting on, or null when nothing is outstanding. */
     private _awaiting: string | null = null;
+    /** What the waiting row calls that agent. */
+    private _awaitingName = "";
     /** The thread the turn waited on was sent to. */
     private _awaitingThread = "";
     private _waitingRow: HTMLElement | null = null;
     private _row: HTMLElement | null = null;
     private _body: HTMLElement | null = null;
-    /** Agent whose stream the visible row currently shows. */
+    /** The stream (`streamKey`) the visible row currently shows. */
     private _rowFrom: string | null = null;
+    /** The reply so far of each active stream, by `streamKey`. */
     private _streams = new AgentStreams();
+    /** The sender's name of each active stream, for its row and its message. */
+    private _senders = new Map<string, string>();
     /** Which target each active stream is replying to, by name (latched at first chunk). */
     private _targets = new Map<string, string>();
     /** The thread each active stream is in, as its frames name it (latched at first chunk). */
@@ -89,10 +95,12 @@ export class ChatStreamUI {
         return this._streams;
     }
 
-    /** A turn is on the wire to the thread `threadId`: show that `from` is working
-     *  until it answers, or the turn ends without an answer (the tracker says so). */
-    awaiting(from: string, threadId: string): void {
-        this._awaiting = from;
+    /** A turn is on the wire to the thread `threadId`: show that the agent `id`,
+     *  called `name`, is working until it answers, or the turn ends without an
+     *  answer (the tracker says so). */
+    awaiting(name: string, id: string, threadId: string): void {
+        this._awaiting = id;
+        this._awaitingName = name;
         this._awaitingThread = threadId;
         this._showWaiting();
     }
@@ -116,8 +124,9 @@ export class ChatStreamUI {
      * still working. An unattributed event ends whatever is outstanding, which
      * is the only useful reading of one.
      *
-     * `from` omitted entirely — a dropped connection, a failed send — ends it
-     * unconditionally, because in those cases no reply is coming for anyone.
+     * `from` (a `streamKey`) omitted entirely — a dropped connection, a failed
+     * send — ends it unconditionally, because in those cases no reply is coming
+     * for anyone.
      */
     endWait(from?: string | null): void {
         if (from === undefined || this._awaiting === null || from === null || from === this._awaiting) {
@@ -141,7 +150,7 @@ export class ChatStreamUI {
         if (!thread) {
             return;
         }
-        this._waitingRow = buildWaitingRow(this._awaiting);
+        this._waitingRow = buildWaitingRow(this._awaitingName);
         thread.appendChild(this._waitingRow);
         this.host.scrollThread();
     }
@@ -158,12 +167,14 @@ export class ChatStreamUI {
 
     /** Latch the reply target on the first chunk, then keep the reply so far. */
     onChunk(detail: { chunk: string; from: string; agentId: string; text: string }): void {
-        const { from, text: soFar } = detail;
+        const { text: soFar } = detail;
+        const from = streamKey(detail.agentId, detail.from);
         // The first token answers the question the row was asking -- but only
         // for the agent that sent it.
         this.endWait(from);
         if (!this._streams.has(from)) {
             const sent = this.host.lastSentTarget();
+            this._senders.set(from, detail.from);
             this._targets.set(from, sent.name);
             this._threads.set(from, detail.agentId || sent.id);
         }
@@ -187,7 +198,7 @@ export class ChatStreamUI {
     /** Commit the ended reply as a message; swap its row for rendered markdown
      *  (a concurrent stream's row stays put). */
     onEnd(detail: { text: string; from: string; agentId: string }): void {
-        const { from } = detail;
+        const from = streamKey(detail.agentId, detail.from);
         // Ends the wait on every ending, including one that produced no tokens
         // at all -- an error or a stop -- which would otherwise leave the row
         // waiting for something that is no longer coming.
@@ -199,13 +210,14 @@ export class ChatStreamUI {
             const sent = this.host.lastSentTarget();
             this.host.commit({
                 id: uid("stream"),
-                from,
+                from: detail.from,
                 to: this._targets.get(from) ?? sent.name,
                 threadId: this._threads.get(from) || detail.agentId || sent.id,
                 content: text,
                 timestampMs: Date.now(),
             });
         }
+        this._senders.delete(from);
         this._targets.delete(from);
         this._threads.delete(from);
         if (this._body && this._rowFrom === from) {
@@ -262,7 +274,7 @@ export class ChatStreamUI {
     }
 
     private _buildRow(thread: HTMLElement, from: string, initialText = ""): void {
-        const { row, body } = buildStreamRow(from, initialText);
+        const { row, body } = buildStreamRow(this._senders.get(from) ?? from, initialText);
         thread.appendChild(row);
         this._row = row;
         this._body = body;

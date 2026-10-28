@@ -459,7 +459,11 @@ class Dashboard:
         return self
 
     def read_thread_of(self, agent: str) -> Dashboard:
-        """Address the composer to ``agent``, which puts its thread on screen."""
+        """Address the composer to ``agent``, which puts its thread on screen.
+
+        ``agent`` as the page calls it: its name, or ``name@node`` where another
+        agent has the name.
+        """
         self.show("chat")
         self._target_select().select_option(label=f"@{agent}")
         return self
@@ -469,7 +473,7 @@ class Dashboard:
 
     @property
     def talking_to(self) -> str:
-        """The agent whose thread is on screen, as the dropdown names it."""
+        """The agent whose thread is on screen, as the dropdown names it: ``name@node`` where shared."""
         chosen = self._target_select().evaluate("s => s.selectedOptions[0]?.text ?? ''")
         return str(chosen).removeprefix("@")
 
@@ -644,6 +648,18 @@ class Dashboard:
         """``agent``'s row in the chat's list of agents."""
         rows = self.page.get_by_test_id("chat-agent-list")
         return rows.get_by_role("button", name=agent, exact=True)
+
+    def press_in_thread(self, option: str) -> Dashboard:
+        """Press ``option`` among the answers the thread on screen offers."""
+        self.page.get_by_test_id("chat-option").and_(
+            self.page.get_by_role("button", name=option, exact=True)
+        ).click()
+        return self
+
+    def follow_link(self, name: str) -> Dashboard:
+        """Follow the link on the page named ``name``, as a person clicks it."""
+        self.page.get_by_role("link", name=name, exact=True).click()
+        return self
 
     def options_in_thread(self) -> list[str]:
         """The answers the thread on screen offers that can still be pressed."""

@@ -7,7 +7,7 @@
  * id. Ids differ from names here, so nothing passes because the two coincide.
  */
 import { describe, it, expect } from "vitest";
-import { filedWithLastSent, planSend } from "../ui/dashboard/chatRouting";
+import { filedWithLastSent, planSend, readdressed, senderOf } from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 
 function agent(name: string, id: string, over: Partial<AgentInfo> = {}): AgentInfo {
@@ -23,6 +23,7 @@ describe("planning a send", () => {
         expect(plan).toEqual({
             thread: "on-pi",
             name: "counter",
+            answerer: "on-pi",
             blocked: null,
             shown: "count",
             routed: "count",
@@ -65,6 +66,94 @@ describe("planning a send", () => {
         const stopped = [agent("counter", "on-pi", { state: "stopped" })];
 
         expect(planSend("hi", { id: "on-pi", name: "counter" }, stopped, "").blocked).toContain("start it");
+    });
+});
+
+describe("planning a send to a name two agents share", () => {
+    const TWO = [
+        agent("main", "main-id"),
+        agent("counter", "counter-on-main"),
+        agent("counter", "counter-on-pi", { node: "pi" }),
+    ];
+
+    it("by its address goes to that one, answered by it", () => {
+        const plan = planSend("@counter@pi count", { id: "main-id", name: "main" }, TWO, "main-id");
+
+        expect(plan).toMatchObject({
+            thread: "main-id",
+            name: "counter",
+            answerer: "counter-on-pi",
+            shown: "count",
+            routed: "@counter@pi count",
+        });
+    });
+
+    it("by main's address finds the one on main, however main is spelled", () => {
+        for (const spelled of ["@counter@main", "@counter@local", "@Counter@MAIN"]) {
+            const plan = planSend(`${spelled} count`, { id: "main-id", name: "main" }, TWO, "main-id");
+
+            expect(plan.answerer).toBe("counter-on-main");
+        }
+    });
+
+    it("in that agent's own thread drops its address from what is shown and sent", () => {
+        const plan = planSend("@counter@pi count", { id: "counter-on-pi", name: "counter" }, TWO, "main-id");
+
+        expect(plan).toMatchObject({ shown: "count", routed: "count", answerer: "counter-on-pi" });
+    });
+
+    it("by the bare name goes out as typed, for the server to answer with the addresses", () => {
+        const plan = planSend("@counter count", { id: "main-id", name: "main" }, TWO, "main-id");
+
+        expect(plan).toMatchObject({
+            thread: "main-id",
+            name: "main",
+            answerer: "main-id",
+            blocked: null,
+            shown: "@counter count",
+            routed: "@counter count",
+        });
+    });
+
+    it("waits on main for a command", () => {
+        expect(planSend("/agents", { id: "counter-on-pi", name: "counter" }, TWO, "main-id").answerer).toBe(
+            "main-id",
+        );
+    });
+});
+
+describe("a message sent again to an address", () => {
+    it("has its mention made the address", () => {
+        expect(readdressed("@counter five", "counter@pi")).toBe("@counter@pi five");
+        expect(readdressed("  @counter@pc five", "counter@pi")).toBe("@counter@pi five");
+    });
+
+    it("mentions the address first when it had no mention", () => {
+        expect(readdressed("five", "counter@pi")).toBe("@counter@pi five");
+        expect(readdressed("@counter", "counter@pi")).toBe("@counter@pi");
+    });
+});
+
+describe("whom a message is from", () => {
+    const msg = (from: string, over: Partial<ChatMessage> = {}): ChatMessage => ({
+        id: "m",
+        from,
+        to: "user",
+        threadId: "thread-id",
+        content: "x",
+        timestampMs: 1,
+        ...over,
+    });
+
+    it("is the agent's own id, or the thread its reply is in", () => {
+        expect(senderOf(msg("counter", { agentId: "counter-on-pi" }))).toBe("counter-on-pi");
+        expect(senderOf(msg("counter"))).toBe("thread-id");
+    });
+
+    it("is no one for the person's words, the gateway's and the system's", () => {
+        expect(senderOf(msg("user"))).toBe("");
+        expect(senderOf(msg("io-gateway"))).toBe("");
+        expect(senderOf(msg("system"))).toBe("");
     });
 });
 

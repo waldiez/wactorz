@@ -326,6 +326,48 @@ class TestWhoseTurnItIs:
         assert turn["agent_id"] == derive_actor_id("main")
 
 
+class TestANameSeveralAgentsShare:
+    """A mention that fits more than one agent is answered with the addresses to pick from."""
+
+    async def test_the_answer_offers_the_addresses_and_names_the_message_a_pick_resends(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        async def _route(_text: str, _reply: Any, **kwargs: Any) -> None:
+            await kwargs["choices_fn"]("More than one.", ("counter@pi", "counter@pc"))
+
+        with patch.object(ws.chat, "route_chat", new=_route):
+            async with client.ws_connect("/ws") as socket:
+                await _opening(socket)
+                frame = {
+                    "type": "chat",
+                    "content": "@counter five",
+                    "agent_name": "main",
+                    "id": "m-7",
+                }
+                await socket.send_str(json.dumps(frame))
+                _turn, reply = await _frames(socket, 2)
+
+        assert reply["content"] == "More than one."
+        assert reply["choices"] == ["counter@pi", "counter@pc"]
+        assert reply["retry_of"] == "m-7"
+        assert [row["content"] for row in db.rows if row["role"] == "assistant"] == [
+            "More than one."
+        ]
+
+    async def test_an_ordinary_answer_offers_nothing(self, client: TestClient[Any, Any]) -> None:
+        async def _route(_text: str, reply: Any, **_kwargs: Any) -> None:
+            await reply("done")
+
+        with patch.object(ws.chat, "route_chat", new=_route):
+            async with client.ws_connect("/ws") as socket:
+                await _opening(socket)
+                await socket.send_str(json.dumps({"type": "chat", "content": "hi", "id": "m-8"}))
+                _turn, reply = await _frames(socket, 2)
+
+        assert "choices" not in reply
+        assert "retry_of" not in reply
+
+
 class TestAnAnswerTheBrowserCanAttribute:
     """The whole point of the attribution: it is what ends a turn on screen.
 

@@ -71,7 +71,7 @@ describe("a turn sent from the composer", () => {
                 id: "m1",
                 from: "weather",
                 to: "user",
-                threadId: "weather",
+                threadId: "a2",
                 content: "sunny",
                 timestampMs: Date.now(),
             },

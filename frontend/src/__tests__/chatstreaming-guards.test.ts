@@ -138,3 +138,34 @@ describe("a reply with action blocks in it", () => {
         expect(thread.querySelectorAll(".af-chat-msg")).toHaveLength(0);
     });
 });
+
+describe("two agents of one name streaming at once", () => {
+    it("keep their replies apart, each in its own thread under its own name", () => {
+        const commit = vi.fn();
+        const ui = new ChatStreamUI(makeHost({ commit }));
+
+        chunk(ui, "sunny", "weather", "weather-on-main");
+        chunk(ui, "rain", "weather", "weather-on-pi");
+        chunk(ui, " all day", "weather", "weather-on-main");
+
+        expect(ui.streams.text("weather-on-main")).toBe("sunny all day");
+        expect(ui.streams.text("weather-on-pi")).toBe("rain");
+
+        end(ui, "weather", "weather-on-pi");
+        end(ui, "weather", "weather-on-main");
+
+        expect(commit.mock.calls.map(([m]) => [m.from, m.threadId, m.content])).toEqual([
+            ["weather", "weather-on-pi", "rain"],
+            ["weather", "weather-on-main", "sunny all day"],
+        ]);
+    });
+
+    it("show the sender's name on the live row, not its id", () => {
+        const thread = document.createElement("div");
+        const ui = new ChatStreamUI(makeHost({ thread: () => thread }));
+
+        chunk(ui, "sunny", "weather", "weather-on-pi");
+
+        expect(thread.querySelector("[data-testid='message-from']")?.textContent).toBe("weather");
+    });
+});

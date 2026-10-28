@@ -11,8 +11,16 @@ import {
     type TurnState,
 } from "../chat/turnTracker";
 
+/** A send to the agent whose id is `target`; main's id is "main". */
 function send(content: string, target = "main", id = content): PendingSend {
-    return { id, content, target, name: target, attachments: [] };
+    return {
+        id,
+        content,
+        target,
+        name: target,
+        answerer: answererOf(content, target, "main"),
+        attachments: [],
+    };
 }
 
 /** A tracker with a host that records what it was told. */
@@ -28,8 +36,8 @@ function tracker(): { turns: TurnTracker; delivered: string[]; states: TurnState
 
 describe("who answers", () => {
     it("is the target, or main for a command typed anywhere", () => {
-        expect(answererOf("hello", "weather")).toBe("weather");
-        expect(answererOf("/agents", "weather")).toBe("main");
+        expect(answererOf("hello", "weather-id", "main-id")).toBe("weather-id");
+        expect(answererOf("/agents", "weather-id", "main-id")).toBe("main-id");
     });
 });
 
@@ -59,6 +67,42 @@ describe("a turn", () => {
 
         vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS + 1);
         expect(turns.state.agent).toBeNull();
+    });
+
+    it("is not ended by another agent of the same name, since it waits on an id", () => {
+        const { turns } = tracker();
+        const onPi = { ...send("hi", "weather-on-pi"), name: "weather" };
+        turns.request(onPi);
+
+        turns.ended("weather-on-main");
+        expect(turns.state.agent).toBe("weather-on-pi");
+        turns.ended("weather-on-pi");
+        expect(turns.state.agent).toBeNull();
+    });
+
+    it("waits on the agent the server says the send reached", () => {
+        const { turns, states } = tracker();
+        turns.request(send("@counter@pi hi", "main", "m1"));
+
+        turns.reached("m1", "counter-on-pi");
+        turns.ended("main");
+        expect(turns.state.agent).toBe("counter-on-pi");
+        expect(states.map(s => s.agent)).toEqual(["main", "counter-on-pi"]);
+
+        turns.ended("counter-on-pi");
+        expect(turns.state.agent).toBeNull();
+    });
+
+    it("takes no word of a send that is not the one under way", () => {
+        const { turns, states } = tracker();
+        turns.request(send("hi", "weather", "m1"));
+
+        turns.reached("m2", "counter");
+        turns.reached("m1", "weather");
+        turns.reached("m1", "");
+
+        expect(turns.state.agent).toBe("weather");
+        expect(states).toHaveLength(1);
     });
 
     it("waits on main for a command typed in another agent's thread", () => {

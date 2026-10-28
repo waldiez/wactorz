@@ -108,8 +108,8 @@ export class CardDashboard {
             view: () => this.view,
             setView: v => this._setView(v),
             render: () => this._renderView(),
-            // The address names the conversation by its agent's name.
-            chatTarget: () => this._chat.chatTargetName,
+            // The address names the conversation by its agent's name, or `name@node` where it is shared.
+            chatTarget: () => this._chat.chatTargetAddress,
             setChatTarget: name => this._chat.openByName(name),
         });
         this._overview = new OverviewView({
@@ -241,6 +241,12 @@ export class CardDashboard {
         }
         if (membership) {
             this._chat.updateTargetSelect();
+            // The open conversation's agent now shares its name, or no longer:
+            // its header and the address name it as the page does, so a reload opens it.
+            if (this._chat.relabelled() !== null && this.view === "chat") {
+                this._chat.renderChatPaneHeader();
+                emit("af-view-changed", { ...this._routes.current(), replace: true });
+            }
         }
     }
 

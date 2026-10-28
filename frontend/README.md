@@ -102,7 +102,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | Event                  | Direction                                                      | Payload                                                                |
 | ---------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `af-agent-command`     | CardDashboard → main.ts (WSClient)                             | `{ command, agentId }`                                                 |
-| `af-send-message`      | DashboardChat → main.ts (IOManager)                            | `{ id, content, target, name, attachments }` (`target` the agent's id) |
+| `af-send-message`      | DashboardChat → main.ts (IOManager)                            | `{ id, content, target, name, answerer, attachments }` (ids)           |
 | `af-addressed`         | DashboardChat → main.ts (WSClient)                             | `{ agent }` (whom the person now talks to, typed or by voice)          |
 | `af-feed-push`         | IOManager / main.ts → CardDashboard                            | `{ item: FeedItem }`                                                   |
 | `af-chat-message`      | main.ts (WSClient) → DashboardChat                             | `{ msg: ChatMessage }`                                                 |
@@ -119,6 +119,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-clear-feed`        | WSClient / main.ts → CardDashboard                             | _(none)_                                                               |
 | `af-wipe-all`          | WSClient / main.ts → CardDashboard                             | `{ survivors }` (ids of the agents still running)                      |
 | `af-answer-option`     | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }`                                       |
+| `af-pick-address`      | chatThread → DashboardChat                                     | `{ id, address }` (one of the addresses the reply `id` offered)        |
 | `af-answered`          | main.ts → DashboardChat                                        | `{ id, option }`                                                       |
 | `af-questions-listed`  | main.ts → DashboardChat                                        | `{ open, answered }`                                                   |
 | `af-app-log`           | WSClient → appLogFeed                                          | `{ entries }`                                                          |

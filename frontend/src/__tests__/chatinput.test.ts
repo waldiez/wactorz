@@ -23,11 +23,12 @@ function setup(agents = ["main", "picam"]): Harness {
     wrap.append(ghost, input); // input.previousElementSibling === ghost (recordSent relies on this)
     document.body.appendChild(wrap);
 
+    // As the target select is built: each agent's id, shown as `@` and its label.
     const select = document.createElement("select");
     agents.forEach(n => {
         const o = document.createElement("option");
-        o.value = n;
-        o.text = n;
+        o.value = `${n}-id`;
+        o.text = `@${n}`;
         select.appendChild(o);
     });
 
@@ -75,7 +76,7 @@ describe("ChatInput @mentions", () => {
         h.input.value = "hi @p";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         h.ci.onKeydown(key("Tab"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.setTarget).toHaveBeenCalledWith("picam");
+        expect(h.host.setTarget).toHaveBeenCalledWith("picam-id");
         expect(h.input.value).toBe("hi"); // trailing @query stripped
         expect(h.panel.classList.contains("open")).toBe(false);
     });
@@ -85,7 +86,7 @@ describe("ChatInput @mentions", () => {
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         h.ci.onKeydown(key("ArrowRight"), h.input, h.select, h.ghost, h.panel); // idx 0 -> 1
         h.ci.onKeydown(key("Enter"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.setTarget).toHaveBeenCalledWith("picam");
+        expect(h.host.setTarget).toHaveBeenCalledWith("picam-id");
     });
 
     it("Escape closes the mention panel", () => {
@@ -100,7 +101,7 @@ describe("ChatInput @mentions", () => {
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         const chip = [...h.panel.querySelectorAll("button")].find(b => b.textContent === "main")!;
         chip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        expect(h.host.setTarget).toHaveBeenCalledWith("main");
+        expect(h.host.setTarget).toHaveBeenCalledWith("main-id");
     });
 
     it("a mention with no matching <select> option is a no-op, not a fake target switch", () => {
@@ -116,6 +117,39 @@ describe("ChatInput @mentions", () => {
         expect(h.host.setTarget).not.toHaveBeenCalled();
         expect(h.input.value).toBe("@ghost");
         expect(h.panel.classList.contains("open")).toBe(false);
+    });
+});
+
+describe("ChatInput @mentions of a name two agents share", () => {
+    let h: Harness;
+    beforeEach(() => {
+        h = setup(["main", "counter@main", "counter@pi"]);
+    });
+
+    it("offers each one by its address", () => {
+        h.input.value = "@cou";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect([...h.panel.querySelectorAll("button")].map(b => b.textContent)).toEqual([
+            "counter@main",
+            "counter@pi",
+        ]);
+    });
+
+    it("narrows on the node once the second @ is typed", () => {
+        h.input.value = "@counter@p";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect([...h.panel.querySelectorAll("button")].map(b => b.textContent)).toEqual(["counter@pi"]);
+    });
+
+    it("takes the one picked, by its id, and drops the whole address typed", () => {
+        h.input.value = "count please @counter@p";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+        h.ci.onKeydown(key("Tab"), h.input, h.select, h.ghost, h.panel);
+
+        expect(h.host.setTarget).toHaveBeenCalledWith("counter@pi-id");
+        expect(h.input.value).toBe("count please");
     });
 });
 

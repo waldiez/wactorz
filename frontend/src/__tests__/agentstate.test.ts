@@ -50,6 +50,15 @@ describe("messageableNames", () => {
             ]),
         ).toEqual(["main", "worker"]);
     });
+
+    it("calls each what the label says, so a shared name is offered as each address", () => {
+        const agents = [{ name: "counter" }, { name: "counter", node: "pi" }];
+
+        expect(messageableNames(agents, a => `${a.name}@${a.node ?? "main"}`)).toEqual([
+            "counter@main",
+            "counter@pi",
+        ]);
+    });
 });
 
 describe("stateColor / stateLabel", () => {

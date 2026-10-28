@@ -229,7 +229,7 @@ function refreshLiveActors(): void {
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId) => {
+ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId, addressChoice) => {
     ingestChat({
         id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
@@ -241,6 +241,7 @@ ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain,
         ...(surface ? { surface } : {}),
         ...(surfaceLabel ? { surfaceLabel } : {}),
         ...(brain ? { brain } : {}),
+        ...(addressChoice ? { addressChoice } : {}),
     });
 });
 
@@ -490,7 +491,7 @@ listen("af-send-message", detail => {
     const { id, content, attachments } = detail;
     // The thread's agent, by its id: the send names it to the server by name and id.
     const agent = agentStore.get(detail.target) ?? null;
-    void ioManager.send(content, agent, attachments, id);
+    void ioManager.send(content, agent, attachments, id, agent ? agentStore.label(agent) : "");
 });
 
 // wipe all

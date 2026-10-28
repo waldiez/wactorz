@@ -14,16 +14,18 @@ import { canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
-import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
-import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
+import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "./chatThread";
+import { buildIobar as buildChatIobar, nameRecipient } from "./chatIobar";
 import { fetchChatHistory } from "./chatHistory";
 import { ChatLog, threadOf } from "../../chat/chatLog";
 import { TurnTracker, type PendingSend, type TurnState } from "../../chat/turnTracker";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
-import { filedWithLastSent, planSend, voiceThreadTarget, type SendPlan } from "./chatRouting";
+import { filedWithLastSent, planSend, senderOf, voiceThreadTarget, type SendPlan } from "./chatRouting";
+import { ChatAnswers } from "./chatAnswers";
 import { SpeechToText } from "../../io/SpeechToText";
 import { ChatStreamUI } from "./chatStreaming";
+import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "./mutate";
 import { MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
@@ -54,7 +56,7 @@ export class DashboardChat {
     private _target = new ChatTarget({
         agents: () => this.host.agents,
         getView: () => this.host.getView(),
-        changed: () => this._updateComposerPlaceholder(),
+        changed: () => nameRecipient(this.root, this.chatTargetName),
     });
 
     /** The id of the agent the user is talking to, or "" before anyone is. */
@@ -65,6 +67,11 @@ export class DashboardChat {
     /** The name of the agent the user is talking to, or "" before anyone is. */
     get chatTargetName(): string {
         return this._target.name;
+    }
+
+    /** What the conversation's address (`#/chat/<…>`) calls the target: its name, or its address where the name is shared. */
+    get chatTargetAddress(): string {
+        return this._target.address;
     }
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
@@ -102,9 +109,21 @@ export class DashboardChat {
     private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
-        agentNames: () => messageableNames(this.host.agents.values()),
+        agentNames: () => messageableNames(this.host.agents.values(), agent => this.host.label(agent)),
         setTarget: (id: string) => this.setTarget(id),
         send: input => this._sendMessage(input),
+    });
+
+    /** Questions and "which one?" replies, answered by a press. */
+    private _answers = new ChatAnswers({
+        log: this._log,
+        redrawThread: msg => {
+            if (this.host.getView() === "chat" && (!msg || this._msgBelongsHere(msg))) {
+                this.renderChatThread();
+            }
+        },
+        redrawSidebar: () => this.renderSidebar(),
+        send: (content, attachments) => void this._send(content, attachments),
     });
 
     /** What `wire` subscribed to, dropped together by `unwire`. */
@@ -134,11 +153,13 @@ export class DashboardChat {
     }
 
     /**
-     * Open the conversation an address names: `#/chat/<name>`. A name is one
-     * agent while names are unique. One not on the list stays the choice, by
-     * name alone, as a choice of an agent that stopped does: the conversation
-     * says whom it is with, a send to it is refused, and it opens on the agent
-     * once one of that name arrives.
+     * Open the conversation an address names: `#/chat/<name>` or
+     * `#/chat/<name>@<node>`. A name is one agent while no other has it. One
+     * that names no agent on the list stays the choice, as a choice of an agent
+     * that stopped does: the conversation says whom it is with, a send to it is
+     * refused, and it opens on the agent once one of that name arrives. A name
+     * several agents share opens none of them: the pane offers each by its
+     * address.
      */
     openByName(name: string): void {
         const agent = this._target.named(name);
@@ -149,6 +170,12 @@ export class DashboardChat {
         this._target.want(name);
         this._refreshForTarget();
         this.updateTargetSelect();
+    }
+
+    /** The open conversation's address, if another agent of its name came or went since it was
+     *  last asked (see `ChatTarget.relabelled`); null when it is called as before. */
+    relabelled(): string | null {
+        return this._target.relabelled();
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -243,7 +270,7 @@ export class DashboardChat {
         this.renderSidebar();
         this.renderChatPaneHeader();
         this.renderChatThread();
-        this._updateComposerPlaceholder();
+        nameRecipient(this.root, this.chatTargetName);
     }
 
     /** Show the chat pane, or the agent list when the user asked for it. */
@@ -312,7 +339,10 @@ export class DashboardChat {
 
         const streamText = this._streamUI.streamHereText();
         const msgs = this._log.thread(this.chatTarget);
-        if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
+        const offered = this._target.offered();
+        if (offered.length) {
+            thread.appendChild(buildChatChoicesState(this.chatTargetName, offered));
+        } else if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
             thread.appendChild(buildChatEmptyState(this.chatTargetName));
         } else {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
@@ -399,15 +429,7 @@ export class DashboardChat {
         if (select) {
             this._populateSelect(select);
         }
-        this._updateComposerPlaceholder();
-    }
-
-    /** The composer names the agent it will send to; keep it on the target. */
-    private _updateComposerPlaceholder(): void {
-        const input = this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
-        if (input) {
-            input.placeholder = composerPlaceholder(this.chatTargetName);
-        }
+        nameRecipient(this.root, this.chatTargetName);
     }
 
     /**
@@ -483,10 +505,21 @@ export class DashboardChat {
     private _sendMessage(input: HTMLTextAreaElement): void {
         const content = input.value.trim();
         const attachments = this._pendingAttachments;
-        if (!content && !attachments.length) {
+        if ((!content && !attachments.length) || !this._send(content, attachments)) {
             return;
         }
-        const prevTarget = this.chatTarget;
+        if (content) {
+            this._chatInput.recordSent(content, input);
+        }
+        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
+        this._renderAttachTray();
+        input.value = "";
+        input.style.height = "auto";
+    }
+
+    /** Send `content`, with `attachments`, from the conversation open now; false when it
+     *  cannot go, which the person is told. */
+    private _send(content: string, attachments: Attachment[]): boolean {
         // The choice, not the control. `select.value` is set programmatically on
         // every redraw and shows a fallback when the choice is not among the
         // options, so reading it here let drawing a dropdown decide where the
@@ -499,18 +532,15 @@ export class DashboardChat {
         );
         if (plan.blocked) {
             toast.show({ type: "alert-error", title: "Agent unavailable", message: plan.blocked });
-            return;
+            return false;
         }
-        if (content) {
-            this._chatInput.recordSent(content, input);
-        }
-        this._deliver(input, plan, prevTarget);
+        this._deliver(plan, this.chatTarget, attachments);
+        return true;
     }
 
-    /** Show the message and clear the composer; the turn tracker puts it on the
-     *  wire now, or once the turn under way or the connection lets it. */
-    private _deliver(input: HTMLTextAreaElement, plan: SendPlan, prevTarget: string): void {
-        const attachments = this._pendingAttachments;
+    /** Show the message; the turn tracker puts it on the wire now, or once the
+     *  turn under way or the connection lets it. */
+    private _deliver(plan: SendPlan, prevTarget: string, attachments: Attachment[]): void {
         this._focusConversation(plan.thread);
         const msg: ChatMessage = {
             id: uid("user"),
@@ -525,16 +555,13 @@ export class DashboardChat {
         // In the thread before the request: a send that fails at once looks
         // for its bubble to take it back.
         this._log.add(msg);
-        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
-        this._renderAttachTray();
         this._showSentMessage(msg, prevTarget !== plan.thread);
-        input.value = "";
-        input.style.height = "auto";
         this._turns.request({
             id: msg.id,
             content: plan.routed,
             target: plan.thread,
             name: plan.name,
+            answerer: plan.answerer,
             attachments: msg.attachments?.map(a => a.id) ?? [],
         });
     }
@@ -554,7 +581,7 @@ export class DashboardChat {
         // by main, so claiming the target is working would name the wrong agent
         // and wait for a reply that is never attributed to it.
         if (!send.content.startsWith("/")) {
-            this._streamUI.awaiting(send.name, send.target);
+            this._streamUI.awaiting(send.name, send.answerer, send.target);
         }
         emit("af-send-message", send);
     }
@@ -574,6 +601,7 @@ export class DashboardChat {
      * conversation.
      */
     private _turnReached(id: string, agentId: string, name: string): void {
+        this._turns.reached(id, agentId);
         const was = this._log.get(id);
         if (!agentId || !was || was.threadId === agentId) {
             return;
@@ -581,7 +609,7 @@ export class DashboardChat {
         this._log.move(id, agentId, name);
         this._address(name, agentId);
         if (this._streamUI.isAwaiting) {
-            this._streamUI.awaiting(name, agentId);
+            this._streamUI.awaiting(name, agentId, agentId);
         }
         if (was.threadId === this.chatTarget) {
             this.setTarget(agentId);
@@ -647,21 +675,8 @@ export class DashboardChat {
         this._listeners.off();
     }
 
-    /** Mark the question `id` answered with `option`, and redraw if it is on screen.
-     *  The same for a press here and an answer from another channel: the buttons close either way. */
-    private _markAnswered(id: string, option: string): void {
-        const message = this._log.answer(id, option);
-        if (!message) {
-            return;
-        }
-        if (this.host.getView() === "chat" && this._msgBelongsHere(message)) {
-            this.renderChatThread();
-        }
-        // The row of an agent that cannot be messaged locks again once nothing it asked is open.
-        this.renderSidebar();
-    }
-
     private _wireChatEvents(): void {
+        this._answers.wire(this._listeners);
         this._listeners.on("af-chat-message", detail => {
             const msg = detail.msg;
             const stored = filedWithLastSent(msg, this._lastSentTarget, this._target.mainId());
@@ -673,8 +688,11 @@ export class DashboardChat {
             // so for those turns this is the only ending there is. Attributed
             // like any other, so a bystander's message does not end a turn it has
             // nothing to do with.
-            this._streamUI.endWait(stored.from);
-            this._turns.ended(stored.from);
+            const sender = senderOf(msg);
+            if (sender) {
+                this._streamUI.endWait(sender);
+                this._turns.ended(sender);
+            }
             const voiceTarget = voiceThreadTarget(stored, this.chatTargetName, [
                 ...this.host.agents.values(),
             ]);
@@ -689,26 +707,6 @@ export class DashboardChat {
             // A question may open a thread the sidebar keeps closed otherwise.
             this.renderSidebar();
         });
-
-        // The ledger, each time the page goes live: a question asked while it was
-        // away joins its thread, one answered meanwhile closes, one no longer
-        // listed goes. Not a message arriving now, so no turn ends on it.
-        this._listeners.on("af-questions-listed", detail => {
-            const { changed, closed } = this._log.reconcile(detail.open, detail.answered);
-            closed.forEach(id => toast.close(id));
-            if (!changed) {
-                return;
-            }
-            if (this.host.getView() === "chat") {
-                this.renderChatThread();
-            }
-            this.renderSidebar();
-        });
-
-        // Marked at the press, not at the broker's echo, so a second press cannot answer twice.
-        // One listener for both: a press here and an answer from elsewhere read the same.
-        this._listeners.on("af-answered", detail => this._markAnswered(detail.id, detail.option));
-        this._listeners.on("af-answer-option", detail => this._markAnswered(detail.id, detail.option));
 
         this._listeners.on("af-turn-reached", detail =>
             this._turnReached(detail.id, detail.agentId, detail.name),
@@ -743,11 +741,11 @@ export class DashboardChat {
         this._listeners.on("af-socket", detail => this._turns.connection(detail.open));
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
-            this._turns.chunk(detail.from);
+            this._turns.chunk(streamKey(detail.agentId, detail.from));
         });
         this._listeners.on("af-stream-end", detail => {
             this._streamUI.onEnd(detail);
-            this._turns.ended(detail.from);
+            this._turns.ended(streamKey(detail.agentId, detail.from));
         });
     }
 }

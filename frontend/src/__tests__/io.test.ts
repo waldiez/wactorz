@@ -24,8 +24,8 @@ interface FakeWS {
     send: ReturnType<typeof vi.fn>;
     onStreamChunk: ReturnType<typeof vi.fn>;
     onStreamEnd: ReturnType<typeof vi.fn>;
-    chunkCb?: (chunk: string, from: string) => void;
-    endCb?: (from: string) => void;
+    chunkCb?: (chunk: string, from: string, timestampMs?: number, agentId?: string) => void;
+    endCb?: (from: string, agentId?: string) => void;
 }
 
 function makeWS(sendResult = true): FakeWS {
@@ -62,6 +62,16 @@ describe("IOManager.send", () => {
         await io.send("hello", agentInfo, [], "m1");
         // By name and by id: the server keeps the thread by the id.
         expect(ws.send).toHaveBeenCalledWith("@alpha hello", "alpha", [], "a1", "m1");
+    });
+
+    it("mentions the agent as the page calls it: its address where the name is shared", async () => {
+        const io = new IOManager(makeRouter());
+        const ws = makeWS();
+        io.setWSClient(ws as unknown as WSClient);
+        await io.send("hello", agentInfo, [], "m1", "alpha@pi");
+        await io.send("@beta hi", agentInfo, [], "m2", "alpha@pi");
+
+        expect(ws.send.mock.calls.map(call => call[0])).toEqual(["@alpha@pi hello", "@beta hi"]);
     });
 
     it("leaves a slash command unaddressed, whichever thread it was typed in", async () => {
@@ -132,6 +142,24 @@ describe("IOManager streaming", () => {
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main" });
         expect(tts.notify).not.toHaveBeenCalled();
         expect(lastEvent("af-feed-push")).toBeUndefined();
+    });
+
+    it("keeps the replies of two agents of one name apart, by their ids", () => {
+        const io = new IOManager(makeRouter());
+        const ws = makeWS();
+        io.setWSClient(ws as unknown as WSClient);
+
+        ws.chunkCb!("sun", "weather", 1, "on-main");
+        ws.chunkCb!("rain", "weather", 2, "on-pi");
+        ws.chunkCb!("ny", "weather", 3, "on-main");
+        ws.endCb!("weather", "on-pi");
+
+        expect(lastEvent("af-stream-chunk")?.detail.text).toBe("sunny");
+        expect(lastEvent("af-stream-end")?.detail).toEqual({
+            text: "rain",
+            from: "weather",
+            agentId: "on-pi",
+        });
     });
 
     it("resets the buffer between turns", () => {

@@ -15,6 +15,7 @@ import { toMs } from "../time";
 import { emit } from "../events";
 import { IO_GATEWAY, MAIN_AGENT } from "../agents/naming";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
+import type { AddressChoice } from "../types/agent";
 
 export type ChatHandler = (
     content: string,
@@ -26,6 +27,7 @@ export type ChatHandler = (
     surfaceLabel: string,
     brain: string,
     threadId: string,
+    addressChoice: AddressChoice | null,
 ) => void;
 /** A piece of a streamed reply; `agentId` is the thread it is in. */
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number, agentId: string) => void;
@@ -45,6 +47,13 @@ const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v 
 /** Coerce an untrusted JSON field to an array; anything else becomes empty, so
  *  a caller can iterate without checking what the server actually sent. */
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/** The addresses a reply offers to pick from, and the message a pick re-sends, or null when it offers none. */
+function addressChoiceOf(data: Record<string, unknown>): AddressChoice | null {
+    const addresses = asArray(data["choices"]).filter((a): a is string => typeof a === "string" && a !== "");
+    const retryOf = asStr(data["retry_of"]);
+    return addresses.length && retryOf ? { addresses, retryOf } : null;
+}
 
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
@@ -455,6 +464,7 @@ export class WSClient {
                 asStr(data["surface_label"]),
                 asStr(data["brain"]),
                 agentId,
+                addressChoiceOf(data),
             );
         } else if (data["type"] === "stream_chunk") {
             this._onStreamChunk?.(asStr(data["content"]), from, ts, agentId);

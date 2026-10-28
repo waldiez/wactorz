@@ -208,9 +208,19 @@ export interface ChatMessage {
     answer?: string;
     /** A chat channel the message also went to ("telegram", "discord", "whatsapp"). */
     channel?: string;
+    /** A name the person used fits more than one agent: the addresses to pick from. */
+    addressChoice?: AddressChoice;
     /** The person's message waits to go out: for a turn under way to end, or for the
      *  connection. Unset once it is sent. */
     queued?: boolean;
+}
+
+/** The addresses a name fits, offered to pick from, and the person's message a pick re-sends. */
+export interface AddressChoice {
+    /** Each agent the name fits, as `name@node`. */
+    addresses: string[];
+    /** The id of the person's message that used the name. */
+    retryOf: string;
 }
 
 /** A person's pick among the options an agent offered, from whichever channel showed them. */

@@ -60,8 +60,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `POST /api/chat`, `POST /api/reset` and `/agents restart|stop|delete`, `/start` and
   `/migrate` all take one; main is the node `main` (or `local`). A bare name works as
   before while one agent has it. When agents on more than one node report the same name,
-  nothing is sent to either: a person is told the addresses, and a program is refused
-  with them (`409` from the REST routes). A task for an agent on a node goes on that
+  nothing is sent to either: a person is told the addresses (the dashboard offers them
+  as buttons, and the one pressed is sent the message), and a program is refused with
+  them (`409` from the REST routes). A task for an agent on a node goes on that
   node's own topic, `agents/at/<node>/<name>/task`, so the full address reaches that
   agent alone, from main or from an agent on another node (which learns where agents
   run from their retained manifests). A node says it takes tasks there with
@@ -87,6 +88,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `/migrate`, `/agents copy`, a `<delete>` block and a delete from the dashboard each act
   on the one agent named, by its address; a bare name kept on more than one host acts on
   none and says the addresses. Main keeps each one's manifest, so `/agents` lists both.
+  On the dashboard, the `@mention` suggestions offer each by its address, a message typed
+  in one's thread goes to that one, and a turn, a streaming reply and the "is working"
+  row each follow the agent's id, so a reply from the other one of the name neither ends
+  the turn nor joins it.
   Main's spawn registry keeps each agent by its id: the
   registry by name is read once on upgrade, every agent keeping its id, and left as it
   was. A reset of a name kept in more than one place is still refused.
@@ -182,8 +187,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   with a `turn` frame naming the agent a turn reached. The dashboard keeps its chat threads by
   that id: two agents of one name have a thread each, the chat list and the target picker name
   them `name@node`, and a message whose `@mention` reaches another agent moves to that agent's
-  thread, the view with it. The chat's address still names the agent (`#/chat/<name>`); the
-  browser remembers the open conversation by id. A node says in its manifest that it
+  thread, the view with it. The chat's address names the agent (`#/chat/<name>`, and
+  `#/chat/<name>@<node>` where the name is shared, which the open conversation's header and
+  address follow as another agent of its name comes or goes; a shared name alone opens
+  neither and links both); the browser remembers the open conversation by id. A node says in its manifest that it
   honours the id (`actor_ids`); one deployed before this gives a new agent the id derived from
   its name, and main refuses to move an agent with an id of its own there until the node is
   deployed again. One restored onto such a node before its manifest arrived, as at a restart,

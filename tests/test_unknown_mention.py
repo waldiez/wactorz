@@ -226,6 +226,40 @@ class TestANameTwoNodesShare:
         assert "`@counter@pi` or `@counter@pc`" in replies[0]
         assert ends["n"] == 1
 
+    async def test_a_sender_that_offers_choices_is_given_the_addresses_to_pick_from(self) -> None:
+        self._two_counters()
+        replies: list[str] = []
+        offered: list[tuple[str, tuple[str, ...]]] = []
+
+        async def _reply(message: str) -> None:
+            replies.append(message)
+
+        async def _offer(message: str, addresses: tuple[str, ...]) -> None:
+            offered.append((message, addresses))
+
+        await chat.route_chat("@counter five", _reply, choices_fn=_offer)
+
+        assert replies == []
+        assert offered == [
+            (chat.destination_of("@counter five").refusal, ("counter@pi", "counter@pc"))
+        ]
+
+    async def test_a_mention_of_nobody_is_not_offered_choices(self) -> None:
+        self._two_counters()
+        replies: list[str] = []
+        offered: list[tuple[str, ...]] = []
+
+        async def _reply(message: str) -> None:
+            replies.append(message)
+
+        async def _offer(_message: str, addresses: tuple[str, ...]) -> None:
+            offered.append(addresses)
+
+        await chat.route_chat("@weather five", _reply, choices_fn=_offer)
+
+        assert offered == []
+        assert "not found" in replies[0]
+
     def test_the_answer_stays_in_the_thread_it_was_asked_from(self) -> None:
         self._two_counters()
 

@@ -45,9 +45,14 @@ export interface ServerEvents {
     "system-health": unknown;
     /** Host-level CPU + memory stats from the backend. */
     "host-stats": HostStats;
+    /** A stored model's pointer moved (`models/{name}/{active|shadow}`); an unset one carries an empty payload. */
+    "model-pointer": { name: string; pointer: string };
     /** Catch-all for raw messages not matching a known pattern. */
     raw: { topic: string; payload: unknown };
 }
+
+/** `models/{name}/{pointer}`: where main says a stored model's pointer stands. */
+const MODEL_POINTER = /^models\/([^/]+)\/(active|shadow)$/;
 
 export type Listener<T> = (data: T) => void;
 type Listeners = { [K in keyof ServerEvents]: Array<Listener<ServerEvents[K]>> };
@@ -79,6 +84,12 @@ export class ServerEventRouter {
     /** Hand on one relayed frame. `threadId` is the thread the server says a chat
      *  message is in, when that is not its sender's own. */
     route(topic: string, payload: unknown, threadId = ""): void {
+        // Before the shape check: an unset pointer is published as an empty payload.
+        const pointer = MODEL_POINTER.exec(topic);
+        if (pointer) {
+            this.emit("model-pointer", { name: pointer[1] ?? "", pointer: pointer[2] ?? "" });
+            return;
+        }
         // Structured routing needs an object. A null/primitive payload can't match
         // any known shape and would throw on property access inside the routers,
         // so surface it as `raw` instead of letting it escape the message handler.

@@ -220,6 +220,22 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         return calls;
     }
 
+    it("says a stored model's pointer moved, an unset one with its empty payload too", () => {
+        const r = new ServerEventRouter();
+        const moved = capture(r, "model-pointer");
+        const raw = capture(r, "raw");
+
+        r.route("models/hvac/shadow", { version: 8 });
+        r.route("models/hvac/active", "");
+        r.route("models/hvac/latest", {});
+
+        expect(moved).toEqual([
+            { name: "hvac", pointer: "shadow" },
+            { name: "hvac", pointer: "active" },
+        ]);
+        expect(raw).toHaveLength(1);
+    });
+
     it("routes fixed-shape agent topics to their typed events", () => {
         const r = new ServerEventRouter();
         const hb = capture(r, "heartbeat");

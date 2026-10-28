@@ -78,6 +78,8 @@ export interface AppEventMap {
     "af-app-log": { entries: unknown[] };
     /** The address changed (Back, a link, a typed hash): open what it names. */
     "af-route": Route;
+    /** A pointer of the stored model `name` moved, wherever it was moved from. */
+    "af-model-pointer": { name: string; pointer: string };
     /** The dashboard opened a view, or another conversation in the chat: the address follows.
      *  `replace` when it is the same place under another name, which is no step for Back. */
     "af-view-changed": Route & { replace?: boolean };

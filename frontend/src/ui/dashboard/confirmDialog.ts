@@ -16,6 +16,9 @@
  *
  * Cancel is the default: it takes focus, and Escape or a click on the backdrop
  * chooses it. Nothing destructive happens without the user aiming at it.
+ *
+ * `confirmWithReason` asks the same, with a box for why, which the action
+ * records beside itself.
  */
 
 import { uid } from "../../ids";
@@ -31,11 +34,18 @@ export interface ConfirmOptions {
     confirmLabel: string;
 }
 
-/** The overlay and its two buttons, assembled but not yet wired. */
-function buildOverlay(opts: ConfirmOptions): {
+/** The longest reason the server keeps with an action: a sentence, not a document. */
+export const MAX_REASON_CHARS = 500;
+
+/** The overlay, its two buttons and, when asked for, the box for a reason; assembled but not wired. */
+function buildOverlay(
+    opts: ConfirmOptions,
+    asksWhy: boolean,
+): {
     overlay: HTMLElement;
     confirmBtn: HTMLButtonElement;
     cancelBtn: HTMLButtonElement;
+    reason: HTMLTextAreaElement | null;
 } {
     const overlay = testId(dialog(el("div", "af-confirm-backdrop"), opts.title), "confirm-dialog");
 
@@ -53,9 +63,24 @@ function buildOverlay(opts: ConfirmOptions): {
     overlay.setAttribute("aria-describedby", message.id);
 
     const box = el("div", "af-confirm");
-    box.append(testId(el("div", "af-confirm-title", opts.title), "confirm-title"), message, actions);
+    box.append(testId(el("div", "af-confirm-title", opts.title), "confirm-title"), message);
+    const reason = asksWhy ? reasonBox() : null;
+    if (reason) {
+        box.appendChild(reason.parentElement ?? reason);
+    }
+    box.appendChild(actions);
     overlay.appendChild(box);
-    return { overlay, confirmBtn, cancelBtn };
+    return { overlay, confirmBtn, cancelBtn, reason };
+}
+
+/** A labelled box for why, which may stay empty. */
+function reasonBox(): HTMLTextAreaElement {
+    const field = el("label", "af-confirm-reason");
+    const input = el("textarea", "af-confirm-reason-input");
+    input.rows = 2;
+    input.maxLength = MAX_REASON_CHARS;
+    field.append(el("span", "", "Reason (optional)"), input);
+    return input;
 }
 
 /**
@@ -74,14 +99,27 @@ let closeActive: (() => void) | null = null;
  * or a second dialog opening over this one.
  */
 export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
+    return ask(opts, false).then(answer => answer !== null);
+}
+
+/**
+ * As `confirmDialog`, with a box for why: the reason given, trimmed ("" when
+ * none was), or null for every way of not confirming.
+ */
+export function confirmWithReason(opts: ConfirmOptions): Promise<string | null> {
+    return ask(opts, true);
+}
+
+/** Open the dialog; the reason when confirmed ("" without a box), null otherwise. */
+function ask(opts: ConfirmOptions, asksWhy: boolean): Promise<string | null> {
     closeActive?.();
-    const { overlay, confirmBtn, cancelBtn } = buildOverlay(opts);
+    const { overlay, confirmBtn, cancelBtn, reason } = buildOverlay(opts, asksWhy);
 
     // Whatever had focus when this opened is where focus belongs afterwards.
     const opener = document.activeElement as HTMLElement | null;
 
-    return new Promise<boolean>(resolve => {
-        const settle = (answer: boolean): void => {
+    return new Promise<string | null>(resolve => {
+        const settle = (answer: string | null): void => {
             overlay.remove();
             document.removeEventListener("keydown", onKey);
             closeActive = null;
@@ -91,7 +129,7 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
 
         const onKey = (e: KeyboardEvent): void => {
             if (e.key === "Escape") {
-                settle(false);
+                settle(null);
             } else if (e.key === "Tab") {
                 trapTab(overlay, e);
             }
@@ -101,13 +139,13 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
         // bubble here and cancel the dialog the user is still reading.
         overlay.addEventListener("click", e => {
             if (e.target === overlay) {
-                settle(false);
+                settle(null);
             }
         });
-        cancelBtn.addEventListener("click", () => settle(false));
-        confirmBtn.addEventListener("click", () => settle(true));
+        cancelBtn.addEventListener("click", () => settle(null));
+        confirmBtn.addEventListener("click", () => settle(reason ? reason.value.trim() : ""));
         document.addEventListener("keydown", onKey);
-        closeActive = () => settle(false);
+        closeActive = () => settle(null);
         document.body.appendChild(overlay);
         cancelBtn.focus();
     });

@@ -344,6 +344,45 @@ class Dashboard:
         self.page.get_by_test_id("confirm-dialog").wait_for(state="detached")
         return self
 
+    def confirm_with_reason(self, reason: str) -> Dashboard:
+        """Write ``reason`` in the dialog's box for why, and confirm."""
+        dialog = self.page.get_by_test_id("confirm-dialog")
+        dialog.get_by_role("textbox", name="Reason (optional)", exact=True).fill(reason)
+        return self.confirm()
+
+    # ── Stored models ───────────────────────────────────────────────────────
+
+    def _model(self) -> Locator:
+        """The model open in the Models view."""
+        return self.page.get_by_role("article")
+
+    def model_steps(self) -> list[str]:
+        """The open model's versions along its line, as each is read out: ``v7, active``."""
+        steps = self._model().get_by_role("list", name="Versions over time").get_by_role("listitem")
+        return [
+            str(label)
+            for label in steps.evaluate_all("items => items.map(i => i.getAttribute('aria-label'))")
+        ]
+
+    def model_moves(self) -> list[str]:
+        """The open model's pointer moves, newest first, each as its line reads."""
+        moves = self._model().get_by_role("list", name="Pointer moves").get_by_role("listitem")
+        return [" ".join(text.split()) for text in moves.all_inner_texts()]
+
+    def press_on_model(self, name: str) -> Dashboard:
+        """Press the button called ``name`` on the open model."""
+        self._model().get_by_role("button", name=name, exact=True).click()
+        return self
+
+    def model_offers(self) -> list[str]:
+        """The moves the open model offers that can be made now."""
+        buttons = self._model().get_by_role("group", name="Moves", exact=True).get_by_role("button")
+        return [
+            buttons.nth(i).inner_text().strip()
+            for i in range(buttons.count())
+            if buttons.nth(i).is_enabled()
+        ]
+
     # ── Clearing what the install has stored ────────────────────────────────
 
     def clear(self, what: str, *, agent: str | None = None) -> str:

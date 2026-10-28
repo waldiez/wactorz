@@ -71,7 +71,7 @@ const defaultConfig = defineConfig({
             {
                 zones: [
                     {
-                        target: ["./src/agents", "./src/chat", "./src/types"],
+                        target: ["./src/agents", "./src/chat", "./src/models", "./src/types"],
                         from: "./src/ui",
                         message: "Models do not import views; let the view observe the model.",
                     },

@@ -8,7 +8,8 @@
  * reads what each view keeps in its route's path.
  *
  * A view's path is its own. The chat keeps the agent whose conversation is
- * open, as `[agent]`; a view with levels of its own adds what it reads here.
+ * open, as `[agent]`, and the Models view the model open, as `[name]`; a view
+ * with levels of its own adds what it reads here.
  */
 import { emit } from "../../events";
 import type { Route } from "../../router";
@@ -30,6 +31,10 @@ export interface ViewRoutesHost {
     chatTarget(): string;
     /** Open `agent`'s conversation in the chat. */
     setChatTarget(agent: string): void;
+    /** The model the Models view has open, or "". */
+    model(): string;
+    /** Open the model `name` in the Models view; "" for the list alone. */
+    setModel(name: string): void;
 }
 
 /** Opens routes for the dashboard, holding one that waits for an extension's view. */
@@ -60,6 +65,9 @@ export class ViewRoutes {
         if (agent && agent !== this.host.chatTarget()) {
             this.host.setChatTarget(agent);
         }
+        if (route.view === "models") {
+            this.host.setModel(route.path[0] ?? "");
+        }
         this.host.setView(route.view);
     }
 
@@ -78,8 +86,9 @@ export class ViewRoutes {
 
     /** Where the dashboard is now, for the address. */
     current(): Route {
-        const agent = this.host.view() === "chat" ? this.host.chatTarget() : "";
-        return { view: this.host.view(), path: agent ? [agent] : [] };
+        const view = this.host.view();
+        const at = view === "chat" ? this.host.chatTarget() : view === "models" ? this.host.model() : "";
+        return { view, path: at ? [at] : [] };
     }
 }
 

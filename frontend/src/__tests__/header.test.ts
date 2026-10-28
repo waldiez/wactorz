@@ -39,10 +39,10 @@ describe("buildHeader", () => {
         });
         expect(header.querySelector(".af-title")!.textContent).toBe("Wactorz");
         expect(header.querySelector(".af-conn-badge")!.classList.contains("af-conn-live")).toBe(true);
-        // 4 built-in view tabs + the Devices link + audio, reset and sign-out
+        // 5 built-in view tabs + the Devices link + audio, reset and sign-out
         // icon buttons. Devices and sign-out are always built and hidden until
         // /api/config says otherwise, so both are here whatever it will answer.
-        expect(header.querySelectorAll(".af-view-btn").length).toBe(8);
+        expect(header.querySelectorAll(".af-view-btn").length).toBe(9);
     });
 
     it("marks the current view active (class + aria-current)", () => {
@@ -328,6 +328,17 @@ describe("buildBottomNav", () => {
         const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
         more.click();
         expect(sheet.classList.contains("open")).toBe(true);
+    });
+
+    it("puts the built-in views the bar has no room for in the More sheet, before Settings", () => {
+        const nav = buildBottomNav({ view: "overview", onSetView: vi.fn(), haUrl: null, extraViews: [] });
+        const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
+
+        expect([...sheet.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"])).toEqual([
+            "models",
+            "settings",
+        ]);
+        expect(nav.querySelector(':scope > [data-view="models"]')).toBeNull();
     });
 
     it("a secondary (settings) tab routes through onSetView", () => {

@@ -140,16 +140,16 @@ describe("CardDashboard and the address", () => {
     });
 
     it("keeps an extension's view waiting until it registers, the current view shown meanwhile", () => {
-        history.replaceState(null, "", "#/models");
+        history.replaceState(null, "", "#/experiments");
         open();
         expect(shownView()).toBe("overview");
         // Not reported, so the address keeps naming the view asked for.
         expect(changes).toEqual([]);
 
-        cd.registerView("models", "grid", "Models", () => document.createElement("div"));
+        cd.registerView("experiments", "grid", "Experiments", () => document.createElement("div"));
 
-        expect(shownView()).toBe("models");
-        expect(changes).toEqual([{ view: "models", path: [] }]);
+        expect(shownView()).toBe("experiments");
+        expect(changes).toEqual([{ view: "experiments", path: [] }]);
     });
 
     it("remembers an agent a link names even when it does not exist, and opens a real one next time", () => {

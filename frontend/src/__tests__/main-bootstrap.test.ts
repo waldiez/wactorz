@@ -196,6 +196,7 @@ describe("main.ts bootstrap", () => {
             "host-stats",
             "raw",
             "answer",
+            "model-pointer",
         ]) {
             expect(typeof mockRouter[ev]).toBe("function");
         }
@@ -446,6 +447,16 @@ describe("main.ts bootstrap", () => {
         await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(2));
         expect(mockOpenQuestions).toHaveBeenLastCalledWith("");
         mockOpenQuestions.mockResolvedValue([]);
+    });
+
+    it("tells the page a stored model's pointer moved", () => {
+        const heard: unknown[] = [];
+        const stop = listen("af-model-pointer", d => heard.push(d));
+
+        routerHandler("model-pointer")({ name: "hvac", pointer: "shadow" });
+        document.removeEventListener("af-model-pointer", stop);
+
+        expect(heard).toEqual([{ name: "hvac", pointer: "shadow" }]);
     });
 
     it("handles the app-event listeners", () => {

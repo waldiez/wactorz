@@ -319,6 +319,8 @@ router.on("alert", payload => {
 });
 
 router.on("chat", msg => ingestChat(msg));
+// A stored model's pointer moved: the Models view reads it again.
+router.on("model-pointer", moved => emit("af-model-pointer", moved));
 
 // A question answered on any channel: the card closes on every open dashboard.
 router.on("answer", answer => {

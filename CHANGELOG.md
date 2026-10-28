@@ -11,6 +11,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A Models tab on the dashboard.** It lists every stored model, saying which serves
+  a version, which is trying one beside it and which has none active, and opens one at
+  `#/models/<name>`: its versions along a line with the active, the shadow and the
+  previous active marked in words and colour, a table of versions with what was said of
+  each, and the history of its pointer moves, each with who made it and why. From there
+  a version is tried as shadow, the shadow promoted or cleared, and the active rolled
+  back to the version it replaced, each after a question that takes an optional reason
+  (a clear takes none, since nothing would keep it). A pointer moved anywhere else, by
+  the CLI, chat or an agent, shows there within seconds. On a phone it is in the More
+  sheet. Making a version active directly stays with the CLI and chat.
 - **Agents written from chat know how to label.** Main's and the planner's prompts now say
   what `label=` on `ask_operator` does and when to use it, and that an agent on main can
   write a label itself with `agent.label(source, value, start=...)`, so a generated agent

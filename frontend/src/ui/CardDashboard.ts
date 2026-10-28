@@ -47,6 +47,9 @@ import { seedServerConfig } from "../config/serverConfig";
 import { emit, Listeners } from "../events";
 import { initialRoute } from "../router";
 import { ViewRoutes } from "./dashboard/viewRoutes";
+import { ModelsView } from "./models/ModelsView";
+import { ModelCatalog } from "../models/ModelCatalog";
+import { ModelsApi } from "../io/modelsApi";
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -67,6 +70,8 @@ export class CardDashboard {
     private _data: OverviewData;
     /** An agent's or a node's history, opened from its card. */
     private _trendPanel = new TrendPanel();
+    /** The stored models and their pointers. */
+    private _models = new ModelsView(new ModelCatalog(new ModelsApi(window.__WACTORZ_INGRESS_PATH ?? "")));
     private _removingIds = new Set<string>();
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
@@ -111,6 +116,8 @@ export class CardDashboard {
             // The address names the conversation by its agent's name, or `name@node` where it is shared.
             chatTarget: () => this._chat.chatTargetAddress,
             setChatTarget: name => this._chat.openByName(name),
+            model: () => this._models.open,
+            setModel: name => this._models.show(name),
         });
         this._overview = new OverviewView({
             root: this.root,
@@ -185,6 +192,7 @@ export class CardDashboard {
         this.hide();
         this._unsubscribe();
         this._trendPanel.destroy();
+        this._models.destroy();
         releaseHeaderPopovers();
         releaseBottomNav();
         this.root.remove();
@@ -350,6 +358,7 @@ export class CardDashboard {
         });
         this._listeners.on("af-route", route => this._routes.open(route));
         this._listeners.on("af-register-view", v => this.registerView(v.key, v.icon, v.label, v.build));
+        this._listeners.on("af-model-pointer", d => this._models.moved(d.name));
     }
 
     private _wireFeedEvents(): void {
@@ -408,6 +417,8 @@ export class CardDashboard {
         } else if (this.view === "chat") {
             body.appendChild(this._chat.buildChatView());
             this._chat.afterMount();
+        } else if (this.view === "models") {
+            body.appendChild(this._models.build());
         } else {
             const builder = this._viewBuilders.get(this.view);
             if (builder) {

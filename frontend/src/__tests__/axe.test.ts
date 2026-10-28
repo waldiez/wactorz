@@ -56,6 +56,63 @@ describe("the dashboard passes axe", () => {
         expect(await blockingFindings(document.body)).toEqual([]);
     });
 
+    it("on the models view, a model open", async () => {
+        const version = (n: number) => ({
+            name: "hvac",
+            version: n,
+            sha256: `s${n}`,
+            format: "onnx",
+            size: 2048,
+            runs_code: false,
+            added_at: 1_700_000_000 + n,
+            metadata: { source: "cli" },
+            reference: `hvac:${n}`,
+        });
+        const pointer = (which: string, n: number, previous: number | null) => ({
+            name: "hvac",
+            pointer: which,
+            version: n,
+            previous,
+            moved_at: 1,
+            by: "cli",
+            reason: null,
+            holds: true,
+        });
+        const pointers = { active: pointer("active", 2, 1), shadow: pointer("shadow", 3, null) };
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (url: string) => {
+                if (url.endsWith("/moves")) {
+                    return Response.json({
+                        moves: [
+                            {
+                                at: 1,
+                                pointer: "shadow",
+                                change: "moved",
+                                version: 3,
+                                from: null,
+                                by: "chat",
+                                reason: "why",
+                            },
+                        ],
+                    });
+                }
+                if (url.endsWith("/api/models")) {
+                    return Response.json({
+                        models: [{ name: "hvac", newest: version(3), versions: 3, pointers }],
+                    });
+                }
+                return Response.json({ name: "hvac", versions: [1, 2, 3].map(version), pointers });
+            }),
+        );
+
+        goTo("models", "hvac");
+        await vi.waitFor(() => expect(document.querySelector(".af-model-detail")).not.toBeNull());
+
+        expect(await blockingFindings(document.body)).toEqual([]);
+        vi.unstubAllGlobals();
+    });
+
     it("on the chat view, with the command list open", async () => {
         const commands = [
             { usage: "/plans", typed: "/plans", summary: "list pending pipeline proposals" },

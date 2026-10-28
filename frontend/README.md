@@ -121,6 +121,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-answer-option`     | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }`                                       |
 | `af-pick-address`      | chatThread → DashboardChat                                     | `{ id, address }` (one of the addresses the reply `id` offered)        |
 | `af-answered`          | main.ts → DashboardChat                                        | `{ id, option }`                                                       |
+| `af-model-pointer`     | main.ts (ServerEventRouter) → CardDashboard (Models view)      | `{ name, pointer }` (a stored model's pointer moved, from anywhere)    |
 | `af-questions-listed`  | main.ts → DashboardChat                                        | `{ open, answered }`                                                   |
 | `af-app-log`           | WSClient → appLogFeed                                          | `{ entries }`                                                          |
 | `af-route`             | router → CardDashboard                                         | `{ view, path }` (the address changed)                                 |

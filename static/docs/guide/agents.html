@@ -220,7 +220,10 @@
 node <code>main</code>, also spelled <code>local</code>). A bare name is enough while one agent has it. When agents
 on more than one node have the name, nothing is sent: a person is told the addresses, and a
 program (<code>send_to</code>, <code>delegate_task</code>, <code>POST /api/chat</code>, <code>POST /api/reset</code>) is refused with
-them. Main never picks one. The same address works in the terminal chat and in
+them. Main never picks one. The dashboard offers the addresses as buttons, and sends the
+message again to the one pressed; it calls each agent of a shared name by its address, in
+the chat list, the target picker and the <code>@mention</code> suggestions, and <code>#/chat/&lt;name&gt;@&lt;node&gt;</code>
+opens that one's conversation. The same address works in the terminal chat and in
 <code>/agents restart|stop|delete</code>, <code>/start</code> and <code>/migrate</code>, and one naming a node the agent is
 not on is refused. <code>@</code> is not allowed in a new agent's name or a new node's name.</p>
 <p>A task for an agent on a node goes on that node's own topic, <code>agents/at/&lt;node&gt;/&lt;name&gt;/task</code>,

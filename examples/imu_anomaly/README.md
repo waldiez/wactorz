@@ -73,6 +73,16 @@ curl -s -X POST localhost:8888/api/models/imu-detector/active -H "X-API-Key: $AP
   -H "Content-Type: application/json" -d '{"version": 1, "reason": "back to the first"}'
 ```
 
+With two versions stored and `publish_imu.py` running, `--set shadow` on the newer
+one, or the Models tab's "Try as shadow", starts a trial: the detector keeps serving
+the active version and scores every reading with the shadow version too, publishing
+its anomalies on `shadow/anomalies/imu`, and the feed says `trying imu-detector:2
+beside imu-detector:1 as model`. `GET /api/models/imu-detector/trial` shows how often
+the two agree and how their scores differ so far; with `?source=sensors/imu/left-wrist
+&positive=fault` it scores both against the labels `triage` collected. Promote or
+clear the shadow and the trial's outcome is kept, listed by `GET
+/api/models/imu-detector/trials`.
+
 With `publish_imu.py` running, the first strong jolt makes `triage` ask on the
 dashboard: maintenance, or a real problem? With main running (`python run.py
 --with-main --llm fake`) the answer is kept as a label of `sensors/imu/left-wrist`

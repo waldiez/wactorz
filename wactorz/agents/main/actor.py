@@ -49,6 +49,7 @@ from .nodes import NodeManager
 from .placement import PlacedOnNode, Placement
 from .planning import PlanningMixin, starts_with_bypass
 from .routing import RoutingMixin
+from .shadow_serving import ShadowServing
 from .spawn_registry import SpawnRegistry
 from .spawns import SpawnService
 from .turn_actions import TurnActions
@@ -215,7 +216,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
         self.hot_swap = HotSwap(self)
-        self.artifact_service = ArtifactService(self, follow=self.hot_swap.follow)
+        self.shadow_serving = ShadowServing(self)
+        self.artifact_service = ArtifactService(self, follow=self._follow_pointers)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.placement = Placement(self)
@@ -362,6 +364,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
         self._inject_user_facts_into_prompt()
+
+    async def _follow_pointers(self, changes: list[Any]) -> None:
+        """What a pointer's move does to running agents: the served version first, then the trial."""
+        await self.hot_swap.follow(changes)
+        await self.shadow_serving.follow(changes)
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 

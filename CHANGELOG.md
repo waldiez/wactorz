@@ -11,6 +11,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Where the model loop's data lives is decided, before it is built.** `docs/design/data-storage.md`
+  records that readings from streams are recorded as Parquet files under the state directory, one
+  file per source and hour, by a recorder that runs on main or on a node, with a node shipping each
+  closed file to main over the blob path; that shadow pairs and serving logs are written the same
+  way under their own prefixes; that SQLite keeps what is small and transactional, labels, the
+  graph, questions, pointer moves, and a short live window of readings for the dashboard; that one
+  loader, `wactorz.data`, reads frames, cuts them into segments, makes time-based and leave-k-out
+  splits that never shuffle, joins the effective labels and profiles a source; that pyarrow is the
+  data package's one dependency, as the `data` extra, with no DuckDB; and what was decided against.
+- **A model's shadow version runs beside the one served, and the trial is compared and kept.**
+  A function agent serving a model by its bare name takes the version the `shadow` pointer
+  names as soon as it is set, from the Models tab, chat or `train.py --set shadow`: after
+  each reading is answered with the active version, the same function runs once more with
+  the shadow version, publishing under `shadow/` and never writing the agent's state, and
+  the two answers are kept as a pair. A pass is skipped, never queued, while the last one
+  runs, so a trial never slows what is served. `GET /api/models/{name}/trial` shows how
+  often the two agree, how their scores differ, their latencies, and, given a source and
+  which label values count as positive, each side's precision and recall against the labels.
+  Clearing or promoting the shadow ends the trial, records its outcome in the provenance
+  graph (`GET /api/models/{name}/trials`) and says what it showed on the feed. Pairs are
+  Parquet files under the state directory's `data/shadow/<model>`, the layout
+  `docs/design/data-storage.md` decided, written by the new `wactorz.data` package; the
+  `data` extra now carries pyarrow for it. Function agents on main only in this step; a
+  program written from chat, and an agent on a node, run no shadow yet.
+- **A library agent the system started follows a moved pointer too.** The hot swap now finds
+  the agents on main among those running, not only among those main spawned, so an agent
+  brought by `WACTORZ_AGENTS` or `wactorz.run(agents=...)` swaps its model when its
+  pointer moves.
 - **A Models tab on the dashboard.** It lists every stored model, saying which serves
   a version, which is trying one beside it and which has none active, and opens one at
   `#/models/<name>`: its versions along a line with the active, the shadow and the

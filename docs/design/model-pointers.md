@@ -241,6 +241,48 @@ Decided against:
 - **Recording a failed swap in the graph.** Rejected: nothing changed; the agent's
   record stays true, and the feed is where a failure is read.
 
+### Shadow serving: what the `shadow` pointer does to a running agent
+
+A function agent serving a model by its bare name follows `active`, and while the
+model's `shadow` pointer is set it holds that version too. After each message is
+answered with the active version, the same function is called once more with a view
+of the actor that reads the shadow version: `load_model` and `artifact_path` give the
+version on trial, what it publishes goes out under `shadow/` in front of the function's
+own topic, and `persist` does nothing, so a trial never writes the agent's state. The
+two answers, with the input's hash, the event time, both versions and both latencies,
+are one pair, kept as Parquet under `shadow/<model>` in the data layout
+(`data-storage.md`). A pass is skipped, never queued, while the previous one is still
+running, so a trial never slows what is served; the agent counts what it skipped.
+Tasks are answered with the active version only: a task has one reply and one asker.
+
+The trial starts when the pointer is set and ends when it is cleared or promoted, and
+main does both in the agents that serve the model, as it hands every pointer change to
+the hot swap. When it ends, main reads the pairs back, compares them (agreement, the
+scores' difference, latencies, and precision and recall against the labels of a source
+when asked), writes an `outcome` node about the model saying how it ended and what it
+showed, and says so on the feed. `GET /api/models/{name}/trial` shows the comparison
+while a trial runs, or over any window; `/trials` lists the outcomes. The outcome
+stands alone until the train step writes `model` nodes for `evaluated_by` to reach.
+
+Two cuts, for this step:
+
+- **Function agents only.** A program written from chat has side effects of its own,
+  and running it twice per input is not safe without a design of its own.
+- **Agents on main only.** An agent on a node would keep its pairs where main cannot
+  read them until the data package ships files to main; it joins the trial then.
+
+Decided against:
+
+- **Queueing shadow work when the agent is behind.** Rejected: a trial that slows
+  serving is a trial nobody will run twice; a skipped pass is counted and costs nothing.
+- **Running the shadow in a second agent.** Rejected: it would subscribe to the same
+  topics and see a different stream under load, and the pairs would have to be joined
+  by hash after the fact; one agent sees one input twice.
+- **Letting the shadow pass write state.** Rejected: the agent's memory is the served
+  version's; a trial that changed it would change what the active version does next.
+- **Deciding promotion here.** Rejected: the comparison is shown and recorded; whether
+  it is enough is decision 6 and the controller's, not the serving agent's.
+
 ## What was decided against
 
 - **`latest` following `active`.** Rejected: `latest` keeps one meaning, the newest, so
@@ -272,7 +314,10 @@ Decided against:
   on main and on nodes, as "Hot swap" above says. Built (`wactorz/agents/main/hot_swap.py`,
   `Actor.swap_model`, the runner's `swap_model` command, `wactorz/core/model_swaps.py`).
 - **Item 8, shadow serving**, resolves `NAME:shadow` beside `active` and runs both; the
-  pointer being unset is what turns the shadow path off.
+  pointer being unset is what turns the shadow path off. Built, for function agents on
+  main, as "Shadow serving" above says (`wactorz/agents/shadow_serving.py`,
+  `FunctionAgent.swap_shadow`, `wactorz/agents/main/shadow_serving.py`,
+  `wactorz/core/shadow_trial.py`, the trial routes).
 - **Item 9, the train step**, stores a version, scores it, and calls `move` or not,
   writing its margin in `reason`.
 - **Step 7, the paid add-on**, calls the same three operations as `agent:<name>` and

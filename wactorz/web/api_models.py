@@ -10,7 +10,10 @@ made ``by`` the dashboard:
 - ``POST /api/models/{name}/rollback``: active back to the version it left;
 - ``DELETE /api/models/{name}/shadow``: the trial ended.
 
-``GET /api/models/{name}/moves`` is the history of those moves, newest first,
+``GET /api/models/{name}/trial`` is what the shadow trial shows so far, or showed
+over a window: its pairs compared, and against the labels of a source when
+``source`` and ``positive`` say which values count; ``/trials`` the outcomes of
+the trials that ended. ``GET /api/models/{name}/moves`` is the history of those moves, newest first,
 from the provenance graph in main's database (`wactorz.core.pointer_moves`).
 
 Each move takes an optional ``reason``. The answer is where the pointer stands
@@ -25,6 +28,7 @@ thread rather than holding the event loop.
 
 import asyncio
 import json
+import time
 from dataclasses import asdict
 from typing import Any
 
@@ -40,10 +44,13 @@ from ..core.artifacts import (
     describe,
     name_error,
 )
+from ..core.labels import Labels
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.pointer_moves import DEFAULT_LIMIT, history
 from ..core.provenance import Provenance
+from ..core.shadow_trial import compare, outcomes_of
+from ..data.files import DataError, data_root
 from . import runtime
 
 #: Who a move made here is recorded as made by.
@@ -187,6 +194,97 @@ async def moves_handler(request: web.Request) -> web.Response:
         )
     moves = await asyncio.to_thread(history, Provenance(db), name, limit=limit)
     return web.json_response({"name": name, "moves": moves})
+
+
+async def trial_handler(request: web.Request) -> web.Response:
+    """What the shadow trial of a model shows: its pairs compared over a window.
+
+    The window is the trial's, from when ``shadow`` was set to now, unless
+    ``since`` and ``until`` (Unix seconds) say otherwise; with no shadow set
+    and no window given there is no trial to show. ``source`` and ``positive``
+    (label values, comma separated) add each side's precision and recall over
+    the pairs a label of that source covers.
+    """
+    name = _name(request)
+    if isinstance(name, web.Response):
+        return name
+    store = _store()
+    try:
+        shadow = await asyncio.to_thread(store.pointer, name, "shadow")
+    except ArtifactError as exc:
+        return _refusal(exc)
+    since = _moment(request.query.get("since"))
+    until = _moment(request.query.get("until"))
+    if since is False or until is False:
+        return web.json_response({"error": "'since' and 'until' are Unix seconds"}, status=400)
+    if since is None:
+        if shadow is None:
+            return web.json_response(
+                {"error": f"{name} has no shadow version on trial"}, status=404
+            )
+        since = shadow.moved_at
+    if until is None:
+        until = time.time()
+    try:
+        from ..data import parquet  # optional dependency: the `data` extra
+    except ModuleNotFoundError:
+        return web.json_response(
+            {"error": "the pairs cannot be read: install wactorz[data]"}, status=503
+        )
+    root = data_root(resolve_state_dir())
+
+    def read() -> list[dict[str, Any]]:
+        return parquet.frame(root, f"shadow/{name}", since, until).to_pylist()
+
+    try:
+        rows = await asyncio.to_thread(read)
+    except DataError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    source = (request.query.get("source") or "").strip()
+    positive = [v.strip() for v in (request.query.get("positive") or "").split(",") if v.strip()]
+    intervals = None
+    if source and positive:
+        db = runtime.db if runtime.db is not None else get_db()
+        if db is None:
+            return web.json_response(
+                {"error": "persistence is not running, so no labels can be read"}, status=503
+            )
+        intervals = await asyncio.to_thread(Labels(db).effective, source, since=since, until=until)
+    summary = compare(rows, intervals=intervals, positive=positive)
+    return web.json_response(
+        {
+            "name": name,
+            "shadow": None if shadow is None else asdict(shadow),
+            "since": since,
+            "until": until,
+            "source": source or None,
+            **summary,
+        }
+    )
+
+
+async def trials_handler(request: web.Request) -> web.Response:
+    """The outcomes of the model's trials that ended, newest first."""
+    name = _name(request)
+    if isinstance(name, web.Response):
+        return name
+    db = runtime.db if runtime.db is not None else get_db()
+    if db is None:
+        return web.json_response(
+            {"error": "persistence is not running, so no trials are recorded"}, status=503
+        )
+    trials = await asyncio.to_thread(outcomes_of, Provenance(db), name)
+    return web.json_response({"name": name, "trials": trials})
+
+
+def _moment(raw: str | None) -> float | bool | None:
+    """``raw`` as Unix seconds; None when unsaid; False when it is not a time."""
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return False
 
 
 def _count(raw: str | None) -> int | None:

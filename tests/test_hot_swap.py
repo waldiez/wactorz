@@ -271,6 +271,9 @@ class _Registry:
     def find_by_name(self, name: str) -> _Running | None:
         return self.running.get(name)
 
+    def all_actors(self) -> list[_Running]:
+        return list(self.running.values())
+
 
 class _Host:
     """Main, as the swap sees it: the registries, a node's desired state and the broker."""
@@ -425,16 +428,30 @@ class TestAgentsOnMainFollow:
         assert host.spawns["detector"]["artifacts"]["model"]["version"] == 1
         assert swaps_of(graph, "imu") == []
 
-    async def test_an_agent_not_running_gets_its_record_updated_and_nothing_else(
+    async def test_an_agent_not_running_is_left_to_its_restart(
         self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance
     ) -> None:
+        """A pin that follows is re-pinned when the agent starts again; nothing to do now."""
         _spawned(host, "stopped", store, follows="active")
 
         await swap.follow([_move(store, graph, "imu:2")])
 
-        assert host.spawns["stopped"]["artifacts"]["model"]["version"] == 2
+        assert host.spawns["stopped"]["artifacts"]["model"]["version"] == 1
         assert host.feed() == []
         assert swaps_of(graph, "imu") == []
+
+    async def test_a_library_agent_with_no_record_follows_too(
+        self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance
+    ) -> None:
+        """One the system started from its plugin: running here, in no registry."""
+        running = _Running("imu-anomaly", readable(store, "imu:1", follows="active"))
+        host._registry.running["imu-anomaly"] = running
+
+        await swap.follow([_move(store, graph, "imu:2")])
+
+        assert [entry["version"] for _, entry in running.swapped] == [2]
+        assert host.feed() == ["imu-anomaly on main now serves imu:2 as model (was imu:1)"]
+        assert "imu-anomaly" not in host.spawns
 
     async def test_an_agent_already_on_the_version_is_passed_over(
         self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance

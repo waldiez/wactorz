@@ -21,6 +21,8 @@ from typing import Any, cast
 import pytest
 
 from wactorz.agents.main import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core.addresses import MAIN_NODE, Address, Resolution, parse, resolve
 from wactorz.core.registry import ActorRegistry
 from wactorz.core.turns import current_agent, current_turn
 from wactorz.interfaces.chat import cli as cli_module
@@ -66,11 +68,29 @@ class _MainActor:
         self.stream_chunks: list[Any] = ["hel", "lo"]
         self.migrate_result: dict[str, Any] = {"success": True, "message": "moved"}
         self.migrate_forced: bool | None = None
+        #: (agent, node) of the last move asked for.
+        self.migrated: tuple[str, str] | None = None
+        self.spawn_registry: dict[str, dict[str, Any]] = {}
         self.installer_result: dict[str, Any] = {"success": True}
         self.installer_calls: list[dict[str, Any]] = []
 
     def persist(self, key: str, value: Any) -> None:
         self.persisted[key] = value
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
+        """As main's, with no node: only the agents in its registry are found."""
+        here = [Address(n, MAIN_NODE) for n in (wanted, parse(wanted).name) if self._here(n)]
+        return resolve(wanted, here)
+
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.spawn_registry)
+
+    def task_refusal(self, _address: Address) -> str | None:
+        """With no node, every task can go."""
+        return None
+
+    def _here(self, name: str) -> bool:
+        return self._registry is not None and self._registry.find_by_name(name) is not None
 
     async def list_agents(self) -> list[dict[str, Any]]:
         return self.agents
@@ -78,8 +98,9 @@ class _MainActor:
     def list_nodes(self) -> list[dict[str, Any]]:
         return self.nodes
 
-    async def migrate_agent(self, _name: str, _node: str, *, force: bool = False) -> dict[str, Any]:
+    async def migrate_agent(self, name: str, node: str, *, force: bool = False) -> dict[str, Any]:
         self.migrate_forced = force
+        self.migrated = (name, node)
         return self.migrate_result
 
     async def delegate_to_installer(self, payload: dict[str, Any], timeout: float) -> Any:
@@ -251,6 +272,26 @@ class TestMigrate:
 
         assert "[OK] moved" in out
 
+    async def test_an_address_names_the_agent_it_moves(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        actor.spawn_registry = {"temp": {"node": "pc"}}
+
+        await drive(_cli(actor), ["/migrate temp@pc rpi"], capsys)
+
+        # The move takes the address: which agent of the name, it decides there.
+        assert actor.migrated == ("temp@pc", "rpi")
+
+    async def test_an_address_naming_another_node_moves_nothing(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        actor.spawn_registry = {"temp": {"node": "pc"}}
+
+        out = await drive(_cli(actor), ["/migrate temp@garage rpi"], capsys)
+
+        assert "'temp' is on 'pc', not on 'garage'." in out
+        assert actor.migrated is None
+
     async def test_a_failed_migration_says_fail(
         self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -399,7 +440,7 @@ class TestAddressingAnAgent:
         """Absent from the local registry does not mean absent — it may live on a
         node, which is reachable only over the broker."""
 
-        async def _remote(_self: CLIInterface, name: str, _message: str) -> str:
+        async def _remote(_self: CLIInterface, name: str, _message: str, _node: str = "") -> str:
             return f"remote {name}"
 
         monkeypatch.setattr(CLIInterface, "_get_remote_agent_response", _remote)
@@ -407,6 +448,76 @@ class TestAddressingAnAgent:
         out = await drive(_cli(actor), ["@faraway ping"], capsys)
 
         assert "remote faraway" in out
+
+
+class TestANameTwoNodesShare:
+    async def test_the_addresses_are_shown_and_nothing_is_sent(
+        self,
+        actor: _MainActor,
+        drive: Any,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        both = Resolution("counter", (Address("counter", "pi"), Address("counter", "pc")))
+        monkeypatch.setattr(actor, "resolve_address", lambda _wanted, **_kw: both)
+        sent: list[str] = []
+
+        async def _remote(_self: CLIInterface, name: str, _message: str, _node: str = "") -> str:
+            sent.append(name)
+            return "sent"
+
+        monkeypatch.setattr(CLIInterface, "_get_remote_agent_response", _remote)
+
+        out = await drive(_cli(actor), ["@counter five"], capsys)
+
+        assert "`@counter@pi` or `@counter@pc`" in out
+        assert sent == []
+
+    async def test_the_full_address_goes_to_that_node(
+        self,
+        actor: _MainActor,
+        drive: Any,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        found = Resolution("counter@pc", (Address("counter", "pc"),))
+        monkeypatch.setattr(actor, "resolve_address", lambda _wanted, **_kw: found)
+        sent: list[tuple[str, str]] = []
+
+        async def _remote(_self: CLIInterface, name: str, _message: str, node: str = "") -> str:
+            sent.append((name, node))
+            return "sent"
+
+        monkeypatch.setattr(CLIInterface, "_get_remote_agent_response", _remote)
+
+        await drive(_cli(actor), ["@counter@pc five"], capsys)
+
+        assert sent == [("counter", "pc")]
+
+
+class TestATaskThatCannotGoYet:
+    async def test_the_reason_is_shown_and_nothing_is_sent(
+        self,
+        actor: _MainActor,
+        drive: Any,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        found = Resolution("counter@pc", (Address("counter", "pc"),))
+        monkeypatch.setattr(actor, "resolve_address", lambda _wanted, **_kw: found)
+        monkeypatch.setattr(actor, "task_refusal", lambda _address: "pi runs it too")
+        sent: list[str] = []
+
+        async def _remote(_self: CLIInterface, name: str, _message: str, _node: str = "") -> str:
+            sent.append(name)
+            return "sent"
+
+        monkeypatch.setattr(CLIInterface, "_get_remote_agent_response", _remote)
+
+        out = await drive(_cli(actor), ["@counter@pc five"], capsys)
+
+        assert "[error] pi runs it too" in out
+        assert sent == []
 
 
 class TestPlainText:

@@ -26,13 +26,27 @@ export interface AppEventMap {
     "af-agent-command": { command: string; agentId: string };
     /** The chat puts a message on the wire: `id` is its bubble's, and comes back on
      *  `af-send-failed` should the send not go out. */
-    "af-send-message": { id: string; content: string; target: string; attachments: string[] };
+    "af-send-message": {
+        id: string;
+        content: string;
+        target: string;
+        name: string;
+        answerer: string;
+        attachments: string[];
+    };
     /** The send `id` did not go out: the socket was closed. */
     "af-send-failed": { id: string; content: string; target: string };
-    /** A piece of `from`'s streamed reply, and the reply so far (`text`). */
-    "af-stream-chunk": { chunk: string; from: string; text: string };
+    /** The person now talks to `agent`, by typing or by voice: a reply the server
+     *  stamps with the gateway's id is that agent's. */
+    "af-addressed": { agent: string };
+    /** A piece of `from`'s streamed reply, and the reply so far (`text`); `agentId` is
+     *  the thread it is in. */
+    "af-stream-chunk": { chunk: string; from: string; agentId: string; text: string };
     /** `from`'s streamed reply ended; `text` is all of it, empty when nothing came. */
-    "af-stream-end": { text: string; from: string };
+    "af-stream-end": { text: string; from: string; agentId: string };
+    /** The server says which agent the person's message `id` reached: `agentId`, called
+     *  `name`. A mention can reach an agent other than the thread it was typed in. */
+    "af-turn-reached": { id: string; agentId: string; name: string };
     /** The socket to the server opened or closed: whether a message can go out now.
      *  Not `af-connection-status`, which needs the server's broker link too. */
     "af-socket": { open: boolean };
@@ -42,6 +56,8 @@ export interface AppEventMap {
     "af-reset-chat": { agent: string | null };
     /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
     "af-answer-option": { id: string; agentId: string; option: string; index: number };
+    /** The person picked one of the addresses a reply (`id`) offered for a name several agents share. */
+    "af-pick-address": { id: string; address: string };
     /** A question was answered, here or on another channel: show the pick, take the buttons off. */
     "af-answered": { id: string; option: string };
     /** The server's ledger of questions, each time the page goes live: the open ones, one
@@ -62,8 +78,14 @@ export interface AppEventMap {
     "af-app-log": { entries: unknown[] };
     /** The address changed (Back, a link, a typed hash): open what it names. */
     "af-route": Route;
-    /** The dashboard opened a view, or another conversation in the chat: the address follows. */
-    "af-view-changed": Route;
+    /** A pointer of the stored model `name` moved, wherever it was moved from. */
+    "af-model-pointer": { name: string; pointer: string };
+    /** The dashboard opened a view, or another conversation in the chat: the address follows.
+     *  `replace` when it is the same place under another name, which is no step for Back. */
+    "af-view-changed": Route & { replace?: boolean };
+    /** An extension adds a view: a nav button showing `icon` and `label`, and `build` for its
+     *  content, opened at `#/<key>`. Sent once, during startup. */
+    "af-register-view": { key: string; icon: string; label: string; build: () => HTMLElement };
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;

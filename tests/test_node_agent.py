@@ -271,11 +271,10 @@ class TestTheNameANodeAnswersTo:
 
 class TestReachingAnAgentElsewhere:
     async def test_send_to_addresses_an_unknown_agent_by_name(self, runner: NodeRunner) -> None:
-        """A node cannot look up which machine holds an agent — main can.
+        """An agent no manifest has placed is sent to by name.
 
-        Refusing for want of that lookup made `send_to` unusable from a node
-        entirely. Every node subscribes to `agents/by-name/+/task`, so naming
-        the agent reaches it wherever among them it runs.
+        Every node subscribes to `agents/by-name/+/task`, so naming the agent
+        reaches it wherever among them it runs, as before nodes read manifests.
         """
         agent = _agent(runner)
         sent: list[tuple[str, Any]] = []
@@ -298,7 +297,36 @@ class TestReachingAnAgentElsewhere:
         (topic, payload) = sent[0]
         assert topic == "agents/by-name/elsewhere/task"
         assert payload["city"] == "Athens"
-        assert payload["_reply_topic"].startswith("agents/by-name/edge-agent/reply/")
+        assert payload["_reply_topic"].startswith("agents/at/node-a/edge-agent/reply/")
+
+    async def test_send_to_reaches_an_agent_on_its_nodes_own_topic(
+        self, runner: NodeRunner
+    ) -> None:
+        # Two nodes run the name; the manifests say where, and pc takes its tasks
+        # on its own topic.
+        for node in ("pc", "pi"):
+            runner.directory.take(
+                f"agents/id-{node}/manifest",
+                json.dumps({"name": "counter", "node": node, "tasks_by_node": True}).encode(),
+            )
+        agent = _agent(runner)
+        sent: list[str] = []
+
+        async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+        await runner.registry.register(agent)
+
+        with contextlib.suppress(ConnectionRefusedError, asyncio.TimeoutError):
+            await asyncio.wait_for(
+                agent._api.send_to("counter@pc", {"n": 1}, timeout=0.05), timeout=2
+            )
+        refused = await agent._api.send_to("counter", {"n": 1}, timeout=0.05)
+
+        assert sent == ["agents/at/pc/counter/task"]
+        assert refused is not None
+        assert "`counter@pc` or `counter@pi`" in refused["error"]
 
     async def test_an_agent_on_this_node_is_reached_in_process(self, runner: NodeRunner) -> None:
         # No broker involved when both are here: the registry delivers it.
@@ -310,6 +338,55 @@ class TestReachingAnAgentElsewhere:
         )
         # Spawned rather than built: the reply comes back through the caller's
         # own mailbox, so it has to be running to receive it.
+        await runner.spawn_agent({"name": "caller", "code": ""})
+        caller = runner.get("caller")
+        assert caller is not None
+
+        result = await asyncio.wait_for(
+            caller._api.send_to("worker", {"do": "the thing"}, timeout=2), timeout=5
+        )
+
+        assert isinstance(result, dict)
+        assert result["did"] == "the thing"
+
+    async def test_send_to_reaches_an_agent_on_an_older_node_by_name(
+        self, runner: NodeRunner
+    ) -> None:
+        # A library agent on a node from before this release: its manifest names
+        # neither its node nor how to reach it.
+        runner.directory.take(
+            "agents/legacy-worker/manifest",
+            json.dumps({"name": "worker", "actor_id": "legacy-worker"}).encode(),
+        )
+        agent = _agent(runner)
+        sent: list[str] = []
+
+        async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+        await runner.registry.register(agent)
+
+        with contextlib.suppress(ConnectionRefusedError, asyncio.TimeoutError):
+            await asyncio.wait_for(agent._api.send_to("worker", {}, timeout=0.05), timeout=2)
+
+        assert sent == ["agents/by-name/worker/task"]
+
+    async def test_one_here_is_asked_in_process_whatever_an_old_manifest_says(
+        self, runner: NodeRunner
+    ) -> None:
+        # A node that has gone left its `worker` manifest retained, and this
+        # one's has not come back yet: the registry here is first-hand.
+        runner.directory.take(
+            "agents/gone/manifest",
+            json.dumps({"name": "worker", "node": "gone", "tasks_by_node": True}).encode(),
+        )
+        await runner.spawn_agent(
+            {
+                "name": "worker",
+                "code": "async def handle_task(agent, payload):\n    return {'did': payload['do']}\n",
+            }
+        )
         await runner.spawn_agent({"name": "caller", "code": ""})
         caller = runner.get("caller")
         assert caller is not None

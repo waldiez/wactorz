@@ -97,6 +97,25 @@ class TestWhatReachesTheBrowser:
         relayed = [f for f in sent if f.get("type") == "server_event"]
         assert relayed[0]["payload"] == "not json at all"
 
+    async def test_a_chat_message_comes_with_the_thread_it_is_in(
+        self, sent: list[dict[str, Any]]
+    ) -> None:
+        # The page keeps its threads by id; a voice surface relays the person's
+        # words to another agent, which it names only by name.
+        runtime.state["agents"].update({"a1": {"name": "reachy"}, "w1": {"name": "weather"}})
+        payload = {"from": "user", "to": "weather", "content": "rain today?"}
+
+        await mqtt.handle_message("agents/a1/chat", json.dumps(payload))
+
+        (relayed,) = [f for f in sent if f.get("type") == "server_event"]
+        assert relayed["thread_id"] == "w1"
+
+    async def test_anything_else_comes_with_no_thread(self, sent: list[dict[str, Any]]) -> None:
+        await mqtt.handle_message("agents/a1/metrics", json.dumps({"cpu": 1.5}))
+
+        (relayed,) = [f for f in sent if f.get("type") == "server_event"]
+        assert "thread_id" not in relayed
+
 
 class _WithMain:
     """A registry holding main, whose node table the dashboard shows nodes from."""

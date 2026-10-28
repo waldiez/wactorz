@@ -16,6 +16,7 @@ import { openLightbox } from "./lightbox";
 import { timeLabel } from "../../time";
 import { button, clickable, el, externalLink, pressed, testId } from "../dom";
 import { emit } from "../../events";
+import { formatRoute } from "../../router";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
  *  a single list for both is what let `data:` reach an anchor href. */
@@ -131,6 +132,26 @@ export function buildOptions(msg: ChatMessage): HTMLElement {
     return wrap;
 }
 
+/** The buttons for the addresses a name fits, or the pick once one is made.
+ *  A press fires `af-pick-address`; the chat re-sends the message that used the name. */
+export function buildAddressChoices(msg: ChatMessage): HTMLElement {
+    const wrap = el("div", "af-chat-options");
+    for (const address of msg.addressChoice?.addresses ?? []) {
+        const btn = testId(button("af-chat-option", `@${address}`), "chat-option");
+        if (msg.answer !== undefined) {
+            btn.disabled = true;
+            if (address === msg.answer) {
+                btn.classList.add("af-chat-option-picked");
+                pressed(btn, true);
+            }
+        } else {
+            btn.addEventListener("click", () => emit("af-pick-address", { id: msg.id, address }));
+        }
+        wrap.appendChild(btn);
+    }
+    return wrap;
+}
+
 /** The bubble body: agent replies render Markdown; user messages stay plain so
  *  stray *asterisks* / backticks they type are never reformatted. */
 function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
@@ -145,6 +166,9 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
     }
     if (!isUser && msg.options?.length) {
         bubble.appendChild(buildOptions(msg));
+    }
+    if (!isUser && msg.addressChoice?.addresses.length) {
+        bubble.appendChild(buildAddressChoices(msg));
     }
     return bubble;
 }
@@ -187,6 +211,27 @@ function buildMsgFooter(msg: ChatMessage, isUser: boolean): HTMLElement | null {
     // come from there rather than from these buttons.
     const via = msg.channel && msg.options?.length ? ` · also on ${msg.channel}` : "";
     return el("div", "af-chat-msg-time", `${timeLabel(msg.timestampMs)}${via}`);
+}
+
+/**
+ * The pane for a name several agents share, asked for by name alone: no
+ * conversation is opened, since nothing says which one is meant; each one's is
+ * offered by its address.
+ */
+export function buildChatChoicesState(name: string, addresses: string[]): HTMLElement {
+    const empty = el("div", "af-chat-empty");
+    const lead = el("p");
+    lead.append("More than one agent is called ", el("strong", "", `@${name}`), ". Open one:");
+    const choices = el("ul", "af-chat-choices");
+    for (const address of addresses) {
+        const link = el("a", "", `@${address}`);
+        link.href = formatRoute({ view: "chat", path: [address] });
+        const item = el("li");
+        item.appendChild(link);
+        choices.appendChild(item);
+    }
+    empty.append(lead, choices);
+    return empty;
 }
 
 /** Placeholder shown when a thread has no messages yet. */

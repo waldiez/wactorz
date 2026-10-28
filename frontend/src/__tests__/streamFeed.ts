@@ -8,6 +8,7 @@
  * putting the reply together itself, so a test that sends pieces says so here.
  */
 import type { ChatStreamUI } from "../ui/dashboard/chatStreaming";
+import { streamKey } from "../io/agentStreams";
 
 const soFar = new WeakMap<ChatStreamUI, Map<string, string>>();
 
@@ -20,16 +21,18 @@ function replies(ui: ChatStreamUI): Map<string, string> {
     return held;
 }
 
-/** `piece` of `from`'s reply arrives. */
-export function chunk(ui: ChatStreamUI, piece: string, from: string): void {
-    const text = (replies(ui).get(from) ?? "") + piece;
-    replies(ui).set(from, text);
-    ui.onChunk({ chunk: piece, from, text });
+/** `piece` of `from`'s reply arrives, in the thread `agentId` (its own, unless said). */
+export function chunk(ui: ChatStreamUI, piece: string, from: string, agentId = from): void {
+    const key = streamKey(agentId, from);
+    const text = (replies(ui).get(key) ?? "") + piece;
+    replies(ui).set(key, text);
+    ui.onChunk({ chunk: piece, from, agentId, text });
 }
 
 /** `from`'s reply ends, with everything it streamed. */
-export function end(ui: ChatStreamUI, from: string): void {
-    const text = replies(ui).get(from) ?? "";
-    replies(ui).delete(from);
-    ui.onEnd({ text, from });
+export function end(ui: ChatStreamUI, from: string, agentId = from): void {
+    const key = streamKey(agentId, from);
+    const text = replies(ui).get(key) ?? "";
+    replies(ui).delete(key);
+    ui.onEnd({ text, from, agentId });
 }

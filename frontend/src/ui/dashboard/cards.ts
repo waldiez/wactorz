@@ -201,8 +201,9 @@ export interface WactorCardCallbacks {
  *  Every card has the same buttons, so each is named after its agent as well:
  *  to someone moving between them by name, "Stop" alone does not say which
  *  agent it stops. The name starts with the word on the button, so a person
- *  who speaks the visible label to control the page still matches it. */
-export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
+ *  who speaks the visible label to control the page still matches it. `label`
+ *  is what the card calls the agent, its node included where its name is shared. */
+export function appendActionBtns(controls: HTMLElement, agent: AgentInfo, label = agent.name): void {
     if (!canDirectMessage(agent)) {
         return;
     }
@@ -210,8 +211,8 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
     // "caution" and "danger" read differently on purpose: stopping an agent is
     // undone by starting it again, and deleting one is not. They sit next to each
     // other, so sharing a colour invited the second when the first was meant.
-    const add = (label: string, action: AgentAction, tone: "" | "caution" | "danger" = "") => {
-        const b = labelled(button(`af-mini-btn${tone ? ` ${tone}` : ""}`, label), `${label} ${agent.name}`);
+    const add = (text: string, action: AgentAction, tone: "" | "caution" | "danger" = "") => {
+        const b = labelled(button(`af-mini-btn${tone ? ` ${tone}` : ""}`, text), `${text} ${label}`);
         b.dataset["action"] = action;
         controls.appendChild(b);
     };
@@ -231,11 +232,11 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
     }
 }
 
-function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLElement {
+function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks, label: string): HTMLElement {
     const controls = el("div", "af-card-controls");
 
     if (canDirectMessage(agent)) {
-        const chatBtn = labelled(button("af-mini-btn af-chat-btn", "Chat"), `Chat with ${agent.name}`);
+        const chatBtn = labelled(button("af-mini-btn af-chat-btn", "Chat"), `Chat with ${label}`);
         chatBtn.hidden = stateLabel(agent.state) === "stopped";
         chatBtn.addEventListener("click", e => {
             e.stopPropagation();
@@ -243,10 +244,10 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
         });
         controls.appendChild(chatBtn);
     }
-    const history = labelled(button("af-mini-btn af-history-btn", "History"), `History of ${agent.name}`);
+    const history = labelled(button("af-mini-btn af-history-btn", "History"), `History of ${label}`);
     history.addEventListener("click", () => cb.onHistory(agent));
     controls.appendChild(history);
-    appendActionBtns(controls, agent);
+    appendActionBtns(controls, agent, label);
     controls.addEventListener("click", e => {
         const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
         if (!btn || btn.disabled) {
@@ -258,8 +259,45 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
     return controls;
 }
 
-/** The dot + name + state label + meta line (everything above the controls). */
-function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): void {
+/**
+ * Say on `card` which node its agent runs on; nothing for one on main, the
+ * common case. Kept apart so a card can follow an agent that moves.
+ */
+export function setCardNode(card: HTMLElement, agent: AgentInfo): void {
+    const line = card.querySelector<HTMLElement>(".af-card-node");
+    if (line) {
+        line.textContent = agent.node ? `on ${agent.node}` : "";
+        line.hidden = !agent.node;
+    }
+}
+
+/**
+ * Repaint what an existing card says of its agent: the state, in its dot and
+ * its label, what it is called, and where it runs. The controls are the caller's.
+ */
+export function paintCard(card: HTMLElement, agent: AgentInfo, label: string): void {
+    const color = stateColor(agent.state);
+    card.dataset["state"] = stateLabel(agent.state);
+    card.setAttribute("aria-label", label);
+    const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
+    if (dot) {
+        dot.style.background = color;
+        dot.style.boxShadow = `0 0 8px ${color}`;
+    }
+    const state = card.querySelector<HTMLElement>(".af-card-state-label");
+    if (state) {
+        state.style.color = color;
+        state.textContent = stateLabel(agent.state);
+    }
+    const name = card.querySelector<HTMLElement>(".af-card-name");
+    if (name) {
+        name.textContent = label;
+    }
+    setCardNode(card, agent);
+}
+
+/** The dot + name + node + state label + meta line (everything above the controls). */
+function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number, label: string): void {
     const color = stateColor(agent.state);
 
     const dot = el("div");
@@ -268,7 +306,8 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
     dot.style.background = color;
     dot.style.boxShadow = `0 0 8px ${color}`;
 
-    const name = el("div", "af-card-name", agent.name);
+    const name = el("div", "af-card-name", label);
+    const node = testId(el("div", "af-card-node"), "agent-node");
 
     const stateLbl = testId(el("div", "af-card-state-label", stateLabel(agent.state)), "agent-state");
     stateLbl.style.color = color;
@@ -283,7 +322,8 @@ function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): vo
         meta.appendChild(el("span", "", `$${cost.toFixed(4)}`));
     }
 
-    card.append(dot, name, stateLbl, meta);
+    card.append(dot, name, node, stateLbl, meta);
+    setCardNode(card, agent);
     appendTokenLine(card, agent);
 }
 
@@ -300,14 +340,20 @@ function appendTokenLine(card: HTMLElement, agent: AgentInfo): void {
     card.appendChild(tokens);
 }
 
-/** Build a single agent ("wactor") card, wiring its control buttons to `cb`. */
-export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCallbacks): HTMLElement {
-    const card = listItem(testId(el("div", "af-card"), "agent-card"), agent.name);
+/** Build a single agent ("wactor") card, wiring its control buttons to `cb`. `label`
+ *  is what it calls the agent: its name, or `name@node` where the name is shared. */
+export function buildWactorCard(
+    agent: AgentInfo,
+    hbMs: number,
+    cb: WactorCardCallbacks,
+    label = agent.name,
+): HTMLElement {
+    const card = listItem(testId(el("div", "af-card"), "agent-card"), label);
     card.dataset["id"] = agent.id;
     card.dataset["name"] = agent.name;
     card.dataset["state"] = stateLabel(agent.state);
 
-    appendCardHeader(card, agent, hbMs);
+    appendCardHeader(card, agent, hbMs, label);
 
     if (agent.task) {
         const task = el("div", "af-card-task", agent.task);
@@ -317,7 +363,7 @@ export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCa
 
     // Filled with the agent's activity trend once it has been fetched.
     card.appendChild(el("div", "af-card-trend"));
-    card.appendChild(buildCardControls(agent, cb));
+    card.appendChild(buildCardControls(agent, cb, label));
 
     if (agent.protected) {
         const shield = el("div", "af-card-protected", "🔒");

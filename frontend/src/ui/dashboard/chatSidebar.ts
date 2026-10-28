@@ -6,26 +6,33 @@
  * Chat sidebar agent list: diff-renders one row per agent, highlighting the
  * active target and disabling unreachable (system) agents, except one asking
  * the user something, whose thread opens so its question can be answered.
- * Selecting a row is delegated to the caller via `onSelect`.
+ * Rows are kept by agent id, since two agents may share a name, and named as
+ * `label` names them. Selecting a row is delegated to the caller via `onSelect`.
  */
 import type { AgentInfo } from "../../types/agent";
 import { canDirectMessage, canOpenThread, stateColor } from "./agentState";
 import { button, el } from "../dom";
 
-/** Create a sidebar row button that selects its agent on click. */
-function createRow(name: string, onSelect: (name: string) => void): HTMLButtonElement {
+/** Create a sidebar row button that selects the agent `id` on click. */
+function createRow(id: string, onSelect: (id: string) => void): HTMLButtonElement {
     const row = button();
-    row.dataset["name"] = name;
+    row.dataset["id"] = id;
     const lock = el("span", "af-chat-agent-lock");
     lock.setAttribute("aria-hidden", "true");
-    row.append(el("span", "af-chat-agent-dot"), el("span", "af-chat-agent-name", name), lock);
-    row.addEventListener("click", () => onSelect(name));
+    row.append(el("span", "af-chat-agent-dot"), el("span", "af-chat-agent-name"), lock);
+    row.addEventListener("click", () => onSelect(id));
     return row;
 }
 
-/** Patch the mutable bits (active/disabled state, dot colour, lock) of a row. */
-function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string, asking: ReadonlySet<string>): void {
-    const isActive = agent.name === chatTarget;
+/** Patch the mutable bits (name, active/disabled state, dot colour, lock) of a row. */
+function patchRow(
+    row: HTMLElement,
+    agent: AgentInfo,
+    name: string,
+    chatTarget: string,
+    asking: ReadonlySet<string>,
+): void {
+    const isActive = agent.id === chatTarget;
     const isDisabled = !canOpenThread(agent, asking);
     const isLocked = !canDirectMessage(agent);
 
@@ -39,10 +46,10 @@ function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string, asking
     row.className = cls.join(" ");
     (row as HTMLButtonElement).disabled = isDisabled;
     row.title = isDisabled
-        ? `${agent.name} — infrastructure agent, not directly reachable`
+        ? `${name} — infrastructure agent, not directly reachable`
         : isLocked
-          ? `${agent.name} — asking you something; it cannot be messaged`
-          : agent.name;
+          ? `${name} — asking you something; it cannot be messaged`
+          : name;
 
     const color = stateColor(agent.state);
     const dot = row.querySelector<HTMLElement>(".af-chat-agent-dot");
@@ -55,30 +62,42 @@ function patchRow(row: HTMLElement, agent: AgentInfo, chatTarget: string, asking
     }
 }
 
-/** Diff-render the sidebar rows for `sorted` agents into `list`. */
+/** Show `name` on `row`: an agent's label changes once another takes its name. */
+function nameRow(row: HTMLElement, name: string): void {
+    const shown = row.querySelector<HTMLElement>(".af-chat-agent-name");
+    if (shown && shown.textContent !== name) {
+        shown.textContent = name;
+    }
+}
+
+/** Diff-render the sidebar rows for `sorted` agents into `list`. `chatTarget` and
+ *  `asking` are agent ids; `label` is what a row calls its agent. */
 export function renderChatSidebar(
     list: HTMLElement,
     sorted: AgentInfo[],
     chatTarget: string,
-    onSelect: (name: string) => void,
+    onSelect: (id: string) => void,
     asking: ReadonlySet<string> = new Set(),
+    label: (agent: AgentInfo) => string = agent => agent.name,
 ): void {
     const existing = new Map<string, HTMLElement>();
     list.querySelectorAll<HTMLElement>(".af-chat-agent-row").forEach(r => {
-        if (r.dataset["name"]) {
-            existing.set(r.dataset["name"], r);
+        if (r.dataset["id"]) {
+            existing.set(r.dataset["id"], r);
         }
     });
-    const keep = new Set(sorted.map(a => a.name));
-    existing.forEach((row, name) => {
-        if (!keep.has(name)) {
+    const keep = new Set(sorted.map(a => a.id));
+    existing.forEach((row, id) => {
+        if (!keep.has(id)) {
             row.remove();
         }
     });
 
     sorted.forEach((agent, idx) => {
-        const row = existing.get(agent.name) ?? createRow(agent.name, onSelect);
-        patchRow(row, agent, chatTarget, asking);
+        const row = existing.get(agent.id) ?? createRow(agent.id, onSelect);
+        const name = label(agent);
+        patchRow(row, agent, name, chatTarget, asking);
+        nameRow(row, name);
         const sibling = list.children[idx];
         if (sibling !== row) {
             list.insertBefore(row, sibling ?? null);

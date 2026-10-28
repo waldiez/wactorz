@@ -104,7 +104,9 @@ class _Host(PlanningMixin):
             self._result_futures[kwargs["reply_task_id"]].set_result(reply)
         return object()
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
         self.removed.append(name)
 
     async def _clear_agent_manifest(self, name: str, actor_id: str) -> None:

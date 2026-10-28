@@ -105,7 +105,8 @@ class HotSwap:
         if not moved:
             return
         self._expire()
-        for agent, config in host._get_spawn_registry().items():
+        for config in host._get_spawn_registry():
+            agent = config["name"]
             try:
                 entries = pinned_in(config)
             except ArtifactError:

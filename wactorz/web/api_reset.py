@@ -18,6 +18,8 @@ from aiohttp.web import Response
 
 from ..agents.llm import cost as llm_cost
 from ..agents.lookup import find_main_actor
+from ..agents.main.spawn_registry import SpawnRegistry, placed_on
+from ..core.addresses import MAIN_NODE, SEPARATOR, Address, Resolution, parse
 from ..core.agent_reset import (
     LIVE_SCOPES,
     forget_conversation,
@@ -94,18 +96,20 @@ def _agents_on_nodes(main_actor: Any) -> dict[str, set[str]]:
 
     From everything that says so: main's spawn registry, which covers a node
     that is away; the dashboard's agents; and each node's last heartbeat, which
-    covers an agent the other two never heard of.
+    covers an agent the other two never heard of -- as main took it, and as the
+    dashboard was shown it, which can lag main's by a heartbeat.
     """
     on: dict[str, set[str]] = {}
-    registry = main_actor._get_spawn_registry() if main_actor is not None else None
-    for name, config in (registry or {}).items():
-        node = (config.get("node") or "").strip()
+    registry = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
+    for config in registry:
+        node = placed_on(config)
         if node:
-            on.setdefault(node, set()).add(name)
+            on.setdefault(node, set()).add(config["name"])
     for agent in runtime.state["agents"].values():
         if agent.get("node") and agent.get("name"):
             on.setdefault(agent["node"], set()).add(agent["name"])
-    for node, listed in runtime.state["nodes"].items():
+    heard = main_actor._known_nodes if main_actor is not None else {}
+    for node, listed in [*heard.items(), *runtime.state["nodes"].items()]:
         names = {str(n) for n in listed.get("agents") or [] if n}
         on.setdefault(node, set()).update(names)
     return on
@@ -154,12 +158,63 @@ def _restartable(agent: str | None) -> tuple[Any, list[Any]]:
     ]
 
 
+def _places(main_actor: Any, name: str) -> list[Address]:
+    """Every place an agent called ``name`` is kept or runs, running or not.
+
+    Main's own process, or main as its spawn registry places it; then every
+    node anything says runs it (see `_agents_on_nodes`).
+    """
+    places: list[Address] = []
+    registry = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
+    here = runtime.registry is not None and runtime.registry.find_by_name(name) is not None
+    if here or registry.at(name, MAIN_NODE) is not None:
+        places.append(Address(name, MAIN_NODE))
+    places += [
+        Address(name, node)
+        for node, names in sorted(_agents_on_nodes(main_actor).items())
+        if name in names
+    ]
+    return places
+
+
+def _reset_target(wanted: str) -> tuple[str, Response | None]:
+    """The name a reset of ``wanted`` (a name or ``name@node``) acts on, or the answer refusing it.
+
+    What is reset is kept by the agent's name: main's chat log, metrics and
+    spawn entry, and the copies on every node that runs the name. So a reset is
+    refused when the name is in more than one place -- for a bare name, with
+    the addresses; for an address, because the others would be reset with it --
+    and an address is refused when the name is not on its node.
+    """
+    main_actor = find_main_actor(runtime.registry)
+    if SEPARATOR in wanted and _places(main_actor, wanted.strip()):
+        # A whole name, taken before the separator was refused in one.
+        return wanted.strip(), None
+    address = parse(wanted)
+    places = _places(main_actor, address.name)
+    if address.node and address not in places:
+        return address.name, web.json_response(
+            {"error": f"No agent '{address.name}' is on node '{address.node}'."}, status=404
+        )
+    if len(places) > 1:
+        if not address.node:
+            error = Resolution(address.name, tuple(places)).refusal()
+        else:
+            error = (
+                f"Agents called '{address.name}' are on {' and '.join(p.node for p in places)}, "
+                "and what a reset clears is kept by name, so one of them cannot be reset alone; "
+                "nothing was done."
+            )
+        return address.name, web.json_response({"error": error}, status=409)
+    return address.name, None
+
+
 async def reset_handler(request: web.Request) -> Response:
     """POST /api/reset  —  clear stored state and ws.broadcast a reset event.
 
     Body (JSON):
       scope   : "chat" | "state" | "metrics" | "spawns" | "all"  (required)
-      agent   : str  (optional — limit to one agent by name)
+      agent   : str  (optional — limit to one agent, by name or ``name@node``)
     """
     try:
         body = await request.json()
@@ -168,6 +223,10 @@ async def reset_handler(request: web.Request) -> Response:
 
     scope = body.get("scope", "")
     agent = body.get("agent") or None
+    if agent:
+        agent, refusal = _reset_target(str(agent))
+        if refusal is not None:
+            return refusal
 
     valid = {"chat", "state", "metrics", "spawns", "logs", "all"}
     if scope not in valid:

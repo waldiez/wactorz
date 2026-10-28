@@ -51,10 +51,10 @@ async def remove_node(ctx: CommandContext, argument: str) -> str:
     await ctx.actor._mqtt_publish(f"nodes/{node_name}/manifest", b"", retain=True)
     await ctx.actor._mqtt_publish(f"nodes/{node_name}/stop_all", {"reason": "removed"}, qos=1)
     # Remove all agents for this node from spawn registry
-    reg = ctx.actor._get_spawn_registry()
-    removed = [n for n, c in reg.items() if c.get("node", "") == node_name]
-    for n in removed:
-        ctx.actor._remove_from_spawn_registry(n)
+    placed = ctx.actor._get_spawn_registry().on_node(node_name)
+    removed = [c["name"] for c in placed]
+    for c in placed:
+        ctx.actor._remove_from_spawn_registry(c["name"], actor_id=c["actor_id"])
     ctx.actor.nodes.forget(node_name)
     return (
         f"Node '{node_name}' removed. "

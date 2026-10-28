@@ -14,6 +14,7 @@ from .spawning import (
     SpawnMixin,
     SpawnPlaceholder,
     agent_type,
+    spawn_actor_id,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "SpawnMixin",
     "SpawnPlaceholder",
     "agent_type",
+    "spawn_actor_id",
 ]

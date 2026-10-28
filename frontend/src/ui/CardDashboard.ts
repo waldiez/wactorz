@@ -8,14 +8,18 @@
  * Full-screen overlay with af-header + af-body + af-iobar layout.
  * Views: overview (stats + cards + nodes) | feed | chat (embedded).
  *
+ * Draws the agents and nodes the `AgentStore` holds, and keeps none of its
+ * own: it subscribes, and redraws what each batch of changes touched.
+ *
  * Connects to the rest of the app through document-level `af-*` events, typed
  * in `events.ts`. This class handles the ones about the dashboard as a whole —
- * feed pushes, connection state, resets; the chat and application-log events
- * belong to `DashboardChat` and `AppLogFeed`, which wire their own.
+ * feed pushes, connection state, resets, an extension's view; the chat and
+ * application-log events belong to `DashboardChat` and `AppLogFeed`, which wire
+ * their own.
  */
 
-import type { AgentInfo, NodeReadings, RemoteNode } from "../types/agent";
-import { readingsFrom } from "../agents/nodeReadings";
+import type { AgentInfo } from "../types/agent";
+import type { AgentActivity, AgentChanges, AgentStore } from "../agents/AgentStore";
 import { safeStorage } from "../safeStorage";
 import {
     buildHeader,
@@ -26,7 +30,7 @@ import {
     renderConnBadge,
 } from "./dashboard/header";
 import { setSignOutVisible } from "./dashboard/signOut";
-import { NODE_EVICT_MS, stateLabel, sortAgents } from "./dashboard/agentState";
+import { stateLabel, sortAgents } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
 import { ActivityFeed } from "./dashboard/activityFeed";
@@ -43,14 +47,12 @@ import { seedServerConfig } from "../config/serverConfig";
 import { emit, Listeners } from "../events";
 import { initialRoute } from "../router";
 import { ViewRoutes } from "./dashboard/viewRoutes";
-
-export { NODE_EVICT_MS };
+import { ModelsView } from "./models/ModelsView";
+import { ModelCatalog } from "../models/ModelCatalog";
+import { ModelsApi } from "../io/modelsApi";
 
 export class CardDashboard {
     private root: HTMLElement;
-    private agents: Map<string, AgentInfo> = new Map();
-    /** Where each agent ran when last drawn: a node's name, or "" for local. */
-    private readonly _placed = new Map<string, string>();
     /** Last-heard-from times, and the card bits that show them. */
     private _heartbeats: Heartbeats;
     /** The activity view's model — agent events and application-log records. */
@@ -62,11 +64,14 @@ export class CardDashboard {
     private view: View = "overview";
     private connState: ConnState = "connecting";
     private tickTimer: ReturnType<typeof setInterval> | null = null;
-    private _remoteNodes = new Map<string, RemoteNode>();
+    /** Stops the store telling this dashboard of changes. */
+    private readonly _unsubscribe: () => void;
     /** The trends and node manifests the overview fetches on a timer. */
     private _data: OverviewData;
     /** An agent's or a node's history, opened from its card. */
     private _trendPanel = new TrendPanel();
+    /** The stored models and their pointers. */
+    private _models = new ModelsView(new ModelCatalog(new ModelsApi(window.__WACTORZ_INGRESS_PATH ?? "")));
     private _removingIds = new Set<string>();
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
@@ -87,15 +92,16 @@ export class CardDashboard {
         return safeStorage.get("wactorz-ha-url") || null;
     }
 
-    constructor() {
+    constructor(private readonly store: AgentStore) {
         this.root = this.buildRoot();
         this._heartbeats = new Heartbeats(this.root);
         this._chat = new DashboardChat({
             root: this.root,
-            agents: this.agents,
+            agents: store.agents,
             getView: () => this.view,
             setView: v => this._setView(v),
-            sortedAgents: () => sortAgents(this.agents.values()),
+            sortedAgents: () => sortAgents(store.agents.values()),
+            label: agent => store.label(agent),
         });
         this._metrics = new MetricsController({
             root: this.root,
@@ -107,25 +113,29 @@ export class CardDashboard {
             view: () => this.view,
             setView: v => this._setView(v),
             render: () => this._renderView(),
-            chatTarget: () => this._chat.chatTarget,
-            setChatTarget: name => this._chat.setTarget(name),
+            // The address names the conversation by its agent's name, or `name@node` where it is shared.
+            chatTarget: () => this._chat.chatTargetAddress,
+            setChatTarget: name => this._chat.openByName(name),
+            model: () => this._models.open,
+            setModel: name => this._models.show(name),
         });
         this._overview = new OverviewView({
             root: this.root,
-            agents: this.agents,
+            agents: store.agents,
             lastHb: this._heartbeats.lastSeen,
-            remoteNodes: this._remoteNodes,
+            remoteNodes: store.nodes,
             removingIds: this._removingIds,
+            label: agent => store.label(agent),
             hostStats: () => this._metrics.hostStats(),
             statData: () => ({
-                agents: [...this.agents.values()],
+                agents: store.list(),
                 totalMessages: this._metrics.totalMessages,
                 totalCostUsd: this._metrics.totalCostUsd,
                 feedCount: this._activity.count,
                 costLimit: this._metrics.costLimitInfo,
             }),
-            onChat: name => {
-                this._chat.setTarget(name);
+            onChat: id => {
+                this._chat.setTarget(id);
                 this._setView("chat");
             },
             onCommand: (id, action, btn) => this._sendCommand(id, action, btn),
@@ -135,7 +145,7 @@ export class CardDashboard {
         });
         this._data = new OverviewData({
             isOverview: () => this.view === "overview",
-            nodeNames: () => [...this._remoteNodes.keys()],
+            nodeNames: () => [...store.nodes.keys()],
             onUpdate: () => this._onDataUpdate(),
         });
         this._activity = new ActivityFeed({
@@ -144,12 +154,12 @@ export class CardDashboard {
         });
         this.root.appendChild(this._chat.buildIobar());
         document.body.appendChild(this.root);
+        this._unsubscribe = store.subscribe(changes => this._onAgentsChanged(changes));
         void this._loadServerConfig();
     }
 
-    /** Reveal the dashboard, seed it with `agents`, wire events, and start the refresh timers. */
-    show(agents: AgentInfo[]): void {
-        agents.forEach(a => this.agents.set(a.id, a));
+    /** Reveal the dashboard, wire events, and start the refresh timers. */
+    show(): void {
         this.root.classList.add("cd-visible");
         this._wireEvents();
         this._routes.open(initialRoute());
@@ -180,7 +190,9 @@ export class CardDashboard {
     /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
+        this._unsubscribe();
         this._trendPanel.destroy();
+        this._models.destroy();
         releaseHeaderPopovers();
         releaseBottomNav();
         this.root.remove();
@@ -201,171 +213,119 @@ export class CardDashboard {
         this._metrics.setHostStats(cpu, memUsedMb, memTotalMb);
     }
 
-    /** Add an agent and refresh the affected views. */
-    addAgent(agent: AgentInfo): void {
-        this.agents.set(agent.id, agent);
-        if (!this.root.classList.contains("cd-visible")) {
-            return;
+    /** Draw what a batch of the store's changes did. */
+    private _onAgentsChanged(changes: AgentChanges): void {
+        changes.removed.forEach((agent, id) => this._forget(id, agent));
+        const visible = this.root.classList.contains("cd-visible");
+        if (visible) {
+            this._drawChanges(changes);
         }
-        if (this.view === "overview") {
-            this._overview.renderCards();
-            this._overview.renderStats();
-            this._overview.renderNodes();
-        }
-        if (this.view === "chat") {
-            this._chat.renderSidebar();
-        }
-        this._chat.updateTargetSelect();
+        changes.activity.forEach(moment => this._showActivity(moment, visible));
     }
 
-    /** Update an agent in place and refresh the affected views. */
-    updateAgent(agent: AgentInfo): void {
-        this.agents.set(agent.id, agent);
-        // Kept apart from the agent, which arrives as the same object it was
-        // changed on: only a copy of where it ran can say it has moved since.
-        const moved = this._placed.get(agent.id) !== (agent.node ?? "");
-        this._placed.set(agent.id, agent.node ?? "");
-        if (!this.root.classList.contains("cd-visible")) {
-            return;
+    /** Let go of what is kept for an agent that left, shown or not. */
+    private _forget(id: string, agent: AgentInfo): void {
+        this._heartbeats.forget(id); // else churned agents leak dead entries the refresh scans
+        this._chat.forgetHistory(agent.id);
+    }
+
+    private _drawChanges(changes: AgentChanges): void {
+        changes.removed.forEach((_agent, id) => this._animateOut(id));
+        const membership = changes.added.size > 0 || changes.removed.size > 0;
+        if (this.view === "overview" && changes.added.size > 0) {
+            this._overview.renderCards();
         }
-        this._overview.patchCard(agent);
+        this._patched(changes).forEach(agent => this._overview.patchCard(agent));
         if (this.view === "overview") {
-            this._overview.renderStats();
-            if (moved) {
+            if (membership || changes.updated.size > 0) {
+                this._overview.renderStats();
+            }
+            if (changes.placement) {
                 this._overview.renderNodes();
             }
         }
-        if (this.view === "chat") {
+        if (this.view === "chat" && (membership || changes.updated.size > 0)) {
             this._chat.renderSidebar();
         }
-    }
-
-    /** Remove an agent (with exit animation) and forget its chat history. */
-    removeAgent(id: string): void {
-        const removed = this.agents.get(id);
-        this.agents.delete(id);
-        this._placed.delete(id);
-        this._heartbeats.forget(id); // else churned agents leak dead entries _refreshTimestamps scans
-        // history is keyed by agent NAME, not UUID — look up name before deleting
-        if (removed) {
-            this._chat.forgetHistory(removed.name);
-        }
-        if (!this.root.classList.contains("cd-visible")) {
-            return;
-        }
-        const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
-        if (card) {
-            this._removingIds.add(id);
-            card.style.animation = "cd-exit 0.25s ease forwards";
-            setTimeout(() => {
-                card.remove();
-                this._removingIds.delete(id);
-            }, 250);
-        }
-        if (this.view === "overview") {
-            this._overview.renderStats();
-            this._overview.renderNodes();
-        }
-        if (this.view === "chat") {
-            this._chat.renderSidebar();
-        }
-        this._chat.updateTargetSelect();
-    }
-
-    /** Record a remote node's agent list and readings, and refresh the nodes panel. */
-    updateRemoteNode(name: string, agents: string[], readings?: NodeReadings): void {
-        const now = Date.now();
-        // The manifest comes from the server's listing, not the heartbeat; keep it.
-        const manifest = this._remoteNodes.get(name)?.manifest;
-        this._remoteNodes.set(name, {
-            agents,
-            lastSeen: now,
-            ...(readings !== undefined && { readings }),
-            ...(manifest !== undefined && { manifest }),
-        });
-        // Nodes announce themselves and never say goodbye, so without this the
-        // map only ever grows. Going quiet is not enough to be dropped — the
-        // panel renders quiet nodes as offline, which is information — but a
-        // node absent this long is gone, not offline.
-        for (const [node, info] of this._remoteNodes) {
-            if (node !== name && now - info.lastSeen > NODE_EVICT_MS) {
-                this._remoteNodes.delete(node);
+        if (membership) {
+            this._chat.updateTargetSelect();
+            // The open conversation's agent now shares its name, or no longer:
+            // its header and the address name it as the page does, so a reload opens it.
+            if (this._chat.relabelled() !== null && this.view === "chat") {
+                this._chat.renderChatPaneHeader();
+                emit("af-view-changed", { ...this._routes.current(), replace: true });
             }
-        }
-        if (this.view === "overview") {
-            this._overview.renderNodes();
         }
     }
 
     /**
-     * Fold what the overview fetched into the nodes it knows, then repaint.
-     *
-     * The server's listing carries each node's manifest, and also names nodes
-     * this page has not heard a heartbeat from yet -- it opened after their
-     * last one -- which it then shows from the listing until one arrives.
+     * The cards to repaint: each that changed, and each that shares a name with
+     * one that came or went, whose label gains or loses its node with it.
+     */
+    private _patched(changes: AgentChanges): AgentInfo[] {
+        const names = new Set<string>();
+        changes.added.forEach(id => names.add(this.store.get(id)?.name ?? ""));
+        changes.removed.forEach(agent => names.add(agent.name));
+        const ids = new Set(changes.updated);
+        names.forEach(name => this.store.byName(name).forEach(agent => ids.add(agent.id)));
+        return [...ids].flatMap(id => this.store.get(id) ?? []);
+    }
+
+    /** Take a card off with its exit animation. */
+    private _animateOut(id: string): void {
+        const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+        if (!card) {
+            return;
+        }
+        this._removingIds.add(id);
+        card.style.animation = "cd-exit 0.25s ease forwards";
+        setTimeout(() => {
+            card.remove();
+            this._removingIds.delete(id);
+        }, 250);
+    }
+
+    /** Show a moment on its agent's card. */
+    private _showActivity(moment: AgentActivity, visible: boolean): void {
+        if (moment.kind === "heartbeat") {
+            // Recorded either way; painted only when there is something to paint on.
+            // A card mid-removal is animating out, and repainting it fights that.
+            this._heartbeats.record(moment.id, moment.timestampMs, {
+                skip: !visible || this._removingIds.has(moment.id),
+            });
+            return;
+        }
+        const card = visible
+            ? this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(moment.id)}"]`)
+            : null;
+        if (!card) {
+            return;
+        }
+        if (moment.kind === "alert") {
+            const severe = moment.severity === "error" || moment.severity === "critical";
+            flash(card, severe ? "af-card-alert-error" : "af-card-alert-warn", 900);
+        } else {
+            flash(card, "af-card-chat-flash", 600);
+        }
+    }
+
+    /**
+     * Fold what the overview fetched into the nodes the store knows, then repaint.
      */
     private _onDataUpdate(): void {
-        for (const [name, listing] of this._data.listings) {
-            const known = this._remoteNodes.get(name);
-            const manifest = listing.manifest ?? null;
-            if (known) {
-                known.manifest = manifest;
-            } else {
-                const agents = Array.isArray(listing["agents"])
-                    ? (listing["agents"] as unknown[]).filter((a): a is string => typeof a === "string")
-                    : [];
-                this._remoteNodes.set(name, {
-                    agents,
-                    lastSeen: (listing.last_seen ?? 0) * 1000,
-                    readings: readingsFrom(listing),
-                    manifest,
-                });
-            }
-        }
+        this.store.mergeNodeListings(this._data.listings.values());
         if (this.view === "overview") {
             this._overview.paintTrends();
             this._overview.renderNodes();
         }
     }
 
-    /** Record a heartbeat timestamp and pulse the agent's card. */
-    onHeartbeat(agentId: string, timestampMs: number, _cpu?: number, _mem?: number): void {
-        // Recorded either way; painted only when there is something to paint on.
-        // A card mid-removal is animating out, and repainting it fights that.
-        const hidden = !this.root.classList.contains("cd-visible");
-        this._heartbeats.record(agentId, timestampMs, {
-            skip: hidden || this._removingIds.has(agentId),
-        });
-    }
-
-    /** Briefly flash an alert class (error/warning) on the agent's card. */
-    showAlert(agentId: string, severity: string): void {
-        const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
-        if (!card) {
-            return;
-        }
-        const cls =
-            severity === "error" || severity === "critical" ? "af-card-alert-error" : "af-card-alert-warn";
-        card.classList.add(cls);
-        setTimeout(() => card.classList.remove(cls, "af-card-alert-error", "af-card-alert-warn"), 900);
-    }
-
-    /** Briefly flash the sender's card to signal chat activity. */
-    onChat(fromId: string, _toId: string): void {
-        const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(fromId)}"]`);
-        if (!card) {
-            return;
-        }
-        card.classList.add("af-card-chat-flash");
-        setTimeout(() => card.classList.remove("af-card-chat-flash"), 600);
-    }
-
     renderView(): void {
         this._renderView();
     }
 
-    /** Register an extension view (nav button + content builder).
-     *  Extensions call this once during startup. */
+    /** Register an extension view (nav button + content builder). An extension
+     *  asks for this with `af-register-view`, once, during startup. */
     registerView(key: string, icon: IconName, label: string, builder: () => HTMLElement): void {
         this._viewBuilders.set(key, builder);
         this._extraViews.push({ key, icon, label });
@@ -397,12 +357,16 @@ export class CardDashboard {
             this._renderHealth();
         });
         this._listeners.on("af-route", route => this._routes.open(route));
+        this._listeners.on("af-register-view", v => this.registerView(v.key, v.icon, v.label, v.build));
+        this._listeners.on("af-model-pointer", d => this._models.moved(d.name));
     }
 
     private _wireFeedEvents(): void {
         this._listeners.on("af-feed-push", detail => this._activity.push(detail.item));
 
         this._listeners.on("af-wipe-all", () => {
+            this._metrics.setTotalCostUsd(0);
+            this._metrics.setTotalMessages(0);
             this._activity.clear();
             this._chat.clearAll();
             this._renderView();
@@ -412,7 +376,7 @@ export class CardDashboard {
         // or an agent explicitly deleted. The only point at which "the chat
         // target is gone" is a fact rather than a race with re-registration.
         this._listeners.on("af-agents-settled", d => {
-            this._chat.dropTargetIfGone(d?.reason ?? "reset");
+            this._chat.dropTargetIfGone(d.reason);
         });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
@@ -453,6 +417,8 @@ export class CardDashboard {
         } else if (this.view === "chat") {
             body.appendChild(this._chat.buildChatView());
             this._chat.afterMount();
+        } else if (this.view === "models") {
+            body.appendChild(this._models.build());
         } else {
             const builder = this._viewBuilders.get(this.view);
             if (builder) {
@@ -478,13 +444,12 @@ export class CardDashboard {
         // names the target from here; updateTargetSelect resolves one if none
         // has been chosen yet.
         this._chat.updateTargetSelect();
-        // Only show the agent-target dropdown in the chat view
+        // Only show the agent-target dropdown in the chat view. Its value is the
+        // one updateTargetSelect gave it, which falls back to an agent that can
+        // be shown when the target is not among the options.
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {
             select.style.display = this.view === "chat" ? "" : "none";
-            if (this.view === "chat") {
-                select.value = this._chat.chatTarget;
-            }
         }
     }
 
@@ -515,7 +480,7 @@ export class CardDashboard {
         if (!el) {
             return;
         }
-        const agents = [...this.agents.values()];
+        const agents = this.store.list();
         const healthy = agents.filter(a => stateLabel(a.state) === "running").length;
         el.textContent = `${healthy}/${agents.length} wactorz healthy`;
     }
@@ -530,7 +495,8 @@ export class CardDashboard {
             this._dispatchCommand(id, action, btn);
             return;
         }
-        const name = this.agents.get(id)?.name ?? id;
+        const agent = this.store.get(id);
+        const name = agent ? this.store.label(agent) : id;
         void confirmDialog({
             title: "Delete agent?",
             message: `Are you sure you want to delete ${name}? This cannot be undone.`,
@@ -613,4 +579,10 @@ export class CardDashboard {
     private _buildSettingsView(): HTMLElement {
         return this._metrics.buildSettingsView();
     }
+}
+
+/** Put `cls` on `card` for `ms`. */
+function flash(card: HTMLElement, cls: string, ms: number): void {
+    card.classList.add(cls);
+    setTimeout(() => card.classList.remove(cls), ms);
 }

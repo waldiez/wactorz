@@ -28,7 +28,9 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import ActorMetrics
 
 
 class _Registry:
@@ -65,6 +67,8 @@ class _Main:
         m._registry = _Registry(agents)  # pyright: ignore[reportAttributeAccessIssue]
         m.manifests = ManifestRegistry(m)
         m.nodes = NodeManager(m, m.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        m.metrics = ActorMetrics(start_time=0.0)
         m.delegation = DelegationManager(m)
         m.spawns = SpawnService(m)
         m.lifecycle = LifecycleService(m)
@@ -93,9 +97,9 @@ class _Main:
         m._drain_notifications = lambda: notification
         m.list_nodes = list
         m.list_topics = lambda keyword="": (self.calls["topics"].append(keyword), [])[1]
-        m._get_spawn_registry = dict
+        m._get_spawn_registry = SpawnRegistry
 
-        async def _delete(name: str) -> None:
+        async def _delete(name: str, node: str | None = None) -> None:
             self.calls["deleted"].append(name)
 
         m.delete_spawned_agent = _delete

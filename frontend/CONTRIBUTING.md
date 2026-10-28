@@ -37,7 +37,7 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 - [ ] Config fields (e.g. `available`, `url`) are registered from the barrel via
       `registerConfigEntry()` from `config/serverConfig.ts` and read from `safeStorage`
 - [ ] Custom icons registered via `registerIcon()` from `ui/dashboard/icons.ts`
-      before calling `dashboard.registerView()` — core never imports your icons
+      before emitting `af-register-view` for the extension's view — core never imports your icons
 - [ ] Unit test in `src/__tests__/ext/<name>/` mirroring the extension layout
 - [ ] Extension docs in `backend` and `frontend` READMEs
 
@@ -72,7 +72,7 @@ handlers in its eight numbered sections. It is **covered** by `src/__tests__/mai
 
 - [ ] Handlers stay thin delegators — store call + `pushFeed`/`toast`, nothing more
 - [ ] Any decision/transform goes in a tested module (`agents/mapping`,
-      `agents/deletionGuard`, `ui/haFeed`, `ui/dashboard/haConfig`), not inline
+      `agents/deletionGuard`, `ui/haFeed`, `config/serverConfig`), not inline
 - [ ] New transport/app-event handlers go in the right numbered section, before the
       `connect()` calls in section 7
 - [ ] `main-bootstrap.test.ts` drives the new handler (mock the transport, invoke the
@@ -87,9 +87,11 @@ handlers in its eight numbered sections. It is **covered** by `src/__tests__/mai
 
 ### Touching AgentStore
 
-- [ ] Keep the public API stable: agent CRUD, `reconcileAgents`, `dispose`
-- [ ] Agent-state mutations go through `addOrUpdateAgent` / `removeAgent` so the CardDashboard stays in sync
-- [ ] No `console.log` left in coordinator code (use `console.info` for intentional dev output)
+- [ ] It is a model: no DOM and no `ui/` import (lint enforces the import). Views read it and `subscribe`
+- [ ] Records are replaced, never changed in place, so a view holding the old one can tell what changed
+- [ ] A name is not an identity: two agents may share one, so look an agent up by id, and by name only
+      where several answers are handled (`byName` returns a list)
+- [ ] Each change is told once per batch: a new kind of change goes in `AgentChanges`
 
 ## Style guide
 

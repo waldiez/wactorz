@@ -187,11 +187,7 @@ class ArtifactService:
         allowed = set(self.offered.get(node, ()))
         if self.host is None:
             return allowed
-        configs = [
-            cfg
-            for cfg in self.host._get_spawn_registry().values()
-            if str(cfg.get("node", "")).strip() == node
-        ]
+        configs = self.host._get_spawn_registry().on_node(node)
         configs += [
             pending["config"]
             for pending in self.host.migration.pending_spawns.values()

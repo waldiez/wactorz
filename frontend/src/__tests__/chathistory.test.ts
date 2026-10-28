@@ -35,7 +35,7 @@ describe("fetchChatHistory", () => {
             ],
         })) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("triage");
+        const out = await fetchChatHistory("agent-1", "triage");
 
         expect(out).toHaveLength(1);
         expect(out![0]).toMatchObject({
@@ -49,6 +49,20 @@ describe("fetchChatHistory", () => {
         });
     });
 
+    it("asks for one agent's history by its id, and files it in that agent's thread", async () => {
+        // Two agents may share a name, so the name would bring back both.
+        const asked: string[] = [];
+        globalThis.fetch = vi.fn(async (url: string) => {
+            asked.push(url);
+            return { ok: true, json: async () => [{ id: 3, ts: 1, role: "assistant", content: "pong" }] };
+        }) as unknown as typeof fetch;
+
+        const out = await fetchChatHistory("5f0c7a52-2f3e", "counter");
+
+        expect(asked[0]).toContain("/api/chats?agent_id=5f0c7a52-2f3e");
+        expect(out![0]).toMatchObject({ from: "counter", threadId: "5f0c7a52-2f3e" });
+    });
+
     it("maps chat_log rows (newest-last) and scales second-based timestamps", async () => {
         globalThis.fetch = vi.fn(async (url: string) => {
             if (url.includes("/api/chats")) {
@@ -60,7 +74,7 @@ describe("fetchChatHistory", () => {
             return { ok: false };
         }) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
         expect(out).toHaveLength(1);
         const firstOut = out ? out[0] : null;
         expect(firstOut).toMatchObject({
@@ -80,7 +94,7 @@ describe("fetchChatHistory", () => {
             return { ok: true, json: async () => [{ role: "assistant", content: "hello" }] };
         }) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
         expect(out).toHaveLength(1);
         const firstOut = out ? out[0] : null;
         expect(firstOut).toMatchObject({ id: "hist-main-0", from: "main", to: "user", content: "hello" });
@@ -105,7 +119,7 @@ describe("fetchChatHistory", () => {
             return { ok: false };
         }) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
 
         expect(out?.map(m => m.content)).toEqual(["what is <spawn>x</spawn>?", "Starting it.\n"]);
     });
@@ -127,7 +141,7 @@ describe("fetchChatHistory", () => {
             };
         }) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
         expect((out || []).map(m => m.content)).toEqual(["spawn image-gen-agent", "done", "what now?"]);
         expect((out || []).some(m => m.content.startsWith("[SYSTEM]"))).toBe(false);
         expect((out || []).some(m => m.content.startsWith("Acknowledged"))).toBe(false);
@@ -147,7 +161,7 @@ describe("fetchChatHistory", () => {
             };
         }) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
         expect((out || []).map(m => m.content)).toEqual(["hello"]);
     });
 
@@ -165,20 +179,20 @@ describe("fetchChatHistory", () => {
             };
         }) as unknown as typeof fetch;
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
         expect((out || []).map(m => m.content)).toEqual(["Sure, anything else?"]);
     });
 
     it("returns null (a retryable failure) when both sources fail", async () => {
         globalThis.fetch = vi.fn(async () => ({ ok: false })) as unknown as typeof fetch;
-        expect(await fetchChatHistory("main")).toBeNull();
+        expect(await fetchChatHistory("main", "main")).toBeNull();
     });
 
     it("returns null (a retryable failure) when fetch throws", async () => {
         globalThis.fetch = vi.fn(async () => {
             throw new Error("network");
         }) as unknown as typeof fetch;
-        expect(await fetchChatHistory("main")).toBeNull();
+        expect(await fetchChatHistory("main", "main")).toBeNull();
     });
 });
 
@@ -217,7 +231,7 @@ describe("attachments restored from history", () => {
         // the row and the chip vanished on the next restart.
         servingRow([{ id: "a".repeat(32), name: "shot.png", mime: "image/png", size: 100 }]);
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
 
         expect(out![0]!.attachments).toHaveLength(1);
         expect(out![0]!.attachments![0]!.name).toBe("shot.png");
@@ -229,7 +243,7 @@ describe("attachments restored from history", () => {
         const id = "b".repeat(32);
         servingRow([{ id, name: "shot.png", mime: "image/png", size: 100 }]);
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
 
         expect(out![0]!.attachments![0]!.url).toBe(`/api/upload/${id}`);
     });
@@ -239,7 +253,7 @@ describe("attachments restored from history", () => {
         const id = "c".repeat(32);
         servingRow([{ id, name: "shot.png", mime: "image/png", size: 100 }]);
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
 
         expect(out![0]!.attachments![0]!.url).toBe(`/hassio/ingress/xyz/api/upload/${id}`);
     });
@@ -247,7 +261,7 @@ describe("attachments restored from history", () => {
     it("leaves a turn with no attachments alone", async () => {
         servingRow(undefined);
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
 
         expect(out![0]!.attachments).toBeUndefined();
     });
@@ -255,7 +269,7 @@ describe("attachments restored from history", () => {
     it("treats an empty list as no attachments", async () => {
         servingRow([]);
 
-        const out = await fetchChatHistory("main");
+        const out = await fetchChatHistory("main", "main");
 
         expect(out![0]!.attachments).toBeUndefined();
     });

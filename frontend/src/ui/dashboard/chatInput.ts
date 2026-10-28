@@ -13,8 +13,11 @@
 import { button, el } from "../dom";
 import { CommandCompletion } from "./commandCompletion";
 
+/** A mention being typed at the end of the text: a name, and a node once the second `@` is typed. */
+const MENTION_TYPED = /@([\w-]*(?:@[\w.-]*)?)$/;
+
 export interface ChatInputHost {
-    /** All known agent names (for `@mention` completion). */
+    /** What each agent that may be messaged is called: its name, or its address where the name is shared. */
     agentNames(): string[];
     /** Set the active chat target (when a mention is accepted). */
     setTarget(name: string): void;
@@ -89,7 +92,7 @@ export class ChatInput {
             return;
         }
         // @mention detection: `@` anywhere at the end of the current word.
-        const mentionMatch = /@(\w*)$/.exec(val);
+        const mentionMatch = MENTION_TYPED.exec(val);
         if (mentionMatch) {
             this._openMentionPanel(mentionMatch[1] ?? "", mentionPanel, select, input, ghost);
             this._clearGhost(input, ghost);
@@ -296,7 +299,8 @@ export class ChatInput {
         if (!name) {
             return;
         }
-        const opt = [...select.options].find(o => o.value === name || o.text === name);
+        // The options are the agents' ids, shown as `@` and what the page calls each.
+        const opt = [...select.options].find(o => o.text === `@${name}`);
         if (!opt) {
             // The mentioned agent isn't a valid target (left, or not messageable).
             // Don't strip the query or fake a target switch — just dismiss the
@@ -305,7 +309,7 @@ export class ChatInput {
             return;
         }
         // Replace the trailing @query with nothing (target is set via select).
-        input.value = input.value.replace(/@\w*$/, "").trimEnd();
+        input.value = input.value.replace(MENTION_TYPED, "").trimEnd();
         select.value = opt.value;
         this.host.setTarget(opt.value);
         this.closePanel(panel);

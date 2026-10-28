@@ -186,12 +186,18 @@ Send a chat message to a named agent.
 { "message": "what is the weather?", "agent_name": "main" }
 ```
 
-`agent_name` is optional and defaults to `main`, the orchestrator.
+`agent_name` is optional and defaults to `main`, the orchestrator. It is a name or a full
+address, `name@node` (see [Addressing an agent](agents.md#addressing-an-agent)).
 
 **Response** `200 OK`
 ```json
 { "status": "sent", "agent": "main" }
 ```
+
+`404` when no agent has the name; `409` when agents on more than one node have it, with an
+`error` that lists their addresses, and when the address names one of them on a node from
+before tasks went by node, which would share the task with the others (see
+[Addressing an agent](agents.md#addressing-an-agent)).
 
 The reply is delivered asynchronously over MQTT (`agents/{id}/chat`) and via the `/ws` WebSocket bridge.
 
@@ -203,7 +209,8 @@ Query the persistent chat log table. Query parameters:
 
 | Param | Description |
 |---|---|
-| `agent` | filter by agent name |
+| `agent_id` | one agent's history, by its id |
+| `agent` | filter by agent name: every agent that went by it |
 | `role` | filter by role (`user` or `assistant`) |
 | `since` | Unix timestamp float — only newer rows |
 | `limit` | max rows (default 200, max 1000) |
@@ -213,7 +220,7 @@ is a question the ledger still knows (`GET /api/questions`) carries it, so the d
 show it with its buttons, or with the pick once it is answered:
 
 ```json
-{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "role": "assistant",
+{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "agent_id": "…", "role": "assistant",
  "content": "Did something change at 14:02?\n\n1. maintenance\n2. real problem",
  "question": {"id": "3f2a…", "agent_id": "…", "text": "Did something change at 14:02?",
               "options": ["maintenance", "real problem"], "answer": null}}
@@ -221,6 +228,10 @@ show it with its buttons, or with the pick once it is answered:
 
 The same words asked more than once are told apart by time: a row is the question asked
 nearest it.
+
+A row's `agent_id` is the id of the agent whose thread the turn is in, and the history is kept
+by it: two agents may share a name, and `agent` returns the rows of both. A row stored before
+ids were kept has the id its agent had then, derived from its name.
 
 ---
 
@@ -295,11 +306,11 @@ Clear stored state and broadcast a reset event over the dashboard WebSocket.
 ```
 
 `scope` must be one of `"chat"`, `"state"`, `"metrics"`, `"spawns"`, `"logs"`, or `"all"`.
-`agent` is optional — when set, the reset is limited to that agent by name, for `chat`, `state`, `metrics` and `spawns`. `logs` is this server's log files, which every agent shares, and `all` is a factory reset, which stops and wipes everything whatever agent is named; both ignore it. A `chat` reset for one agent deletes the uploaded files only that agent's thread referred to; a file another thread also shows is kept. A `state` reset also restarts each agent it covers on a node, and each on main that the supervisor runs, so the agent forgets what it read when it started as well as the file; the system's own agents (main, the monitor, the installer, the catalogue), and any the supervisor does not hold, keep running with their copies cleared.
+`agent` is optional — when set, the reset is limited to that agent, by name or `name@node`, for `chat`, `state`, `metrics` and `spawns`. `logs` is this server's log files, which every agent shares, and `all` is a factory reset, which stops and wipes everything whatever agent is named; both ignore it. A `chat` reset for one agent deletes the uploaded files only that agent's thread referred to; a file another thread also shows is kept. A `state` reset also restarts each agent it covers on a node, and each on main that the supervisor runs, so the agent forgets what it read when it started as well as the file; the system's own agents (main, the monitor, the installer, the catalogue), and any the supervisor does not hold, keep running with their copies cleared.
 
 `chat`, `state` and `metrics` also reach the agents on nodes: main asks each node concerned to clear its own copies, and waits up to 10 s for it to say so.
 
-**Response** `200 OK` with `{"status": "ok", "scope": ..., "agent": ..., "nodes": {...}}`. `nodes` (empty for `all`, which deletes the agents on nodes rather than resetting them) says, for each node the reset concerned, `"cleared"`, `"no answer"`, `"offline"` (not asked: the request is not kept for it), or `"older release"` (a node that does not reset its agents; deploy it again). `400` if `scope` is missing or invalid. Also available as the `wactorz-reset` CLI for offline use.
+**Response** `200 OK` with `{"status": "ok", "scope": ..., "agent": ..., "nodes": {...}}`. `nodes` (empty for `all`, which deletes the agents on nodes rather than resetting them) says, for each node the reset concerned, `"cleared"`, `"no answer"`, `"offline"` (not asked: the request is not kept for it), or `"older release"` (a node that does not reset its agents; deploy it again). `400` if `scope` is missing or invalid; `404` if `agent` is an address and the name is not on that node; `409` if the name is in more than one place, main and nodes alike, whether `agent` is the bare name (the `error` lists the addresses) or an address (what a reset clears is kept by name, so one of them cannot be reset alone). Also available as the `wactorz-reset` CLI for offline use.
 
 ---
 
@@ -608,6 +619,20 @@ After connection the server streams every MQTT message as a JSON object. Field n
 ```
 
 The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
+
+### Chat frames
+
+A chat turn is sent as `{"type": "chat", "content": "...", "agent_name": "main", "agent_id": "…", "id": "…"}`: the thread the page is in, by name and id, and the page's id for the message. Only `content` is required.
+
+The server answers first with the agent the turn reached, which is the agent an `@mention` names when it can reach one, and otherwise the thread the page said:
+
+```json
+{"type": "turn", "agent_id": "…", "name": "catalog", "id": "…", "timestamp": 1760000000.4}
+```
+
+`id` is the message's own, so the page files the person's words in that agent's thread. Every reply frame that follows (`chat`, `stream_chunk`, `stream_end`) carries the same `from` (the agent's name) and `agent_id`.
+
+A relayed `server_event` for an agent's chat message carries `thread_id`, the id of the agent whose thread it is in, when that is not the agent whose topic it came on: a voice surface relays the person's words to the agent that answers them, which it names only by name.
 
 ---
 

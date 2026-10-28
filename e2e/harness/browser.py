@@ -305,6 +305,12 @@ class Dashboard:
         self.show("overview")
         return self._card(name).get_by_test_id("agent-state").inner_text().strip()
 
+    def card_node(self, name: str) -> str:
+        """The node the agent's card says it runs on; empty for one on main, which says none."""
+        self.show("overview")
+        line = self._card(name).get_by_test_id("agent-node")
+        return line.inner_text().strip() if line.is_visible() else ""
+
     def card_actions(self, name: str) -> list[str]:
         """The buttons the agent's card offers, by what each says."""
         self.show("overview")
@@ -337,6 +343,45 @@ class Dashboard:
         answer.click()
         self.page.get_by_test_id("confirm-dialog").wait_for(state="detached")
         return self
+
+    def confirm_with_reason(self, reason: str) -> Dashboard:
+        """Write ``reason`` in the dialog's box for why, and confirm."""
+        dialog = self.page.get_by_test_id("confirm-dialog")
+        dialog.get_by_role("textbox", name="Reason (optional)", exact=True).fill(reason)
+        return self.confirm()
+
+    # ── Stored models ───────────────────────────────────────────────────────
+
+    def _model(self) -> Locator:
+        """The model open in the Models view."""
+        return self.page.get_by_role("article")
+
+    def model_steps(self) -> list[str]:
+        """The open model's versions along its line, as each is read out: ``v7, active``."""
+        steps = self._model().get_by_role("list", name="Versions over time").get_by_role("listitem")
+        return [
+            str(label)
+            for label in steps.evaluate_all("items => items.map(i => i.getAttribute('aria-label'))")
+        ]
+
+    def model_moves(self) -> list[str]:
+        """The open model's pointer moves, newest first, each as its line reads."""
+        moves = self._model().get_by_role("list", name="Pointer moves").get_by_role("listitem")
+        return [" ".join(text.split()) for text in moves.all_inner_texts()]
+
+    def press_on_model(self, name: str) -> Dashboard:
+        """Press the button called ``name`` on the open model."""
+        self._model().get_by_role("button", name=name, exact=True).click()
+        return self
+
+    def model_offers(self) -> list[str]:
+        """The moves the open model offers that can be made now."""
+        buttons = self._model().get_by_role("group", name="Moves", exact=True).get_by_role("button")
+        return [
+            buttons.nth(i).inner_text().strip()
+            for i in range(buttons.count())
+            if buttons.nth(i).is_enabled()
+        ]
 
     # ── Clearing what the install has stored ────────────────────────────────
 
@@ -453,9 +498,13 @@ class Dashboard:
         return self
 
     def read_thread_of(self, agent: str) -> Dashboard:
-        """Address the composer to ``agent``, which puts its thread on screen."""
+        """Address the composer to ``agent``, which puts its thread on screen.
+
+        ``agent`` as the page calls it: its name, or ``name@node`` where another
+        agent has the name.
+        """
         self.show("chat")
-        self._target_select().select_option(agent)
+        self._target_select().select_option(label=f"@{agent}")
         return self
 
     def _target_select(self) -> Locator:
@@ -463,12 +512,17 @@ class Dashboard:
 
     @property
     def talking_to(self) -> str:
-        """The agent whose thread is on screen."""
-        return self._target_select().input_value()
+        """The agent whose thread is on screen, as the dropdown names it: ``name@node`` where shared."""
+        chosen = self._target_select().evaluate("s => s.selectedOptions[0]?.text ?? ''")
+        return str(chosen).removeprefix("@")
 
     def _targets(self) -> list[str]:
+        """The agents the dropdown offers, as it names them: an option's value is
+        the agent's id, which no person reads.
+        """
         options = self._target_select().locator("option")
-        return list(options.evaluate_all("options => options.map(o => o.value)"))
+        names = options.evaluate_all("options => options.map(o => o.text)")
+        return [str(name).removeprefix("@") for name in names]
 
     def sent(self) -> list[str]:
         """What the user has said, as the thread shows it."""
@@ -510,7 +564,7 @@ class Dashboard:
             if agent not in self._targets():
                 continue
             try:
-                self._target_select().select_option(agent, timeout=GONE_MS)
+                self._target_select().select_option(label=f"@{agent}", timeout=GONE_MS)
             except PlaywrightTimeoutError:
                 continue
             threads[agent] = self.said()
@@ -633,6 +687,18 @@ class Dashboard:
         """``agent``'s row in the chat's list of agents."""
         rows = self.page.get_by_test_id("chat-agent-list")
         return rows.get_by_role("button", name=agent, exact=True)
+
+    def press_in_thread(self, option: str) -> Dashboard:
+        """Press ``option`` among the answers the thread on screen offers."""
+        self.page.get_by_test_id("chat-option").and_(
+            self.page.get_by_role("button", name=option, exact=True)
+        ).click()
+        return self
+
+    def follow_link(self, name: str) -> Dashboard:
+        """Follow the link on the page named ``name``, as a person clicks it."""
+        self.page.get_by_role("link", name=name, exact=True).click()
+        return self
 
     def options_in_thread(self) -> list[str]:
         """The answers the thread on screen offers that can still be pressed."""

@@ -17,11 +17,9 @@ import { chunk, end } from "./streamFeed";
 function makeHost(thread: HTMLElement, inChatView = true, openThread = "weather"): StreamHost {
     return {
         isChatView: () => inChatView,
-        lastSentTarget: () => "weather",
-        // What the chat controller does: a reply belongs here when it comes from
-        // the agent whose thread is open.
-        belongsHere: (from: string) => from === openThread,
-        isOpenThread: (name: string) => name === openThread,
+        lastSentTarget: () => ({ name: "weather", id: "weather" }),
+        // What the chat controller does: a thread is open when its id is the target's.
+        isOpenThread: (id: string) => id === openThread,
         thread: () => thread,
         scrollThread: () => {},
         commit: () => {},
@@ -44,7 +42,7 @@ describe("while an agent is working", () => {
     it("shows a row in its place", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         expect(waiting(thread)).not.toBeNull();
         expect(thread.querySelector(".af-chat-msg-from")?.textContent).toBe("weather");
@@ -53,7 +51,7 @@ describe("while an agent is working", () => {
     it("says who is working, for a reader who cannot see the dots", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         expect(waiting(thread)?.getAttribute("aria-label")).toBe("weather is working");
         expect(waiting(thread)?.getAttribute("role")).toBe("status");
@@ -62,7 +60,7 @@ describe("while an agent is working", () => {
     it("reports the turn as outstanding, so the thread keeps room for it", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         expect(ui.isAwaiting).toBe(true);
     });
@@ -70,8 +68,8 @@ describe("while an agent is working", () => {
     it("shows only one row however many turns are announced", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.awaiting("weather");
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
+        ui.awaiting("weather", "weather", "weather");
 
         expect(thread.querySelectorAll(".af-chat-waiting").length).toBe(1);
     });
@@ -79,7 +77,7 @@ describe("while an agent is working", () => {
     it("renders nothing while another view is open", () => {
         const ui = new ChatStreamUI(makeHost(thread, false));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         expect(waiting(thread)).toBeNull();
         // Still outstanding, so returning to the chat view puts it back.
@@ -90,7 +88,7 @@ describe("while an agent is working", () => {
 describe("once the turn ends", () => {
     it("the first token replaces it", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         chunk(ui, "it is ", "weather");
 
@@ -101,7 +99,7 @@ describe("once the turn ends", () => {
 
     it("an ending with no text at all still clears it", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         // What a stopped or failed turn looks like: the stream ends having
         // produced nothing, and the row would otherwise wait forever.
@@ -115,7 +113,7 @@ describe("once the turn ends", () => {
 describe("when the thread is re-rendered underneath it", () => {
     it("comes back if the turn is still outstanding", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         thread.innerHTML = "";
         ui.dropRefs();
@@ -126,7 +124,7 @@ describe("when the thread is re-rendered underneath it", () => {
 
     it("does not come back once the turn has ended", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
         end(ui, "weather");
 
         thread.innerHTML = "";
@@ -140,7 +138,7 @@ describe("whose conversation it appears in", () => {
     it("stays out of another agent's thread", () => {
         const ui = new ChatStreamUI(makeHost(thread, true, "main"));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         // Sent to weather while main's thread is open: main is not working.
         expect(waiting(thread)).toBeNull();
@@ -151,14 +149,13 @@ describe("whose conversation it appears in", () => {
         let open = "main";
         const ui = new ChatStreamUI({
             isChatView: () => true,
-            lastSentTarget: () => "weather",
-            belongsHere: (from: string) => from === open,
-            isOpenThread: (name: string) => name === open,
+            lastSentTarget: () => ({ name: "weather", id: "weather" }),
+            isOpenThread: (id: string) => id === open,
             thread: () => thread,
             scrollThread: () => {},
             commit: () => {},
         });
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
         expect(waiting(thread)).toBeNull();
 
         open = "weather";
@@ -171,7 +168,7 @@ describe("whose conversation it appears in", () => {
 describe("which turn an ending belongs to", () => {
     it("a chunk from another agent leaves this one waiting", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         chunk(ui, "unrelated", "calendar");
 
@@ -181,11 +178,22 @@ describe("which turn an ending belongs to", () => {
         expect(ui.isAwaiting).toBe(true);
     });
 
+    it("a chunk from another agent of the same name leaves this one waiting", () => {
+        const ui = new ChatStreamUI(makeHost(thread));
+        ui.awaiting("weather", "weather-on-pi", "weather");
+
+        chunk(ui, "sunny", "weather", "weather-on-main");
+        expect(ui.isAwaiting).toBe(true);
+
+        chunk(ui, "rain", "weather", "weather-on-pi");
+        expect(ui.isAwaiting).toBe(false);
+    });
+
     it("an ending from another agent leaves this one waiting", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
-        ui.onEnd({ text: "done", from: "calendar" });
+        ui.onEnd({ text: "done", from: "calendar", agentId: "calendar" });
 
         expect(waiting(thread)).not.toBeNull();
         expect(ui.isAwaiting).toBe(true);
@@ -193,7 +201,7 @@ describe("which turn an ending belongs to", () => {
 
     it("an ending attributed to nobody ends whatever is outstanding", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         ui.endWait(null);
 
@@ -202,7 +210,7 @@ describe("which turn an ending belongs to", () => {
 
     it("a reply from a bystander agent does not end it", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         // Agent-to-agent chatter arrives as an ordinary chat frame; it is not an
         // answer to this turn. A command, which is answered by main rather than
@@ -214,7 +222,7 @@ describe("which turn an ending belongs to", () => {
 
     it("gives up unconditionally when told nothing is coming", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         // A dropped connection or a send that never left: no reply for anyone.
         ui.endWait();
@@ -228,7 +236,7 @@ describe("the empty state of another thread", () => {
     it("is not suppressed by a turn belonging elsewhere", () => {
         const ui = new ChatStreamUI(makeHost(thread, true, "main"));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         // Outstanding, but not here -- main's thread must still say it is empty
         // rather than showing nothing at all.
@@ -239,7 +247,7 @@ describe("the empty state of another thread", () => {
     it("is suppressed for the thread the turn belongs to", () => {
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         expect(ui.awaitingHere()).toBe(true);
     });
@@ -248,7 +256,7 @@ describe("the empty state of another thread", () => {
 describe("a turn that never goes on the wire", () => {
     it("stops waiting when the send fails", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         // What DashboardChat does on af-send-failed: nothing left, so nothing
         // is coming back.
@@ -259,7 +267,7 @@ describe("a turn that never goes on the wire", () => {
 
     it("stops waiting when the transport drops", () => {
         const ui = new ChatStreamUI(makeHost(thread));
-        ui.awaiting("weather");
+        ui.awaiting("weather", "weather", "weather");
 
         ui.endWait();
 

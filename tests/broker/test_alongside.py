@@ -1,0 +1,135 @@
+"""An agent on main and a second agent of its name on a node, each reached alone by its address.
+
+`/agents copy` is the way a person asks for the second one. Over a real broker
+the copy is spawned on the node as main spawns any agent there, under an id of
+its own, and both then answer to their own address: one that also took the
+other's tasks, or ran under its id, would show here.
+"""
+
+import asyncio
+import uuid
+from typing import Any
+
+import pytest
+
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.commands import agents as agent_cmds
+from wactorz.agents.main.commands.dispatch import CommandContext
+
+from .conftest import FastNode, until
+
+pytestmark = [pytest.mark.real_mqtt_client, pytest.mark.timeout(180)]
+
+#: An agent that says where it runs, and counts the tasks it has had.
+WHERE_AM_I = """
+async def handle_task(agent, payload):
+    tasks = (agent.recall("tasks") or 0) + 1
+    agent.persist("tasks", tasks)
+    return {"result": agent.node, "tasks": tasks}
+"""
+
+
+async def _ask(main: MainActor, address: str) -> dict[str, Any]:
+    reply = await asyncio.wait_for(
+        main.delegation.delegate_task(address, "", timeout=30), timeout=60
+    )
+    assert reply is not None, f"'{address}' never answered"
+    return reply
+
+
+async def _ready(main: MainActor, node: FastNode) -> None:
+    """Wait until main knows the node takes ids and tasks of its own."""
+    await until(lambda: main.nodes.takes_actor_ids(node.node_name), "main reading the manifest")
+    await until(lambda: main.nodes.takes_tasks_by_node(node.node_name), "tasks by node")
+
+
+@pytest.fixture(name="shared")
+def shared_fixture() -> str:
+    """A name of its own per test: what an agent leaves retained outlives the test."""
+    return f"tally-{uuid.uuid4().hex[:8]}"
+
+
+async def _copied(main: MainActor, node: FastNode, shared: str) -> str:
+    """Run ``shared`` on main, copy it to ``node``, and wait for both; what the copy said."""
+    await _ready(main, node)
+    await main._spawn_from_config({"name": shared, "code": WHERE_AM_I}, save=True)
+    said = await agent_cmds.copy_agent(CommandContext(actor=main), f"{shared} {node.node_name}")
+    await until(
+        lambda: shared in main._known_nodes[node.node_name].get("agents", []),
+        f"main seeing '{shared}' on {node.node_name}",
+    )
+    return said
+
+
+class TestACopyOnANode:
+    async def test_each_is_reached_alone_by_its_address(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        said = await _copied(main, node, shared)
+
+        there = [await _ask(main, f"{shared}@{node.node_name}") for _ in range(2)]
+        here = await _ask(main, f"{shared}@main")
+
+        assert said == f"Spawned '{shared}' on node '{node.node_name}'"
+        assert [(r["result"], r["tasks"]) for r in there] == [
+            (node.node_name, 1),
+            (node.node_name, 2),
+        ]
+        # Had the one here heard the node's tasks, this would be its third.
+        assert (here["result"], here["tasks"]) == ("local", 1)
+
+    async def test_they_are_two_agents_under_two_ids(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        await _copied(main, node, shared)
+
+        registry = main._get_spawn_registry()
+        here, there = registry.at(shared, "main"), registry.at(shared, node.node_name)
+        running = main._registry.find_by_name(shared) if main._registry else None
+
+        assert here is not None and there is not None
+        assert running is not None and running.actor_id == here["actor_id"]
+        assert there["actor_id"] != here["actor_id"]
+        assert node.get(shared) is not None
+        assert node.get(shared).actor_id == there["actor_id"]  # pyright: ignore[reportOptionalMemberAccess]
+
+    async def test_the_bare_name_is_refused_with_both_addresses(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        await _copied(main, node, shared)
+
+        reply = await _ask(main, shared)
+
+        assert f"`{shared}@main`" in reply["error"]
+        assert f"`{shared}@{node.node_name}`" in reply["error"]
+
+    async def test_a_second_copy_onto_the_same_node_is_refused(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        await _copied(main, node, shared)
+
+        said = await agent_cmds.copy_agent(
+            CommandContext(actor=main), f"{shared}@main {node.node_name}"
+        )
+
+        assert f"{shared}@{node.node_name} already runs" in said
+        assert len(main._get_spawn_registry().named(shared)) == 2
+
+    async def test_main_holds_each_ones_manifest(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        await _copied(main, node, shared)
+        registry = main._get_spawn_registry()
+        here, there = registry.at(shared, "main"), registry.at(shared, node.node_name)
+        assert here is not None and there is not None
+
+        def held() -> dict[str, str]:
+            return {
+                str(m.get("actor_id")): str(m.get("node") or "")
+                for m in main._agent_manifests.values()
+                if m.get("name") == shared
+            }
+
+        await until(lambda: len(held()) == 2, "main holding both manifests")
+
+        assert held() == {here["actor_id"]: "", there["actor_id"]: node.node_name}

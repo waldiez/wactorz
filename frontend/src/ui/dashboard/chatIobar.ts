@@ -21,6 +21,14 @@ export function composerPlaceholder(target: string): string {
     return target ? `Message @${target}…` : "Message…";
 }
 
+/** Have the composer in `root`, once it is there, name `target` as the recipient. */
+export function nameRecipient(root: ParentNode, target: string): void {
+    const input = root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
+    if (input) {
+        input.placeholder = composerPlaceholder(target);
+    }
+}
+
 export interface IobarDeps {
     chatInput: ChatInput;
     stt: SpeechToText;

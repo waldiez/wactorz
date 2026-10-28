@@ -206,7 +206,7 @@ class TestTheChatFrameCarriesTotals:
 
         monkeypatch.setattr(events, "parse_topic", lambda t, p: {"metric": metric})
 
-        async def _noop_mqtt(topic: str, payload: str) -> None:
+        async def _noop_mqtt(topic: str, payload: str, thread_id: str = "") -> None:
             return None
 
         monkeypatch.setattr(mqtt, "broadcast_mqtt_msg", _noop_mqtt)

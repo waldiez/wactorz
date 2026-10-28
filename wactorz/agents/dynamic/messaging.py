@@ -6,11 +6,14 @@ import logging
 import time
 import uuid
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...core.actor import ReplyError, ask_through
+from ...core.addresses import MAIN_NODE, Address, parse
+from ...core.agent_directory import AgentDirectory
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
+from ...core.topics import reply_topic, task_by_name_topic, task_topic
 from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -28,6 +31,69 @@ logger = logging.getLogger(__name__)
 #: The same bound, and the same choice, as main's delegation: the task still
 #: gets done when the subscription is slow, which beats not sending it at all.
 REPLY_SUBSCRIBE_TIMEOUT_S = 5.0
+
+
+class Route(NamedTuple):
+    """Where a task goes: the agent's address, and the topic, "" for one in this process."""
+
+    address: Address
+    topic: str
+
+
+def route_from_main(main: Any, wanted: str) -> Route | str:
+    """Where a task for ``wanted`` goes, as main knows its agents and the nodes'; or why nowhere."""
+    resolution = main.resolve_address(wanted)
+    if resolution.ambiguous:
+        return resolution.refusal()
+    found = resolution.found
+    if found is None:
+        return Route(Address(parse(wanted).name), "")
+    refusal = main.task_refusal(found)
+    if refusal:
+        return refusal
+    return Route(found, "" if found.node == MAIN_NODE else main.task_topic_for(found))
+
+
+def route_from_node(directory: AgentDirectory, wanted: str, here: str) -> Route | str:
+    """Where a task from an agent on node ``here`` for ``wanted`` goes; or why nowhere.
+
+    From what the agents' manifests say. An agent whose place is known goes on
+    its node's topic, or by name to a node from before tasks went by node. One
+    no manifest places -- not heard of, or whose manifest names no node, as
+    main's own and an older node's do -- is sent by name, which every node
+    hears, as before nodes read manifests; but a bare name is not, while an
+    agent of that name is also placed somewhere, since that would be a guess.
+    Main takes no task from a node, so an address on main is refused.
+    """
+    address = parse(wanted)
+    if address.node == MAIN_NODE:
+        return f"'{address.name}' is on main, which takes no task from an agent on a node."
+    resolution = directory.resolve(wanted)
+    if resolution.ambiguous:
+        return resolution.refusal()
+    found = resolution.found
+    if found is None:
+        if address.node:
+            return f"No agent '{address.name}' is known on node '{address.node}'."
+        return Route(address, task_by_name_topic(address.name))
+    if found.node == here:
+        return Route(found, "")
+    if not address.node and directory.unplaced(found.name):
+        return (
+            f"An agent called '{found.name}' runs on {found.node}, and another whose manifest "
+            f"does not say where, so nothing was sent. Name the one on {found.node} by its "
+            f"address: `{found}`."
+        )
+    if directory.takes_tasks_by_node(found):
+        return Route(found, task_topic(found.node, found.name))
+    others = directory.nodes_running(found.name) - {found.node}
+    if others:
+        return (
+            f"Agents called '{found.name}' also run on {' and '.join(sorted(others))}, and node "
+            f"'{found.node}' takes a task only by name, which every one of them would run, so "
+            f"nothing was sent to {found}."
+        )
+    return Route(found, task_by_name_topic(found.name))
 
 
 class MessagingMixin(_Host):
@@ -201,52 +267,33 @@ class MessagingMixin(_Host):
         return [q.to_dict() for q in self._actor.open_questions()]
 
     async def _send_to_remote(
-        self, agent_name: str, payload: Any, timeout: float
+        self, address: Address, payload: Any, timeout: float, topic: str
     ) -> dict[str, Any] | None:
-        """Deliver to an agent on another node and wait for its reply topic."""
-        registry = self._actor._registry
-        remote_node = None
-        main = find_main_actor(registry)
-        if main:
-            remote_node = main.nodes.node_for(agent_name) or None
-            refusal = main.nodes.refuses_tasks(remote_node) if remote_node else None
-            if refusal:
-                return {"error": refusal}
+        """Send a task for the agent at ``address`` on ``topic`` and wait for its reply.
 
-        if not remote_node and not self._actor._node:
-            logger.warning(
-                "[%s] send_to: agent '%s' not found locally or remotely", self.name, agent_name
-            )
-            return {"error": f"Agent '{agent_name}' not found"}
+        ``address`` names no node for an agent sent to by name alone, wherever
+        among the nodes it runs.
+        """
+        agent_name = address.name
+        remote_node = address.node or None
+        main = find_main_actor(self._actor._registry)
+        refusal = main.nodes.refuses_tasks(remote_node) if main and remote_node else None
+        if refusal:
+            return {"error": refusal}
 
-        if not remote_node:
-            # On a node, and the target is not here. Which machine has it is
-            # main's knowledge, not this one's — but the address below does not
-            # need it: every node subscribes to `agents/by-name/+/task`, so
-            # naming the agent reaches it wherever among them it is running.
-            # Refusing instead, for want of a lookup that can only be done
-            # elsewhere, is what made `send_to` unusable from a node at all.
-            #
-            # ⚠ This reaches agents on nodes, not agents on main: main publishes
-            # to that topic and does not subscribe to it. A node agent that
-            # needs one of main's sends it a task through main instead. The
-            # timeout below is what such a call gets.
-            logger.debug(
-                "[%s] send_to '%s': no local match, addressing it by name", self.name, agent_name
-            )
-
-        reply_topic = f"agents/by-name/{self.name}/reply/{uuid.uuid4().hex[:8]}"
+        here = getattr(self._actor, "_node", None) or MAIN_NODE
+        reply_to = reply_topic(here, self.name, uuid.uuid4().hex[:8])
 
         if not isinstance(payload, dict):
             payload = {"message": payload, "text": str(payload)}
         payload = dict(payload)
-        payload["_reply_topic"] = reply_topic
+        payload["_reply_topic"] = reply_to
         payload["_remote_task"] = True
 
         future = asyncio.get_running_loop().create_future()
         if not hasattr(self._actor, "_result_futures"):
             self._actor._result_futures = {}
-        self._actor._result_futures[reply_topic] = future
+        self._actor._result_futures[reply_to] = future
 
         # Subscribed before the task goes out: the broker drops a reply nobody
         # is subscribed to yet, so a node that answers at once would answer into
@@ -256,7 +303,7 @@ class MessagingMixin(_Host):
         reply_task = asyncio.create_task(
             await_remote_reply(
                 future,
-                reply_topic,
+                reply_to,
                 self._actor,
                 agent_name,
                 timeout,
@@ -266,7 +313,7 @@ class MessagingMixin(_Host):
         )
         try:
             await _until_subscribed(subscribed, self.name, agent_name)
-            await self._actor._mqtt_publish(f"agents/by-name/{agent_name}/task", payload)
+            await self._actor._mqtt_publish(topic, payload)
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(
@@ -285,17 +332,43 @@ class MessagingMixin(_Host):
             return {"error": f"Could not receive a reply from remote '{agent_name}': {exc}"}
         finally:
             reply_task.cancel()
-            self._actor._result_futures.pop(reply_topic, None)
+            self._actor._result_futures.pop(reply_to, None)
+
+    def _where(self, wanted: str) -> Route | str:
+        """Where a task for ``wanted``, a name or ``name@node``, goes; or why it goes nowhere.
+
+        Main knows where its agents and the nodes' are. A node knows what the
+        agents' manifests say (`wactorz.core.agent_directory`). Anywhere else, only
+        the agents in this process are reached.
+        """
+        main = find_main_actor(self._actor._registry)
+        if main is not None:
+            return route_from_main(main, wanted)
+        directory = getattr(getattr(self._actor, "_runner", None), "directory", None)
+        if not isinstance(directory, AgentDirectory):
+            return Route(parse(wanted), "")
+        here = self._actor._node
+        address = parse(wanted)
+        registry = self._actor._registry
+        if (
+            address.node in ("", here)
+            and registry is not None
+            and registry.find_by_name(address.name)
+        ):
+            # Here, whatever the manifests say: this node's own record is first-hand,
+            # and the agent's manifest may not have come back to it yet.
+            return Route(Address(address.name, here), "")
+        return route_from_node(directory, wanted, here)
 
     async def send_to(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Any | None:
-        """Send a TASK to another agent by name and wait for its result.
+        """Send a TASK to another agent, by name or ``name@node``, and wait for its result.
 
         Routing priority:
           1. Local registry — fast in-process mailbox
-          2. Remote node via MQTT — agents/by-name/{name}/task with reply topic
-          3. Returns error dict if the agent is unknown in both — except from a
-             node, which cannot do the lookup step 2 depends on and addresses
-             the agent by name regardless
+          2. Remote node via MQTT — the task topic of the agent's node, or its
+             name's for a node from before tasks went by node, with a reply topic
+          3. Returns an error dict for an agent found nowhere, and for a name
+             more than one agent has, with their addresses
 
         Works for an agent on main and for one on any node.
         """
@@ -308,7 +381,14 @@ class MessagingMixin(_Host):
             logger.warning("[%s] send_to: no registry", self.name)
             return None
 
-        target = registry.find_by_name(agent_name)
+        where = self._where(agent_name)
+        if isinstance(where, str):
+            return {"error": where}
+        address, topic = where
+        agent_name = address.name
+        # One here is asked in-process, whatever a manifest has said or not yet said.
+        here = getattr(self._actor, "_node", None) or MAIN_NODE
+        target = registry.find_by_name(agent_name) if address.node in ("", here) else None
 
         if target:
             # ── Local path ────────────────────────────────────────────────────
@@ -331,7 +411,12 @@ class MessagingMixin(_Host):
                 )
                 return {"error": f"Timeout waiting for '{agent_name}'"}
 
-        return await self._send_to_remote(agent_name, payload, timeout)
+        if not topic:
+            logger.warning(
+                "[%s] send_to: agent '%s' not found locally or remotely", self.name, agent_name
+            )
+            return {"error": f"Agent '{agent_name}' not found"}
+        return await self._send_to_remote(address, payload, timeout, topic)
 
     async def send_to_many(self, tasks: list[tuple[str, Any]], timeout: float = 60.0) -> list[Any]:
         """Send tasks to multiple agents IN PARALLEL and collect all results.

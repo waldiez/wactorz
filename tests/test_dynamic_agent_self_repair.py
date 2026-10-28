@@ -15,6 +15,7 @@ import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 
 CRASHING_PROCESS = """
@@ -546,7 +547,9 @@ class TestARepairThatIsKept:
         main = MainActor.__new__(MainActor)
         main.name = "main"
         entry = {"name": "crashy", "type": "dynamic", "code": TRUSTED_CRASHING, "trusted": True}
-        setattr(main, "_get_spawn_registry", lambda: {"crashy": dict(entry)})
+        setattr(
+            main, "_get_spawn_registry", lambda: SpawnRegistry.from_names({"crashy": dict(entry)})
+        )
         setattr(main, "_save_to_spawn_registry", saved.append)
 
         def factory() -> DynamicAgent:

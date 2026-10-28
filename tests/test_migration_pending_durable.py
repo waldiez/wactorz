@@ -24,6 +24,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import PENDING_MIGRATIONS_KEY, Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 
 
 class _LocalAgent:
@@ -89,7 +90,7 @@ class _Main:
         setattr(main, "_spawn_remote", _spawn_remote)
         setattr(main, "_spawn_from_config", _spawn_from_config)
         setattr(main, "_purge_local_agent_persistence", _purge)
-        setattr(main, "_get_spawn_registry", dict)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
         setattr(main, "_save_to_spawn_registry", lambda _c: None)
         setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
         setattr(main, "_queue_notification", lambda _n: None)

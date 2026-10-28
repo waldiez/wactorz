@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { confirmDialog } from "../ui/dashboard/confirmDialog";
+import { confirmDialog, confirmWithReason, MAX_REASON_CHARS } from "../ui/dashboard/confirmDialog";
 
 const opts = { title: "Delete agent?", message: "Are you sure?", confirmLabel: "Delete" };
 
@@ -157,5 +157,39 @@ describe("confirmDialog", () => {
 
         press("Escape"); // no dialog, no listener — must not throw
         expect(document.querySelector(".af-confirm-backdrop")).toBeNull();
+    });
+});
+
+describe("confirmWithReason", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    const reasonBox = () => document.querySelector<HTMLTextAreaElement>(".af-confirm-reason-input")!;
+
+    it("gives the reason typed, trimmed, on confirming", () => {
+        const answer = confirmWithReason(opts);
+        expect(reasonBox().maxLength).toBe(MAX_REASON_CHARS);
+        reasonBox().value = "  the valve was replaced ";
+        click(".af-confirm-ok");
+        return expect(answer).resolves.toBe("the valve was replaced");
+    });
+
+    it("gives an empty reason when none was typed, and null for a cancel", async () => {
+        const blank = confirmWithReason(opts);
+        click(".af-confirm-ok");
+        await expect(blank).resolves.toBe("");
+
+        const cancelled = confirmWithReason(opts);
+        reasonBox().value = "never sent";
+        click(".af-confirm-cancel");
+        await expect(cancelled).resolves.toBeNull();
+    });
+
+    it("asks no reason in the plain dialog", () => {
+        const answer = confirmDialog(opts);
+        expect(document.querySelector(".af-confirm-reason-input")).toBeNull();
+        click(".af-confirm-cancel");
+        return expect(answer).resolves.toBe(false);
     });
 });

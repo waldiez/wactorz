@@ -1,0 +1,406 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── Models view (see ui/models/) ───────────────────────────────────── */
+.af-models {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+}
+.af-models-page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-models-lead {
+  margin-top: 2px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-models-columns {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+}
+.af-models-side,
+.af-models-pane {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+/* The list is as tall as what it holds, as the cards beside it are. */
+.af-models-side {
+  align-self: start;
+}
+
+/* A card: the list beside, and each part of the model open. */
+.af-models-side,
+.af-model-card {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+}
+.af-models-side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.af-models-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--af-text-dim);
+}
+.af-models-count {
+  font-size: 11px;
+  color: var(--af-text-dim);
+}
+.af-models-filter {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 10px;
+}
+.af-models-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.af-model-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.85);
+  text-decoration: none;
+}
+.af-model-row:hover,
+.af-model-row.open {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(56, 189, 248, 0.06);
+}
+.af-model-row-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.af-model-row-line {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--af-text-dim);
+}
+.af-model-status {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  align-self: start;
+  color: var(--af-text-dim);
+}
+.af-model-status.serving {
+  color: #34d399;
+}
+.af-model-status.on-trial {
+  color: #fbbf24;
+}
+.af-model-none {
+  font-size: 12px;
+  color: var(--af-text-dim);
+  padding: 6px 0;
+}
+.af-models-back {
+  display: none;
+  font-size: 12px;
+  color: #8ab4ff;
+  margin-bottom: 8px;
+}
+
+/* ── One model ── */
+.af-model-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.af-model-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  overflow-wrap: anywhere;
+}
+.af-model-description {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-model-warning {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #f87171;
+}
+.af-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.af-model-action {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+.af-mini-btn.primary {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: white;
+}
+.af-mini-btn.primary:hover {
+  background: #1d4ed8;
+}
+.af-model-offer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.af-model-refused {
+  font-size: 11px;
+  color: var(--af-text-dim);
+}
+.af-mini-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The versions along a line, oldest first. Every step has the same three rows,
+   the mark's empty where there is none, so the circles sit on one line; the line
+   runs behind them, through their centres. */
+.af-model-timeline {
+  --af-dot: 40px;
+  --af-mark: 22px;
+  position: relative;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 22px;
+  padding: 0 4px;
+  overflow-x: auto;
+}
+.af-model-timeline::before {
+  content: "";
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  top: calc(var(--af-mark) + 6px + var(--af-dot) / 2);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.af-model-step {
+  position: relative;
+  flex: 1 0 64px;
+  display: grid;
+  grid-template-rows: var(--af-mark) var(--af-dot) auto;
+  justify-items: center;
+  row-gap: 6px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-model-mark:empty {
+  visibility: hidden;
+}
+.af-model-mark {
+  align-self: end;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.af-model-dot {
+  width: var(--af-dot);
+  height: var(--af-dot);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  background: #0b1220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+.af-model-when {
+  font-size: 11px;
+  color: var(--af-text-dim);
+  white-space: nowrap;
+}
+.af-model-step.active,
+tr.active .af-model-role,
+.af-model-move.active::before {
+  color: #34d399;
+}
+.af-model-step.active .af-model-dot {
+  border-color: #34d399;
+}
+.af-model-step.active .af-model-mark {
+  border: 1px solid rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.1);
+}
+.af-model-step.shadow,
+tr.shadow .af-model-role,
+.af-model-move.shadow::before {
+  color: #fbbf24;
+}
+.af-model-step.shadow .af-model-dot {
+  border-color: #fbbf24;
+}
+.af-model-step.shadow .af-model-mark {
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.1);
+}
+.af-model-step.previous .af-model-dot {
+  border-style: dashed;
+}
+
+/* Versions beside the pointer moves where there is room for both. */
+.af-model-below {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+/* A narrow screen scrolls the table sideways rather than breaking its words. */
+.af-model-versions-card {
+  overflow-x: auto;
+}
+.af-model-versions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+}
+.af-model-versions caption,
+.af-model-moves h3 {
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  padding-bottom: 10px;
+}
+.af-model-versions th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--af-text-dim);
+  padding: 4px 10px 6px 0;
+}
+.af-model-versions td {
+  padding: 8px 10px 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: middle;
+}
+.af-model-versions th,
+.af-model-versions td {
+  white-space: nowrap;
+}
+.af-model-versions td.af-model-said {
+  white-space: normal;
+  min-width: 140px;
+  overflow-wrap: anywhere;
+}
+.af-model-row-action {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.af-model-moves ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.af-model-move {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  row-gap: 2px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-model-move::before {
+  content: "●";
+  grid-row: 1;
+  color: var(--af-text-dim);
+}
+.af-model-move-what,
+.af-model-move-when {
+  grid-column: 2;
+}
+.af-model-move-when {
+  font-size: 11px;
+  color: var(--af-text-dim);
+}
+.af-model-reason {
+  color: rgba(255, 255, 255, 0.65);
+  overflow-wrap: anywhere;
+}
+
+/* The reason a move is made for, asked in the confirm dialog. */
+.af-confirm-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-confirm-reason-input {
+  resize: vertical;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+@media (max-width: 1100px) {
+  .af-model-below {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* On a phone: the list, or the model open with a way back to it. */
+@media (max-width: 639px) {
+  .af-models {
+    padding: 8px;
+  }
+  .af-models-heading {
+    display: none;
+  }
+  .af-models-columns {
+    grid-template-columns: 1fr;
+  }
+  .af-models.has-open .af-models-side,
+  .af-models:not(.has-open) .af-models-pane {
+    display: none;
+  }
+  .af-models-back {
+    display: inline-block;
+  }
+  .af-model-timeline {
+    justify-content: flex-start;
+  }
+}

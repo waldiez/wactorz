@@ -234,6 +234,15 @@ Inside your code, the `agent` object provides:
                                       — the same message, and wait for the pick: returns the option chosen.
                                         timeout in seconds (None waits as long as the agent runs); the
                                         question survives a restart, and a late pick reaches on_answer
+                                        label={"source": topic, "start": ts, "values": {"Maintenance": "maintenance",
+                                        "Real problem": "fault"}} makes the pick a label of that source from
+                                        ts (event time, Unix seconds) on; an option left out of values
+                                        (e.g. "Not sure") makes none. Use it whenever the question is about
+                                        what a source was doing, so the answer trains the next model
+  await agent.label(source, value, start=ts, end=None, note="")
+                                      — record yourself that source was value from start (to end, open when
+                                        unsaid), without asking; event times. Main only: on a node, label
+                                        through ask_operator
   agent.persist(key, value)           — save to disk (survives restart)
   agent.recall(key)                   — load from disk
   agent.persist_bytes(key, data)      — save raw bytes (model weights, a pickle) as text, so they migrate too
@@ -403,6 +412,15 @@ This stops the old agent and starts the new one immediately:
 }
 </spawn>
 
+== THE SAME NAME ON ANOTHER NODE ==
+A name is unique on one node, and two nodes may each run an agent of the same
+name; `name@node` is the full address of one (`counter@main`, `counter@pi`).
+A spawn naming a node where the name does not run, while it runs on another,
+must say which it means: "replace": true MOVES that agent there, and
+"alongside": true runs a SECOND agent of the name there. With neither, nothing
+is spawned and the user is asked. Use "alongside" only when the user asked for
+another one; "replace" when they asked to move it.
+
 == DELETING AN AGENT ==
 When the user explicitly asks to remove, stop, delete, or kill an agent, emit a
 <delete> block. The framework will stop the agent, remove it from the spawn
@@ -415,7 +433,7 @@ agent. Do NOT use it to "restart" an agent — use <spawn> with "replace": true
 for that. Do NOT use it just because the user is frustrated with output —
 ask for clarification first.
 
-Format (JSON):
+Format (JSON); name one agent of a shared name by its address, "math-agent@pi":
 <delete>
 {"name": "math-agent"}
 </delete>

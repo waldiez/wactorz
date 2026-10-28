@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tests.test_reset import _make_request
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import api_reset, runtime
 
 
@@ -29,13 +30,14 @@ class _Broker:
 
 
 class _Main:
-    """Main as the reset reads it: a spawn registry naming where each agent runs."""
+    """Main as the reset reads it: a spawn registry naming where each agent runs, and no node heard from."""
 
     def __init__(self, registry: dict[str, dict[str, Any]]) -> None:
         self._registry = registry
+        self._known_nodes: dict[str, dict[str, Any]] = {}
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self._registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self._registry)
 
 
 @pytest.fixture(name="broker")

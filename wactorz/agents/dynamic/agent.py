@@ -355,7 +355,7 @@ class DynamicAgent(Actor):
             main = find_main_actor(registry)
             if main is not None:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:
                     logger.debug("[%s] Could not drop the spawn entry", self.name, exc_info=True)
             try:
@@ -1480,22 +1480,22 @@ class DynamicAgent(Actor):
             if self._registry:
                 main = find_main_actor(self._registry)
                 if main is not None:
-                    reg = main._get_spawn_registry()
-                    if self.name in reg:
-                        entry = dict(reg[self.name])
-                        if entry.get("code") != fixed_code or "trusted" in entry:
-                            entry["code"] = fixed_code
-                            entry["_code_fixed_at"] = time.time()
-                            # `trusted` vouches for the catalogue's own source;
-                            # kept, a restart would run the model's repair past
-                            # the safety check.
-                            entry.pop("trusted", None)
-                            main._save_to_spawn_registry(entry)
-                            logger.info(
-                                "[%s] Fixed code written to spawn registry (%s chars).",
-                                self.name,
-                                len(fixed_code),
-                            )
+                    entry = main._get_spawn_registry().by_id(self.actor_id)
+                    if entry is not None and (
+                        entry.get("code") != fixed_code or "trusted" in entry
+                    ):
+                        entry["code"] = fixed_code
+                        entry["_code_fixed_at"] = time.time()
+                        # `trusted` vouches for the catalogue's own source;
+                        # kept, a restart would run the model's repair past
+                        # the safety check.
+                        entry.pop("trusted", None)
+                        main._save_to_spawn_registry(entry)
+                        logger.info(
+                            "[%s] Fixed code written to spawn registry (%s chars).",
+                            self.name,
+                            len(fixed_code),
+                        )
 
             # ── 2. Update Supervisor factory (survives Supervisor-driven restart) ─
             # The factory closure captures the original kwargs including the old code.

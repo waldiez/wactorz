@@ -30,10 +30,12 @@ from wactorz.agents.main.placement import (
     Placement,
     runs_model_code,
 )
+from wactorz.agents.main.spawn_registry import SPAWN_REGISTRY_KEY, SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.main.turn_actions import TurnActions
 from wactorz.config import DeployTarget
 from wactorz.core import refusals
+from wactorz.core.actor import ActorMetrics
 from wactorz.core.outbound import Answer, answer_topic
 from wactorz.web import answers, runtime
 
@@ -74,8 +76,8 @@ class _Host:
     def migration(self) -> Migration:
         return cast("Migration", None)  # no move is made from these tests
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
     def _node_refuses_tasks(self, node_name: str) -> str | None:
         return self.unheard.get(node_name)
@@ -363,7 +365,16 @@ def _main() -> MainActor:
     main.nodes = NodeManager(main, main.manifests)
     main.spawns = SpawnService(main)
     main.placement = Placement(main)
+    main.metrics = ActorMetrics()
+    # The spawn registry is read from here: empty until a test keeps something.
+    setattr(main, "_persistence_api", None)
+    setattr(main, "_persistent_state", {})
     return main
+
+
+def _keep(main: MainActor, *entries: dict[str, Any]) -> None:
+    """Put ``entries`` in main's spawn registry, each under its id."""
+    main._persistent_state[SPAWN_REGISTRY_KEY] = {entry["actor_id"]: entry for entry in entries}
 
 
 @pytest.mark.usefixtures("sandboxed")
@@ -428,7 +439,7 @@ def _spawning_main(
 
     monkeypatch.setattr(main.spawns, "_spawn_from_config", _spawn)
     monkeypatch.setattr(main, "_stop_for_replace", _stop)
-    monkeypatch.setattr(main.spawns, "_remove_from_spawn_registry", lambda name: None)
+    monkeypatch.setattr(main.spawns, "_remove_from_spawn_registry", lambda *_, **__: None)
     return main, sent, stopped
 
 
@@ -470,8 +481,11 @@ class TestTheSpawnBlocks:
 
         assert sent == []
         said = TurnActions(tuple(spawned)).summary("")
-        assert said.startswith("'scraper' is already running here, so it was not spawned again")
-        assert f"node '{NODE}'" in said
+        assert said.startswith(
+            f"Did not spawn 'scraper' on '{NODE}': it already runs as 'scraper@main'"
+        )
+        assert '"replace": true moves it' in said and '"alongside": true runs a second' in said
+        assert f"/agents copy scraper@main {NODE}" in said
         assert "Spawned" not in said
 
     async def test_replace_moves_it_off_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -481,6 +495,129 @@ class TestTheSpawnBlocks:
 
         assert stopped == ["scraper"]
         assert [c["node"] for c in sent] == [NODE]
+
+
+#: The agent called scraper kept on node pi, under an id of its own.
+ON_PI = {**dynamic(), "node": "pi", "actor_id": "33333333-3333-4333-8333-333333333333"}
+
+
+@pytest.mark.usefixtures("sandboxed")
+class TestTheSameNameOnAnotherHost:
+    """A spawn of a name that runs elsewhere says whether it moves the agent or adds one."""
+
+    async def test_alongside_adds_a_second_one_and_leaves_the_first_running(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, sent, stopped = _spawning_main(monkeypatch, "scraper")
+        main.nodes.node_manifests[NODE] = {"actor_ids": True}
+
+        _, spawned = await main.spawns._process_spawn_commands(_block(dynamic(alongside=True)))
+
+        assert [c["node"] for c in sent] == [NODE] and stopped == []
+        assert TurnActions(tuple(spawned)).summary("") == f"Spawned 'scraper' on node '{NODE}'"
+
+    async def test_the_second_one_does_not_take_the_first_ones_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, _sent, _stopped = _spawning_main(monkeypatch, "scraper")
+
+        assert main.spawns._kept_actor_id("scraper", NODE, alongside=True) is None
+        assert main.spawns._kept_actor_id("scraper", NODE) == "scraper-id"
+
+    async def test_alongside_on_a_node_that_derives_ids_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, sent, _stopped = _spawning_main(monkeypatch, "scraper")
+        main.nodes.node_manifests[NODE] = {"agents": []}
+
+        _, spawned = await main.spawns._process_spawn_commands(_block(dynamic(alongside=True)))
+
+        assert sent == []
+        said = TurnActions(tuple(spawned)).summary("")
+        assert said.startswith("Did not spawn 'scraper':") and f"/deploy {NODE}" in said
+
+    async def test_alongside_onto_a_host_that_runs_the_name_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, sent, _stopped = _spawning_main(monkeypatch, "scraper")
+        _keep(main, ON_PI)
+
+        _, spawned = await main.spawns._process_spawn_commands(
+            _block(dynamic(alongside=True, node="pi"))
+        )
+
+        assert sent == []
+        assert "scraper@pi already runs" in TurnActions(tuple(spawned)).summary("")
+
+    async def test_a_name_on_a_node_spawned_here_without_either_is_asked_about(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(placement, "MODEL_CODE_ON_MAIN", "allow")
+        main, sent, _stopped = _spawning_main(monkeypatch)
+        _keep(main, ON_PI)
+
+        _, spawned = await main.spawns._process_spawn_commands(_block(dynamic(node="main")))
+
+        assert sent == []
+        said = TurnActions(tuple(spawned)).summary("")
+        assert said.startswith("Did not spawn 'scraper' on 'main': it already runs as 'scraper@pi'")
+
+    async def test_replace_with_the_name_in_two_places_says_which_cannot_be_told(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, sent, stopped = _spawning_main(monkeypatch, "scraper")
+        _keep(main, ON_PI)
+
+        _, spawned = await main.spawns._process_spawn_commands(_block(dynamic(replace=True)))
+
+        assert (sent, stopped) == ([], [])
+        said = TurnActions(tuple(spawned)).summary("")
+        assert "`scraper@main` or `scraper@pi`" in said and "/migrate" in said
+
+    async def test_replace_from_a_node_stops_it_there_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, sent, _stopped = _spawning_main(monkeypatch)
+        _keep(main, ON_PI)
+        published: list[tuple[str, Any]] = []
+        desired: list[tuple[str, Any, Any]] = []
+
+        async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
+            published.append((topic, payload))
+
+        async def _desired(node: str, config: Any = None, remove_name: Any = None) -> None:
+            desired.append((node, config, remove_name))
+
+        monkeypatch.setattr(main, "_mqtt_publish", _publish)
+        monkeypatch.setattr(main, "_update_node_desired_state", _desired)
+
+        await main.spawns._process_spawn_commands(_block(dynamic(replace=True)))
+
+        assert ("nodes/pi/stop", {"name": "scraper"}) in published
+        assert ("pi", None, "scraper") in desired
+        assert [c["node"] for c in sent] == [NODE]
+
+    async def test_a_move_whose_spawn_fails_is_put_back_where_it_was(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main, _sent, stopped = _spawning_main(monkeypatch, "scraper")
+        here = {**dynamic(), "node": "", "actor_id": "44444444-4444-4444-8444-444444444444"}
+        _keep(main, here)
+        restarted: list[dict[str, Any]] = []
+
+        async def _refused(config: dict[str, Any], save: bool = True, **_kw: Any) -> Any:
+            return None
+
+        async def _local(config: dict[str, Any], **_kw: Any) -> Any:
+            restarted.append(config)
+
+        monkeypatch.setattr(main.spawns, "_spawn_from_config", _refused)
+        monkeypatch.setattr(main, "_spawn_local_from_config", _local)
+
+        await main.spawns._process_spawn_commands(_block(dynamic(replace=True)))
+
+        assert stopped == ["scraper"]
+        assert [c["actor_id"] for c in restarted] == [here["actor_id"]]
 
 
 class TestWhatTheTurnSays:

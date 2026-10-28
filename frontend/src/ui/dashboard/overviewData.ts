@@ -10,7 +10,8 @@
  * One request covers every agent's card. Nodes are few, so each has its own.
  * Nothing is fetched while the page is hidden or another view is showing.
  */
-import { fetchAgentsField, fetchHistory, fetchNodes, type NodeListing } from "./history";
+import type { NodeListing } from "../../types/agent";
+import { fetchAgentsField, fetchHistory, fetchNodes } from "./history";
 import type { NodeTrend } from "./nodeCard";
 import { levels, perMinute, samplesOf, type Point } from "./trend";
 

@@ -19,6 +19,7 @@ from wactorz.agents.main.hosts import NodeHost
 from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry, with_actor_id
 from wactorz.core.actor import derive_actor_id
 
 
@@ -53,10 +54,15 @@ class Host:
         self.desired_state_calls: list[tuple[str, str | None]] = []
         self.published: list[str] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self._spawn_registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        # Each entry with its id, as the real registry hands them back.
+        return SpawnRegistry.from_names(
+            {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
+        )
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
         self._spawn_registry.pop(name, None)
 
     def _node_last_listing(self, name: str) -> str:
@@ -189,10 +195,12 @@ class _NodeHost:
         self.nodes: NodeManager | None = None
         self.listed_when_settled: list[list[str]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
         pass
 
     async def _update_node_desired_state(self, node: str, **_: Any) -> None:

@@ -10,6 +10,7 @@ stated here rather than left to emerge from anything.
 """
 
 from .agents import (
+    copy_agent,
     delete_agent,
     list_agents,
     migrate_agent_cmd,
@@ -62,6 +63,7 @@ registry.add(manage_packages)
 registry.add(migrate_agent_cmd)
 registry.add(deploy_node)
 registry.add(restart_agent)
+registry.add(copy_agent)
 registry.add(remove_node)
 registry.add(restart_node)
 registry.add(run_on_node)

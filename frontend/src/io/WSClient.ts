@@ -15,6 +15,7 @@ import { toMs } from "../time";
 import { emit } from "../events";
 import { IO_GATEWAY, MAIN_AGENT } from "../agents/naming";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
+import type { AddressChoice } from "../types/agent";
 
 export type ChatHandler = (
     content: string,
@@ -25,11 +26,15 @@ export type ChatHandler = (
     surface: string,
     surfaceLabel: string,
     brain: string,
+    threadId: string,
+    addressChoice: AddressChoice | null,
 ) => void;
-export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
-export type StreamEndHandler = (from: string) => void;
-/** A live `server_event` frame carrying a topic-addressed payload. */
-export type ServerEventHandler = (topic: string, payload: unknown) => void;
+/** A piece of a streamed reply; `agentId` is the thread it is in. */
+export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number, agentId: string) => void;
+export type StreamEndHandler = (from: string, agentId: string) => void;
+/** A live `server_event` frame carrying a topic-addressed payload, and for a chat
+ *  message the thread the server says it is in. */
+export type ServerEventHandler = (topic: string, payload: unknown, threadId: string) => void;
 /** The /ws connection opened or dropped. */
 export type ConnectionHandler = () => void;
 /** Server↔broker connection state — combined with the /ws state to drive "live". */
@@ -42,6 +47,13 @@ const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v 
 /** Coerce an untrusted JSON field to an array; anything else becomes empty, so
  *  a caller can iterate without checking what the server actually sent. */
 const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/** The addresses a reply offers to pick from, and the message a pick re-sends, or null when it offers none. */
+function addressChoiceOf(data: Record<string, unknown>): AddressChoice | null {
+    const addresses = asArray(data["choices"]).filter((a): a is string => typeof a === "string" && a !== "");
+    const retryOf = asStr(data["retry_of"]);
+    return addresses.length && retryOf ? { addresses, retryOf } : null;
+}
 
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
@@ -62,6 +74,32 @@ interface StatePatch {
     total_cost_usd?: number;
     total_messages?: number;
     log_feed?: LogFeedItem[];
+}
+
+/**
+ * Tell the page what a frame that only informs it says, as the app event it
+ * becomes; whether `type` is such a frame. Emitted rather than handled here:
+ * WSClient owns the socket, not the views that decide what follows. A switch
+ * over the types it knows, so the frame's own text never picks what is called.
+ */
+function told(type: unknown, data: Record<string, unknown>): boolean {
+    switch (type) {
+        case "turn":
+            // The agent the person's message reached, which a mention can make
+            // another than the thread it was typed in.
+            emit("af-turn-reached", {
+                id: asStr(data["id"]),
+                agentId: asStr(data["agent_id"]),
+                name: asStr(data["name"]),
+            });
+            return true;
+        case "app_log":
+            // Records the server wrote since the last frame.
+            emit("af-app-log", { entries: asArray(data["entries"]) });
+            return true;
+        default:
+            return false;
+    }
 }
 
 export class WSClient {
@@ -85,8 +123,9 @@ export class WSClient {
     private _lastFrameAt = 0;
     private _url = "";
     private _closed = false;
-    /** The agent the last chat was addressed to — used to attribute replies,
-     *  which the server stamps with the generic transport id "io-gateway". */
+    /** The agent the person last addressed — used to attribute replies, which
+     *  the server stamps with the generic transport id "io-gateway". The chat
+     *  decides who that is (it also knows of a voice turn); see `addressed`. */
     private _lastAgentName = MAIN_AGENT;
 
     /**
@@ -186,15 +225,26 @@ export class WSClient {
         this._onDisconnected?.();
     }
 
+    /** The person now talks to `agentName`: a reply the gateway stamps is theirs. */
+    addressed(agentName: string): void {
+        this._lastAgentName = agentName;
+    }
+
     /**
-     * Send a chat message over the WebSocket.
+     * Send a chat message over the WebSocket: to the thread of `agentName` (`agentId`),
+     * as the message `id`, which the server's `turn` frame names back.
      * Returns false when the socket is not open.
      */
-    send(content: string, agentName = MAIN_AGENT, attachments: string[] = []): boolean {
+    send(
+        content: string,
+        agentName = MAIN_AGENT,
+        attachments: string[] = [],
+        agentId = "",
+        id = "",
+    ): boolean {
         if (!this.connected) {
             return false;
         }
-        this._lastAgentName = agentName;
         // Ids only — the server holds the name, type and size it stored, so a
         // turn cannot claim a file is something other than what was uploaded.
         this.ws!.send(
@@ -202,6 +252,8 @@ export class WSClient {
                 type: "chat",
                 content,
                 agent_name: agentName,
+                ...(agentId ? { agent_id: agentId } : {}),
+                ...(id ? { id } : {}),
                 ...(attachments.length ? { attachments } : {}),
             }),
         );
@@ -312,14 +364,10 @@ export class WSClient {
     private _handleFrame(data: Record<string, unknown>): void {
         const type = data["type"];
         if (type === "server_event") {
-            this._onServerEvent?.(asStr(data["topic"]), data["payload"]);
+            this._onServerEvent?.(asStr(data["topic"]), data["payload"], asStr(data["thread_id"]));
             return;
         }
-        if (type === "app_log") {
-            // Records the server wrote since the last frame. Emitted rather
-            // than handled here: WSClient owns the socket, not the view that
-            // decides what a new row does.
-            emit("af-app-log", { entries: asArray(data["entries"]) });
+        if (told(type, data)) {
             return;
         }
         if (type === "mqtt_status") {
@@ -331,11 +379,7 @@ export class WSClient {
             return;
         }
         if (type === "delete_agent") {
-            // Server explicitly deleted an agent — remove it and apply rest of patch
-            this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
-            // The frame names the agent, so this is a fact, not reset churn: the
-            // chat target can be judged against the list that is left.
-            emit("af-agents-settled", { reason: "deleted" });
+            this._handleDelete(data);
             return;
         }
         // Any message with a "state" field is a state patch broadcast; it may
@@ -344,6 +388,14 @@ export class WSClient {
             this._applyStatePatch(data["state"]);
         }
         this._dispatchContent(data);
+    }
+
+    /** The server deleted an agent: remove it and apply the rest of the patch. */
+    private _handleDelete(data: Record<string, unknown>): void {
+        this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
+        // The frame names the agent, so this is a fact, not reset churn: the
+        // chat target can be judged against the list that is left.
+        emit("af-agents-settled", { reason: "deleted" });
     }
 
     /** State reset broadcast — apply the state patch then clear UI as needed. */
@@ -396,9 +448,10 @@ export class WSClient {
         // agent the user addressed. Re-attribute it to that agent so the thread,
         // feed and toasts are consistent live and after a reload. The proper fix
         // is server-side — the reply frame should carry the real agent name.
-        const rawFrom = asStr(data["from"], IO_GATEWAY);
+        const rawFrom = asStr(data["from"]) || IO_GATEWAY;
         const from = rawFrom === IO_GATEWAY ? this._lastAgentName : rawFrom;
         const ts = toMs(data["timestamp"]);
+        const agentId = asStr(data["agent_id"]);
 
         if (data["type"] === "chat") {
             this._onChat?.(
@@ -410,11 +463,13 @@ export class WSClient {
                 asStr(data["surface"]),
                 asStr(data["surface_label"]),
                 asStr(data["brain"]),
+                agentId,
+                addressChoiceOf(data),
             );
         } else if (data["type"] === "stream_chunk") {
-            this._onStreamChunk?.(asStr(data["content"]), from, ts);
+            this._onStreamChunk?.(asStr(data["content"]), from, ts, agentId);
         } else if (data["type"] === "stream_end") {
-            this._onStreamEnd?.(from);
+            this._onStreamEnd?.(from, agentId);
         }
     }
 

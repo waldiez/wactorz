@@ -27,7 +27,8 @@ from wactorz.agents.main.delegation import DelegationManager
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
-from wactorz.core.actor import MessageType
+from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core.actor import ActorMetrics, MessageType
 
 from .node_messages import SignedMessage
 
@@ -143,6 +144,8 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        main.metrics = ActorMetrics(start_time=0.0)
         main.migration = Migration(main, main.nodes)
         main.delegation = DelegationManager(main)
         main._known_nodes = dict(known_nodes or {})
@@ -150,7 +153,7 @@ class _Main:
         main._mqtt_port = 1883
         main._result_futures = {}
         setattr(main, "_registry", _Registry(running) if registry else None)
-        setattr(main, "_get_spawn_registry", dict)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
 
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
         self.published: list[tuple[str, Any]] = []
@@ -277,6 +280,50 @@ class TestChoosingWhereTheTaskGoes:
 
         assert main.sent
         assert not main.published
+
+    async def test_a_name_two_nodes_report_is_refused_with_the_addresses(self) -> None:
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+
+        answer = await main.delegate("sensor")
+
+        assert answer is not None
+        assert "`sensor@rpi` or `sensor@pc`" in answer["error"]
+        assert not main.published
+        assert not main.sent
+
+    async def test_the_full_address_of_one_of_them_is_refused_too(self) -> None:
+        # The task would go on the name's topic, which both nodes run.
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+
+        answer = await main.delegate("sensor@pc")
+
+        assert answer is not None
+        assert "takes a task only by name" in answer["error"]
+        assert not main.published
+
+    async def test_the_full_address_of_the_only_one_reaches_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main(known_nodes={"pc": {"agents": ["sensor"]}})
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.delegate("sensor@pc", timeout=0.05)
+
+        topic, _payload = main.published[0]
+        assert topic == "agents/by-name/sensor/task"
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two nodes run the name, and pc is reached alone on its own topic.
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+        main.actor.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.delegate("sensor@pc", timeout=0.05)
+
+        topic, _payload = main.published[0]
+        assert topic == "agents/at/pc/sensor/task"
 
     async def test_an_agent_nobody_knows_answers_nothing(self) -> None:
         main = _Main()
@@ -522,7 +569,11 @@ class TestWhoseReplyIsTheAnswer:
     ) -> None:
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
         main = _Main(known_nodes={"sandbox": {"agents": ["sensor"]}})
-        setattr(main.actor, "_get_spawn_registry", lambda: {"sensor": {"node": "rpi"}})
+        setattr(
+            main.actor,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names({"sensor": {"node": "rpi"}}),
+        )
 
         assert await main.delegate("sensor", timeout=0.05) is None
         assert not main.published

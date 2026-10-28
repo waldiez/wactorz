@@ -25,6 +25,7 @@ from wactorz.agents.main.commands import models as models_commands
 from wactorz.agents.main.commands import registry
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.hosts import ArtifactHost
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import (
     INDEX_FORMAT,
@@ -490,8 +491,8 @@ class _Host:
         self._mqtt_port = 1883
         self.published: list[tuple[str, Any, bool, int]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0

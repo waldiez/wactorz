@@ -18,8 +18,8 @@ import pytest
 
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD
-from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY
-from wactorz.core.actor import ActorState
+from wactorz.agents.main.spawn_registry import NAME_KEYED_REGISTRY_KEY, SPAWN_REGISTRY_KEY
+from wactorz.core.actor import ActorState, derive_actor_id
 
 
 @pytest.fixture(name="main")
@@ -41,24 +41,51 @@ def _cfg(name: str, node: str = "") -> dict[str, Any]:
     return {"name": name, "code": "", "node": node}
 
 
+def _names(main: MainActor) -> list[str]:
+    return sorted(entry["name"] for entry in main._get_spawn_registry())
+
+
 class TestSpawnRegistry:
     def test_it_starts_empty(self, main: MainActor) -> None:
-        assert main._get_spawn_registry() == {}
+        assert not main._get_spawn_registry()
 
     def test_a_saved_agent_is_recalled_by_name(self, main: MainActor) -> None:
         main._save_to_spawn_registry(_cfg("weather"))
 
-        assert list(main._get_spawn_registry()) == ["weather"]
+        assert _names(main) == ["weather"]
 
     def test_saving_the_same_name_replaces_rather_than_duplicates(self, main: MainActor) -> None:
         main._save_to_spawn_registry(_cfg("weather", node="node-a"))
         main._save_to_spawn_registry(_cfg("weather", node="node-b"))
 
         reg = main._get_spawn_registry()
-        # Re-spawning under an existing name is a replacement; two entries would
-        # leave a stale node recorded and a restart aimed at the wrong machine.
+        # Re-spawning under an existing name is a replacement -- a move, here;
+        # two entries would leave a stale node recorded and a restart aimed at
+        # the wrong machine.
         assert len(reg) == 1
-        assert reg["weather"]["node"] == "node-b"
+        assert [e["node"] for e in reg.named("weather")] == ["node-b"]
+
+    def test_a_second_agent_alongside_is_an_entry_of_its_own(self, main: MainActor) -> None:
+        main._save_to_spawn_registry(_cfg("weather"))
+        main._save_to_spawn_registry({**_cfg("weather", node="pi"), "alongside": True})
+
+        reg = main._get_spawn_registry()
+        here, there = reg.at("weather", ""), reg.at("weather", "pi")
+        assert here is not None and there is not None
+        assert here["actor_id"] != there["actor_id"]
+        # What asked for a second agent says nothing about it once it is there.
+        assert "alongside" not in there
+
+    def test_a_save_of_one_of_a_shared_name_rewrites_that_one(self, main: MainActor) -> None:
+        main._save_to_spawn_registry(_cfg("weather"))
+        main._save_to_spawn_registry({**_cfg("weather", node="pi"), "alongside": True})
+
+        main._save_to_spawn_registry({**_cfg("weather", node="pi"), "code": "v2"})
+
+        reg = main._get_spawn_registry()
+        assert len(reg) == 2
+        assert (reg.at("weather", "pi") or {})["code"] == "v2"
+        assert (reg.at("weather", "") or {})["code"] == ""
 
     def test_removing_an_agent_leaves_the_others(self, main: MainActor) -> None:
         main._save_to_spawn_registry(_cfg("weather"))
@@ -66,20 +93,92 @@ class TestSpawnRegistry:
 
         main._remove_from_spawn_registry("weather")
 
-        assert list(main._get_spawn_registry()) == ["news"]
+        assert _names(main) == ["news"]
+
+    def test_removing_one_of_a_shared_name_leaves_the_other(self, main: MainActor) -> None:
+        main._save_to_spawn_registry(_cfg("weather"))
+        main._save_to_spawn_registry({**_cfg("weather", node="pi"), "alongside": True})
+
+        main._remove_from_spawn_registry("weather", "pi")
+
+        assert [e["node"] for e in main._get_spawn_registry().named("weather")] == [""]
+
+    def test_a_bare_name_kept_in_two_places_removes_neither(self, main: MainActor) -> None:
+        main._save_to_spawn_registry(_cfg("weather"))
+        main._save_to_spawn_registry({**_cfg("weather", node="pi"), "alongside": True})
+
+        main._remove_from_spawn_registry("weather")
+
+        assert len(main._get_spawn_registry()) == 2
 
     def test_removing_something_absent_is_harmless(self, main: MainActor) -> None:
         main._save_to_spawn_registry(_cfg("news"))
 
         main._remove_from_spawn_registry("never-existed")
 
-        assert list(main._get_spawn_registry()) == ["news"]
+        assert _names(main) == ["news"]
 
     def test_the_registry_is_persisted_not_just_held(self, main: MainActor) -> None:
         main._save_to_spawn_registry(_cfg("weather"))
 
         # Read back through recall, which is what a restart does.
-        assert "weather" in (main.recall(SPAWN_REGISTRY_KEY) or {})
+        stored = main.recall(SPAWN_REGISTRY_KEY) or {}
+        assert [entry["name"] for entry in stored.values()] == ["weather"]
+
+
+#: An id a registry entry from before kept, minted rather than derived.
+KEPT_ID = "6f1c2d3e-4b5a-4c6d-8e7f-901a2b3c4d5e"
+
+
+class TestTheRegistryFromBeforeIds:
+    """A store written when entries were kept by name is read once, and left as it was."""
+
+    @staticmethod
+    def _by_name(main: MainActor) -> dict[str, Any]:
+        old = {
+            "weather": {"name": "weather", "code": "", "node": "", "actor_id": KEPT_ID},
+            "sensor": {"name": "sensor", "code": "", "node": "pi"},
+        }
+        main.persist(NAME_KEYED_REGISTRY_KEY, old)
+        return old
+
+    def test_its_entries_are_read_with_the_ids_they_had(self, main: MainActor) -> None:
+        self._by_name(main)
+
+        reg = main._get_spawn_registry()
+
+        assert (reg.at("weather", "") or {})["actor_id"] == KEPT_ID
+        assert (reg.at("sensor", "pi") or {})["actor_id"] == derive_actor_id("sensor")
+
+    def test_the_first_save_writes_them_under_the_new_key(self, main: MainActor) -> None:
+        self._by_name(main)
+
+        main._save_to_spawn_registry(_cfg("news"))
+
+        stored = main.recall(SPAWN_REGISTRY_KEY) or {}
+        assert sorted(stored) == sorted([KEPT_ID, derive_actor_id("sensor"), stored_id(main)])
+
+    def test_the_old_store_is_left_as_it_was(self, main: MainActor) -> None:
+        old = self._by_name(main)
+
+        main._save_to_spawn_registry(_cfg("news"))
+        main._remove_from_spawn_registry("weather")
+
+        assert main.recall(NAME_KEYED_REGISTRY_KEY) == old
+
+    def test_once_written_the_new_store_is_the_registry(self, main: MainActor) -> None:
+        self._by_name(main)
+        main._save_to_spawn_registry(_cfg("news"))
+
+        main._remove_from_spawn_registry("weather")
+
+        # Gone, although the old store still has it.
+        assert _names(main) == ["news", "sensor"]
+
+
+def stored_id(main: MainActor) -> str:
+    """The id the registry gave the agent called news."""
+    return (main._get_spawn_registry().only("news") or {})["actor_id"]
 
 
 class TestAgentsToPrune:

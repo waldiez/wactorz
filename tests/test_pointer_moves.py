@@ -17,6 +17,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from wactorz.agents.main import artifact_service as service_module
 from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.hosts import ArtifactHost
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import ArtifactStore, Pointer
 from wactorz.core.persistence import WactorzDB
@@ -125,8 +126,8 @@ class _Host:
         self._mqtt_port = 1883
         self.published: list[tuple[str, Any, bool, int]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0

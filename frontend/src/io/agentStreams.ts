@@ -13,6 +13,12 @@
  */
 import { MAX_STREAM_CHARS } from "./streamCap";
 
+/** Which stream a frame belongs to: its agent's id, or its sender's name for a frame without one.
+ *  Two agents may share a name, so a name alone would merge their replies. */
+export function streamKey(agentId: string, from: string): string {
+    return agentId || from;
+}
+
 export class AgentStreams {
     private _buffers = new Map<string, string>();
 

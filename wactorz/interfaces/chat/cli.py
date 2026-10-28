@@ -6,8 +6,9 @@ import logging
 import socket
 import threading
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from ...agents.main.addresses import registered_agent
 from ...config import (
     deploy_env_prefix,
     deploy_target,
@@ -15,6 +16,7 @@ from ...config import (
     deploy_target_help,
     deploy_target_names,
 )
+from ...core.addresses import MAIN_NODE, Address, parse
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
 from ...core.state_snapshot import FORCE_FLAG
@@ -132,12 +134,20 @@ class CLIInterface:
             return str(result)
         return f"[{agent_name}] Task sent (no synchronous response)"
 
-    async def _get_remote_agent_response(self, agent_name: str, message: str) -> str:
-        """Route a message to a remote agent via MQTT and wait for reply."""
+    def _here(self, address: Address) -> Any:
+        """The agent ``address`` names in this process, or None when it is on a node or nowhere."""
+        registry = self.agent._registry
+        if registry is None or address.node not in ("", MAIN_NODE):
+            return None
+        return registry.find_by_name(address.name)
+
+    async def _get_remote_agent_response(
+        self, agent_name: str, message: str, remote_node: str = ""
+    ) -> str:
+        """Route a message to ``agent_name`` on ``remote_node`` via MQTT and wait for reply."""
         main = self.agent
 
-        remote_node = main.nodes.node_for(agent_name)
-        if not remote_node:
+        if not remote_node or remote_node == MAIN_NODE:
             known = [a for nd in main._known_nodes.values() for a in nd.get("agents", [])]
             if known:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
@@ -173,7 +183,7 @@ class CLIInterface:
         await asyncio.sleep(0.15)  # let subscriber connect first
 
         await main._mqtt_publish(
-            f"agents/by-name/{agent_name}/task",
+            main.task_topic_for(Address(agent_name, remote_node)),
             {
                 "text": message,
                 "payload": message,
@@ -369,13 +379,13 @@ class CLIInterface:
                         print()
                     elif not hasattr(self.agent, "migrate_agent"):
                         print("[error] migrate_agent not available on this actor.\n")
+                    elif refusal := registered_agent(self.agent, parts[1])[1]:
+                        print(f"[error] {refusal}\n")
                     else:
-                        agent_name = parts[1]
+                        agent_name = parse(parts[1]).name
                         target_node = parts[2]
                         print(f"[Migrating @{agent_name} to {target_node}...]")
-                        result = await self.agent.migrate_agent(
-                            agent_name, target_node, force=force
-                        )
+                        result = await self.agent.migrate_agent(parts[1], target_node, force=force)
                         ok = result.get("success", False)
                         sym = "OK" if ok else "FAIL"
                         print(f"[{sym}] {result.get('message', '')}\n")
@@ -449,12 +459,17 @@ class CLIInterface:
                     if not message:
                         print(f"[usage] @{agent_name} <your message>\n")
                         continue
-                    print(f"\n[routing to @{agent_name}]")
-                    target = (
-                        self.agent._registry.find_by_name(agent_name)
-                        if self.agent._registry
-                        else None
-                    )
+                    resolution = self.agent.resolve_address(agent_name)
+                    if resolution.ambiguous:
+                        print(f"\n[error] {resolution.refusal(mention=True)}\n")
+                        continue
+                    found = resolution.found or Address(agent_name)
+                    if refusal := self.agent.task_refusal(found):
+                        print(f"\n[error] {refusal}\n")
+                        continue
+                    agent_name = found.name
+                    print(f"\n[routing to @{found}]")
+                    target = self._here(found)
                     # @main goes through the full orchestration pipeline
                     if target is self.agent:
                         print(f"\n@{agent_name}: ", end="", flush=True)
@@ -483,7 +498,9 @@ class CLIInterface:
                         print(f"\n@{agent_name}: {response}\n")
                     else:
                         # Not found locally — try remote nodes
-                        response = await self._get_remote_agent_response(agent_name, message)
+                        response = await self._get_remote_agent_response(
+                            agent_name, message, found.node
+                        )
                         print(f"\n@{agent_name}: {response}\n")
                     continue
 

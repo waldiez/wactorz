@@ -24,8 +24,7 @@ interface Host extends StreamHost {
 function makeHost(over: Partial<Host> = {}): Host {
     return {
         isChatView: () => true,
-        lastSentTarget: () => "main",
-        belongsHere: () => true,
+        lastSentTarget: () => ({ name: "main", id: "main" }),
         isOpenThread: () => true,
         thread: () => document.createElement("div"),
         scrollThread: vi.fn(),
@@ -74,7 +73,7 @@ describe("streamHereText", () => {
     it("is null when the active stream belongs to another thread", () => {
         // Someone else's agent is answering; its text must not drive this
         // thread's empty-state or get reattached into it.
-        const ui = new ChatStreamUI(makeHost({ belongsHere: () => false }));
+        const ui = new ChatStreamUI(makeHost({ isOpenThread: () => false }));
         chunk(ui, "not for you", "other");
 
         expect(ui.streamHereText()).toBeNull();
@@ -137,5 +136,36 @@ describe("a reply with action blocks in it", () => {
 
         expect(commit).not.toHaveBeenCalled();
         expect(thread.querySelectorAll(".af-chat-msg")).toHaveLength(0);
+    });
+});
+
+describe("two agents of one name streaming at once", () => {
+    it("keep their replies apart, each in its own thread under its own name", () => {
+        const commit = vi.fn();
+        const ui = new ChatStreamUI(makeHost({ commit }));
+
+        chunk(ui, "sunny", "weather", "weather-on-main");
+        chunk(ui, "rain", "weather", "weather-on-pi");
+        chunk(ui, " all day", "weather", "weather-on-main");
+
+        expect(ui.streams.text("weather-on-main")).toBe("sunny all day");
+        expect(ui.streams.text("weather-on-pi")).toBe("rain");
+
+        end(ui, "weather", "weather-on-pi");
+        end(ui, "weather", "weather-on-main");
+
+        expect(commit.mock.calls.map(([m]) => [m.from, m.threadId, m.content])).toEqual([
+            ["weather", "weather-on-pi", "rain"],
+            ["weather", "weather-on-main", "sunny all day"],
+        ]);
+    });
+
+    it("show the sender's name on the live row, not its id", () => {
+        const thread = document.createElement("div");
+        const ui = new ChatStreamUI(makeHost({ thread: () => thread }));
+
+        chunk(ui, "sunny", "weather", "weather-on-pi");
+
+        expect(thread.querySelector("[data-testid='message-from']")?.textContent).toBe("weather");
     });
 });

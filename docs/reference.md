@@ -766,6 +766,7 @@ them to main too. A social channel such as Discord runs only the everyday ones
 |---|---|
 | `/agents` | List all known agents with descriptions and schemas |
 | `/agents <keyword>` | Filter agents by capability keyword |
+| `/agents copy <agent> <node>` | Run a second agent of that name, from its config, on another node (alongside) |
 | `/agents delete <agent>` | The same as /delete |
 | `/agents remove <agent>` | The same as /delete |
 | `/agents restart <agent>` | Restart an agent, local or remote, state preserved |
@@ -957,7 +958,8 @@ The dashboard starts alongside wactorz by default at `http://localhost:8888`; us
 | `agents/{id}/metrics` | Token usage, cost, tasks completed after each LLM call |
 | `agents/{id}/completed` | Task completion notification with result preview |
 | `agents/{id}/actuations` | Fired by `HomeAssistantActuatorAgent` on each HA service call |
-| `agents/by-name/{name}/task` | Address a task to an agent by name (used by remote agents) |
+| `agents/at/{node}/{name}/task` | A task for the agent called `name` on `node`; only that node subscribes |
+| `agents/by-name/{name}/task` | A task for an agent by name alone, for a node from before tasks went by node; every node subscribes |
 | `agents/{id}/manifest` | Retained capability manifest — publishes, subscribes, schemas, observed samples |
 | `agents/{name}/data/{key}` | Agent-published world state (retained, via SharedStateHub) |
 | `system/health` | Global health snapshot every 15s — running/stopped/failed counts |

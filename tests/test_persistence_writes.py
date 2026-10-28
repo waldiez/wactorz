@@ -14,6 +14,7 @@ import time
 import unittest
 from pathlib import Path
 
+from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import SCHEMA_SQL, WactorzDB
 
 
@@ -40,7 +41,7 @@ class WactorzDBWritePathTest(unittest.TestCase):
         self.db.write_detection(ts, "yolo", "person", 0.9)
         self.db.write_ha_state(ts, "light.kitchen", "off", "on", domain="light")
         self.db.write_actuation(ts, "act", "light", "turn_on", "light.kitchen")
-        self.db.write_chat_log(ts, "main", "user", "hello")
+        self.db.write_chat_log(ts, "main", "user", "hello", agent_id=derive_actor_id("main"))
         # round-trips read back
         self.assertEqual(len(self.db.query_chat_log("main")), 1)
         self.assertEqual(len(self.db.query_sensor(topic="sensors/temp")), 1)

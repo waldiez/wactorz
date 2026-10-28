@@ -26,6 +26,7 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.placement import Placement
 from wactorz.agents.main.spawns import SpawnService, _parse_spawn_config
 from wactorz.agents.mixins import agent_type
+from wactorz.core.actor import ActorMetrics
 
 _SPAWN_FAILED = "spawn failed"
 
@@ -93,6 +94,10 @@ class _Main:
         main.nodes = NodeManager(main, main.manifests)
         main.spawns = SpawnService(main)
         main.placement = Placement(main)
+        main.metrics = ActorMetrics()
+        #: What the spawn registry is read from: empty, so no name runs elsewhere.
+        setattr(main, "_persistence_api", None)
+        setattr(main, "_persistent_state", {})
         setattr(main, "_registry", registry if registry is not None else _Registry())
 
         self.configs: list[dict[str, Any]] = []

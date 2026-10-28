@@ -26,6 +26,7 @@ from wactorz.agents.main import hot_swap as hot_swap_module
 from wactorz.agents.main.artifact_service import ArtifactService, Change
 from wactorz.agents.main.hosts import ArtifactHost, SwapHost
 from wactorz.agents.main.hot_swap import MAIN, TOKEN_TTL_S, HotSwap
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import Actor, ActorState, Message, UnnamedModelError
 from wactorz.core.artifacts import ArtifactStore, Pointer, pinned
 from wactorz.core.model_swaps import SWAP, move_id, record_swap, swap_id, swaps_of
@@ -285,8 +286,8 @@ class _Host:
         self.desired: list[tuple[str, dict[str, Any] | None]] = []
         self.published: list[tuple[str, Any, int]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {name: dict(cfg) for name, cfg in self.spawns.items()}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({name: dict(cfg) for name, cfg in self.spawns.items()})
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.spawns[config["name"]] = dict(config)

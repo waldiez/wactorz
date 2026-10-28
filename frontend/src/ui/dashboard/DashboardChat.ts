@@ -5,7 +5,7 @@
 /**
  * Chat concern of the dashboard, a composed sub-controller. Owns the chat
  * thread + streaming + send + history state and the iobar; reaches back to the
- * host only for the shared root element, the agent map, and view switching.
+ * host only for the shared root element, the agents (read-only), and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
@@ -14,58 +14,65 @@ import { canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
-import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
-import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
+import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "./chatThread";
+import { buildIobar as buildChatIobar, nameRecipient } from "./chatIobar";
 import { fetchChatHistory } from "./chatHistory";
 import { ChatLog, threadOf } from "../../chat/chatLog";
 import { TurnTracker, type PendingSend, type TurnState } from "../../chat/turnTracker";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
-import {
-    replacementTarget,
-    resolveSendTarget,
-    sendBlockedReason,
-    settlingTarget,
-    stripLeadingMention,
-    voiceThreadTarget,
-} from "./chatRouting";
+import { filedWithLastSent, planSend, senderOf, voiceThreadTarget, type SendPlan } from "./chatRouting";
+import { ChatAnswers } from "./chatAnswers";
 import { SpeechToText } from "../../io/SpeechToText";
 import { ChatStreamUI } from "./chatStreaming";
+import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "./mutate";
-import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
+import { MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, Listeners } from "../../events";
-import { rememberConversation, rememberedConversation } from "./viewRoutes";
+import { ChatTarget } from "./chatTarget";
 
 /** What the chat controller needs from its host (CardDashboard). */
 export interface ChatHost {
     readonly root: HTMLElement;
-    readonly agents: Map<string, AgentInfo>;
+    readonly agents: ReadonlyMap<string, AgentInfo>;
     /** The currently active view (read live — it changes over time). */
     getView(): View;
     /** Switch the active dashboard view. */
     setView(v: View): void;
     /** Agents sorted with main pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
+    /** What the page calls `agent`: its name, or `name@node` once the name is shared. */
+    label(agent: AgentInfo): string;
 }
 
 export class DashboardChat {
     /**
      * Who the user is talking to — their choice, and nothing else. Empty until
      * one is made (or resolved for them on first arrival): "never chose" is not
-     * "chose main", so nothing draws over a choice that was never made. Changed
-     * only through `_move`.
+     * "chose main", so nothing draws over a choice that was never made.
      */
-    private _target = "";
+    private _target = new ChatTarget({
+        agents: () => this.host.agents,
+        getView: () => this.host.getView(),
+        changed: () => nameRecipient(this.root, this.chatTargetName),
+    });
 
-    /** Who the user is talking to, or "" before anyone is. */
+    /** The id of the agent the user is talking to, or "" before anyone is. */
     get chatTarget(): string {
-        return this._target;
+        return this._target.id;
     }
 
-    /** Whether the target is the user's rather than a default filled for them. */
-    private _targetSettled = false;
+    /** The name of the agent the user is talking to, or "" before anyone is. */
+    get chatTargetName(): string {
+        return this._target.name;
+    }
+
+    /** What the conversation's address (`#/chat/<…>`) calls the target: its name, or its address where the name is shared. */
+    get chatTargetAddress(): string {
+        return this._target.address;
+    }
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
     /** Whether a turn is under way, and the person's messages waiting for it. */
@@ -78,16 +85,19 @@ export class DashboardChat {
     /** Stream accumulation, live bubble and commit — extracted (size + per-agent keying). */
     private _streamUI = new ChatStreamUI({
         isChatView: () => this.host.getView() === "chat",
-        lastSentTarget: () => this._lastSentTarget,
-        belongsHere: (from, to) => this._msgBelongsHere({ id: "", from, to, content: "", timestampMs: 0 }),
-        isOpenThread: name => name === this.chatTarget,
+        lastSentTarget: () => ({
+            ...this._lastSentTarget,
+            id: this._lastSentTarget.id || this._target.mainId(),
+        }),
+        isOpenThread: id => id === this.chatTarget,
         thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
         scrollThread: () => this._scrollThread(),
         commit: msg => {
             this._log.add(msg);
         },
     });
-    private _lastSentTarget = MAIN_AGENT;
+    /** Whom the person last sent to: replies the gateway stamps are filed with it. */
+    private _lastSentTarget = { name: MAIN_AGENT, id: "" };
     /**
      * Mobile master–detail: the pane is open unless the user asked for the list.
      * Derived in `_syncPaneVisibility` rather than toggled at each call site —
@@ -99,9 +109,21 @@ export class DashboardChat {
     private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
-        agentNames: () => messageableNames(this.host.agents.values()),
-        setTarget: (name: string) => this.setTarget(name),
+        agentNames: () => messageableNames(this.host.agents.values(), agent => this.host.label(agent)),
+        setTarget: (id: string) => this.setTarget(id),
         send: input => this._sendMessage(input),
+    });
+
+    /** Questions and "which one?" replies, answered by a press. */
+    private _answers = new ChatAnswers({
+        log: this._log,
+        redrawThread: msg => {
+            if (this.host.getView() === "chat" && (!msg || this._msgBelongsHere(msg))) {
+                this.renderChatThread();
+            }
+        },
+        redrawSidebar: () => this.renderSidebar(),
+        send: (content, attachments) => void this._send(content, attachments),
     });
 
     /** What `wire` subscribed to, dropped together by `unwire`. */
@@ -117,41 +139,43 @@ export class DashboardChat {
     }
 
     /**
-     * Switch the conversation to `name` — the one owner of a target change.
+     * Switch the conversation to the agent `id` — the one owner of a target change.
      *
      * Every way of choosing an agent lands here (wactor-card "Chat" button, the
-     * target `<select>`, the `@mention` panel, the sidebar). It used to set the
-     * field and stop, so each caller re-rendered whatever it remembered — in
-     * practice only the composer placeholder — and the pane header and thread
-     * went on showing the previous conversation.
+     * target `<select>`, the `@mention` panel, the sidebar), so the pane header,
+     * the thread and the composer move together.
      */
-    setTarget(name: string): void {
-        this._move(name, "claim");
+    setTarget(id: string): void {
+        this._target.move(id, "claim");
         this._refreshForTarget();
-        void this.loadHistory(name);
+        void this.loadHistory(id);
         this.updateTargetSelect();
     }
 
     /**
-     * Make `name` the conversation — the one place it changes — and say so in
-     * the composer, which names its recipient.
-     *
-     * `claim` is the person's own choice: picking an agent, sending or speaking
-     * to one. It is settled, so nothing moves it under them, and remembered,
-     * so it is in the address and is where the next load opens. `settle` is a
-     * move made for them because theirs went away: settled, but not
-     * remembered, or the next load would bring it back as though chosen.
-     * `default` fills an empty choice while they have been shown nothing.
+     * Open the conversation an address names: `#/chat/<name>` or
+     * `#/chat/<name>@<node>`. A name is one agent while no other has it. One
+     * that names no agent on the list stays the choice, as a choice of an agent
+     * that stopped does: the conversation says whom it is with, a send to it is
+     * refused, and it opens on the agent once one of that name arrives. A name
+     * several agents share opens none of them: the pane offers each by its
+     * address.
      */
-    private _move(name: string, how: "claim" | "settle" | "default"): void {
-        this._target = name;
-        if (how !== "default") {
-            this._targetSettled = true;
+    openByName(name: string): void {
+        const agent = this._target.named(name);
+        if (agent) {
+            this.setTarget(agent.id);
+            return;
         }
-        if (how === "claim" && name) {
-            rememberConversation(name, this.host.getView());
-        }
-        this._updateComposerPlaceholder();
+        this._target.want(name);
+        this._refreshForTarget();
+        this.updateTargetSelect();
+    }
+
+    /** The open conversation's address, if another agent of its name came or went since it was
+     *  last asked (see `ChatTarget.relabelled`); null when it is called as before. */
+    relabelled(): string | null {
+        return this._target.relabelled();
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -166,9 +190,9 @@ export class DashboardChat {
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
-    /** Forget that an agent's history was loaded (so it re-fetches if re-added). */
-    forgetHistory(name: string): void {
-        this._log.forgetHistory(name);
+    /** Forget that the agent `id`'s history was loaded (so it re-fetches if re-added). */
+    forgetHistory(id: string): void {
+        this._log.forgetHistory(id);
     }
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
@@ -202,7 +226,7 @@ export class DashboardChat {
         // Guarded on there being one — mounting with nothing to open on has
         // shown them nothing, and the preference has not had its chance yet.
         if (this.chatTarget) {
-            this._targetSettled = true;
+            this._target.settle();
         }
         void this.loadHistory(this.chatTarget);
     }
@@ -224,10 +248,9 @@ export class DashboardChat {
      * already on its way to an agent the user cannot see.
      */
     private _focusConversation(target: string): void {
-        // Sending is a choice too: an `@mention` routes it elsewhere and the
-        // view follows, so reopening on the agent left behind contradicts what
-        // the screen last showed.
-        this._move(target, "claim");
+        // Sending is a choice too. An `@mention` that reaches another agent
+        // moves the view there once the server says which (`_turnReached`).
+        this._target.move(target, "claim");
         this._listVisible = false;
     }
 
@@ -247,7 +270,7 @@ export class DashboardChat {
         this.renderSidebar();
         this.renderChatPaneHeader();
         this.renderChatThread();
-        this._updateComposerPlaceholder();
+        nameRecipient(this.root, this.chatTargetName);
     }
 
     /** Show the chat pane, or the agent list when the user asked for it. */
@@ -265,15 +288,22 @@ export class DashboardChat {
         const sorted = this.host
             .sortedAgents()
             .filter(a => !this.sidebarFilter || a.name.toLowerCase().includes(this.sidebarFilter));
-        renderChatSidebar(list, sorted, this.chatTarget, name => this._selectAgent(name), this._log.asking());
+        renderChatSidebar(
+            list,
+            sorted,
+            this.chatTarget,
+            id => this._selectAgent(id),
+            this._log.asking(),
+            agent => this.host.label(agent),
+        );
     }
 
-    private _selectAgent(name: string): void {
-        const latest = [...this.host.agents.values()].find(a => a.name === name);
+    private _selectAgent(id: string): void {
+        const latest = this.host.agents.get(id);
         if (!latest || !canOpenThread(latest, this._log.asking())) {
             return;
         }
-        this.setTarget(name);
+        this.setTarget(id);
         // Picking from the sidebar is also a request to see the conversation.
         this._listVisible = false;
         this._syncPaneVisibility();
@@ -285,8 +315,8 @@ export class DashboardChat {
         if (!hdr) {
             return;
         }
-        const agent = [...this.host.agents.values()].find(a => a.name === this.chatTarget);
-        renderPaneHeader(hdr, this.chatTarget, agent, () => {
+        const agent = this.host.agents.get(this.chatTarget);
+        renderPaneHeader(hdr, agent ? this.host.label(agent) : this.chatTargetName, agent, () => {
             this._listVisible = true;
             this._syncPaneVisibility();
         });
@@ -309,8 +339,11 @@ export class DashboardChat {
 
         const streamText = this._streamUI.streamHereText();
         const msgs = this._log.thread(this.chatTarget);
-        if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
-            thread.appendChild(buildChatEmptyState(this.chatTarget));
+        const offered = this._target.offered();
+        if (offered.length) {
+            thread.appendChild(buildChatChoicesState(this.chatTargetName, offered));
+        } else if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
+            thread.appendChild(buildChatEmptyState(this.chatTargetName));
         } else {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
         }
@@ -337,19 +370,20 @@ export class DashboardChat {
         }
     }
 
-    /** Fetch and merge an agent's persisted chat history once, by agent NAME
-     *  (history is keyed by name, not actor id; subsequent calls no-op). */
-    async loadHistory(agentName: string): Promise<void> {
+    /** Fetch and merge the persisted chat history of the agent `id` once (kept by
+     *  id, since two agents may share a name; subsequent calls no-op). */
+    async loadHistory(id: string): Promise<void> {
         // No target chosen yet — there is no conversation to fetch.
-        if (!agentName || this._log.historyLoaded(agentName)) {
+        if (!id || this._log.historyLoaded(id)) {
             return;
         }
-        const incoming = await fetchChatHistory(agentName);
+        const name = this.host.agents.get(id)?.name ?? (id === this.chatTarget ? this.chatTargetName : "");
+        const incoming = await fetchChatHistory(id, name);
         // null = transient failure — don't mark loaded, so the next open retries.
         if (incoming === null) {
             return;
         }
-        this._log.addHistory(agentName, incoming);
+        this._log.addHistory(id, incoming);
         if (incoming.length) {
             this.renderChatThread();
         }
@@ -360,8 +394,8 @@ export class DashboardChat {
         return buildChatIobar({
             chatInput: this._chatInput,
             stt: this._stt,
-            target: () => this.chatTarget,
-            setTarget: name => this.setTarget(name),
+            target: () => this.chatTargetName,
+            setTarget: id => this.setTarget(id),
             populateSelect: select => this._populateSelect(select),
             send: input => this._sendMessage(input),
             stop: () => void this._stopGeneration(),
@@ -379,7 +413,9 @@ export class DashboardChat {
     }
 
     private _populateSelect(select: HTMLSelectElement): void {
-        renderTargetSelect(select, [...this.host.agents.values()], this.chatTarget);
+        renderTargetSelect(select, [...this.host.agents.values()], this.chatTarget, agent =>
+            this.host.label(agent),
+        );
     }
 
     /** Rebuild the target-agent `<select>` options from the current agent list. */
@@ -393,20 +429,7 @@ export class DashboardChat {
         if (select) {
             this._populateSelect(select);
         }
-        this._updateComposerPlaceholder();
-    }
-
-    /** Put the caret in the composer, if it is on the page yet. */
-    private _focusComposer(): void {
-        this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.focus();
-    }
-
-    /** The composer names the agent it will send to; keep it on the target. */
-    private _updateComposerPlaceholder(): void {
-        const input = this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
-        if (input) {
-            input.placeholder = composerPlaceholder(this.chatTarget);
-        }
+        nameRecipient(this.root, this.chatTargetName);
     }
 
     /**
@@ -419,12 +442,10 @@ export class DashboardChat {
      * case — it keeps the choice, and the send blocks instead.
      */
     dropTargetIfGone(reason: "reset" | "deleted"): void {
-        const next = replacementTarget([...this.host.agents.values()], this.chatTarget);
-        if (next === null) {
+        const lost = this._target.replaceIfGone();
+        if (lost === null) {
             return;
         }
-        const lost = this.chatTarget;
-        this._move(next, "settle");
         this._refreshForTarget();
         this.updateTargetSelect();
         // The move always happens, or the chat is wrong when it is next opened.
@@ -437,7 +458,7 @@ export class DashboardChat {
         toast.show({
             type: "system",
             title: "Chat moved",
-            message: `@${lost} ${what} — now messaging @${this.chatTarget}.`,
+            message: `@${lost} ${what} — now messaging @${this.chatTargetName}.`,
         });
     }
 
@@ -461,15 +482,16 @@ export class DashboardChat {
      * shown nothing.
      */
     resolveDefaultTarget(): void {
-        const before = this.chatTarget;
-        const agents = [...this.host.agents.values()];
-        const resolved = settlingTarget(agents, before, rememberedConversation(), this._targetSettled);
-        if (resolved !== before) {
-            this._move(resolved, "default");
+        const { changed, arrived } = this._target.settleOn();
+        if (arrived) {
+            // The address asked for it, so it is the person's choice: it stood
+            // until its agent arrived, and is opened as one.
+            this.setTarget(arrived.id);
+            return;
         }
         // Only for a chat already on screen: one still being built is drawn,
         // and its history loaded, once it is attached (`afterMount`).
-        if (this.chatTarget !== before && this.root.querySelector("#af-chat-pane-header")) {
+        if (changed && this.root.querySelector("#af-chat-pane-header")) {
             // A fresh page lands on the chat before any agent has arrived,
             // showing nobody's conversation, and the target filled in afterwards
             // has to reach the header and thread too. Not claimed: it is what
@@ -483,50 +505,49 @@ export class DashboardChat {
     private _sendMessage(input: HTMLTextAreaElement): void {
         const content = input.value.trim();
         const attachments = this._pendingAttachments;
-        if (!content && !attachments.length) {
+        if ((!content && !attachments.length) || !this._send(content, attachments)) {
             return;
         }
-        const prevTarget = this.chatTarget;
-        const agents = [...this.host.agents.values()];
+        if (content) {
+            this._chatInput.recordSent(content, input);
+        }
+        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
+        this._renderAttachTray();
+        input.value = "";
+        input.style.height = "auto";
+    }
+
+    /** Send `content`, with `attachments`, from the conversation open now; false when it
+     *  cannot go, which the person is told. */
+    private _send(content: string, attachments: Attachment[]): boolean {
         // The choice, not the control. `select.value` is set programmatically on
         // every redraw and shows a fallback when the choice is not among the
         // options, so reading it here let drawing a dropdown decide where the
         // message went.
-        const target = resolveSendTarget(
+        const plan = planSend(
             content,
-            agents.map(a => a.name),
-            this.chatTarget || MAIN_AGENT,
+            { id: this.chatTarget, name: this.chatTargetName },
+            [...this.host.agents.values()],
+            this._target.mainId(),
         );
-
-        // Say so rather than sending somewhere else. Routing a message the user
-        // addressed to a stopped agent onwards to main is what the original
-        // complaint was, and a quiet fallback here would reproduce it.
-        const blocked = sendBlockedReason(agents, target);
-        if (blocked) {
-            toast.show({ type: "alert-error", title: "Agent unavailable", message: blocked });
-            return;
+        if (plan.blocked) {
+            toast.show({ type: "alert-error", title: "Agent unavailable", message: plan.blocked });
+            return false;
         }
-
-        if (content) {
-            this._chatInput.recordSent(content, input);
-        }
-        this._deliver(input, content, target, prevTarget);
+        this._deliver(plan, this.chatTarget, attachments);
+        return true;
     }
 
-    /** Show the message and clear the composer; the turn tracker puts it on the
-     *  wire now, or once the turn under way or the connection lets it. */
-    private _deliver(input: HTMLTextAreaElement, content: string, target: string, prevTarget: string): void {
-        const attachments = this._pendingAttachments;
-        this._focusConversation(target);
-        // The leading @mention is the routing prefix; drop it from the displayed
-        // bubble/feed (the transport re-adds the canonical one). Keep the original
-        // if stripping would leave nothing to send.
-        const body = stripLeadingMention(content, target) || content;
+    /** Show the message; the turn tracker puts it on the wire now, or once the
+     *  turn under way or the connection lets it. */
+    private _deliver(plan: SendPlan, prevTarget: string, attachments: Attachment[]): void {
+        this._focusConversation(plan.thread);
         const msg: ChatMessage = {
             id: uid("user"),
             from: "user",
-            to: target,
-            content: body,
+            to: plan.name,
+            threadId: plan.thread,
+            content: plan.shown,
             timestampMs: Date.now(),
             ...(attachments.length ? { attachments: [...attachments] } : {}),
             ...(this._turns.sendsNow() ? {} : { queued: true }),
@@ -534,15 +555,13 @@ export class DashboardChat {
         // In the thread before the request: a send that fails at once looks
         // for its bubble to take it back.
         this._log.add(msg);
-        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
-        this._renderAttachTray();
-        this._showSentMessage(msg, prevTarget !== target);
-        input.value = "";
-        input.style.height = "auto";
+        this._showSentMessage(msg, prevTarget !== plan.thread);
         this._turns.request({
             id: msg.id,
-            content: body,
-            target,
+            content: plan.routed,
+            target: plan.thread,
+            name: plan.name,
+            answerer: plan.answerer,
             attachments: msg.attachments?.map(a => a.id) ?? [],
         });
     }
@@ -550,7 +569,7 @@ export class DashboardChat {
     /** Put `send` on the wire, now the turn tracker says so: its bubble no longer
      *  waits, and the thread shows its agent working. */
     private _wire(send: PendingSend): void {
-        this._lastSentTarget = send.target;
+        this._address(send.name, send.target);
         const waited = this._log.get(send.id)?.queued === true;
         if (waited) {
             this._log.update(send.id, ({ queued: _sent, ...rest }) => rest);
@@ -562,9 +581,41 @@ export class DashboardChat {
         // by main, so claiming the target is working would name the wrong agent
         // and wait for a reply that is never attributed to it.
         if (!send.content.startsWith("/")) {
-            this._streamUI.awaiting(send.target);
+            this._streamUI.awaiting(send.name, send.answerer, send.target);
         }
         emit("af-send-message", send);
+    }
+
+    /** The person now talks to `name`, the agent `id`: replies the gateway stamps
+     *  are its, here and on the socket, which hears it from here rather than
+     *  keeping its own. */
+    private _address(name: string, id: string): void {
+        this._lastSentTarget = { name, id };
+        emit("af-addressed", { agent: name });
+    }
+
+    /**
+     * The server says which agent the person's message `id` reached. A mention can
+     * reach an agent other than the thread it was typed in: the message moves to
+     * that agent's thread, and the view with it, as sending to an agent opens its
+     * conversation.
+     */
+    private _turnReached(id: string, agentId: string, name: string): void {
+        this._turns.reached(id, agentId);
+        const was = this._log.get(id);
+        if (!agentId || !was || was.threadId === agentId) {
+            return;
+        }
+        this._log.move(id, agentId, name);
+        this._address(name, agentId);
+        if (this._streamUI.isAwaiting) {
+            this._streamUI.awaiting(name, agentId, agentId);
+        }
+        if (was.threadId === this.chatTarget) {
+            this.setTarget(agentId);
+        } else if (this.host.getView() === "chat") {
+            this.renderChatThread();
+        }
     }
 
     /** Say what the turn is now, and stop showing an agent working once it ends. */
@@ -615,7 +666,7 @@ export class DashboardChat {
             // the iobar sits below every view, so a file dropped from the
             // overview is already visible there — and sending moves to the chat
             // view on its own.
-            this._focusComposer();
+            this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.focus();
         });
     }
 
@@ -624,25 +675,11 @@ export class DashboardChat {
         this._listeners.off();
     }
 
-    /** Mark the question `id` answered with `option`, and redraw if it is on screen.
-     *  The same for a press here and an answer from another channel: the buttons close either way. */
-    private _markAnswered(id: string, option: string): void {
-        const message = this._log.answer(id, option);
-        if (!message) {
-            return;
-        }
-        if (this.host.getView() === "chat" && this._msgBelongsHere(message)) {
-            this.renderChatThread();
-        }
-        // The row of an agent that cannot be messaged locks again once nothing it asked is open.
-        this.renderSidebar();
-    }
-
     private _wireChatEvents(): void {
+        this._answers.wire(this._listeners);
         this._listeners.on("af-chat-message", detail => {
             const msg = detail.msg;
-            const stored: ChatMessage =
-                msg.from === IO_GATEWAY || msg.from === "system" ? { ...msg, to: this._lastSentTarget } : msg;
+            const stored = filedWithLastSent(msg, this._lastSentTarget, this._target.mainId());
             // A frame delivered twice is one message.
             if (!this._log.add(stored)) {
                 return;
@@ -651,13 +688,18 @@ export class DashboardChat {
             // so for those turns this is the only ending there is. Attributed
             // like any other, so a bystander's message does not end a turn it has
             // nothing to do with.
-            this._streamUI.endWait(stored.from);
-            this._turns.ended(stored.from);
-            const voiceTarget = voiceThreadTarget(stored, this.chatTarget, [...this.host.agents.values()]);
+            const sender = senderOf(msg);
+            if (sender) {
+                this._streamUI.endWait(sender);
+                this._turns.ended(sender);
+            }
+            const voiceTarget = voiceThreadTarget(stored, this.chatTargetName, [
+                ...this.host.agents.values(),
+            ]);
             if (voiceTarget) {
                 // Speaking to an agent is choosing it, as typing to one is.
-                this._move(voiceTarget, "claim");
-                this._lastSentTarget = voiceTarget;
+                this._target.move(voiceTarget.id, "claim");
+                this._address(voiceTarget.name, voiceTarget.id);
             }
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
                 this._showSentMessage(stored, Boolean(voiceTarget));
@@ -666,25 +708,9 @@ export class DashboardChat {
             this.renderSidebar();
         });
 
-        // The ledger, each time the page goes live: a question asked while it was
-        // away joins its thread, one answered meanwhile closes, one no longer
-        // listed goes. Not a message arriving now, so no turn ends on it.
-        this._listeners.on("af-questions-listed", detail => {
-            const { changed, closed } = this._log.reconcile(detail.open, detail.answered);
-            closed.forEach(id => toast.close(id));
-            if (!changed) {
-                return;
-            }
-            if (this.host.getView() === "chat") {
-                this.renderChatThread();
-            }
-            this.renderSidebar();
-        });
-
-        // Marked at the press, not at the broker's echo, so a second press cannot answer twice.
-        // One listener for both: a press here and an answer from elsewhere read the same.
-        this._listeners.on("af-answered", detail => this._markAnswered(detail.id, detail.option));
-        this._listeners.on("af-answer-option", detail => this._markAnswered(detail.id, detail.option));
+        this._listeners.on("af-turn-reached", detail =>
+            this._turnReached(detail.id, detail.agentId, detail.name),
+        );
 
         this._listeners.on("af-reset-chat", detail => {
             const agent = detail.agent;
@@ -715,11 +741,11 @@ export class DashboardChat {
         this._listeners.on("af-socket", detail => this._turns.connection(detail.open));
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
-            this._turns.chunk(detail.from);
+            this._turns.chunk(streamKey(detail.agentId, detail.from));
         });
         this._listeners.on("af-stream-end", detail => {
             this._streamUI.onEnd(detail);
-            this._turns.ended(detail.from);
+            this._turns.ended(streamKey(detail.agentId, detail.from));
         });
     }
 }

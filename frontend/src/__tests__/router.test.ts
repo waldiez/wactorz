@@ -49,6 +49,9 @@ describe("formatRoute", () => {
 
     it("keeps a level with a slash in it one level", () => {
         expect(formatRoute({ view: "chat", path: ["a/b"] })).toBe("#/chat/a%2Fb");
+        // An agent's address reads as it is spelled, and reads back the same.
+        expect(formatRoute({ view: "chat", path: ["counter@pi"] })).toBe("#/chat/counter@pi");
+        expect(parseRoute("#/chat/counter@pi")).toEqual({ view: "chat", path: ["counter@pi"] });
     });
 });
 
@@ -108,6 +111,16 @@ describe("startRouter", () => {
 
         expect(location.hash).toBe("#/chat/weather");
         expect(history.length).toBe(before + 1);
+    });
+
+    it("puts the same place under a new name in place of its entry, adding nothing to Back", () => {
+        emit("af-view-changed", { view: "chat", path: ["weather"] });
+        const before = history.length;
+
+        emit("af-view-changed", { view: "chat", path: ["weather@main"], replace: true });
+
+        expect(location.hash).toBe("#/chat/weather@main");
+        expect(history.length).toBe(before);
     });
 
     it("adds nothing when the view followed the address", () => {

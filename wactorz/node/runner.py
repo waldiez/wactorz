@@ -37,6 +37,7 @@ from ..config import (
 )
 from ..core import bundles
 from ..core.actor import Actor, ActorState, SupervisorStrategy
+from ..core.agent_directory import MANIFESTS, AgentDirectory
 from ..core.agent_reset import LIVE_SCOPES
 from ..core.artifacts import ArtifactError, check_pinned, pinned_in
 from ..core.blob_transfer import (
@@ -54,6 +55,7 @@ from ..core.blob_transfer import (
     wait_for,
 )
 from ..core.cancellation import cancel_all_until_done
+from ..core.identity import given_actor_id
 from ..core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -70,7 +72,12 @@ from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
-from ..core.topics import RETAINED_AGENT_LEAVES
+from ..core.topics import (
+    RETAINED_AGENT_LEAVES,
+    node_task_subscription,
+    task_by_name_topic,
+    task_target,
+)
 from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
@@ -129,6 +136,9 @@ class NodeRunner:
         self._loops: list[asyncio.Task] = []
         self._loop_lag = LoopLagMonitor()
         self.registry = ActorRegistry()
+        #: Where the other agents are, from their retained manifests, so an agent
+        #: here can send to one by its address (see `wactorz.core.agent_directory`).
+        self.directory = AgentDirectory()
         self.supervisor = Supervisor(self.registry, self._inject)
         # The back-reference `ActorSystem` gives the registry on main. Without
         # it an agent here cannot reach its own supervisor, and two things go
@@ -473,6 +483,7 @@ class NodeRunner:
         """The library agent ``plugin`` builds, made this node's before it starts."""
         options = config.get("options")
         actor = plugin.build(
+            actor_id=given_actor_id(config.get("actor_id")),
             name=str(config["name"]),
             persistence_dir=self.state_dir,
             options=dict(options) if isinstance(options, dict) else None,
@@ -783,6 +794,12 @@ class NodeRunner:
                 # it sends the agent's code with the spawn, which this node takes.
                 "agents": plugins.targets(),
                 "code_bundles": True,
+                # That an agent sent here runs under the id its spawn names,
+                # rather than one derived from its name.
+                "actor_ids": True,
+                # That a task for an agent here may come on this node's own
+                # topic, agents/at/<node>/<name>/task, rather than only by name.
+                "tasks_by_node": True,
                 # Whether this node clears its agents' chat, state or counters
                 # when main resets its own; main asks only a node that says so.
                 "resets": True,
@@ -1241,10 +1258,9 @@ class NodeRunner:
         is the loop waiting for the call to finish. It deadlocks and times out a
         minute later although main answered in milliseconds.
         """
-        parts = topic_str.split("/")  # agents/by-name/{agent_name}/task
-        if len(parts) < 4:
+        agent_name = task_target(topic_str)
+        if agent_name is None:
             return
-        agent_name = parts[2]
         agent = self.hosted(agent_name)
         if agent is None or not isinstance(data, dict):
             return
@@ -1329,7 +1345,12 @@ class NodeRunner:
             f"nodes/{self.node_name}/swap_model",  # serve another version of a model
             f"nodes/{self.node_name}/reply/#",
             f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
-            "agents/by-name/+/task",
+            # Tasks for the agents here: on this node's own topic, and by name
+            # from a sender on a release that addresses no node.
+            node_task_subscription(self.node_name),
+            task_by_name_topic("+"),
+            # Every agent's manifest, retained: where the others are.
+            MANIFESTS,
         ]
 
         while self._running:
@@ -1349,17 +1370,7 @@ class NodeRunner:
                     )
 
                     async for msg in client.messages:
-                        topic_str = str(msg.topic)
-                        if topic_str.startswith(self._blob_prefix):
-                            # Binary, and never a command: before any decoding.
-                            await self._accept_blob(topic_str, msg.payload)
-                            continue
-                        try:
-                            data = json.loads(msg.payload.decode())
-                        except Exception:
-                            data = msg.payload.decode()
-                        if self._admit_control(topic_str, msg):
-                            await self._dispatch_control(topic_str, data, msg)
+                        await self._receive(msg)
 
             except asyncio.CancelledError:
                 break
@@ -1369,6 +1380,24 @@ class NodeRunner:
                         "[runner] Subscriber disconnected: %s. Reconnecting in about 3s...", e
                     )
                     await asyncio.sleep(reconnect_wait(3.0))
+
+    async def _receive(self, msg: Any) -> None:
+        """Take one message off the control connection: where agents are, a blob, or a command."""
+        topic_str = str(msg.topic)
+        if topic_str.endswith("/manifest") and topic_str.startswith("agents/"):
+            # Read, never acted on: the directory only says where.
+            self.directory.take(topic_str, message_bytes(msg.payload))
+            return
+        if topic_str.startswith(self._blob_prefix):
+            # Binary, and never a command: before any decoding.
+            await self._accept_blob(topic_str, msg.payload)
+            return
+        try:
+            data = json.loads(msg.payload.decode())
+        except Exception:
+            data = msg.payload.decode()
+        if self._admit_control(topic_str, msg):
+            await self._dispatch_control(topic_str, data, msg)
 
     @property
     def _blob_prefix(self) -> str:

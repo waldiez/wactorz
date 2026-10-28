@@ -9,24 +9,11 @@
  * database to keep a history in, a node manager absent — so a caller draws
  * nothing rather than an error where a trend would be.
  */
+import type { NodeListing } from "../../types/agent";
 import type { Sample } from "./trend";
 
 /** One stored sample of an agent or a node: its time and whatever fields were kept. */
 export type HistoryRow = Record<string, unknown> & { ts: number };
-
-/** What a node's listing entry carries that the dashboard reads. */
-export interface NodeListing {
-    /** The node's name. */
-    node: string;
-    /** Whether main has heard from it lately. */
-    online: boolean;
-    /** Seconds since the epoch it was last heard from. */
-    last_seen?: number;
-    /** What its machine is, or null from a node that has not said. */
-    manifest?: Record<string, unknown> | null;
-    /** Its latest readings, under the names its heartbeat uses. */
-    [reading: string]: unknown;
-}
 
 function base(): string {
     return window.__WACTORZ_INGRESS_PATH ?? "";

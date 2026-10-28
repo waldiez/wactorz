@@ -8,15 +8,16 @@
  * reads what each view keeps in its route's path.
  *
  * A view's path is its own. The chat keeps the agent whose conversation is
- * open, as `[agent]`; a view with levels of its own adds what it reads here.
+ * open, as `[agent]`, and the Models view the model open, as `[name]`; a view
+ * with levels of its own adds what it reads here.
  */
 import { emit } from "../../events";
 import type { Route } from "../../router";
 import { safeStorage } from "../../safeStorage";
 import { BUILTIN_VIEWS, SETTINGS_VIEW, type View } from "./types";
 
-/** The browser's memory of the conversation the user last chose. */
-const CHAT_TARGET_KEY = "wactorz-chat-target";
+/** The browser's memory of the conversation the user last chose, by the agent's id. */
+const CHAT_TARGET_KEY = "wactorz-chat-agent-id";
 
 /** What opening a route needs from the dashboard. */
 export interface ViewRoutesHost {
@@ -30,6 +31,10 @@ export interface ViewRoutesHost {
     chatTarget(): string;
     /** Open `agent`'s conversation in the chat. */
     setChatTarget(agent: string): void;
+    /** The model the Models view has open, or "". */
+    model(): string;
+    /** Open the model `name` in the Models view; "" for the list alone. */
+    setModel(name: string): void;
 }
 
 /** Opens routes for the dashboard, holding one that waits for an extension's view. */
@@ -60,6 +65,9 @@ export class ViewRoutes {
         if (agent && agent !== this.host.chatTarget()) {
             this.host.setChatTarget(agent);
         }
+        if (route.view === "models") {
+            this.host.setModel(route.path[0] ?? "");
+        }
         this.host.setView(route.view);
     }
 
@@ -78,8 +86,9 @@ export class ViewRoutes {
 
     /** Where the dashboard is now, for the address. */
     current(): Route {
-        const agent = this.host.view() === "chat" ? this.host.chatTarget() : "";
-        return { view: this.host.view(), path: agent ? [agent] : [] };
+        const view = this.host.view();
+        const at = view === "chat" ? this.host.chatTarget() : view === "models" ? this.host.model() : "";
+        return { view, path: at ? [at] : [] };
     }
 }
 
@@ -89,12 +98,14 @@ export function rememberedConversation(): string | null {
 }
 
 /**
- * Remember that the user chose `agent`'s conversation, and with the chat open
- * (`view`), put it in the address.
+ * Remember that the user chose the conversation of the agent `id`, called `name`,
+ * and with the chat open (`view`), put it in the address. The browser keeps the
+ * id, which says which agent exactly; the address says the name, which a person
+ * can read and which outlives the agent spawned again.
  */
-export function rememberConversation(agent: string, view: View): void {
-    safeStorage.set(CHAT_TARGET_KEY, agent);
+export function rememberConversation(id: string, name: string, view: View): void {
+    safeStorage.set(CHAT_TARGET_KEY, id);
     if (view === "chat") {
-        emit("af-view-changed", { view: "chat", path: [agent] });
+        emit("af-view-changed", { view: "chat", path: [name] });
     }
 }

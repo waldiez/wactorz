@@ -19,6 +19,7 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.actor import Actor, Message, MessageType
+from ...core.addresses import Address, Resolution
 from ...core.node_signing import node_control_properties
 from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
@@ -29,6 +30,7 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
+from .addresses import resolve_address, task_refusal, task_topic_for
 from .artifact_service import ArtifactService
 from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
@@ -47,6 +49,7 @@ from .nodes import NodeManager
 from .placement import PlacedOnNode, Placement
 from .planning import PlanningMixin, starts_with_bypass
 from .routing import RoutingMixin
+from .spawn_registry import SpawnRegistry
 from .spawns import SpawnService
 from .turn_actions import TurnActions
 
@@ -362,7 +365,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 
-    def _get_spawn_registry(self) -> dict[str, Any]:
+    def _get_spawn_registry(self) -> SpawnRegistry:
         return self.spawns._get_spawn_registry()
 
     def _restore_earned_trust(self, agent_name: str, local_cfg: dict[str, Any]) -> bool:
@@ -379,7 +382,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         ``from_registry``. A claim that was not earned is left in place rather
         than removed here, so the spawn path strips it and says so.
         """
-        if not self._get_spawn_registry().get(agent_name, {}).get("trusted"):
+        registry = self._get_spawn_registry()
+        entry = registry.by_id(local_cfg.get("actor_id")) or registry.only(agent_name)
+        if not (entry or {}).get("trusted"):
             return False
         local_cfg["trusted"] = True
         return True
@@ -387,8 +392,21 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.spawns._save_to_spawn_registry(config)
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
-        self.spawns._remove_from_spawn_registry(name)
+    def _registered_actor_id(self, name: str, node: str | None = None) -> str | None:
+        """The id the spawn registry keeps for ``name`` (on ``node``), which a spawn of it runs under."""
+        return self.spawns._registered_actor_id(name, node)
+
+    def _kept_actor_id(self, name: str, node: str, *, alongside: bool = False) -> str | None:
+        """The id an agent spawned as ``name`` onto ``node`` keeps; see `SpawnService._kept_actor_id`."""
+        return self.spawns._kept_actor_id(name, node, alongside=alongside)
+
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
+        self.spawns._remove_from_spawn_registry(name, node, actor_id=actor_id)
+
+    def _clear_spawn_registry(self) -> None:
+        self.spawns._clear_spawn_registry()
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         await self.lifecycle._clear_agent_manifest(name, actor_id)
@@ -835,7 +853,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Process any <delete>{"name": "..."}</delete> blocks the LLM produced.
         # This is the orchestrator-side counterpart of <spawn> — lets the LLM
         # remove agents in response to user requests like "delete the math agent".
-        clean, deleted, missing = await self._process_delete_commands(clean)
+        clean, deleted, missing, refused = await self._process_delete_commands(clean)
 
         # Execute structured <delegate>{...}</delegate> blocks — the preferred,
         # unambiguous delegation form. Results are spliced in-place.
@@ -850,7 +868,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             {"type": "user_interaction", "input": text[:100], "response": clean[:200]},
         )
 
-        summary = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(response)
+        summary = TurnActions(
+            tuple(spawned), tuple(deleted), tuple(missing), tuple(refused)
+        ).summary(response)
         if summary:
             clean += f"\n\n[System: {summary}]"
 
@@ -1107,7 +1127,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         _, spawned = await self._process_spawn_commands(full_response)
 
         # Process any <delete> blocks — orchestrator-side counterpart of <spawn>
-        _, deleted, missing = await self._process_delete_commands(full_response)
+        _, deleted, missing, refused = await self._process_delete_commands(full_response)
 
         # Execute structured <delegate>{...}</delegate> blocks first (preferred
         # form). The stream above left the block out, so append each result as
@@ -1131,9 +1151,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         full_response = delegated
         self._replace_latest_interface_reply("".join(full_chunks), full_response)
 
-        system_msg = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(
-            full_response
-        )
+        system_msg = TurnActions(
+            tuple(spawned), tuple(deleted), tuple(missing), tuple(refused)
+        ).summary(full_response)
 
         # Also surface the concrete spawn/delete outcome for stream consumers
         # that ignore the final done dict.
@@ -1210,13 +1230,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
         return await self.spawns._process_spawn_commands(response)
 
-    async def _process_delete_commands(self, response: str) -> tuple[str, list[str], list[str]]:
+    async def _process_delete_commands(
+        self, response: str
+    ) -> tuple[str, list[str], list[str], list[str]]:
         return await self.lifecycle._process_delete_commands(response)
 
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
     ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         return await self.spawns._spawn_from_config(config, save, from_registry=from_registry)
+
+    async def spawn_placed(self, config: dict[str, Any]) -> Any:
+        """Spawn ``config`` where placement puts it: see `SpawnService.spawn_placed`."""
+        return await self.spawns.spawn_placed(config)
 
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
         return self.spawns._inject_llm_bridge_code(config)
@@ -1296,6 +1322,18 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _known_nodes(self, value: dict[str, dict[str, Any]]) -> None:
         self.nodes.known = value
 
+    def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
+        """Which agents ``wanted``, a bare name or ``name@node``, finds: see `addresses`."""
+        return resolve_address(self, wanted, heard_within=heard_within)
+
+    def task_refusal(self, address: Address) -> str | None:
+        """Why a task for the agent at ``address`` cannot be sent: see `addresses`."""
+        return task_refusal(self, address)
+
+    def task_topic_for(self, address: Address) -> str:
+        """The topic a task for the agent at ``address``, on a node, goes on: see `addresses`."""
+        return task_topic_for(self, address)
+
     def list_nodes(self) -> list[dict[str, Any]]:
         """Return all known remote nodes with their last-seen time, running agents, and system metrics."""
         return self.nodes.list_nodes()
@@ -1323,6 +1361,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _node_takes_bundles(self, node_name: str) -> bool:
         """Whether ``node_name`` builds a library agent from code sent with its spawn."""
         return self.nodes.takes_bundles(node_name)
+
+    def _node_takes_actor_ids(self, node_name: str) -> bool | None:
+        """Whether ``node_name`` runs an agent under the id its spawn names; None if unknown."""
+        return self.nodes.takes_actor_ids(node_name)
 
     def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
@@ -1544,8 +1586,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """
         return self.nodes.running_agent(name)
 
-    async def delete_spawned_agent(self, name: str) -> None:
-        await self.lifecycle.delete_spawned_agent(name)
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
+        await self.lifecycle.delete_spawned_agent(name, node)
 
     async def _purge_agent_retained_topics(self, actor_id: str | None) -> None:
         await self.lifecycle._purge_agent_retained_topics(actor_id)

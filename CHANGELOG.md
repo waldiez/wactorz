@@ -11,6 +11,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A Models tab on the dashboard.** It lists every stored model, saying which serves
+  a version, which is trying one beside it and which has none active, and opens one at
+  `#/models/<name>`: its versions along a line with the active, the shadow and the
+  previous active marked in words and colour, a table of versions with what was said of
+  each, and the history of its pointer moves, each with who made it and why. From there
+  a version is tried as shadow, the shadow promoted or cleared, and the active rolled
+  back to the version it replaced, each after a question that takes an optional reason
+  (a clear takes none, since nothing would keep it). A pointer moved anywhere else, by
+  the CLI, chat or an agent, shows there within seconds. On a phone it is in the More
+  sheet. Making a version active directly stays with the CLI and chat.
+- **Agents written from chat know how to label.** Main's and the planner's prompts now say
+  what `label=` on `ask_operator` does and when to use it, and that an agent on main can
+  write a label itself with `agent.label(source, value, start=...)`, so a generated agent
+  asks about a source in a way that trains the next model rather than only reporting.
 - **How two agents can share a name is decided, before it is built.** `docs/design/agent-identity.md` records the following. A name is unique per node, and `name@node` is the full address, with a bare name working while it is unique. An agent's id is minted at spawn and kept across restarts and moves. An ambiguous bare name is answered with a question, never guessed. Tasks are routed by node. A spawn says whether it moves an agent or adds a second one. An optional `WACTORZ_NAMESPACE` puts an install's own control topics under a prefix, while the world topics stay shared. An upgrade changes nothing that is configured. The record also lists what was decided against. Nothing changes until it is built.
 - **An operator's answer can become a label, and labels live in a provenance graph.** `ask_operator(..., label={"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance": "maintenance", "Real problem": "fault"}})` makes the answer a record that the source was doing something from `start` (to `end`, open when unsaid), in event time; an option the spec leaves out, such as "Not sure", makes none, and a spec that cannot be used is refused before the question is sent. The agent keeps the spec in its question book, and main writes the label once the book says the question was answered, for an agent on main or on a node; it takes a book only from where its agent is, as it takes a manifest, so a node cannot answer for another node's agent. A later label on the same source supersedes an earlier one wherever their windows overlap, without editing it: the earlier one is kept, `partly_superseded` or `superseded`, and what held when is the newest label at each moment. A label from an answer the dashboard sent is marked verified; one heard on the broker, where anything can publish an answer, is not. An agent on main can write its own with `agent.label(source, value, start=...)`, and a rule with the new `label` action, from when its trigger says it happened. `GET /api/labels` lists labels by source and event-time window, and `GET /api/labels/effective` resolves a source into what held when. Labels are nodes of a new provenance graph in main's database, two tables of nodes and of edges from cause to effect, which the rest of the model loop will record its decisions and actions in; the database migrates to it at start. See `docs/design/labels-and-provenance.md`.
 
@@ -51,8 +65,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   nothing. Each swap that landed is an `action` in the provenance graph, joined to the
   move that caused it, and one line on the feed. A node takes the new version only from
   a command main signed; the version is fetched the way the first was.
+- **An agent can be named by its full address, `name@node`.** `@counter@pi-kitchen` in
+  chat or the terminal, `send_to("counter@pi-kitchen", ...)`, `delegate_task`,
+  `POST /api/chat`, `POST /api/reset` and `/agents restart|stop|delete`, `/start` and
+  `/migrate` all take one; main is the node `main` (or `local`). A bare name works as
+  before while one agent has it. When agents on more than one node report the same name,
+  nothing is sent to either: a person is told the addresses (the dashboard offers them
+  as buttons, and the one pressed is sent the message), and a program is refused with
+  them (`409` from the REST routes). A task for an agent on a node goes on that
+  node's own topic, `agents/at/<node>/<name>/task`, so the full address reaches that
+  agent alone, from main or from an agent on another node (which learns where agents
+  run from their retained manifests). A node says it takes tasks there with
+  `"tasks_by_node": true` in its manifest; one from before that is still sent tasks by
+  name, which every node running the name hears, so while another node runs the name a
+  task for it is refused until it is deployed again. An agent whose manifest names no
+  node, as main's own and those on older nodes do, is still sent tasks by name from a
+  node. A reset of a name kept in more than one place is refused,
+  since what it clears is kept by name. An address naming a node the agent is not on is
+  refused rather than taken as the bare name. `@` is no longer allowed in the name of a
+  new agent or a new node; an agent that already has one keeps it and is still reached
+  by its whole name.
+- **Two agents may share a name, one per host.** A spawn naming a node where the name
+  does not run, while it runs on another host, says what it means: `"replace": true`
+  moves the agent there, keeping its id, and `"alongside": true` runs a second agent of
+  the name there, under an id of its own. One that says neither spawns nothing, and the
+  chat says both; before, a spawn onto a node left the first agent running where it was
+  and started another. `/agents copy <agent> <node>` runs a second one from chat, from the
+  first one's config and with none of its state. A spawn, move or copy onto a host that
+  already runs the name is refused, and so is a second agent of a name on a node from
+  before ids were kept, which would give it the first one's id. A move whose spawn is
+  refused puts the agent back where it was. `/agents restart|stop|delete`, `/start`,
+  `/migrate`, `/agents copy`, a `<delete>` block and a delete from the dashboard each act
+  on the one agent named, by its address; a bare name kept on more than one host acts on
+  none and says the addresses. Main keeps each one's manifest, so `/agents` lists both.
+  On the dashboard, the `@mention` suggestions offer each by its address, a message typed
+  in one's thread goes to that one, and a turn, a streaming reply and the "is working"
+  row each follow the agent's id, so a reply from the other one of the name neither ends
+  the turn nor joins it.
+  Main's spawn registry keeps each agent by its id: the
+  registry by name is read once on upgrade, every agent keeping its id, and left as it
+  was. A reset of a name kept in more than one place is still refused.
 
 ### Changed
+
+- **An agent's card says which node it runs on, and two agents may share a name on the dashboard.**
+  A card for an agent on a node reads "on <node>", and follows it when it moves. A second
+  agent with a name already shown gets a card of its own, each called `name@node`, rather
+  than replacing the first. The dashboard is ready for it, and the server lets two agents
+  share a name, one per host (see Added). A heartbeat that changes an agent's state now shows on its card
+  at once. The chat's agent picker no longer comes up blank when the agent you were talking
+  to is not in the list. After a voice turn moves the chat to the agent spoken to (a
+  robot), a reply the server does not name is credited to that agent in the notices and
+  the activity feed too, not only in the chat.
 
 - **A message sent while an agent is still answering waits its turn instead of being blocked.**
   It shows in the thread at once, marked "Waiting to send", and goes when the reply ends,
@@ -122,7 +186,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   independently from continuous listening motion, which remains opt-in because servo noise can
   reach the live microphone.
 
+- **An agent keeps an id of its own, across restarts and moves, and its chat history follows the id.**
+  A new agent is given an id when it is first spawned, kept in main's spawn registry; a restart,
+  a `replace` or a move to another node keeps it, and a node runs the agent under it. Deleting an
+  agent and spawning one of the same name makes a new agent, whose history starts empty. Main's
+  own agents, and every agent spawned before this, keep the id derived from their name, so an
+  upgrade changes nothing: registry entries and stored chat turns read back with the id they
+  already had. Chat history is kept by that id (`GET /api/chats?agent_id=`; `?agent=` still
+  returns every agent that went by the name), and the dashboard's WebSocket frames carry it,
+  with a `turn` frame naming the agent a turn reached. The dashboard keeps its chat threads by
+  that id: two agents of one name have a thread each, the chat list and the target picker name
+  them `name@node`, and a message whose `@mention` reaches another agent moves to that agent's
+  thread, the view with it. The chat's address names the agent (`#/chat/<name>`, and
+  `#/chat/<name>@<node>` where the name is shared, which the open conversation's header and
+  address follow as another agent of its name comes or goes; a shared name alone opens
+  neither and links both); the browser remembers the open conversation by id. A node says in its manifest that it
+  honours the id (`actor_ids`); one deployed before this gives a new agent the id derived from
+  its name, and main refuses to move an agent with an id of its own there until the node is
+  deployed again. One restored onto such a node before its manifest arrived, as at a restart,
+  runs there under the derived id: main says so in chat once the manifest comes, naming the
+  agents and saying to deploy the node again.
+
 ### Fixed
+
+- **Two package checks at once no longer fail with a `KeyError`.** Checking or installing packages for two agents at the same time could fail inside Python's import system, which is not safe to refresh from two threads at once; Wactorz now refreshes it from one thread at a time.
 
 - **Reachy cannot promote forwarded text to operator authority.** Main processes actor-forwarded interface turns through its existing restricted entry point. Package approval, node administration, executable spawn/delete actions, plan approval, and unrestricted delegation remain on the existing operator interfaces; payload labels and the robot microphone do not authenticate a person. Conversation, everyday device control and bounded delegation remain available.
 

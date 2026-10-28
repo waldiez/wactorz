@@ -22,6 +22,7 @@ export const TEST_IDS = [
     "connection",
     "agent-card",
     "agent-state",
+    "agent-node",
     "node",
     "node-agents",
     "node-machine",

@@ -20,6 +20,7 @@ from wactorz.agents.catalog_agent import _build_catalog
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry, with_actor_id
 from wactorz.agents.main.spawns import SpawnService
 
 _SPAWN_FAILED = "agent failed to start"
@@ -136,7 +137,11 @@ class _Main:
             self.remotely_spawned.append((name, node, save))
             self.configs[name] = config
 
-        setattr(main.spawns, "_get_spawn_registry", lambda: dict(spawn_registry or {}))
+        setattr(
+            main.spawns,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names(dict(spawn_registry or {})),
+        )
         setattr(main.spawns, "_spawn_from_config", _local)
         setattr(main.spawns, "_spawn_remote", _remote)
         setattr(main, "_match_catalog_recipe", lambda name, capabilities=None: catalog_match)
@@ -408,7 +413,8 @@ class TestCatalogAgentsComeBackCurrent:
 
         restored = main.configs["smart-energy"]
         assert restored["node"] == "rpi"
-        assert restored == entry
+        # With the id the registry keeps for it, as every entry is read back.
+        assert restored == with_actor_id("smart-energy", entry)
 
     async def test_changed_dependencies_need_a_fresh_approved_spawn(self) -> None:
         stale = {
@@ -440,7 +446,7 @@ class TestCatalogAgentsComeBackCurrent:
 
         await main.restore()
 
-        assert main.configs["reachy-mini"] == own
+        assert main.configs["reachy-mini"] == with_actor_id("reachy-mini", own)
 
     async def test_an_agent_with_no_recipe_is_left_alone(self) -> None:
         main = _Main(spawn_registry={"a": local("a", trusted=True)})

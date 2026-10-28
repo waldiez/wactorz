@@ -11,6 +11,7 @@ function message(over: Partial<ChatMessage> = {}): ChatMessage {
         id: "q1",
         from: "installer",
         to: "user",
+        threadId: "installer",
         content: "'probe' needs a package. Install?",
         timestampMs: 0,
         agentId: "installer-id",

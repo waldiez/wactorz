@@ -158,19 +158,19 @@ class LabelRecorder:
         host = self.host
         if host is None:
             return "", questions_in_frame(frame)
+        actor_id = _actor_id_from(topic)
         local = host._registry.find_by_name(name) if host._registry is not None else None
-        if local is not None:
-            # The name in the frame is anyone's to write; the agent it names is
-            # read only when the topic is that agent's own, or a book published
-            # under another id would be recorded as its answers.
-            if getattr(local, "actor_id", "") != _actor_id_from(topic):
-                return None
+        if local is not None and getattr(local, "actor_id", "") == actor_id:
+            # The name in the frame is anyone's to write; the agent here is
+            # read only when the topic is its own. A book under another id is
+            # weighed as one from a node, which may run an agent of the name
+            # as well, or it would be recorded as this agent's answers.
             own = getattr(local, "questions", None)
             kept = own() if callable(own) else None
             return ("", list(kept.values())) if isinstance(kept, dict) else None
         if properties is None:
-            return "", questions_in_frame(frame)
-        node = placed_node(host, name) or _listing_node(host._known_nodes, name)
+            return ("", questions_in_frame(frame)) if local is None else None
+        node = placed_node(host, name, actor_id) or _listing_node(host._known_nodes, name)
         if not speaks_for(host, node, name):
             logger.warning(
                 "[main] Ignoring a question book for %r from %r: main does not place it there",

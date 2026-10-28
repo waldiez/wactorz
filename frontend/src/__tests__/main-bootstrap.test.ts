@@ -22,10 +22,18 @@ const mockRouter: Record<string, (...a: any[]) => void> = {};
 const mockWs: Record<string, (...a: any[]) => void> = {};
 // Every frame main.ts sent over the mocked transport with sendRaw.
 const mockSent: unknown[] = [];
-// A single known agent so `getAgents().find(...)` resolves in the metrics path.
+// A single known agent so `get(...)` resolves in the metrics path.
 const mockStoreAgents = [{ id: "a", name: "A", state: "running", protected: false }];
 // The store main.ts builds, so a test can see what reached it.
 const mockStores: { onHeartbeat: ReturnType<typeof vi.fn> }[] = [];
+// The dashboard main.ts builds over it.
+const mockDashboards: {
+    setTotalCostUsd: ReturnType<typeof vi.fn>;
+    setTotalMessages: ReturnType<typeof vi.fn>;
+    setHostStats: ReturnType<typeof vi.fn>;
+}[] = [];
+// Who the socket was told the person addresses.
+const mockAddressed: string[] = [];
 
 // Fetch a registered handler (asserting it exists) so the call sites below stay
 // branch-free — keeps each test's cyclomatic complexity low.
@@ -70,6 +78,7 @@ vi.mock("../io/WSClient", () => ({
         onStreamEnd = vi.fn();
         connect = vi.fn();
         disconnect = vi.fn();
+        addressed = vi.fn((agent: string) => mockAddressed.push(agent));
         sendRaw = vi.fn((frame: unknown) => {
             mockSent.push(frame);
             return true;
@@ -91,33 +100,44 @@ vi.mock("../agents/AgentStore", () => ({
         constructor() {
             mockStores.push(this);
         }
-        mount = vi.fn();
         reconcileAgents = vi.fn();
         onChat = vi.fn();
         removeAgent = vi.fn();
-        setTotalCostUsd = vi.fn();
-        setTotalMessages = vi.fn();
         addOrUpdateAgent = vi.fn();
-        getAgents = () => mockStoreAgents;
+        list = () => mockStoreAgents;
+        get = (id: string) => mockStoreAgents.find(a => a.id === id);
+        byName = (name: string) => mockStoreAgents.filter(a => a.name === name);
+        label = (agent: { name: string }) => agent.name;
         onHeartbeat = vi.fn();
         onSpawn = vi.fn();
         onAlert = vi.fn();
         pruneSilentRemoteAgents = vi.fn();
         updateRemoteNode = vi.fn();
-        setHostStats = vi.fn();
         clearAll = vi.fn();
-        dispose = vi.fn();
+    },
+}));
+
+vi.mock("../ui/CardDashboard", () => ({
+    CardDashboard: class {
+        constructor() {
+            mockDashboards.push(this);
+        }
+        show = vi.fn();
+        destroy = vi.fn();
+        setTotalCostUsd = vi.fn();
+        setTotalMessages = vi.fn();
+        setHostStats = vi.fn();
     },
 }));
 
 // What had happened by the time main.ts installed the session-expiry hook.
-const mockAtExpiryInstall: { requests: number; stores: number }[] = [];
+const mockAtExpiryInstall: { requests: number; stores: number; dashboards: number }[] = [];
 vi.mock("../io/sessionExpiry", () => ({
     installSessionExpiry: () => {
         const requests = vi.isMockFunction(globalThis.fetch)
             ? vi.mocked(globalThis.fetch).mock.calls.length
             : 0;
-        mockAtExpiryInstall.push({ requests, stores: mockStores.length });
+        mockAtExpiryInstall.push({ requests, stores: mockStores.length, dashboards: mockDashboards.length });
     },
 }));
 
@@ -158,7 +178,7 @@ describe("main.ts bootstrap", () => {
 
     it("installs session expiry before any request, and before the dashboard mounts", () => {
         // Mounting starts the dashboard's polling, so it too must come after.
-        expect(mockAtExpiryInstall).toEqual([{ requests: 0, stores: 0 }]);
+        expect(mockAtExpiryInstall).toEqual([{ requests: 0, stores: 0, dashboards: 0 }]);
     });
 
     it("registers every router handler and the WS handlers", () => {
@@ -176,6 +196,7 @@ describe("main.ts bootstrap", () => {
             "host-stats",
             "raw",
             "answer",
+            "model-pointer",
         ]) {
             expect(typeof mockRouter[ev]).toBe("function");
         }
@@ -341,6 +362,20 @@ describe("main.ts bootstrap", () => {
         expect(true).toBe(true);
     });
 
+    it("hands the totals and the host's readings to the dashboard", () => {
+        const dashboard = mockDashboards[0]!;
+        wsHandler("statePatch")([], undefined, { totalCostUsd: 7, totalMessages: 4 });
+        routerHandler("host-stats")({ cpu: 1, memUsedMb: 2, memTotalMb: 3 });
+        expect(dashboard.setTotalCostUsd).toHaveBeenLastCalledWith(7);
+        expect(dashboard.setTotalMessages).toHaveBeenLastCalledWith(4);
+        expect(dashboard.setHostStats).toHaveBeenLastCalledWith(1, 2, 3);
+    });
+
+    it("tells the socket whom the chat addresses", () => {
+        emit("af-addressed", { agent: "weather" });
+        expect(mockAddressed.at(-1)).toBe("weather");
+    });
+
     it("sends a pressed option to the agent, and closes the question on an answer", () => {
         const answered: unknown[] = [];
         const seen = (e: Event): void => {
@@ -414,12 +449,36 @@ describe("main.ts bootstrap", () => {
         mockOpenQuestions.mockResolvedValue([]);
     });
 
+    it("tells the page a stored model's pointer moved", () => {
+        const heard: unknown[] = [];
+        const stop = listen("af-model-pointer", d => heard.push(d));
+
+        routerHandler("model-pointer")({ name: "hvac", pointer: "shadow" });
+        document.removeEventListener("af-model-pointer", stop);
+
+        expect(heard).toEqual([{ name: "hvac", pointer: "shadow" }]);
+    });
+
     it("handles the app-event listeners", () => {
-        emit("af-stream-end", { text: "done", from: "A" });
-        emit("af-stream-end", { text: "", from: "A" }); // !text → return
+        emit("af-stream-end", { text: "done", from: "A", agentId: "a" });
+        emit("af-stream-end", { text: "", from: "A", agentId: "a" }); // !text → return
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
-        emit("af-send-message", { id: "s1", content: "hi", target: "A", attachments: [] }); // agent found
-        emit("af-send-message", { id: "s2", content: "hi", target: "nope", attachments: [] }); // null
+        emit("af-send-message", {
+            id: "s1",
+            content: "hi",
+            target: "a",
+            name: "A",
+            answerer: "a",
+            attachments: [],
+        }); // agent found
+        emit("af-send-message", {
+            id: "s2",
+            content: "hi",
+            target: "nope",
+            name: "nope",
+            answerer: "nope",
+            attachments: [],
+        }); // null
         emit("af-wipe-all", { survivors: ["a"] });
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));

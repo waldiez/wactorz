@@ -561,6 +561,7 @@ class LLMAgent(Actor):
                     # can type a credential where no command asks for one.
                     content=redact(user_msg),
                     session_id=self.actor_id,
+                    agent_id=self.actor_id,
                 )
                 db.write_chat_log(
                     ts=ts_reply,
@@ -568,6 +569,7 @@ class LLMAgent(Actor):
                     role="assistant",
                     content=redact(reply),
                     session_id=self.actor_id,
+                    agent_id=self.actor_id,
                 )
             except Exception as exc:
                 # Warning, not debug: this branch swallowed an AttributeError for

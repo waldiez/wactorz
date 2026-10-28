@@ -365,8 +365,12 @@ function wirePrimaryBottomNav(
     });
 }
 
-/** Fill the More sheet with the overflow tabs — extension-registered views plus
- *  Settings — which is why the nav is rebuilt whenever a view registers late. */
+/** The views the phone's bar always shows; every other one is in the More sheet. */
+const PHONE_BAR: readonly View[] = ["overview", "feed", "chat"];
+
+/** Fill the More sheet with the overflow tabs — the built-in views the bar has
+ *  no room for, extension-registered views, then Settings — which is why the nav
+ *  is rebuilt whenever a view registers late. */
 function wireSecondaryBottomNav(
     sheet: HTMLElement,
     moreBtn: HTMLButtonElement,
@@ -375,6 +379,7 @@ function wireSecondaryBottomNav(
     onSetView: (v: View) => void,
 ): void {
     const secondary: { key: View; icon: IconName; label: string }[] = [
+        ...BUILTIN_VIEWS.filter(v => !PHONE_BAR.includes(v.key)),
         ...extraViews,
         { key: SETTINGS_VIEW.key, icon: SETTINGS_VIEW.icon, label: SETTINGS_VIEW.label },
     ];

@@ -14,7 +14,7 @@ from typing import Any
 from ..agents.llm.cost import get_global_alltime_cost
 from ..core import outbound
 from ..core.questions import QUESTIONS_LEAF
-from . import cost, runtime
+from . import chat, cost, runtime
 from . import questions as question_ledger
 
 logger = logging.getLogger(__name__)
@@ -416,8 +416,24 @@ def _on_chat(agent_id: str, data: Any) -> dict[str, Any]:
     frame: dict[str, Any] = {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
     if message["content"]:
         add_log({"type": "chat", "agent_id": agent_id, **message})
-        frame["_push_chat"] = {"type": "chat", **message}
+        frame["_push_chat"] = {
+            "type": "chat",
+            **message,
+            "thread_id": _thread_id(agent_id, message),
+        }
     return frame
+
+
+def _thread_id(agent_id: str, message: dict[str, Any]) -> str:
+    """The id of the agent whose thread ``message``, heard on ``agent_id``'s topic, is in.
+
+    Usually that agent's own. A voice agent relays a user's words as from the
+    user to another agent, and those are in that agent's thread.
+    """
+    owner = message["to"] if message["from"] == "user" else message["from"]
+    if owner == _name_of(agent_id):
+        return agent_id
+    return chat.agent_id_of(str(owner))
 
 
 def _on_answer(agent_id: str, data: Any) -> None:

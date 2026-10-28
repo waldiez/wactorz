@@ -12,32 +12,36 @@
  * again. Nothing is refused for being early. The socket is what decides, not the
  * server's link to the broker: without the broker, main still answers over it.
  *
- * A turn belongs to the agent that answers it, so a message from anyone else —
- * another agent streaming at the same time, a bystander's note — neither ends
- * it nor keeps it alive. A command is answered by main whichever thread it was
- * typed in, so its turn waits on main. A turn that goes quiet for
+ * A turn belongs to the agent that answers it, by id, so a message from anyone
+ * else — another agent streaming at the same time, a bystander's note, another
+ * agent of the same name — neither ends it nor keeps it alive. A command is
+ * answered by main whichever thread it was typed in, so its turn waits on main.
+ * The server says which agent a message reached before any of its reply, and
+ * the turn then waits on that one. A turn that goes quiet for
  * `TURN_IDLE_TIMEOUT_MS` is given up on: none of its endings arrive if the
  * backend dies part way.
  *
  * No DOM: the chat delivers what this says to send, and the views draw from
  * what it reports.
  */
-import { MAIN_AGENT } from "../agents/naming";
-
 /** How long a turn may go without a sign of life before it is given up on. */
 export const TURN_IDLE_TIMEOUT_MS = 60_000;
 
-/** One message to send: the id of its bubble, its words, to whom, and what is attached. */
+/** One message to send: the id of its bubble, its words, the thread it is sent from
+ *  (`target`, an agent id), the name of the agent it is to, the id of the agent
+ *  expected to answer it, and what is attached. */
 export interface PendingSend {
     id: string;
     content: string;
     target: string;
+    name: string;
+    answerer: string;
     attachments: string[];
 }
 
 /** What the turn is now. */
 export interface TurnState {
-    /** The agent the turn waits on, or null when none is under way. */
+    /** The id of the agent the turn waits on, or null when none is under way. */
     agent: string | null;
     /** How many sends wait: for the turn to end, or for the connection. */
     queued: number;
@@ -51,9 +55,9 @@ export interface TurnHost {
     changed(state: TurnState): void;
 }
 
-/** Who answers `content` sent to `target`: main for a command, else `target`. */
-export function answererOf(content: string, target: string): string {
-    return content.startsWith("/") ? MAIN_AGENT : target;
+/** The id of who answers `content` sent to the agent `target`: main (`mainId`) for a command, else `target`. */
+export function answererOf(content: string, target: string, mainId: string): string {
+    return content.startsWith("/") ? mainId : target;
 }
 
 export class TurnTracker {
@@ -91,14 +95,24 @@ export class TurnTracker {
         this._notify();
     }
 
-    /** A piece of `from`'s reply arrived: the turn it answers is alive. */
+    /** A piece of the reply of the agent `from` (an id) arrived: the turn it answers is alive. */
     chunk(from: string): void {
         if (this._agent !== null && from === this._agent) {
             this._arm();
         }
     }
 
-    /** `from`'s reply ended, streamed or in one message: its turn is over. */
+    /** The server says the send `id` reached the agent `agentId`: if it is the
+     *  send under way, its turn waits on that agent from now. */
+    reached(id: string, agentId: string): void {
+        if (this._inFlight?.id === id && agentId && this._agent !== agentId) {
+            this._agent = agentId;
+            this._arm();
+            this._notify();
+        }
+    }
+
+    /** The reply of the agent `from` (an id) ended, streamed or in one message: its turn is over. */
     ended(from: string): void {
         if (this._agent !== null && from === this._agent) {
             this._finish();
@@ -140,7 +154,7 @@ export class TurnTracker {
 
     private _start(send: PendingSend): void {
         this._inFlight = send;
-        this._agent = answererOf(send.content, send.target);
+        this._agent = send.answerer;
         this._arm();
         this._notify();
         this.host.deliver(send);

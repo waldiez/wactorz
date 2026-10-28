@@ -111,6 +111,20 @@ export interface RemoteNode {
     manifest?: Record<string, unknown> | null;
 }
 
+/** What a node's listing entry carries that the dashboard reads. */
+export interface NodeListing {
+    /** The node's name. */
+    node: string;
+    /** Whether main has heard from it lately. */
+    online: boolean;
+    /** Seconds since the epoch it was last heard from. */
+    last_seen?: number;
+    /** What its machine is, or null from a node that has not said. */
+    manifest?: Record<string, unknown> | null;
+    /** Its latest readings, under the names its heartbeat uses. */
+    [reading: string]: unknown;
+}
+
 /** Status update payload. */
 export interface StatusPayload {
     agentId: string;
@@ -171,6 +185,9 @@ export interface ChatMessage {
     id: string;
     from: string; // "user" or agent name
     to: string; // agent name or "user"
+    /** The id of the agent whose thread the message is in, as the server names it:
+     *  the agent's own for its replies, the one spoken to for the person's words. */
+    threadId: string;
     content: string;
     timestampMs: number;
     /** Origin channel for special routing, such as an embodied voice turn. */
@@ -191,9 +208,19 @@ export interface ChatMessage {
     answer?: string;
     /** A chat channel the message also went to ("telegram", "discord", "whatsapp"). */
     channel?: string;
+    /** A name the person used fits more than one agent: the addresses to pick from. */
+    addressChoice?: AddressChoice;
     /** The person's message waits to go out: for a turn under way to end, or for the
      *  connection. Unset once it is sent. */
     queued?: boolean;
+}
+
+/** The addresses a name fits, offered to pick from, and the person's message a pick re-sends. */
+export interface AddressChoice {
+    /** Each agent the name fits, as `name@node`. */
+    addresses: string[];
+    /** The id of the person's message that used the name. */
+    retryOf: string;
 }
 
 /** A person's pick among the options an agent offered, from whichever channel showed them. */

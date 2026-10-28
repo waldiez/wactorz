@@ -16,6 +16,7 @@ this process had already loaded cannot work until a restart.
 
 import asyncio
 import importlib.util
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -32,8 +33,10 @@ from wactorz.agents.catalog_agent import (
     get_native_factory,
 )
 from wactorz.agents.dynamic import DynamicAgent
+from wactorz.agents.mixins import spawning
 from wactorz.catalogue_agents.weather_agent import WeatherAgent
 from wactorz.core.actor import Message, MessageType
+from wactorz.core.identity import derive_actor_id
 
 
 def _available_off_loop(requirements: list[str]) -> list[str]:
@@ -103,9 +106,17 @@ class _Main(_Actor):
         self._result_futures: dict[str, asyncio.Future[Any]] = {}
         self._agent_manifests: dict[str, dict[str, Any]] = {}
         self.spawn_registry: list[dict[str, Any]] = []
+        #: The ids main's spawn registry keeps, by name.
+        self.kept_ids: dict[str, str] = {}
 
     def _save_to_spawn_registry(self, cfg: dict[str, Any]) -> None:
         self.spawn_registry.append(cfg)
+
+    def _registered_actor_id(self, name: str) -> str | None:
+        return self.kept_ids.get(name)
+
+    def _kept_actor_id(self, name: str, node: str, *, alongside: bool = False) -> str | None:
+        return None if alongside else self.kept_ids.get(name)
 
 
 class _Broker:
@@ -130,6 +141,8 @@ def catalog_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CatalogA
 def main_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Main:
     main = _Main(tmp_path)
     monkeypatch.setattr(catalog_agent, "find_main_actor", lambda _registry: main)
+    # And where the id a spawn runs under is decided.
+    monkeypatch.setattr(spawning, "find_main_actor", lambda _registry: main)
     return main
 
 
@@ -397,6 +410,7 @@ class TestNativeSpawn:
         ((cls, kwargs),) = spawner.calls
         assert cls is WeatherAgent
         assert kwargs == {
+            "actor_id": kwargs["actor_id"],
             "name": "weather-agent",
             "persistence_dir": str(tmp_path / "state"),
             "llm_provider": main.llm,
@@ -439,6 +453,33 @@ class TestNativeSpawn:
 
         assert result == {"ok": False, "message": "Native recipe 'weather-agent' has no factory"}
         assert spawner.calls == []
+
+
+class TestTheIdASpawnRunsUnder:
+    @pytest.mark.parametrize("recipe", ["weather-agent", "smart-energy"], ids=["native", "dynamic"])
+    async def test_a_new_agent_gets_one_of_its_own(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch, recipe: str
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        spawner = _spawner(catalog, monkeypatch)
+
+        await catalog._action_spawn(recipe, {})
+
+        given = spawner.calls[0][1]["actor_id"]
+        assert uuid.UUID(given).version == 4
+        assert given != derive_actor_id(recipe)
+
+    async def test_one_main_knows_keeps_the_id_it_has(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        kept = str(uuid.uuid4())
+        main.kept_ids["smart-energy"] = kept
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        spawner = _spawner(catalog, monkeypatch)
+
+        await catalog._action_spawn("smart-energy", {})
+
+        assert spawner.calls[0][1]["actor_id"] == kept
 
 
 class TestDynamicSpawn:

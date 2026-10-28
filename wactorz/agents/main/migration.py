@@ -63,7 +63,9 @@ from ...core.mqtt import (
 from ...core.paths import resolve_state_dir
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from ...plugins import MODULE_TYPE, is_module_config
-from .spawns import why_a_node_cannot_run, with_code_for, without_transient_keys
+from .addresses import registered_agent
+from .spawn_registry import SpawnRegistry, address_of, without_transient_keys
+from .spawns import why_a_node_cannot_run, with_code_for
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -395,8 +397,8 @@ class Migration:
         """
         if self.host is None:
             return None
-        entry = self.host._get_spawn_registry().get(agent_name) or library_agent_config(
-            agent_name, self.host._registry
+        entry = _entry_on(self.host._get_spawn_registry(), agent_name, from_node) or (
+            library_agent_config(agent_name, self.host._registry)
         )
         if not entry:
             logger.warning(
@@ -914,7 +916,7 @@ class Migration:
             from_node = started.get("from_node", "")
             if not agent_name or not from_node:
                 continue
-            config = self.host._get_spawn_registry().get(agent_name)
+            config = _entry_on(self.host._get_spawn_registry(), agent_name, from_node)
             if not config:
                 logger.warning(
                     "[%s] %r never came back from %r and is not in the registry — "
@@ -1079,8 +1081,12 @@ class Migration:
         """
         if self.host is None or self.host_nodes is None:
             return {}
+        named, refusal = registered_agent(self.host, agent_name)
+        if refusal:
+            return {"success": False, "message": refusal}
+        agent_name = named.name
         reg = self.host._get_spawn_registry()
-        config = reg.get(agent_name)
+        config = named.entry
         if config is None:
             # A library agent started with the system has no entry: its config
             # is what a `type: module` spawn of it would say.
@@ -1089,14 +1095,15 @@ class Migration:
 
         # ── Locate the agent via every source we have ─────────────────────────
         # Registry first, then manifest, then heartbeats. We need at least to
-        # know WHERE the agent is to do anything useful.
+        # know WHERE the agent is to do anything useful. A name kept in more
+        # than one place was named by its address, and the registry alone says
+        # where that one is: the others of the name are elsewhere.
         manifest = self.host._agent_manifests.get(agent_name, {})
-        current_node = ""
-        if config:
-            current_node = (config.get("node") or "").strip()
-        if not current_node and manifest:
+        shared = len(reg.named(agent_name)) > 1
+        current_node = named.node
+        if not current_node and manifest and not shared:
             current_node = (manifest.get("node") or "").strip()
-        if not current_node:
+        if not current_node and not shared:
             # Last resort — the live heartbeats, which may know a node the spawn
             # registry does not record.
             current_node = self.host_nodes.running_agent(agent_name)
@@ -1131,6 +1138,18 @@ class Migration:
 
         # Normalise "local" as a target so users can type /migrate agent-name local
         is_target_local = target_node.strip().lower() in ("", "local", "main")
+
+        occupied = self._occupied(
+            agent_name,
+            "" if is_target_local else target_node,
+            str((config or {}).get("actor_id") or ""),
+        )
+        if occupied:
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {occupied} It stays on "
+                f"'{current_node or 'local'}'.",
+            }
 
         # ── Verify the target node exists and is online ────────────────────────
         # This must happen BEFORE anything destructive. Without it, a typo'd or
@@ -1445,6 +1464,32 @@ class Migration:
         logger.info("[%s] %s", self.host.name, msg)
         return {"success": True, "message": msg}
 
+    def _occupied(self, agent_name: str, target_node: str, moving_id: str = "") -> str | None:
+        """Why ``target_node`` ("" for main) cannot take ``agent_name``: it runs one of the name already.
+
+        A name is unique on a host, so a move there would leave two agents
+        answering to one address. Renaming one on the way is not offered: it
+        would break every address that names it. What runs under the moving
+        agent's own id, ``moving_id``, is that agent -- main keeps its copy
+        until a move out is confirmed -- and is not another one.
+        """
+        if self.host is None:
+            return None
+        here = self.host._registry.find_by_name(agent_name) if self.host._registry else None
+        if here is not None and moving_id and here.actor_id == moving_id:
+            here = None
+        kept = self.host._get_spawn_registry().at(agent_name, target_node)
+        if kept is not None and moving_id and kept["actor_id"] == moving_id:
+            kept = None
+        listed = (
+            bool(target_node)
+            and self.host_nodes is not None
+            and (agent_name in self.host_nodes.known.get(target_node, {}).get("agents", []))
+        )
+        if kept is None and not listed and (target_node or here is None):
+            return None
+        return f"{address_of({'name': agent_name, 'node': target_node})} already runs."
+
     @staticmethod
     def _hand_back_request(agent_name: str, return_token: str, force: bool) -> dict[str, Any]:
         """What a source node is sent to hand an agent back to main.
@@ -1518,8 +1563,7 @@ class Migration:
         if self.host is None:
             return
         # Build desired state from spawn registry filtered to this node
-        reg = self.host._get_spawn_registry()
-        agents = {name: cfg for name, cfg in reg.items() if cfg.get("node", "").strip() == node}
+        agents = {cfg["name"]: cfg for cfg in self.host._get_spawn_registry().on_node(node)}
 
         # Apply pending change before publishing. Stripped, because this message
         # is retained: the runner reconciles from it on every reboot, and a
@@ -1546,6 +1590,11 @@ class Migration:
             qos=1,
         )
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
+
+
+def _entry_on(registry: SpawnRegistry, agent_name: str, node: str) -> dict[str, Any] | None:
+    """The registry entry of ``agent_name`` on ``node``, or else its only entry, or None."""
+    return registry.at(agent_name, node) or registry.only(agent_name)
 
 
 def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) -> bool:

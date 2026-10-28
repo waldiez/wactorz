@@ -14,6 +14,7 @@ import re
 import shutil
 import site
 import sys
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -28,6 +29,24 @@ _PACKAGE_NAME = re.compile(
     r"(?:,(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+)*"
     r")?"
 )
+
+
+#: Held while the import system's caches are refreshed. Refreshing walks
+#: ``sys.path_importer_cache`` and deletes entries as it goes, so two threads
+#: refreshing at once both delete the same entry and the second raises KeyError.
+_IMPORT_CACHES_LOCK = threading.Lock()
+
+
+def refresh_import_caches() -> None:
+    """`importlib.invalidate_caches`, one thread at a time.
+
+    The checks and installs here run off the event loop, several at once when
+    more than one agent is waiting on packages, and the standard library's
+    refresh is not safe to run concurrently with itself. Every caller in
+    Wactorz goes through this.
+    """
+    with _IMPORT_CACHES_LOCK:
+        importlib.invalidate_caches()
 
 
 def is_installable_name(package: str) -> bool:
@@ -138,7 +157,7 @@ def requirement_is_satisfied(requirement: str) -> bool:
     if not name:
         return False
     specifier = re.sub(r"^[^<>=!~]*", "", (requirement or "").split(";", 1)[0]).strip()
-    importlib.invalidate_caches()
+    refresh_import_caches()
     try:
         version = importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -181,7 +200,7 @@ def make_user_site_importable() -> bool:
     if not Path(user_site).is_dir() or user_site in sys.path:
         return False
     site.addsitedir(user_site)
-    importlib.invalidate_caches()
+    refresh_import_caches()
     return True
 
 
@@ -195,7 +214,7 @@ def stale_loaded_distributions(before: dict[str, str], after: dict[str, str]) ->
     downgrades a shared dependency is the usual way this happens. Each entry
     reads ``name old -> new``.
     """
-    importlib.invalidate_caches()
+    refresh_import_caches()
     changed = {name for name, version in before.items() if after.get(name) != version}
     if not changed:
         return []

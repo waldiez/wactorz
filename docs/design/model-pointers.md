@@ -265,8 +265,9 @@ Decided against:
 
 - **Step 4, item 5** builds the pointers and the topics as written here: the index
   format, `resolve`, the three operations, the refusals, `follows` on a pin, the CLI
-  and chat commands, main publishing the topics. Built; the dashboard's model view is
-  not part of it and waits for the dashboard work.
+  and chat commands, main publishing the topics. Built, and so is the dashboard's model
+  view (the Models tab), which moves every pointer but `activate`: from there a version
+  is served by being tried first. A clear takes no reason, since nothing would keep one.
 - **Item 7, hot swap**, re-pins and reloads the agents whose pin follows a moved pointer,
   on main and on nodes, as "Hot swap" above says. Built (`wactorz/agents/main/hot_swap.py`,
   `Actor.swap_model`, the runner's `swap_model` command, `wactorz/core/model_swaps.py`).

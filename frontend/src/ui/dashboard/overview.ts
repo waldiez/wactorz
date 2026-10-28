@@ -8,13 +8,15 @@
  * through the host and routes card interactions back via `onChat` / `onCommand`.
  */
 import type { AgentInfo, RemoteNode } from "../../types/agent";
-import { stateColor, stateLabel, sortAgents, STALE_MS } from "./agentState";
+import { STALE_MS } from "../../agents/liveness";
+import { stateLabel, sortAgents } from "./agentState";
 import {
     buildHostBar,
     buildStatCards,
     buildWactorCard,
     appendActionBtns,
     paintCardTrend,
+    paintCard,
     type StatCardData,
     type AgentAction,
 } from "./cards";
@@ -25,16 +27,18 @@ import type { TrendKind } from "./trendPanel";
 
 export interface OverviewHost {
     readonly root: HTMLElement;
-    readonly agents: Map<string, AgentInfo>;
+    readonly agents: ReadonlyMap<string, AgentInfo>;
     readonly lastHb: Map<string, number>;
-    readonly remoteNodes: Map<string, RemoteNode>;
+    readonly remoteNodes: ReadonlyMap<string, RemoteNode>;
     readonly removingIds: Set<string>;
+    /** What to call an agent on its card: its name, or `name@node` where the name is shared. */
+    label(agent: AgentInfo): string;
     /** [cpu, memUsedMb, memTotalMb] for the host bar. */
     hostStats(): [number | null, number | null, number | null];
     /** Inputs for the summary stat cards. */
     statData(): StatCardData;
-    /** Open chat targeting the named agent. */
-    onChat(name: string): void;
+    /** Open chat with the agent `id`. */
+    onChat(id: string): void;
     /** Run a control command (start/stop/delete) on an agent. */
     onCommand(id: string, action: AgentAction, btn: HTMLButtonElement): void;
     /** An agent's messages per minute over the last hour, once fetched. */
@@ -112,7 +116,7 @@ export class OverviewView {
         });
     }
 
-    /** Update one card's state dot/label/name/controls in place, rebuilding the grid if it's missing. */
+    /** Update one card's state, name, node and controls in place, rebuilding the grid if it's missing. */
     patchCard(agent: AgentInfo): void {
         if (this.host.removingIds.has(agent.id)) {
             return;
@@ -122,23 +126,9 @@ export class OverviewView {
             this.renderCards();
             return;
         }
-        const color = stateColor(agent.state);
-        card.dataset["state"] = stateLabel(agent.state);
-        const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
-        const lbl = card.querySelector<HTMLElement>(".af-card-state-label");
-        const nm = card.querySelector<HTMLElement>(".af-card-name");
-        if (dot) {
-            dot.style.background = color;
-            dot.style.boxShadow = `0 0 8px ${color}`;
-        }
-        if (lbl) {
-            lbl.style.color = color;
-            lbl.textContent = stateLabel(agent.state);
-        }
-        if (nm) {
-            nm.textContent = agent.name;
-        }
-        this._rebuildControls(card, agent);
+        const label = this.host.label(agent);
+        paintCard(card, agent, label);
+        this._rebuildControls(card, agent, label);
     }
 
     /** Render the nodes panel (local + remote nodes with online/offline pills) into `container` or the mounted list. */
@@ -213,16 +203,21 @@ export class OverviewView {
     }
 
     private _buildCard(agent: AgentInfo): HTMLElement {
-        const card = buildWactorCard(agent, this.host.lastHb.get(agent.id) ?? 0, {
-            onChat: a => this.host.onChat(a.name),
-            onCommand: (id, action, btn) => this.host.onCommand(id, action, btn),
-            onHistory: a => this.host.onOpenTrend("agents", a.name),
-        });
+        const card = buildWactorCard(
+            agent,
+            this.host.lastHb.get(agent.id) ?? 0,
+            {
+                onChat: a => this.host.onChat(a.id),
+                onCommand: (id, action, btn) => this.host.onCommand(id, action, btn),
+                onHistory: a => this.host.onOpenTrend("agents", a.name),
+            },
+            this.host.label(agent),
+        );
         paintCardTrend(card, this.host.agentTrend(agent.name));
         return card;
     }
 
-    private _rebuildControls(card: HTMLElement, agent: AgentInfo): void {
+    private _rebuildControls(card: HTMLElement, agent: AgentInfo, label: string): void {
         const controls = card.querySelector<HTMLElement>(".af-card-controls");
         if (!controls) {
             return;
@@ -233,6 +228,6 @@ export class OverviewView {
         }
         // Only replace the action buttons — the delegated click listener stays.
         controls.querySelectorAll("[data-action]").forEach(b => b.remove());
-        appendActionBtns(controls, agent);
+        appendActionBtns(controls, agent, label);
     }
 }

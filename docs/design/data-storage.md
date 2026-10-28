@@ -206,8 +206,10 @@ there is no third.
   collector's event-time columns and shortened retention, and the
   `StreamWindow` event-time option.
 - **1.5, shadow serving**, writes pairs under `shadow/<model>` through the same
-  writer, and reads them back through `frame` for the comparison. It may build
-  the writer first if it lands before 1.6a.
+  writer, and reads them back through `frame` for the comparison. Built, with
+  the writer and `frame` as its first piece (`wactorz/data/`): a batch that
+  closes inside the hour is a further part of it, `<hh>-0001.parquet`, since a
+  file is never appended to; the `data` extra carries pyarrow beside pandas.
 - **1.6, the train step**, reads its window through `frame`, takes a split from
   the loader, and stores the split's manifest and the files' hashes with the
   version, which is the data manifest `model-pointers.md` asks for.

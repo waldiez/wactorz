@@ -96,7 +96,9 @@ class HotSwap:
         Called by the pointer watcher with what it found, the first look
         included: an agent on main was re-pinned when it was restored and is
         passed over, while one on a node that stayed up through main's
-        absence is sent the version everyone else moved to.
+        absence is sent the version everyone else moved to. Agents on main
+        are found among those running, so a library agent the system started
+        follows as a spawned one does; agents on nodes through their records.
         """
         host = self.host
         if host is None:
@@ -105,86 +107,122 @@ class HotSwap:
         if not moved:
             return
         self._expire()
-        for config in host._get_spawn_registry():
-            agent = config["name"]
+        registry = host._get_spawn_registry()
+        # Agents on nodes are reached through their records; main does not
+        # hold them.
+        for config in registry:
+            if not str(config.get("node") or "").strip():
+                continue
             try:
                 entries = pinned_in(config)
             except ArtifactError:
                 continue
             for key, entry in entries.items():
                 for name, which, now in moved:
-                    if entry.get("name") != name or entry.get("follows") != which:
-                        continue
-                    try:
-                        await self._follow_one(agent, config, key, entry, now)
-                    except Exception as exc:
-                        # One agent's trouble is not the others': they follow too.
-                        logger.warning(
-                            "[%s] cannot follow %s for %r: %s", host.name, now.reference, agent, exc
-                        )
+                    if entry.get("name") == name and entry.get("follows") == which:
+                        await self._guarded(self._follow_on_node, config, key, entry, now)
+        # Agents here are the ones running, whatever placed them: a library
+        # agent started with the system has no record, and follows all the same.
+        for actor in host._registry.all_actors() if host._registry else []:
+            artifacts = getattr(actor, "artifacts", None)
+            if not isinstance(artifacts, dict):
+                continue
+            for key, entry in artifacts.items():
+                for name, which, now in moved:
+                    if entry.get("name") == name and entry.get("follows") == which:
+                        config = registry.at(actor.name, "") if registry else None
+                        await self._guarded(self._follow_here, actor, config, key, entry, now)
 
-    async def _follow_one(
-        self, agent: str, config: dict[str, Any], key: str, entry: dict[str, Any], now: Pointer
+    async def _guarded(self, follow: Any, *args: Any) -> None:
+        """Run one agent's follow; its trouble is not the others', which follow too."""
+        host = self.host
+        try:
+            await follow(*args)
+        except Exception as exc:
+            logger.warning(
+                "[%s] cannot follow a moved pointer: %s", host.name if host else "main", exc
+            )
+
+    async def _follow_on_node(
+        self, config: dict[str, Any], key: str, entry: dict[str, Any], now: Pointer
     ) -> None:
+        """Re-pin an agent on a node and send the node its new version."""
         host = self.host
         if host is None:
             return
+        agent = str(config["name"])
         node = str(config.get("node") or "").strip()
         try:
             repinned = await asyncio.to_thread(self.store.pin, entry)
         except ArtifactError as exc:
             await self._say(f"{agent} keeps {_reference(entry)} as {key}: {exc}")
             return
+        if repinned["sha256"] == entry["sha256"]:
+            return
         updated = {**config, "artifacts": {**pinned_in(config), key: repinned}}
-        if node:
-            if repinned["sha256"] == entry["sha256"]:
-                return
-            # The registry is what says a node may have a version, and the
-            # desired state what a reboot runs: both before the node is asked.
-            host._save_to_spawn_registry(updated)
-            await host._update_node_desired_state(node, updated)
-            token = secrets.token_hex(8)
-            self.pending[token] = {
+        # The registry is what says a node may have a version, and the
+        # desired state what a reboot runs: both before the node is asked.
+        host._save_to_spawn_registry(updated)
+        await host._update_node_desired_state(node, updated)
+        token = secrets.token_hex(8)
+        self.pending[token] = {
+            "agent": agent,
+            "node": node,
+            "key": key,
+            "from": entry.get("version"),
+            "pointer": now,
+            "sent_at": time.time(),
+        }
+        # Signed on the way out, because it is a node control topic: see
+        # `MainActor._publish_properties`.
+        await host._mqtt_publish(
+            f"nodes/{node}/swap_model",
+            {
                 "agent": agent,
-                "node": node,
                 "key": key,
-                "from": entry.get("version"),
-                "pointer": now,
-                "sent_at": time.time(),
-            }
-            # Signed on the way out, because it is a node control topic: see
-            # `MainActor._publish_properties`.
-            await host._mqtt_publish(
-                f"nodes/{node}/swap_model",
-                {
-                    "agent": agent,
-                    "key": key,
-                    "entry": repinned,
-                    "token": token,
-                    "timestamp": time.time(),
-                },
-                qos=1,
-            )
+                "entry": repinned,
+                "token": token,
+                "timestamp": time.time(),
+            },
+            qos=1,
+        )
+
+    async def _follow_here(
+        self,
+        actor: Any,
+        config: dict[str, Any] | None,
+        key: str,
+        entry: dict[str, Any],
+        now: Pointer,
+    ) -> None:
+        """Swap the version into an agent running on main, and keep its record true."""
+        host = self.host
+        if host is None:
             return
-        actor = host._registry.find_by_name(agent) if host._registry else None
-        if actor is None:
-            # Not running: the registry now names what it runs when it starts.
-            if repinned["sha256"] != entry["sha256"]:
-                host._save_to_spawn_registry(updated)
+        try:
+            repinned = await asyncio.to_thread(self.store.pin, entry)
+        except ArtifactError as exc:
+            await self._say(f"{actor.name} keeps {_reference(entry)} as {key}: {exc}")
             return
-        held = actor.artifacts.get(key, entry)
-        if repinned["sha256"] == held.get("sha256"):
-            if repinned["sha256"] != entry["sha256"]:
-                host._save_to_spawn_registry(updated)
+        recorded = pinned_in(config).get(key, {}).get("sha256") if config is not None else None
+        if repinned["sha256"] == entry["sha256"]:
+            # Already on the version, as a restore leaves it; its record may lag.
+            if config is not None and recorded != repinned["sha256"]:
+                host._save_to_spawn_registry(
+                    {**config, "artifacts": {**pinned_in(config), key: repinned}}
+                )
             return
         try:
             path = await asyncio.to_thread(self.store.readable_path, repinned)
             await actor.swap_model(key, {**repinned, "path": str(path)})
         except Exception as exc:
-            await self._say(f"{agent} on {MAIN} keeps {_reference(held)} as {key}: {exc}")
+            await self._say(f"{actor.name} on {MAIN} keeps {_reference(entry)} as {key}: {exc}")
             return
-        host._save_to_spawn_registry(updated)
-        await self._landed(secrets.token_hex(8), agent, MAIN, key, held.get("version"), now)
+        if config is not None:
+            host._save_to_spawn_registry(
+                {**config, "artifacts": {**pinned_in(config), key: repinned}}
+            )
+        await self._landed(secrets.token_hex(8), actor.name, MAIN, key, entry.get("version"), now)
 
     # ── Hearing from a node ───────────────────────────────────────────────
 

@@ -411,6 +411,33 @@ End the trial: unset `shadow`.
 
 ---
 
+### `GET /api/models/{name}/trial`
+
+What the shadow trial shows: the pairs the serving agents kept, compared. By default the trial's own window, from when `shadow` was set to now; `since` and `until` (Unix seconds) choose another, and are the only way to read a trial that has ended. `source` and `positive` (label values, comma separated) add each side's precision and recall over the pairs a label of that source covers, as `GET /api/labels/effective` resolves them.
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector", "shadow": {"version": 4, "moved_at": 1760000000.0, "...": "..."},
+ "since": 1760000000.0, "until": 1760086400.0, "source": "sensors/imu/left-wrist",
+ "pairs": 8640, "agreement": 0.97, "flagged": {"active": 41, "shadow": 38}, "shadow_errors": 0,
+ "versions": {"active": [3], "shadow": [4]},
+ "latency": {"active": {"mean_ms": 1.2, "p95_ms": 2.9}, "shadow": {"mean_ms": 1.4, "p95_ms": 3.1}},
+ "score": {"active_mean": 2.1, "shadow_mean": 2.0, "difference_mean": -0.1, "scored": 8640},
+ "labels": {"labelled": 120, "positives": 9, "positive": ["fault"],
+            "active": {"tp": 7, "fp": 3, "fn": 2, "precision": 0.7, "recall": 0.78},
+            "shadow": {"tp": 8, "fp": 1, "fn": 1, "precision": 0.89, "recall": 0.89}}}
+```
+
+`agreement` is the share of pairs where both sides answered alike; `flagged` how many inputs each side published something for; `score` is read from a `score` field in the outputs, over the pairs where both gave one. `404` when no shadow is set and no window is given, `400` for a bad `name`, `since` or `until`, `503` when the pairs cannot be read because the `data` extra is not installed, or when labels are asked for and persistence is not running.
+
+---
+
+### `GET /api/models/{name}/trials`
+
+The outcomes of the model's trials that ended, newest first: how each ended (`promoted` or `cleared`), the versions on either side, the window, and the comparison above as it stood then. `503` when persistence is not running.
+
+---
+
 Every pointer move answers `200 OK` with `{"pointer": {...}}`, the pointer it moved as it stands now; for `DELETE .../shadow`, the shadow pointer as it was before it was cleared. Each answers `409` for a move the pointers do not allow now (already there, no shadow to promote, nothing to roll back to, a shadow on the active version), `404` for a name or version that is not stored, and `400` for a request that is not one; `{"error": "..."}` says which in the store's words.
 
 ---

@@ -67,7 +67,8 @@ cron      = ["croniter>=2.0.0"]
 # Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
 # no Bluetooth adapter has nothing to install it for.
 flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
-data      = ["pandas>=2.0.0"]
+# Parquet, for the readings and shadow pairs the model loop keeps (docs/design/data-storage.md).
+data      = ["pandas>=2.0.0", "pyarrow>=15.0.0"]
 vision    = ["opencv-python>=4.8.0"]
 # The Reachy Mini catalogue agent's packages, the same list its recipe installs
 # on first spawn. Installed up front they resolve together with Wactorz's own,
@@ -109,6 +110,8 @@ dev       = [
     # Test-only support for optional catalogue-agent media paths. These stay out
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
+    # So the Parquet writer and the shadow trial are tested for real.
+    "pyarrow>=15.0.0",
     "Pillow>=10.0.0",
     # So the doc-to-pptx agent's deck is built for real in its tests.
     "python-pptx>=1.0.2",

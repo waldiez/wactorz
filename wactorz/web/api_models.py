@@ -358,8 +358,14 @@ async def rollback_handler(request: web.Request) -> web.Response:
 
 
 async def clear_shadow_handler(request: web.Request) -> web.Response:
-    """End the trial: unset ``shadow``."""
+    """End the trial: unset ``shadow``, with the body's optional ``reason``."""
     name = _name(request)
     if isinstance(name, web.Response):
         return name
-    return await _moved(_store().clear, "shadow", name, by=BY)
+    body = await _body(request)
+    if isinstance(body, web.Response):
+        return body
+    reason = _reason(body)
+    if isinstance(reason, web.Response):
+        return reason
+    return await _moved(_store().clear, "shadow", name, by=BY, reason=reason)

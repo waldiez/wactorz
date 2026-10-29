@@ -76,10 +76,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A model keeps the history of its pointers.** Every move of `active` or `shadow` is
   recorded with who made it, why, and from which version to which, whether it was made on
   the dashboard, in chat or with `wactorz-artifacts`; `GET /api/models/{name}/moves` lists
-  them, newest first. A clear made on the dashboard or in chat says who cleared it too
-  (one made with the CLI beside the server is recorded without a name), and a shadow ended
-  by a promotion is recorded as part of it. Kept in the provenance graph in main's
-  database; the store's index format does not change.
+  them, newest first. A clear says who cleared it and why, and a shadow ended by a
+  promotion is recorded as part of it. Each change is journalled beside the store's index
+  as it is made, and kept in the provenance graph in main's database once main has read
+  it; the store's index format does not change. Both moves are listed when one follows
+  another within seconds, as when a shadow is set and promoted at once, and so is a change
+  made while main was down. Clearing a pointer takes a reason: `DELETE
+  /api/models/{name}/shadow` with `{"reason": "..."}`, `/artifacts clear active|shadow <name>
+  [reason]` in chat and `wactorz-artifacts clear --reason`.
 - **A running agent follows its model's pointer, without a restart.** An agent whose
   spawn named a model by its bare name, or as `NAME:active` or `NAME:shadow`, serves the
   version that pointer moves to as soon as it has loaded: promote, roll back, point at a

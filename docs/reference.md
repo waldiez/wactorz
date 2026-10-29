@@ -801,7 +801,7 @@ them to main too. A social channel such as Discord runs only the everyday ones
 | `/artifacts` | List the models kept on main (wactorz-artifacts) |
 | `/artifacts <name>` | Every version of one model |
 | `/artifacts activate <name:version> [reason]` | Make a version the one agents serve |
-| `/artifacts clear active\|shadow <name>` | Unset a pointer |
+| `/artifacts clear active\|shadow <name> [reason]` | Unset a pointer |
 | `/artifacts promote <name> [reason]` | Make the shadow version active |
 | `/artifacts shadow <name:version> [reason]` | Try a version beside the active one |
 

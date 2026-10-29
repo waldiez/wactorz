@@ -56,7 +56,7 @@ from ...core.mqtt import (
 )
 from ...core.paths import resolve_state_dir
 from ...core.persistence.stores import get_db
-from ...core.pointer_moves import record_clear, record_move
+from ...core.pointer_moves import record_change, record_clear, record_move
 from ...core.provenance import Provenance
 
 if TYPE_CHECKING:
@@ -101,13 +101,27 @@ def record_pointer_changes(
     changes: list[Change],
     standing: Mapping[tuple[str, str], Pointer | None],
 ) -> None:
-    """Write each change into the provenance graph, as `wactorz.core.pointer_moves` keeps them.
+    """Write the store's journal, then each change seen, into the provenance graph.
 
-    A shadow that went because its version became active is the promotion's,
-    by whoever promoted; any other clear is by whoever this process saw clear
-    it, or unknown.
+    The journal first: it says who made each change and why, in whichever
+    process, and the first record of a change is the one that stands
+    (`wactorz.core.pointer_moves`). It is trimmed once written, so a database
+    that refuses a record leaves it to the next look. What is seen in the
+    index covers a change the journal lost: a shadow that went because its
+    version became active is the promotion's, by whoever promoted; any other
+    clear is by nobody known.
     """
     prov = Provenance(db)
+    journalled, read = store.pointer_changes()
+    for change in journalled:
+        record_change(prov, change)
+    rejected = store.forget_pointer_changes(read)
+    if rejected:
+        logger.warning(
+            "%s line(s) of the pointer journal were not a change, kept in %s",
+            len(rejected),
+            store.rejected_journal_path,
+        )
     for name, which, now, was in changes:
         if now is not None:
             record_move(prov, now)
@@ -116,9 +130,11 @@ def record_pointer_changes(
             continue
         active = standing.get((name, "active"))
         if which == "shadow" and active is not None and active.version == was.version:
-            record_clear(prov, was, at=active.moved_at, by=active.by, promoted=True)
+            record_clear(
+                prov, was, at=active.moved_at, by=active.by, reason=active.reason, promoted=True
+            )
         else:
-            record_clear(prov, was, at=time.time(), by=store.cleared_by(name, which))
+            record_clear(prov, was, at=time.time())
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -322,7 +338,7 @@ class ArtifactService:
     ) -> None:
         """Write ``changes`` into the provenance graph, where main has a database."""
         db = get_db()
-        if not changes or db is None:
+        if db is None:
             return
         try:
             await asyncio.to_thread(record_pointer_changes, db, self.store, changes, standing)

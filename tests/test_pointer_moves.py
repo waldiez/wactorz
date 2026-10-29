@@ -1,8 +1,8 @@
 """The history of a model's pointers: each move an action in the provenance graph.
 
-Main writes one when its pointer watcher sees a change, whoever made it -- the
-dashboard, the chat, the CLI beside the server -- and the models routes read
-them back newest first. The index itself stays where each pointer is now; see
+The store journals each change as it is made, whoever made it -- the
+dashboard, the chat, the CLI beside the server -- main writes the journal into
+the graph on its next look, and the models routes read them back newest first. The index itself stays where each pointer is now; see
 ``wactorz.core.pointer_moves`` for why, and for what is recorded of a move made
 while main was away.
 """
@@ -194,17 +194,80 @@ class TestMainRecordsWhatItSees:
 
         assert _changes(graph)[-1] == (CLEARED, "shadow", None, "dashboard")
 
-    async def test_a_clear_made_elsewhere_is_recorded_by_nobody_known(
+    async def test_a_clear_made_by_another_process_is_recorded_by_whoever_made_it(
         self, store: ArtifactStore, service: ArtifactService, graph: Provenance
     ) -> None:
         store.move("shadow", "imu:3", by="cli")
         await service.publish_pointers()
 
-        # As the CLI beside the server would: this process never hears who.
-        store.clear("shadow", "imu")
+        # As the CLI beside the server would: its own store, on the same directory.
+        ArtifactStore(store.root).clear("shadow", "imu", by="cli", reason="noisy")
         await service.publish_pointers()
 
-        assert _changes(graph)[-1] == (CLEARED, "shadow", None, "")
+        assert _changes(graph)[-1] == (CLEARED, "shadow", None, "cli")
+        assert history(graph, "imu")[0]["reason"] == "noisy"
+
+    async def test_a_shadow_set_and_promoted_between_two_looks_keeps_both(
+        self, store: ArtifactStore, service: ArtifactService, graph: Provenance
+    ) -> None:
+        store.move("active", "imu:1", by="cli")
+        await service.publish_pointers()
+
+        store.move("shadow", "imu:3", by="dashboard", reason="quieter at night")
+        store.promote("imu", by="dashboard", reason="fewer false alarms")
+        await service.publish_pointers()
+
+        assert _changes(graph)[-3:] == [
+            (MOVED, "shadow", 3, "dashboard"),
+            (MOVED, "active", 3, "dashboard"),
+            (PROMOTED, "shadow", None, "dashboard"),
+        ]
+        reasons = [move["reason"] for move in reversed(history(graph, "imu"))]
+        assert reasons[-3:] == ["quieter at night", "fewer false alarms", "fewer false alarms"]
+
+    async def test_a_clear_made_while_main_was_away_is_recorded(
+        self, store: ArtifactStore, service: ArtifactService, graph: Provenance
+    ) -> None:
+        store.move("shadow", "imu:3", by="cli")
+        store.clear("shadow", "imu", by="cli", reason="the wrong file")
+
+        await service.publish_pointers()
+
+        assert _changes(graph) == [(MOVED, "shadow", 3, "cli"), (CLEARED, "shadow", None, "cli")]
+        assert history(graph, "imu")[0]["reason"] == "the wrong file"
+
+    async def test_the_journal_is_trimmed_once_recorded(
+        self, store: ArtifactStore, service: ArtifactService, graph: Provenance
+    ) -> None:
+        store.move("active", "imu:2", by="cli")
+
+        await service.publish_pointers()
+        await service.publish_pointers()
+
+        assert store.pointer_changes() == ([], b"")
+        assert _changes(graph) == [(MOVED, "active", 2, "cli")]
+
+    async def test_a_journal_the_database_refused_is_recorded_on_the_next_look(
+        self,
+        store: ArtifactStore,
+        service: ArtifactService,
+        graph: Provenance,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await service.publish_pointers()
+        store.move("shadow", "imu:3", by="chat", reason="try it")
+
+        def refuse(*_args: Any) -> None:
+            raise RuntimeError("disk full")
+
+        with monkeypatch.context() as patched:
+            patched.setattr(service_module, "record_change", refuse)
+            await service.publish_pointers()
+        assert store.pointer_changes()[0], "kept for the next look"
+        await service.publish_pointers()
+
+        assert [move["reason"] for move in history(graph, "imu")] == ["try it"]
+        assert store.pointer_changes() == ([], b"")
 
     async def test_a_promotion_clears_the_shadow_as_the_promotion(
         self, store: ArtifactStore, service: ArtifactService, graph: Provenance
@@ -220,6 +283,27 @@ class TestMainRecordsWhatItSees:
             (MOVED, "active", 3, "dashboard"),
             (PROMOTED, "shadow", None, "dashboard"),
         ]
+
+    async def test_a_promotion_the_journal_lost_keeps_its_reason_from_the_index(
+        self,
+        store: ArtifactStore,
+        service: ArtifactService,
+        graph: Provenance,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store.move("active", "imu:1", by="cli")
+        store.move("shadow", "imu:3", by="cli")
+        await service.publish_pointers()
+        store.promote("imu", by="dashboard", reason="won the trial")
+        store.journal_path.unlink()
+
+        await service.publish_pointers()
+
+        newest = history(graph, "imu")[:2]
+        assert {(m["change"], m["reason"]) for m in newest} == {
+            (MOVED, "won the trial"),
+            (PROMOTED, "won the trial"),
+        }
 
     async def test_a_database_that_refuses_the_record_does_not_repeat_the_change(
         self, store: ArtifactStore, service: ArtifactService, monkeypatch: pytest.MonkeyPatch
@@ -247,6 +331,117 @@ class TestMainRecordsWhatItSees:
         await service.publish_pointers()
 
         assert service.announced[("imu", "active")] is not None
+        assert store.pointer_changes()[0], "the journal waits for a main that records it"
+
+
+def _journalled(store: ArtifactStore) -> list[tuple[str, str, int, str, Any]]:
+    """What the journal holds, oldest first: change, pointer, version, by, reason."""
+    return [
+        (c["change"], c["pointer"]["pointer"], c["pointer"]["version"], c["by"], c["reason"])
+        for c in store.pointer_changes()[0]
+    ]
+
+
+class TestTheStoreJournalsEachChange:
+    def test_each_move_and_clear_with_who_and_why(self, store: ArtifactStore) -> None:
+        store.move("active", "imu:1", by="cli", reason="first")
+        store.move("shadow", "imu:3", by="chat")
+        store.promote("imu", by="dashboard", reason="won")
+        store.rollback("imu", by="dashboard", reason="worse")
+        store.move("shadow", "imu:2", by="cli")
+        store.clear("shadow", "imu", by="cli", reason="noisy")
+
+        assert _journalled(store) == [
+            (MOVED, "active", 1, "cli", "first"),
+            (MOVED, "shadow", 3, "chat", None),
+            (MOVED, "active", 3, "dashboard", "won"),
+            (PROMOTED, "shadow", 3, "dashboard", "won"),
+            (MOVED, "active", 1, "dashboard", "worse"),
+            (MOVED, "shadow", 2, "cli", None),
+            (CLEARED, "shadow", 2, "cli", "noisy"),
+        ]
+
+    def test_active_moved_onto_the_shadow_version_is_a_promotion(
+        self, store: ArtifactStore
+    ) -> None:
+        store.move("shadow", "imu:3", by="cli")
+
+        store.move("active", "imu:3", by="chat", reason="it held up")
+
+        assert _journalled(store)[-2:] == [
+            (MOVED, "active", 3, "chat", "it held up"),
+            (PROMOTED, "shadow", 3, "chat", "it held up"),
+        ]
+
+    def test_removing_every_version_clears_its_pointers(self, store: ArtifactStore) -> None:
+        store.move("active", "imu:1", by="cli")
+        store.move("shadow", "imu:2", by="cli")
+
+        store.remove("imu", every_version=True)
+
+        assert sorted(_journalled(store)[-2:]) == [
+            (CLEARED, "active", 1, "", None),
+            (CLEARED, "shadow", 2, "", None),
+        ]
+
+    def test_what_is_journalled_after_a_read_is_kept_when_the_read_is_forgotten(
+        self, store: ArtifactStore
+    ) -> None:
+        store.move("active", "imu:1", by="cli")
+        changes, read = store.pointer_changes()
+        store.move("active", "imu:2", by="cli")
+
+        store.forget_pointer_changes(read)
+
+        assert len(changes) == 1
+        assert _journalled(store) == [(MOVED, "active", 2, "cli", None)]
+
+    def test_two_readers_of_the_same_lines_never_drop_a_newer_one(
+        self, store: ArtifactStore
+    ) -> None:
+        # The watcher and a chat command may both read before either forgets.
+        store.move("active", "imu:1", by="cli")
+        _, first = store.pointer_changes()
+        _, second = store.pointer_changes()
+        store.move("active", "imu:2", by="cli")
+
+        store.forget_pointer_changes(first)
+        store.forget_pointer_changes(second)
+
+        assert _journalled(store) == [(MOVED, "active", 2, "cli", None)]
+
+    def test_a_line_cut_short_is_set_aside_and_the_next_change_kept_whole(
+        self, store: ArtifactStore
+    ) -> None:
+        store.move("active", "imu:1", by="cli")
+        with store.journal_path.open("ab") as journal:
+            journal.write(b'{"change": "cleared", "at": 1, "poin')
+        assert len(store.pointer_changes()[0]) == 1, "a line with no end yet is not read"
+
+        store.move("shadow", "imu:3", by="chat")
+        changes, read = store.pointer_changes()
+        rejected = store.forget_pointer_changes(read)
+
+        assert [(c["change"], c["by"]) for c in changes] == [(MOVED, "cli"), (MOVED, "chat")]
+        assert rejected == [b'{"change": "cleared", "at": 1, "poin']
+        assert store.rejected_journal_path.read_bytes() == rejected[0] + b"\n"
+        assert store.pointer_changes() == ([], b"")
+
+    async def test_a_line_that_is_not_a_change_is_passed_over(
+        self, store: ArtifactStore, service: ArtifactService, graph: Provenance
+    ) -> None:
+        store.move("active", "imu:2", by="cli")
+        with store.journal_path.open("a", encoding="utf-8") as journal:
+            journal.write(
+                'not json\n{"change": "moved"}\n{"change": "renamed", "at": 1, "pointer": {}}\n'
+            )
+        store.move("shadow", "imu:3", by="cli")
+
+        await service.publish_pointers()
+
+        assert _changes(graph) == [(MOVED, "active", 2, "cli"), (MOVED, "shadow", 3, "cli")]
+        assert store.pointer_changes() == ([], b"")
+        assert len(store.rejected_journal_path.read_bytes().splitlines()) == 3
 
 
 @pytest.fixture(name="client")

@@ -90,8 +90,16 @@ pointers and writes it back as format 2.
 
 No history is kept in the index: it holds where each pointer is now and where it was.
 Every move is one event on the feed, and one `action` node of the provenance graph in
-main's database (`labels-and-provenance.md`): main writes it when its watcher sees the
-change, whoever made it, and `GET /api/models/{name}/moves` reads the history back. That
+main's database (`labels-and-provenance.md`), and `GET /api/models/{name}/moves` reads
+the history back. The store appends each change, with who made it and why, to a journal
+beside the index (`pointer-moves.jsonl`), under the lock it changes the index under, in
+whichever process made it; main records the journal on its next look and trims what it
+recorded, only while the journal still starts with what it read, so a second reader never
+drops a line written since. A line that is not a change, one cut short when a process died
+writing it, is moved to `pointer-moves.rejected.jsonl` beside it for a person to read. A change undone before main looks is still kept, as is one made while main was
+down, a clear included. Main also records what it sees changed in the index, which covers
+a journal line lost between the two writes; a change is recorded once, and the journal's
+record, written first, is the one that stands. That
 is where "what happened to this model" is answered; the retained topics below say where
 things stand.
 
@@ -291,7 +299,13 @@ Decided against:
 - **A history of moves in the index.** Rejected: the index would grow with every
   retrain, and an older release refuses an index format it does not know. The history
   is kept as actions in the provenance graph instead. `previous` covers the one case
-  where the index itself needs to look back, a rollback.
+  where the index itself needs to look back, a rollback. The journal beside it is
+  not this: it holds only what main has not recorded yet, and an older release does
+  not read it.
+- **Recording a move where main makes it, in the routes and chat commands.** Rejected:
+  a move from the CLI, in its own process, would still be seen only by main's look at
+  the index, which misses one undone before the next look and cannot say who cleared
+  a pointer. The store is where every change passes, whoever makes it.
 - **More pointers, or named tags.** Rejected: two roles are what the loop needs, and a
   tag that means nothing to the system is metadata, which exists.
 - **Pointers in a file of their own.** Rejected: one lock, one file, one export; and a

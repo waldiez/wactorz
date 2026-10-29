@@ -361,20 +361,20 @@ One model: every version, oldest first, with what was said of it when it was sto
 
 ### `GET /api/models/{name}/moves`
 
-Every move of the model's pointers, newest first: who made it, why, and from which version to which. Main records each one from its look at the store, whoever made it (the dashboard, the chat, the CLI beside the server), in the provenance graph. `limit` caps how many (default 200, at most 1000).
+Every move of the model's pointers, newest first: who made it, why, and from which version to which. The store journals each change as it is made, whoever made it (the dashboard, the chat, the CLI beside the server), and main records the journal in the provenance graph on its next look. `limit` caps how many (default 200, at most 1000).
 
 **Response** `200 OK`
 ```json
 {"name": "imu-detector",
  "moves": [
    {"at": 1760000300.0, "pointer": "shadow", "change": "promoted", "version": null, "from": 4,
-    "by": "dashboard", "reason": null},
+    "by": "dashboard", "reason": "won the trial"},
    {"at": 1760000300.0, "pointer": "active", "change": "moved", "version": 4, "from": 3,
     "by": "dashboard", "reason": "won the trial"}
  ]}
 ```
 
-`change` is `moved` (set to `version`), `cleared` (unset; `by` is empty when it was cleared outside main, as by the CLI), or `promoted` (the shadow cleared by a promotion). A move made while main was down is recorded when it starts, the last per pointer; a clear made then is not seen. The history outlives the versions, so a model whose versions were all removed still has its moves. `400` for a bad `name` or `limit`, `503` when persistence is not running.
+`change` is `moved` (set to `version`), `cleared` (unset, with the clear's own `reason`; `by` is empty for a pointer dropped by removing every version of the model), or `promoted` (the shadow cleared by a promotion, with the promotion's `by` and `reason`). Every change is kept, however quickly the next follows; one made while main was down is recorded when it starts. The history outlives the versions, so a model whose versions were all removed still has its moves. `400` for a bad `name` or `limit`, `503` when persistence is not running.
 
 ---
 
@@ -407,7 +407,7 @@ Move `active` back to the version it named before its last move. Only that one s
 
 ### `DELETE /api/models/{name}/shadow`
 
-End the trial: unset `shadow`.
+End the trial: unset `shadow`. The body is optional: `{"reason": "..."}` is kept with the clear in the history.
 
 ---
 

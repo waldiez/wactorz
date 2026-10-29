@@ -4,30 +4,36 @@ The store's index keeps where each pointer is now and the version it left,
 which is enough for one step back and nothing more: a history there would grow
 with every retrain (docs/design/model-pointers.md). Each move is instead an
 ``action`` node of the graph in main's database (docs/design/labels-and-
-provenance.md), written by main when it sees the change: who made it, why, from
-which version to which. The models routes read it back as the history.
+provenance.md), written by main from the store's journal of changes, which says
+who made each and why whichever process made it (`ArtifactStore.pointer_changes`),
+and from what main sees changed in the index. The models routes read it back as
+the history.
 
 A move's node id is minted from the move itself -- the name, the pointer, the
-version it reached and when -- so recording one again changes nothing. That is
-what lets main record, when it starts, where each pointer stands: a move made
-while it was away is written once, and one it already holds is passed over. A
-clear made while it was away leaves nothing to find, and is not recorded.
+version it reached and when -- so recording one again changes nothing, and the
+first record written stands. Main records the journal before what it sees in
+the index, so a change is kept with its ``by`` and reason where the journal has
+them; what it sees in the index covers a journal line lost to a crash between
+the two writes.
 
 Calls block on SQLite; from the event loop, go through ``asyncio.to_thread``.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
 from typing import Any
 
-from .artifacts import Pointer
+from .artifacts import CLEARED, MOVED, PROMOTED, Pointer
 from .provenance import ACTION, DONE, Provenance, ProvNode, stable_id
 
-#: What the action did, in its payload's ``change``: a pointer set to a version,
-#: or unset; ``promoted`` is the shadow cleared by a promotion.
-MOVED = "moved"
-CLEARED = "cleared"
-PROMOTED = "promoted"
+logger = logging.getLogger(__name__)
+
+#: What the action did, in its payload's ``change`` -- `MOVED`, `CLEARED` or
+#: `PROMOTED`, the shadow cleared by a promotion -- in the words the store's
+#: journal names its changes with.
+CHANGES = (MOVED, CLEARED, PROMOTED)
 
 #: Most moves the history route returns when it is not told.
 DEFAULT_LIMIT = 200
@@ -60,9 +66,15 @@ def record_move(prov: Provenance, now: Pointer) -> ProvNode:
 
 
 def record_clear(
-    prov: Provenance, was: Pointer, *, at: float, by: str = "", promoted: bool = False
+    prov: Provenance,
+    was: Pointer,
+    *,
+    at: float,
+    by: str = "",
+    reason: str | None = None,
+    promoted: bool = False,
 ) -> ProvNode:
-    """Write that ``was.pointer`` was unset, by ``by`` where it is known.
+    """Write that ``was.pointer`` was unset, by ``by`` where it is known, and why.
 
     ``promoted`` says the shadow went because its version became active. The id
     names the pointer as it stood, so the same clear is written once: it cannot
@@ -80,8 +92,34 @@ def record_clear(
             "pointer": was.pointer,
             "version": None,
             "from": was.version,
+            "reason": reason,
         },
         node_id=stable_id("pointer-cleared", was.name, was.pointer, was.version, was.moved_at),
+    )
+
+
+def record_change(prov: Provenance, change: Mapping[str, Any]) -> ProvNode | None:
+    """Write one change of the store's journal; None for a line that is not one, which is logged."""
+    try:
+        pointer = Pointer(**dict(change["pointer"]))
+        kind = change["change"]
+        at = float(change["at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning("a pointer change in the journal is not one, passed over: %s", exc)
+        return None
+    if kind == MOVED:
+        return record_move(prov, pointer)
+    if kind not in CHANGES:
+        logger.warning("a pointer change in the journal is not one, passed over: %r", kind)
+        return None
+    reason = change.get("reason")
+    return record_clear(
+        prov,
+        pointer,
+        at=at,
+        by=str(change.get("by") or ""),
+        reason=reason if isinstance(reason, str) else None,
+        promoted=kind == PROMOTED,
     )
 
 

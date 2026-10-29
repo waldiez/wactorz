@@ -36,6 +36,12 @@ class TestAnIdThatTravels:
         there = node.get("counter")
         assert there is not None
         assert there.actor_id == minted
+        # The node runs it before main has its confirmation; a move is asked
+        # once main has it, as a second move is refused until then.
+        await until(
+            lambda: main._get_spawn_registry().at("counter", node.node_name) is not None,
+            "main to confirm the move",
+        )
         assert main._registered_actor_id("counter") == minted
 
         home = await main.migrate_agent("counter", "local")

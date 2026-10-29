@@ -241,6 +241,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent is moved once at a time.** From the moment a move is asked for until the agent is
+  confirmed where it went, or put back where it was, another `/migrate` of it is refused, saying
+  where it is going, including one asked at the same moment: the agent may already run there
+  while main still places it where it left, and a second move would start from the wrong one.
+  An agent of the same name on another host moves freely, unless it would arrive where the
+  first is leaving or going.
+
 - **A node shows on the dashboard from the first heartbeat main takes.** After a start, the first
   heartbeat could reach main before the dashboard was listening for what main took from it, so
   a node appeared one heartbeat later than it should, and one heard before the dashboard began

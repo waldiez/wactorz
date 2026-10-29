@@ -17,6 +17,7 @@ The refusals matter as much as the moves: migrating to a node that is not
 listening loses the agent, so the checks that come first are pinned first.
 """
 
+import asyncio
 import json
 import time
 from collections.abc import Iterator
@@ -260,6 +261,154 @@ class TestRefusingTheMove:
         result = await main.migrate("collector", "nuc")
 
         assert "pi2" in result["message"]
+
+
+class TestOneMoveAtATime:
+    """A move is under way from its checks until the agent is confirmed or put back.
+
+    Until it is confirmed, the registry still places the agent where it left,
+    while it may already run where it is going: a second move would start from
+    the wrong one. Agents of one name on other hosts are not held up by it.
+    """
+
+    @staticmethod
+    def _main() -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code()},
+            nodes={"nuc": online(), "edge": online()},
+            local=("collector",),
+        )
+
+    async def test_a_move_out_waiting_for_its_target_holds_off_another(self) -> None:
+        main = self._main()
+        await main.migrate("collector", "nuc")
+        published = len(main.published)
+
+        result = await main.migrate("collector", "local")
+
+        assert result["success"] is False
+        assert "from 'local' to 'nuc'" in result["message"]
+        assert len(main.published) == published
+        assert len(main.spawned_remote) == 1
+
+    @pytest.mark.parametrize(("target", "said"), [("local", "local"), ("nuc", "nuc")])
+    async def test_a_hand_back_asked_for_holds_off_another(self, target: str, said: str) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code(node="rpi")},
+            nodes={"rpi": online(), "nuc": online(), "edge": online()},
+        )
+        await main.migrate("collector", target)
+
+        result = await main.migrate("collector", "edge")
+
+        assert result["success"] is False
+        assert f"from 'rpi' to '{said}'" in result["message"]
+        assert len(main.published_to("/migrate")) == 1
+
+    async def test_two_moves_asked_at_once_make_one(self) -> None:
+        main = self._main()
+        migration = main.actor.migration
+        let_go = asyncio.Event()
+        ready_for = migration._ready_for
+
+        async def _slow_ready_for(config: dict[str, Any], target: str) -> Any:
+            await let_go.wait()
+            return await ready_for(config, target)
+
+        setattr(migration, "_ready_for", _slow_ready_for)
+        first = asyncio.create_task(main.migrate("collector", "nuc"))
+        await asyncio.sleep(0)
+
+        second = await main.migrate("collector", "edge")
+        let_go.set()
+        done = await first
+
+        assert second["success"] is False and "to 'nuc'" in second["message"]
+        assert done["success"] is True
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    async def test_a_move_refused_before_it_is_sent_holds_off_nothing(self) -> None:
+        main = self._main()
+
+        refused = await main.migrate("collector", "nowhere")
+        result = await main.migrate("collector", "nuc")
+
+        assert refused["success"] is False
+        assert result["success"] is True
+        assert not main.actor.migration._in_hand
+
+    async def test_a_confirmation_being_committed_holds_off_another(self) -> None:
+        main = self._main()
+        migration = main.actor.migration
+        await main.migrate("collector", "nuc")
+        token = next(iter(migration.pending_spawns))
+        let_go = asyncio.Event()
+        release = migration._release_source
+
+        async def _slow_release(pending: dict[str, Any]) -> None:
+            await let_go.wait()
+            await release(pending)
+
+        setattr(migration, "_release_source", _slow_release)
+        ack = json.dumps({"migration_token": token, "agent": "collector", "node": "nuc"})
+        committing = asyncio.create_task(
+            migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack.encode())
+        )
+        await asyncio.sleep(0)
+        assert not migration.pending_spawns, "the entry is taken before the commit ends"
+
+        result = await main.migrate("collector", "local")
+        let_go.set()
+        await committing
+
+        assert result["success"] is False and "to 'nuc'" in result["message"]
+        assert not migration._in_hand
+
+    async def test_a_returned_agent_being_placed_holds_off_another(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code(node="rpi")},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+        migration = main.actor.migration
+        await main.migrate("collector", "local")
+        token = next(iter(migration.pending_returns))
+        let_go = asyncio.Event()
+        place = migration._place_returned
+
+        async def _slow_place(*args: Any, **kwargs: Any) -> None:
+            await let_go.wait()
+            await place(*args, **kwargs)
+
+        setattr(migration, "_place_returned", _slow_place)
+        returned = json.dumps(
+            {"return_token": token, "agent": "collector", "node": "rpi", "state": {}}
+        )
+        placing = asyncio.create_task(
+            migration.receive_state_return("nodes/rpi/state_return", returned.encode())
+        )
+        await asyncio.sleep(0)
+        assert not migration.pending_returns, "the entry is taken before the agent is placed"
+
+        result = await main.migrate("collector", "nuc")
+        let_go.set()
+        await placing
+
+        assert result["success"] is False and "from 'rpi' to 'local'" in result["message"]
+        assert not migration._in_hand
+
+    async def test_an_agent_of_the_same_name_elsewhere_moves_all_the_same(self) -> None:
+        main = _Main(nodes={"rpi": online(), "edge": online(), "nuc": online()})
+        here = with_code(node="rpi", actor_id=ACTOR_ID)
+        there = with_code(node="edge", actor_id="1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b")
+        registry = SpawnRegistry({e["actor_id"]: e for e in (here, there)})
+        setattr(main.actor, "_get_spawn_registry", lambda: registry)
+        await main.migrate("collector@rpi", "nuc")
+
+        result = await main.migrate("collector@edge", "local")
+        crossing = await main.migrate("collector@edge", "nuc")
+
+        assert result["success"] is True, result
+        assert crossing["success"] is False and "to 'nuc'" in crossing["message"]
 
 
 class TestFindingWhereTheAgentIs:

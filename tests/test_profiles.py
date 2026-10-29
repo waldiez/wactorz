@@ -651,11 +651,18 @@ class TestTheProviderUnderTheMinimalProfile:
         await app_module._build_provider(get_args(["--minimal", "--llm", "ollama"]), minimal=True)
         assert factory == ["ollama"]
 
-    async def test_the_full_profile_builds_the_configured_one(self, factory: list[str]) -> None:
+    async def test_the_full_profile_builds_the_configured_one(
+        self, factory: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pinned: CONFIG is read from this machine's environment, which may name any provider.
+        monkeypatch.setattr(
+            app_module, "CONFIG", dataclasses.replace(CONFIG, llm_provider="anthropic")
+        )
+
         with pytest.raises(StartupError) as refused:
             await app_module._build_provider(get_args([]), minimal=False)
 
-        assert factory == [CONFIG.llm_provider]
+        assert factory == ["anthropic"]
         # The message names both ways out.
         assert "wactorz[anthropic]" in str(refused.value)
         assert "LLM_PROVIDER=none" in str(refused.value)

@@ -1068,7 +1068,8 @@ class Migration:
         a node checks its own, from the same two values sent with the request.
 
         Sources of truth, in priority order:
-          1. Spawn registry — has the full config including code.
+          1. Spawn registry — has the full config including code; with the
+             agent running in main's own process, settles that it is on main.
           2. Agent manifest — has node, description, schemas (no code).
           3. Node heartbeats — minimum: tells us which node the agent runs on.
 
@@ -1085,7 +1086,6 @@ class Migration:
         if refusal:
             return {"success": False, "message": refusal}
         agent_name = named.name
-        reg = self.host._get_spawn_registry()
         config = named.entry
         if config is None:
             # A library agent started with the system has no entry: its config
@@ -1094,16 +1094,20 @@ class Migration:
         have_code = bool(config and config.get("code"))
 
         # ── Locate the agent via every source we have ─────────────────────────
-        # Registry first, then manifest, then heartbeats. We need at least to
-        # know WHERE the agent is to do anything useful. A name kept in more
-        # than one place was named by its address, and the registry alone says
-        # where that one is: the others of the name are elsewhere.
+        # What main holds first: a registry entry says where the agent is, its
+        # empty node meaning main itself, and an agent running in this process
+        # is here. Only an agent main has neither for is looked for in the
+        # manifests, then the heartbeats: a manifest retained from where the
+        # agent ran before would otherwise send the move to a node that no
+        # longer has it. A name kept in more than one place always has its
+        # entry here: `registered_agent` takes only an address for it.
         manifest = self.host._agent_manifests.get(agent_name, {})
-        shared = len(reg.named(agent_name)) > 1
+        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
         current_node = named.node
-        if not current_node and manifest and not shared:
+        placed_by_main = named.entry is not None or local_alive
+        if not placed_by_main and manifest:
             current_node = (manifest.get("node") or "").strip()
-        if not current_node and not shared:
+        if not current_node and not placed_by_main:
             # Last resort — the live heartbeats, which may know a node the spawn
             # registry does not record.
             current_node = self.host_nodes.running_agent(agent_name)
@@ -1112,7 +1116,6 @@ class Migration:
         # If we found nothing — not in registry, not in manifest, not heart-
         # beating from any node, not in the local registry — we genuinely
         # can't migrate what doesn't exist.
-        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
         if not config and not manifest and not current_node and not local_alive:
             return {
                 "success": False,
@@ -1120,10 +1123,13 @@ class Migration:
                 f"entry, no manifest, no heartbeat). Nothing to migrate.",
             }
 
-        if current_node == target_node:
+        # Normalise "local" as a target so users can type /migrate agent-name local
+        is_target_local = target_node.strip().lower() in ("", "local", "main")
+
+        if current_node == ("" if is_target_local else target_node):
             return {
                 "success": False,
-                "message": f"Agent '{agent_name}' is already on '{target_node or 'local'}'.",
+                "message": f"Agent '{agent_name}' is already on '{current_node or 'local'}'.",
             }
 
         if current_node and not config:
@@ -1135,9 +1141,6 @@ class Migration:
                 f"(it is not in the spawn registry), and a node's own copy is not run "
                 f"elsewhere. It stays on '{current_node}'.",
             }
-
-        # Normalise "local" as a target so users can type /migrate agent-name local
-        is_target_local = target_node.strip().lower() in ("", "local", "main")
 
         occupied = self._occupied(
             agent_name,

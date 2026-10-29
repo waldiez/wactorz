@@ -37,6 +37,9 @@ from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.artifacts import ArtifactStore
 
+#: The id an agent on main and its registry entry share.
+ACTOR_ID = "9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
+
 
 class _Supervisor:
     """Records the entries it is told to forget."""
@@ -272,6 +275,41 @@ class TestFindingWhereTheAgentIs:
         await main.migrate("collector", "nuc")
 
         assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
+
+    async def test_an_agent_the_registry_keeps_on_main_moves_from_main(self) -> None:
+        # Its manifest from the node it ran on before is still retained: asking
+        # that node to hand it back would wait for an agent it no longer has.
+        main = _Main(
+            spawn_registry={"collector": with_code()},
+            manifests={"collector": {"node": "rpi"}},
+            nodes={"rpi": online(), "nuc": online()},
+            local=("collector",),
+        )
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is True
+        assert main.published_to("/migrate") == []
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    @pytest.mark.parametrize("target", ["", "local", "main", "Local"])
+    async def test_an_agent_the_registry_keeps_on_main_is_already_there(self, target: str) -> None:
+        # The running agent and its entry share one id, as they do on main: the
+        # move is refused as one onto where it is, not taken as one to a node.
+        main = _Main(
+            spawn_registry={"collector": with_code(actor_id=ACTOR_ID)},
+            manifests={"collector": {"node": "rpi"}},
+            nodes={"rpi": online(("collector",))},
+            local=("collector",),
+        )
+        main.local().actor_id = ACTOR_ID
+
+        result = await main.migrate("collector", target)
+
+        assert result["success"] is False
+        assert "already on 'local'" in result["message"]
+        assert not main.published
+        assert main.spawned_remote == []
 
     async def test_the_manifest_answers_when_the_registry_does_not(self) -> None:
         # Located, and refused there: with no registry entry main holds no
@@ -1027,6 +1065,17 @@ class TestALibraryAgent:
         assert config["type"] == "module"
         assert config["target"] == target
         assert config["_initial_state"] == {"seen": 3}
+
+    async def test_it_goes_from_main_whatever_a_retained_manifest_says(self, target: str) -> None:
+        main = self._main(builds=[target])
+        main.actor._agent_manifests["probe"] = {"node": "rpi"}
+        main.actor.nodes.known["rpi"] = online(("probe",))
+
+        result = await main.migrate("probe", "nuc")
+
+        assert result["success"] is True
+        assert main.published_to("/migrate") == []
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
 
     async def test_a_node_that_cannot_build_it_is_refused(self, target: str) -> None:
         main = self._main(builds=["other.pkg:agent"])

@@ -237,6 +237,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Moving an agent that runs on main moves it.** When the agent had once run on a node, `/migrate`
+  could take that node's old record for where it is now: it asked the node to hand back an agent
+  it no longer had and reported the move as under way, while the agent stayed on main and never
+  reached the target. Main now goes by its own record of where the agent runs. `/migrate <agent>
+  local` for an agent already on main is refused as such, rather than taken as a move to a node
+  named `local`.
+
 - **A link into the dashboard leads there after signing in.** A link such as
   `#/models/imu-detector`, opened in a browser that is not signed in, now opens that view once
   the key is accepted, rather than the dashboard's start. The sign-in page is served with the

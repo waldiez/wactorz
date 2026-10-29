@@ -237,6 +237,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A node shows on the dashboard from the first heartbeat main takes.** After a start, the first
+  heartbeat could reach main before the dashboard was listening for what main took from it, so
+  a node appeared one heartbeat later than it should, and one heard before the dashboard began
+  listening was not shown until its next. The dashboard now listens from the moment it connects
+  to the broker, and shows the nodes main already knows when it begins.
+
 - **Moving an agent that runs on main moves it.** When the agent had once run on a node, `/migrate`
   could take that node's old record for where it is now: it asked the node to hand back an agent
   it no longer had and reported the move as under way, while the agent stayed on main and never

@@ -68,7 +68,7 @@ async def handle_message(topic: str, payload: str) -> None:
     can publish one, so the dashboard is shown what main took from it instead,
     which main hands over once it has checked it (see `_watch_main_nodes`).
     """
-    if _is_node_heartbeat(topic) and _watch_main_nodes():
+    if _is_node_heartbeat(topic) and await _watch_main_nodes():
         return
     await _dispatch(topic, payload)
 
@@ -78,11 +78,15 @@ def _is_node_heartbeat(topic: str) -> bool:
     return len(parts) == 3 and parts[0] == "nodes" and parts[2] == "heartbeat"
 
 
-def _watch_main_nodes() -> bool:
+async def _watch_main_nodes() -> bool:
     """Whether main's node table is there to show nodes from, watching it if so.
 
-    Asked on each heartbeat rather than once at start: main may come up after
-    this server does. Watching is idempotent, so asking again costs a lookup.
+    Asked when the server connects to the broker, so a start has main watched
+    before any heartbeat arrives, and again on each heartbeat, for a main that
+    comes up after this server does. Watching is idempotent, so asking again
+    costs a lookup. When watching begins, the nodes main already holds are
+    shown: main and this server read the broker apart, and a heartbeat main
+    took before it was watched would otherwise reach no browser.
     """
     nodes = getattr(find_main_actor(runtime.registry), "nodes", None)
     watchers = getattr(nodes, "watchers", None)
@@ -90,6 +94,9 @@ def _watch_main_nodes() -> bool:
         return False
     if _show_node_heartbeat not in watchers:
         watchers.append(_show_node_heartbeat)
+        known = getattr(nodes, "known", None)
+        for node, held in list(known.items()) if isinstance(known, dict) else []:
+            await _show_node_heartbeat(node, held)
     return True
 
 
@@ -185,6 +192,9 @@ async def mqtt_listener() -> None:
                 ) as client:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
+                    # Before subscribing: main reads the same heartbeats on a
+                    # client of its own, and one it takes unwatched is not shown.
+                    await _watch_main_nodes()
 
                     for topic in runtime.MQTT_TOPICS:
                         await client.subscribe(topic, qos=1)

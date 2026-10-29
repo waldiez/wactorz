@@ -184,6 +184,13 @@ class Dashboard:
         self.page.get_by_test_id("agent-card").first.wait_for(state="visible")
         return self
 
+    def sign_in_at(self, hash_: str, key: str) -> Dashboard:
+        """Open a link to ``hash_`` (``#/models/x``), be sent to the sign-in page, and sign in."""
+        self.page.goto(f"{self.base_url.rstrip('/')}/{hash_}", wait_until="domcontentloaded")
+        self.submit_key(key)
+        self._wait_until_drawn()
+        return self
+
     def submit_key(self, key: str) -> Dashboard:
         """Type ``key`` into the sign-in page and send it."""
         field = self.page.get_by_label(LOGIN_KEY, exact=True)

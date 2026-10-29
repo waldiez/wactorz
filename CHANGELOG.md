@@ -237,6 +237,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A link into the dashboard leads there after signing in.** A link such as
+  `#/models/imu-detector`, opened in a browser that is not signed in, now opens that view once
+  the key is accepted, rather than the dashboard's start. The sign-in page is served with the
+  dashboard's Content-Security-Policy.
+
 - **Two package checks at once no longer fail with a `KeyError`.** Checking or installing packages for two agents at the same time could fail inside Python's import system, which is not safe to refresh from two threads at once; Wactorz now refreshes it from one thread at a time.
 
 - **Reachy cannot promote forwarded text to operator authority.** Main processes actor-forwarded interface turns through its existing restricted entry point. Package approval, node administration, executable spawn/delete actions, plan approval, and unrestricted delegation remain on the existing operator interfaces; payload labels and the robot microphone do not authenticate a person. Conversation, everyday device control and bounded delegation remain available.

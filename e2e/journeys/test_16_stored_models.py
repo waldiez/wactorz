@@ -3,8 +3,8 @@
 Two versions of a model are stored, and the first made active, from the command
 line, as an operator does. The Models view marks the one served. The second is
 tried beside it and then promoted from the page, each with a reason; a second
-browser with the model open sees each move as main publishes it, and the
-history says who moved what, and why.
+browser, signed in from a link to the model, opens on it and sees each move as
+main publishes it, and the history says who moved what, and why.
 
 It starts from what journey 15 left; it touches no agent.
 """
@@ -69,8 +69,10 @@ def test_the_stored_versions_are_shown_with_the_one_served(
 def test_a_version_tried_and_promoted_here_is_seen_in_another_browser(
     dashboard: browser.Dashboard, visitor: browser.Dashboard, run: Run
 ) -> None:
-    visitor.sign_in(run.api_key)
-    visitor.open_address(f"#/models/{MODEL}")
+    # A link to the model, followed in a browser that has not signed in: the
+    # sign-in keeps the view it named.
+    visitor.sign_in_at(f"#/models/{MODEL}", run.api_key)
+    assert visitor.address == f"#/models/{MODEL}"
     _steps_become(visitor, ["v1, active", "v2"], "the second browser to show the model")
     # Opened again: between journeys the guard reads every chat thread, which leaves the chat open.
     dashboard.open_address(f"#/models/{MODEL}")

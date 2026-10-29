@@ -14,10 +14,12 @@ logged in are the same state) and why the origin gate is enough — see
 
 import hmac
 import logging
+import secrets
 
 from aiohttp import web
 
 from . import auth, origins, sessions, throttle
+from .static_site import csp_policy
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,14 @@ _PAGE = """<!doctype html>
     <button type="submit">Sign in</button>
   </form>
 </main>
+<script nonce="{nonce}">
+  // The address's #... never reaches the server, so the server's `next` lacks
+  // it: carry the view the browser was opening (#/models/x) through the sign-in.
+  document.querySelector("form").addEventListener("submit", function (event) {{
+    var next = event.target.elements.namedItem("next");
+    if (location.hash) next.value = next.value.split("#")[0] + location.hash;
+  }});
+</script>
 </body>
 </html>
 """
@@ -135,6 +145,9 @@ def _escape(value: str) -> str:
 
 
 def _page(next_value: str, message: str, status: int = 200) -> web.Response:
+    # The dashboard's policy: the page's own script runs by its nonce, and a
+    # script injected into the page does not.
+    nonce = secrets.token_urlsafe(16)
     return web.Response(
         # Anything but 200 is the page saying no, so the message carries the
         # colour rather than a separate flag the two callers could disagree on.
@@ -142,12 +155,13 @@ def _page(next_value: str, message: str, status: int = 200) -> web.Response:
             next_value=_escape(next_value),
             message=message,
             message_class="" if status == 200 else "error",
+            nonce=nonce,
         ),
         content_type="text/html",
         status=status,
         # A login page a proxy has cached, or a browser re-shows from history
         # after signing out, is a page that lies about the state of the server.
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", "Content-Security-Policy": csp_policy(nonce)},
     )
 
 

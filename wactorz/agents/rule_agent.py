@@ -230,12 +230,14 @@ class RuleAction:
     #: Whether the trigger payload travels with the action, under ``trigger``.
     include_trigger: bool = True
     #: For ``ask_operator``: the question, its options, where and to whom it
-    #: goes, and how long to wait before the dashboard is tried and given up on.
+    #: goes, how long to wait before the dashboard is tried and given up on,
+    #: and why it is asked, which may name trigger fields in braces.
     text: str = ""
     options: tuple[str, ...] = ()
     channel: str = ""
     user: str = ""
     timeout: float = 0.0
+    context: str = ""
     #: For ``label``: the source it is about and the value to record, either of
     #: which may name trigger fields in braces. ``text`` is kept as its note.
     source: str = ""
@@ -264,6 +266,7 @@ class RuleAction:
             channel=channel,
             user=str(raw.get("user", "")),
             timeout=timeout,
+            context=str(raw.get("context", "")),
             source=str(raw.get("source", "")).strip(),
             value=str(raw.get("value", "")).strip(),
         )
@@ -284,6 +287,21 @@ class RuleAction:
         elif self.type == "webhook" and not self.url.startswith(("http://", "https://")):
             raise RuleError.webhook_without_url()
 
+    def _question_fields(self) -> dict[str, Any]:
+        """What an ``ask_operator`` action says beyond the fields every action has."""
+        fields: dict[str, Any] = {
+            "text": self.text,
+            "options": list(self.options),
+            "channel": self.channel,
+        }
+        if self.user:
+            fields["user"] = self.user
+        if self.timeout:
+            fields["timeout"] = self.timeout
+        if self.context:
+            fields["context"] = self.context
+        return fields
+
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type, "payload": dict(self.payload)}
         if self.topic:
@@ -296,13 +314,7 @@ class RuleAction:
         if not self.include_trigger:
             out["include_trigger"] = False
         if self.type == "ask_operator":
-            out["text"] = self.text
-            out["options"] = list(self.options)
-            out["channel"] = self.channel
-            if self.user:
-                out["user"] = self.user
-            if self.timeout:
-                out["timeout"] = self.timeout
+            out.update(self._question_fields())
         if self.type == "label":
             out["source"] = self.source
             out["value"] = self.value
@@ -513,6 +525,7 @@ class RuleAgent(Actor):
                 channel=action.channel,
                 user=action.user,
                 timeout=action.timeout or None,
+                context=str(_render(action.context, trigger)),
             )
         except asyncio.TimeoutError:
             logger.warning("[%s] nobody answered %r; the question stays open", self.name, text[:60])

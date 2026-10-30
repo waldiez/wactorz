@@ -292,6 +292,7 @@ class TestAskingTheOperator:
             "user": "42",
             "timeout": 600,
             "topic": "labels/pump",
+            "context": "Score {score}.",
         }
         action = RuleAction.from_dict(raw)
         assert action.options == ("yes", "no")
@@ -356,6 +357,7 @@ class TestAskingTheOperator:
                     "channel": "telegram",
                     "user": "42",
                     "topic": "labels/pump",
+                    "context": "Score {score} on {name}.",
                 }
             ],
         )
@@ -377,6 +379,7 @@ class TestAskingTheOperator:
                 "channel": "telegram",
                 "user": "42",
                 "timeout": None,
+                "context": "Score 9 on P3.",
             }
         ]
         assert (

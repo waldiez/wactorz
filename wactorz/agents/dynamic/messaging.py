@@ -225,6 +225,7 @@ class MessagingMixin(_Host):
         user: str = "",
         timeout: float | None = None,
         label: dict[str, Any] | None = None,
+        context: str = "",
     ) -> str:
         """Ask the person ``text`` with ``options`` and return the one picked (see Actor.ask_operator).
 
@@ -234,10 +235,16 @@ class MessagingMixin(_Host):
         option)`` if it defines one. ``label`` makes the answer a label:
         ``{"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance":
         "maintenance", "Real problem": "fault"}}``, an option left out making
-        none.
+        none. ``context`` says why it is being asked, for the dashboard's Inbox.
         """
         return await self._actor.ask_operator(
-            text, options=options, channel=channel, user=user, timeout=timeout, label=label
+            text,
+            options=options,
+            channel=channel,
+            user=user,
+            timeout=timeout,
+            label=label,
+            context=context,
         )
 
     async def label(

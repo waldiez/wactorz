@@ -371,8 +371,9 @@ if answer == "maintenance":
 
 - The question is written into the agent's state until it is answered, so a restart in between loses nothing. When the agent starts it listens again, and a pick that arrives while nothing waits for it reaches `on_operator_answer(question, option)` on an `Actor`, or `async def on_answer(agent, question, option)` in a generated agent's program. `me.open_questions()` lists what is still unanswered, and `await me.wait_for_answer(question_id)` waits for one of them by id.
 - A pick may come with a note, what the person added in their own words; it is kept as `question.answer_note`, empty when there is none.
+- `context="..."` says why the question is being asked: what the agent saw, what the answer will change. It is kept in the book and shown with the question in the dashboard's Inbox; chat channels are sent the question alone. It is redacted and cut to a thousand characters.
 - The agent publishes its questions, retained, on `agents/{id}/questions` whenever one is asked or answered, and again when it starts. The monitor's `GET /api/questions` lists them from there, so one asked while the monitor was down is not missed.
-- The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, so the operator can answer there as well.
+- The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, in its Inbox (`#/inbox`), so the operator can answer there as well, with a note if they want; a question sent with `notify_user` alone keeps no book, so it shows as a notice and in the agent's thread but not in the Inbox.
 - The answer is not authenticated. It arrives on the agent's `agents/{id}/answer` topic, and anything that can publish to the broker, any node included, can publish one there. Read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.
 - `timeout` is seconds; `None` waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then `asyncio.TimeoutError` is raised, and the question stays open: a later pick still reaches `on_operator_answer`.
 
@@ -416,13 +417,14 @@ RuleConfig(
             user="123456789",
             timeout=3600,
             topic="labels/hvac",
+            context="Above 20 for ten minutes on {sensor}.",
         ),
     ),
     cooldown_seconds=3600,
 )
 ```
 
-The text may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, `{"question", "option", "index", "trigger"}` is published on `topic`, or on `answers/<rule name>` when none is given, which is where a label store or a controller listens.
+The text and `context` may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, `{"question", "option", "index", "trigger"}` is published on `topic`, or on `answers/<rule name>` when none is given, which is where a label store or a controller listens.
 
 A rule can also record a label itself, with the `label` action: `{"type": "label", "source": "sensors/{entity_id}", "value": "maintenance", "text": "maintenance switch on"}` records that the source was under maintenance from when the trigger says it happened (its `ts` or `timestamp`, else now), as the rule's own label. `source` and `value` may name trigger fields in braces, and `text` is kept as the label's note.
 

@@ -29,6 +29,7 @@ from wactorz.core.actor import Actor, NoAnswerError
 from wactorz.core.outbound import Answer, answer_topic
 from wactorz.core.questions import (
     ANSWERED_KEPT,
+    MAX_CONTEXT_CHARS,
     QUESTIONS_KEY,
     Question,
     answered,
@@ -336,6 +337,47 @@ class TestTheNote:
         assert question.answer_note == "valve swapped at 14:02"
         (published,) = wired.book
         assert published.answer_note == "valve swapped at 14:02"
+
+
+class TestTheContext:
+    async def test_it_is_kept_in_the_book_and_not_sent_to_the_channels(self, wired: Wired) -> None:
+        asking = asyncio.create_task(
+            wired.actor.ask_operator(
+                "Changed?", options=["yes", "no"], context="Supply air rose at 14:02."
+            )
+        )
+        await wired.settle()
+        await until(lambda: wired.book, what="the question in the published book")
+
+        (published,) = wired.book
+        assert published.context == "Supply air rose at 14:02."
+        assert "Supply air" not in json.dumps(wired.chat_frames)
+        await wired.answer("yes")
+        await asking
+
+    async def test_it_is_redacted_and_cut_before_it_is_kept(self, wired: Wired) -> None:
+        asking = asyncio.create_task(
+            wired.actor.ask_operator(
+                "Changed?",
+                options=["yes"],
+                context=f"  password=hunter2 {'x' * MAX_CONTEXT_CHARS}",
+            )
+        )
+        await wired.settle()
+        await until(lambda: wired.book, what="the question in the published book")
+
+        (question,) = wired.actor.questions().values()
+        assert "hunter2" not in question.context
+        assert len(question.context) == MAX_CONTEXT_CHARS
+        await wired.answer("yes")
+        await asking
+
+    def test_a_record_written_before_it_existed_reads_as_none(self) -> None:
+        record = Question(id="q", text="t", options=("a",), channel="dashboard").to_dict()
+        del record["context"]
+        question = Question.from_dict(record)
+        assert question is not None
+        assert question.context == ""
 
 
 class TestThePublishedBook:

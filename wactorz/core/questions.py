@@ -24,6 +24,8 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from ..monitoring.log_redaction import redact
+
 #: The persisted key holding the book: question id to its record.
 QUESTIONS_KEY = "_questions"
 
@@ -33,6 +35,19 @@ ANSWERED_KEPT = 100
 
 #: The leaf of the retained topic an agent publishes its book on.
 QUESTIONS_LEAF = "questions"
+
+#: How much of a question's ``context`` is kept: a line or two a person reads
+#: before answering, not a report.
+MAX_CONTEXT_CHARS = 1000
+
+
+def context_text(raw: str) -> str:
+    """``raw`` as a question's context: redacted, trimmed and cut to `MAX_CONTEXT_CHARS`.
+
+    The book is retained on the broker, and an agent writes this from what it
+    was reading, so anything shaped like a secret goes before it is kept.
+    """
+    return redact(str(raw)).strip()[:MAX_CONTEXT_CHARS]
 
 
 def questions_topic(agent_id: str) -> str:
@@ -63,7 +78,9 @@ class Question:
     is set once a question sent on a chat channel was shown again on the
     dashboard for want of an answer. ``label`` is how the answer becomes a
     label, as a :class:`wactorz.core.labels.LabelSpec` dict, or None for a
-    question whose answer is not one.
+    question whose answer is not one. ``context`` says why the question is
+    being asked, for the person weighing the answer; it stays in the book, so
+    the dashboard's Inbox shows it and the chat channels send the question alone.
     """
 
     id: str
@@ -79,6 +96,7 @@ class Question:
     fallen_back: bool = False
     answer_note: str = ""
     label: dict[str, Any] | None = None
+    context: str = ""
 
     @property
     def open(self) -> bool:
@@ -114,6 +132,7 @@ class Question:
                 answered_at=float(record.get("answered_at") or 0.0),
                 fallen_back=bool(record.get("fallen_back", False)),
                 label=dict(record["label"]) if isinstance(record.get("label"), dict) else None,
+                context=str(record.get("context") or ""),
             )
         except (KeyError, TypeError, ValueError):
             return None

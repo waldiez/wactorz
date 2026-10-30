@@ -674,7 +674,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
 | `notify_user(text, options=[...], channel=..., user=...)` and `agents/<id>/answer` | a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see *Messages from an agent* in the interfaces guide) |
-| `ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart, and with `label=` its answer becomes a label |
+| `ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=...)`, `wait_for_answer`, `open_questions`, `on_operator_answer` | the same, waiting for the pick; a question outlives a restart, and with `label=` its answer becomes a label |
 | `label(source, value, start=..., end=...)` | a label written as the agent's own, on main (see *Answers that become labels* in the interfaces guide) |
 | `models=` on `wactorz.agent`, `MODELS` on an `Actor`, with `artifact_path`, `load_model` and `artifacts` | the models an agent loads |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |

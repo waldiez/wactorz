@@ -244,6 +244,7 @@ TYPE 3 — "dynamic"
                                                         arrives on agents/{id}/answer ({"id","option","index"})
     await agent.ask_operator(text, options=[...], channel="dashboard", user="", timeout=None)
                                                       — the same, waiting for the pick; returns the option (ASYNC)
+                                                        context="why it is asked" is shown with it in the Inbox
                                                         label={"source": topic, "start": ts, "values": {option: value}}
                                                         makes the pick a label of that source from ts (event time)
                                                         on; an option left out of values makes none. Use it when the

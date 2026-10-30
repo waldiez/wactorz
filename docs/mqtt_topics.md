@@ -362,7 +362,7 @@ A message that offers the person a choice, or goes to a chat channel, carries mo
 **Published by:** The agent that asked
 **Retained:** yes
 **Trigger:** When the agent starts, if it has asked anything, and whenever it asks a question or one is answered
-**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back. Cleared when the agent is deleted.
+**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back, and relays it to the dashboard's Inbox. Cleared when the agent is deleted.
 
 ```json
 {

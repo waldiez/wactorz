@@ -40,6 +40,7 @@ from .questions import (
     answered,
     book_frame,
     book_of,
+    context_text,
     questions_in,
     questions_topic,
 )
@@ -1963,6 +1964,7 @@ class Actor(ABC):
         user: str = "",
         timeout: float | None = None,
         label: Mapping[str, Any] | None = None,
+        context: str = "",
     ) -> str:
         """Ask the person ``text``, offer ``options``, and return the one they pick.
 
@@ -1989,6 +1991,10 @@ class Actor(ABC):
         Main records the label once the answer is in the question book, for an
         agent here or on a node. See docs/design/labels-and-provenance.md.
 
+        ``context`` says why this is being asked: what the agent saw, what the
+        answer will change. It is shown with the question in the dashboard's
+        Inbox, and is not sent to chat channels.
+
         Raises ``ValueError`` for no options, options or a channel the channels
         cannot show, or a ``label`` that cannot be used -- before anything is
         sent.
@@ -2007,6 +2013,7 @@ class Actor(ABC):
             user=str(user).strip(),
             asked_at=time.time(),
             label=None if spec is None else spec.to_dict(),
+            context=context_text(context),
         )
         await self._write_question(question)
         try:

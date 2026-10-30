@@ -454,13 +454,14 @@ The questions agents have put to a person, on any channel, from main or a node: 
      "text": "Did something change at 14:02?", "options": ["maintenance", "real problem"],
      "channel": "telegram", "user": "123456789", "asked_at": 1760000000.0,
      "answer": null, "answer_index": null, "answer_channel": "", "answered_at": 0.0,
-     "answer_note": "", "fallen_back": false, "label": null}
+     "answer_note": "", "fallen_back": false, "label": null,
+     "context": "Supply air rose 6 degrees in ten minutes."}
   ],
   "answered": []
 }
 ```
 
-Read from the books agents publish on `agents/{id}/questions`. `label` is the label spec a question was asked with (`ask_operator(..., label=...)`), or `null`; see `GET /api/labels`.
+Read from the books agents publish on `agents/{id}/questions`. `label` is the label spec a question was asked with (`ask_operator(..., label=...)`), or `null`; see `GET /api/labels`. `context` is why the agent says it asks (`ask_operator(..., context=...)`), or empty; the dashboard's Inbox shows it, and chat channels are sent the question alone.
 
 ---
 

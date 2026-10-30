@@ -417,7 +417,11 @@ export class WSClient {
         this._applyStatePatch(data["state"] as StatePatch | undefined);
         if (scope === "chat") {
             const agent = data["agent"];
-            emit("af-reset-chat", { agent: typeof agent === "string" ? agent : null });
+            const agentId = data["agent_id"];
+            emit("af-reset-chat", {
+                agent: typeof agent === "string" ? agent : null,
+                agentId: typeof agentId === "string" ? agentId : null,
+            });
         }
         // metrics and logs both clear the server-side activity feed; the
         // on-screen feed is append-only, so tell it to drop its entries.

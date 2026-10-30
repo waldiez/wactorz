@@ -7,8 +7,10 @@ other's tasks, or ran under its id, would show here.
 """
 
 import asyncio
+import json
 import uuid
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -18,6 +20,7 @@ from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.core import topic_bus
 from wactorz.core.topic_bus import TopicBus
+from wactorz.web import api_reset
 
 from .conftest import FastNode, until
 
@@ -122,6 +125,28 @@ class TestACatalogSpawnOfANameOnANode:
         assert before is not None and here is not None
         assert here["actor_id"] == before["actor_id"]
         assert registry.at(shared, node.node_name) is None
+
+
+class TestAResetOfOneOfTwo:
+    async def test_the_other_keeps_its_state(
+        self, main: MainActor, node: FastNode, shared: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await _copied(main, node, shared)
+        monkeypatch.setattr(api_reset.runtime, "registry", main._registry)
+        monkeypatch.setattr(api_reset.ws, "broadcast", AsyncMock())
+        await until(lambda: main.nodes.takes_resets(node.node_name), "the node taking resets")
+        address = f"{shared}@{node.node_name}"
+        await _ask(main, address)
+        await _ask(main, f"{shared}@main")
+        request = MagicMock()
+        request.json = AsyncMock(return_value={"scope": "state", "agent": address})
+
+        response = await api_reset.reset_handler(request)
+
+        assert response.status == 200
+        assert json.loads(cast("bytes", response.body))["nodes"] == {node.node_name: "cleared"}
+        assert (await _ask(main, address))["tasks"] == 1
+        assert (await _ask(main, f"{shared}@main"))["tasks"] == 2
 
 
 class TestACopyOnANode:

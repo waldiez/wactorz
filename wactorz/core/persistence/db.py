@@ -506,21 +506,26 @@ class WactorzDB:
                 ),
             )
 
-    def clear_chat_log(self, agent_name: str | None = None) -> int:
-        """Delete chat_log rows. Pass agent_name to limit to one agent."""
+    def clear_chat_log(self, agent_name: str | None = None, agent_id: str | None = None) -> int:
+        """Delete chat_log rows: ``agent_id``'s, every agent's called ``agent_name``, or all."""
         with self.transaction() as conn:
-            if agent_name:
+            if agent_id:
+                cur = conn.execute("DELETE FROM chat_log WHERE agent_id=?", (agent_id,))
+            elif agent_name:
                 cur = conn.execute("DELETE FROM chat_log WHERE agent_name=?", (agent_name,))
             else:
                 cur = conn.execute("DELETE FROM chat_log")
         return cur.rowcount
 
     @_serialised
-    def chat_attachment_ids(self, agent_name: str | None = None) -> set[str]:
+    def chat_attachment_ids(
+        self, agent_name: str | None = None, agent_id: str | None = None
+    ) -> set[str]:
         """Every upload id a kept chat turn refers to: what the upload sweep must keep.
 
-        With `agent_name`, only the turns in that agent's thread: what a reset of
-        that thread may take with it, less whatever another thread still names.
+        With `agent_name`, or `agent_id` where two share it, only the turns in
+        that agent's thread: what a reset of that thread may take with it, less
+        whatever another thread still names.
         A row whose attachments cannot be read counts as naming none, as it does
         everywhere else a row is read.
         """
@@ -528,11 +533,12 @@ class WactorzDB:
         query = (
             "SELECT attachments FROM chat_log WHERE attachments IS NOT NULL AND attachments != ''"
         )
-        rows = (
-            self.conn.execute(f"{query} AND agent_name=?", (agent_name,))
-            if agent_name
-            else self.conn.execute(query)
-        )
+        if agent_id:
+            rows = self.conn.execute(f"{query} AND agent_id=?", (agent_id,))
+        elif agent_name:
+            rows = self.conn.execute(f"{query} AND agent_name=?", (agent_name,))
+        else:
+            rows = self.conn.execute(query)
         for (raw,) in rows:
             for item in _with_attachments({"attachments": raw})["attachments"]:
                 if isinstance(item, dict) and item.get("id"):
@@ -828,9 +834,17 @@ class WactorzDB:
         ).fetchall()
         return [_node_sample(r) for r in reversed(rows)]
 
-    def clear_metrics_history(self, agent: str | None = None) -> int:
-        """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed."""
+    def clear_metrics_history(self, agent: str | None = None, node: str | None = None) -> int:
+        """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed.
+
+        ``node`` limits it to the agent of that name on that node, "" for main's.
+        """
         with self.transaction() as conn:
+            if agent and node is not None:
+                cur = conn.execute(
+                    "DELETE FROM agent_metrics_history WHERE agent = ? AND node = ?", (agent, node)
+                )
+                return cur.rowcount
             if agent:
                 cur = conn.execute("DELETE FROM agent_metrics_history WHERE agent = ?", (agent,))
                 return cur.rowcount

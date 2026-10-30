@@ -716,7 +716,7 @@ export class DashboardChat {
             const agent = detail.agent;
             // Scoped reset: drop that agent's replies and the user's messages
             // *to that agent* — user messages addressed to others survive.
-            this._log.reset(agent);
+            this._log.reset(agent, detail.agentId);
             if (this.host.getView() === "chat") {
                 this.renderChatThread();
             }

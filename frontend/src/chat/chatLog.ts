@@ -263,17 +263,18 @@ export class ChatLog {
     /**
      * Drop the threads of the agents called `agent` — their own messages and
      * everything said to them — or every thread when `agent` is null. By name,
-     * as the server resets them: every agent that went by it. Every thread's
+     * as the server resets them: every agent that went by it. `agentId` limits
+     * it to that agent's thread, where another shares the name. Every thread's
      * history is to be fetched again either way: the server's copy may have
      * been reset with it.
      */
-    reset(agent: string | null): void {
+    reset(agent: string | null, agentId: string | null = null): void {
         if (agent === null) {
             this._drop();
             return;
         }
         for (const [id, list] of [...this._threads]) {
-            if (list.some(m => ownerName(m) === agent)) {
+            if (agentId ? id === agentId : list.some(m => ownerName(m) === agent)) {
                 list.forEach(m => this._where.delete(m.id));
                 this._threads.delete(id);
                 this._asking.delete(id);

@@ -53,7 +53,7 @@ export interface AppEventMap {
     /** A turn started or ended, or what waits changed: who it waits on (null when no
      *  turn is under way), and how many of the person's messages wait to go out. */
     "af-turn": { agent: string | null; queued: number };
-    "af-reset-chat": { agent: string | null };
+    "af-reset-chat": { agent: string | null; agentId?: string | null };
     /** The person pressed one of a question's buttons: send the pick to the agent that asked. */
     "af-answer-option": { id: string; agentId: string; option: string; index: number };
     /** The person picked one of the addresses a reply (`id`) offered for a name several agents share. */

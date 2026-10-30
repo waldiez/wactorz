@@ -240,6 +240,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **One of two agents of a name can be reset.** A reset of `tally@pi` was refused while `tally`
+  also ran elsewhere. Now it clears that agent alone, in every scope; a bare `tally` is still
+  refused, with the addresses to choose from.
 - **The planner sees both agents of a shared name.** It kept one contract per name, so with
   `tally` on main and on a node it saw whichever was heard last, and one stopping took the
   other's contract with it. Each is now kept by its id and shown as `tally@main` and

@@ -175,7 +175,7 @@ def _withdrawn_on_offline_nodes(
     return withdrawn
 
 
-async def purge_spawn_reconcile(agent: str | None = None) -> None:
+async def purge_spawn_reconcile(agent: str | None = None, actor_id: str | None = None) -> None:
     """Tear down the agent-respawn state behind a spawn-registry clear.
 
     Shared by the "spawns" and "all" reset scopes so both behave identically:
@@ -187,9 +187,8 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
 
     For a global clear (agent is None) every affected node's desired_state is
     blanked. For a single-agent clear it is REPUBLISHED from the reduced registry
-    so sibling agents still on that node survive. A reset of one agent names a
-    name kept in one place: what a reset clears is kept by name, so one kept in
-    more is refused before this is reached.
+    so sibling agents still on that node survive. ``actor_id`` says which of the
+    agents called ``agent`` it is, where the name is in more than one place.
 
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
@@ -197,6 +196,8 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     main_actor = find_main_actor(runtime.registry)
     reg = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
     withdrawn = reg.named(agent) if agent else list(reg)
+    if actor_id:
+        withdrawn = [cfg for cfg in withdrawn if cfg["actor_id"] == actor_id]
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
     node_names: set[str] = set(runtime.state["nodes"].keys())

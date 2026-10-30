@@ -551,6 +551,26 @@ describe("WSClient", () => {
         expect(eventSpy).toHaveBeenCalled();
     });
 
+    it("reset message for one of two agents says which by its id", () => {
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        const eventSpy = vi.fn();
+        document.addEventListener("af-reset-chat", eventSpy, { once: true });
+        ws().emit("message", {
+            data: JSON.stringify({
+                type: "reset",
+                scope: "chat",
+                agent: "counter@pi",
+                agent_id: "on-the-pi",
+                state: { agents: [] },
+            }),
+        });
+        expect((eventSpy.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+            agent: "counter@pi",
+            agentId: "on-the-pi",
+        });
+    });
+
     it("reset message with scope='all' wipes, then applies the survivors the frame carries", () => {
         const c = new WSClient();
         const patchSpy = vi.fn();

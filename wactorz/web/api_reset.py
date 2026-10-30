@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from aiohttp import web
@@ -19,7 +20,7 @@ from aiohttp.web import Response
 from ..agents.llm import cost as llm_cost
 from ..agents.lookup import find_main_actor
 from ..agents.main.spawn_registry import SpawnRegistry, placed_on
-from ..core.addresses import MAIN_NODE, SEPARATOR, Address, Resolution, parse
+from ..core.addresses import MAIN_NODE, SEPARATOR, Address, Resolution, node_of, parse
 from ..core.agent_reset import (
     LIVE_SCOPES,
     forget_conversation,
@@ -177,36 +178,96 @@ def _places(main_actor: Any, name: str) -> list[Address]:
     return places
 
 
-def _reset_target(wanted: str) -> tuple[str, Response | None]:
-    """The name a reset of ``wanted`` (a name or ``name@node``) acts on, or the answer refusing it.
+@dataclass(frozen=True)
+class _Target:
+    """Whom a reset is for: everyone, an agent by its name, or one of two by its address.
 
-    What is reset is kept by the agent's name: main's chat log, metrics and
-    spawn entry, and the copies on every node that runs the name. So a reset is
-    refused when the name is in more than one place -- for a bare name, with
-    the addresses; for an address, because the others would be reset with it --
-    and an address is refused when the name is not on its node.
+    A name kept in one place is reset by name, which reaches everything of it,
+    its turns from before it had an id included. ``address`` is set where the
+    name is in more than one place: a name is unique on a host, so what a host
+    keeps by name is that host's agent's alone, and of what main keeps for
+    every host, only what ``actor_id`` or the node says is this agent's goes.
+    """
+
+    name: str | None = None
+    address: Address | None = None
+    actor_id: str | None = None
+
+    @property
+    def said(self) -> str | None:
+        """The agent, as the answer names it."""
+        return str(self.address) if self.address else self.name
+
+    @property
+    def on_main(self) -> bool:
+        """Whether the reset reaches what main keeps for its own agents."""
+        return self.address is None or self.address.node == MAIN_NODE
+
+    @property
+    def history_node(self) -> str | None:
+        """The node whose metrics samples are this agent's; None for any, "" for main."""
+        if self.address is None:
+            return None
+        return "" if self.on_main else self.address.node
+
+    def covers(self, actor: Any) -> bool:
+        """Whether ``actor``, running in main's process, is one this reset reaches."""
+        return self.on_main and (self.name is None or actor.name == self.name)
+
+    def nodes_of(self, on: dict[str, set[str]]) -> dict[str, set[str]]:
+        """Of the agents each node runs, those this reset reaches."""
+        if self.address is None:
+            return on
+        return {} if self.on_main else {self.address.node: {self.address.name}}
+
+
+def _id_at(main_actor: Any, address: Address) -> str | None:
+    """The id of the agent at ``address``: main's record of it, or what it last said it was."""
+    registry = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
+    entry = registry.at(address.name, address.node)
+    if entry is not None:
+        return entry["actor_id"]
+    for actor_id, agent in runtime.state["agents"].items():
+        place = node_of(str(agent.get("node") or MAIN_NODE))
+        if agent.get("name") == address.name and place == address.node:
+            return actor_id
+    if address.node == MAIN_NODE and runtime.registry is not None:
+        actor = runtime.registry.find_by_name(address.name)
+        return actor.actor_id if actor is not None else None
+    return None
+
+
+def _reset_target(wanted: str) -> tuple[_Target, Response | None]:
+    """Whom a reset of ``wanted`` (a name or ``name@node``) is for, or the answer refusing it.
+
+    A bare name in more than one place does not say which, and is refused with
+    the addresses; an address is refused when the name is not on its node, or
+    when the agent there has no id to tell it from the others by.
     """
     main_actor = find_main_actor(runtime.registry)
     if SEPARATOR in wanted and _places(main_actor, wanted.strip()):
         # A whole name, taken before the separator was refused in one.
-        return wanted.strip(), None
+        return _Target(wanted.strip()), None
     address = parse(wanted)
     places = _places(main_actor, address.name)
     if address.node and address not in places:
-        return address.name, web.json_response(
+        return _Target(address.name), web.json_response(
             {"error": f"No agent '{address.name}' is on node '{address.node}'."}, status=404
         )
-    if len(places) > 1:
-        if not address.node:
-            error = Resolution(address.name, tuple(places)).refusal()
-        else:
-            error = (
-                f"Agents called '{address.name}' are on {' and '.join(p.node for p in places)}, "
-                "and what a reset clears is kept by name, so one of them cannot be reset alone; "
-                "nothing was done."
-            )
-        return address.name, web.json_response({"error": error}, status=409)
-    return address.name, None
+    if len(places) == 1 or not places:
+        return _Target(address.name), None
+    if not address.node:
+        error = Resolution(address.name, tuple(places)).refusal()
+        return _Target(address.name), web.json_response({"error": error}, status=409)
+    actor_id = _id_at(main_actor, address)
+    if actor_id is None:
+        error = (
+            f"Agents called '{address.name}' are on {' and '.join(p.node for p in places)}, "
+            f"and nothing says which id the one on '{address.node}' has, so it cannot be told "
+            "from the others; nothing was done."
+        )
+        return _Target(address.name), web.json_response({"error": error}, status=409)
+    return _Target(address.name, address, actor_id), None
 
 
 async def reset_handler(request: web.Request) -> Response:
@@ -222,11 +283,12 @@ async def reset_handler(request: web.Request) -> Response:
         return web.json_response({"error": "invalid JSON"}, status=400)
 
     scope = body.get("scope", "")
-    agent = body.get("agent") or None
-    if agent:
-        agent, refusal = _reset_target(str(agent))
+    target = _Target()
+    if body.get("agent"):
+        target, refusal = _reset_target(str(body["agent"]))
         if refusal is not None:
             return refusal
+    agent = target.name
 
     valid = {"chat", "state", "metrics", "spawns", "logs", "all"}
     if scope not in valid:
@@ -379,23 +441,23 @@ async def reset_handler(request: web.Request) -> Response:
         )
         return web.json_response({"status": "ok", "scope": "all", "agent": None, "nodes": {}})
     if scope == "chat":
-        _reset.reset_chat(agent)
+        _reset.reset_chat(agent, actor_id=target.actor_id, on_main=target.on_main)
     elif scope == "state":
         # An agent forgets its state only once it starts again: what it read at
         # start is in memory, and its next persist writes it back. So each is
         # restarted with the file gone -- except the system's own agents, main
         # among them, which this request runs through.
         supervisor, restarting = _restartable(agent)
-        for actor in restarting:
+        for actor in restarting if target.on_main else ():
             await supervisor.restart_afresh(
                 actor.name, lambda name=actor.name: _reset.reset_agent_state(name)
             )
-        if agent:
-            _reset.reset_agent_state(agent)
-        else:
+        if not agent:
             _reset._reset_all_pickles()
+        elif target.on_main:
+            _reset.reset_agent_state(agent)
     elif scope == "metrics":
-        _reset.reset_metrics(agent)
+        _reset.reset_metrics(agent, node=target.history_node, on_main=target.on_main)
         live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory cost.lifetime_cost
@@ -405,10 +467,14 @@ async def reset_handler(request: web.Request) -> Response:
         if agent:
             # The dashboard's agents as well as this process's: an agent on a
             # node banks its cost here too, under an id no local actor has.
-            aid = next(
-                (getattr(a, "actor_id", None) for a in live_actors if a.name == agent), None
-            ) or next(
-                (k for k, v in runtime.state["agents"].items() if v.get("name") == agent), None
+            aid = (
+                target.actor_id
+                or next(
+                    (getattr(a, "actor_id", None) for a in live_actors if a.name == agent), None
+                )
+                or next(
+                    (k for k, v in runtime.state["agents"].items() if v.get("name") == agent), None
+                )
             )
             if aid:
                 cost.forget_lifetime_cost(aid)
@@ -423,8 +489,8 @@ async def reset_handler(request: web.Request) -> Response:
         # to learn the affected nodes), then wipe the kv on disk. Without this,
         # clearing the registry left desired_state behind and a runner reconnect
         # reconciled the agents straight back.
-        await lifecycle.purge_spawn_reconcile(agent)
-        _reset.reset_spawns(agent)
+        await lifecycle.purge_spawn_reconcile(agent, target.actor_id)
+        _reset.reset_spawns(agent, actor_id=target.actor_id)
     elif scope == "logs":
         _reset.reset_logs()
         # The activity feed mirrors the log files we just truncated, so drop the
@@ -437,12 +503,12 @@ async def reset_handler(request: web.Request) -> Response:
         # their own and write them back on their next turn, persist or heartbeat
         # unless those go too, and an agent on a node keeps its copy there.
         for actor in list(runtime.registry.all_actors()) if runtime.registry is not None else []:
-            if agent is None or actor.name == agent:
+            if target.covers(actor):
                 reset_live(actor, scope)
         main_actor = find_main_actor(runtime.registry)
         if main_actor is not None:
             nodes = await node_reset.reset_on_nodes(
-                main_actor, scope, agent, _agents_on_nodes(main_actor)
+                main_actor, scope, agent, target.nodes_of(_agents_on_nodes(main_actor))
             )
 
     # Clear in-memory dashboard cost/message state for the affected agents.
@@ -450,10 +516,10 @@ async def reset_handler(request: web.Request) -> Response:
     # message counters or wipe the alerts/activity feed.
     if scope == "metrics":
         if agent:
-            aid = next(
+            aid = target.actor_id or next(
                 (k for k, v in runtime.state["agents"].items() if v.get("name") == agent), None
             )
-            if aid:
+            if aid and aid in runtime.state["agents"]:
                 runtime.state["agents"][aid].pop("cost_usd", None)
                 runtime.state["agents"][aid].pop("messages_processed", None)
         else:
@@ -464,6 +530,12 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["log_feed"].clear()
 
     await ws.broadcast(
-        {"type": "reset", "scope": scope, "agent": agent, "state": events.snapshot()}
+        {
+            "type": "reset",
+            "scope": scope,
+            "agent": target.said,
+            "agent_id": target.actor_id,
+            "state": events.snapshot(),
+        }
     )
-    return web.json_response({"status": "ok", "scope": scope, "agent": agent, "nodes": nodes})
+    return web.json_response({"status": "ok", "scope": scope, "agent": target.said, "nodes": nodes})

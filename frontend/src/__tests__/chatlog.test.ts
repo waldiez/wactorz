@@ -487,6 +487,16 @@ describe("two agents of one name", () => {
         expect(ids(log.all)).toEqual(["c"]);
     });
 
+    it("are cleared one at a time by the id of the one reset", () => {
+        const log = new ChatLog();
+        log.add(msg({ id: "a", from: "counter", threadId: "on-main" }));
+        log.add(msg({ id: "b", from: "user", to: "counter", threadId: "on-the-pi" }));
+
+        log.reset("counter@pi", "on-the-pi");
+
+        expect(ids(log.all)).toEqual(["a"]);
+    });
+
     it("say by id which is asking something", () => {
         const log = new ChatLog();
         log.add(question("q", { threadId: "on-the-pi" }));

@@ -241,6 +241,19 @@ export function renderConnBadge(root: ParentNode, state: ConnState): void {
     }
 }
 
+/** Show on the Inbox tabs under `root` how many questions wait, or nothing when none do.
+ *  Inside the tab's text, not an `aria-label`: a tab's name has to hold what it shows. */
+export function renderInboxCount(root: ParentNode, waiting: number): void {
+    root.querySelectorAll<HTMLElement>('.af-view-btn[data-view="inbox"]').forEach(tab => {
+        tab.querySelector(".af-nav-count")?.remove();
+        if (waiting > 0) {
+            const count = el("span", "af-nav-count", ` ${waiting}`);
+            count.appendChild(el("span", "af-screen-reader", " waiting"));
+            tab.appendChild(count);
+        }
+    });
+}
+
 /** A square icon-only header button, labelled for anyone not seeing the icon. */
 function headerIconButton(label: string, icon: IconName): HTMLButtonElement {
     return iconButton("af-view-btn af-view-btn-icon", label, iconMarkup(icon));
@@ -350,12 +363,7 @@ function wirePrimaryBottomNav(
     view: View,
     onSetView: (v: View) => void,
 ): void {
-    const primary: { key: View; icon: IconName; label: string }[] = [
-        { key: "overview", icon: "grid", label: "Overview" },
-        { key: "feed", icon: "list", label: "Feed" },
-        { key: "chat", icon: "chat", label: "Chat" },
-    ];
-    primary.forEach(({ key, icon, label }) => {
+    BUILTIN_VIEWS.filter(v => PHONE_BAR.includes(v.key)).forEach(({ key, icon, label }) => {
         const btn = bottomTab(key, icon, label, view, "");
         btn.addEventListener("click", () => {
             sheet.classList.remove("open");
@@ -365,8 +373,9 @@ function wirePrimaryBottomNav(
     });
 }
 
-/** The views the phone's bar always shows; every other one is in the More sheet. */
-const PHONE_BAR: readonly View[] = ["overview", "feed", "chat"];
+/** The views the phone's bar always shows; every other one is in the More sheet.
+ *  The bar is for reacting: what needs the person, and who to talk to about it. */
+const PHONE_BAR: readonly View[] = ["overview", "chat", "inbox"];
 
 /** Fill the More sheet with the overflow tabs — the built-in views the bar has
  *  no room for, extension-registered views, then Settings — which is why the nav

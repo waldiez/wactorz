@@ -82,6 +82,28 @@ async def process(agent):
 """
 
 
+#: What the checker asks the person, and why it says it asks.
+CHECK = "Is the valve closed?"
+CHECK_CONTEXT = "Flow rose after the valve was last reported closed."
+
+#: An agent that asks one question with its reason, and says what was picked.
+ASKS_WITH_A_REASON = f"""
+async def setup(agent):
+    agent.state["asked"] = bool(agent.recall("asked"))
+
+
+async def process(agent):
+    if agent.state["asked"]:
+        return
+    agent.state["asked"] = True
+    agent.persist("asked", True)
+    picked = await agent.ask_operator(
+        {CHECK!r}, options=["Closed", "Open"], context={CHECK_CONTEXT!r}
+    )
+    await agent.notify_user("checked: " + picked)
+"""
+
+
 #: A moment already past when any journey asks. With its offset, so it means
 #: the same moment whatever time zone the server reads schedules in.
 _JUST_NOW = (
@@ -241,6 +263,15 @@ SCRIPT = {
         capabilities=["asking"],
         poll_interval=1,
         code=ASKS_THE_OPERATOR,
+    ),
+    "start a checker": _starts(
+        "Starting it.",
+        name="checker",
+        type="dynamic",
+        description="Asks the person to check a valve",
+        capabilities=["checking"],
+        poll_interval=1,
+        code=ASKS_WITH_A_REASON,
     ),
     "start a finisher on the node": _starts(
         "Starting it there.",

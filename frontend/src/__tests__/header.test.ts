@@ -42,7 +42,7 @@ describe("buildHeader", () => {
         // 5 built-in view tabs + the Devices link + audio, reset and sign-out
         // icon buttons. Devices and sign-out are always built and hidden until
         // /api/config says otherwise, so both are here whatever it will answer.
-        expect(header.querySelectorAll(".af-view-btn").length).toBe(9);
+        expect(header.querySelectorAll(".af-view-btn").length).toBe(10);
     });
 
     it("marks the current view active (class + aria-current)", () => {
@@ -335,10 +335,13 @@ describe("buildBottomNav", () => {
         const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
 
         expect([...sheet.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"])).toEqual([
+            "feed",
             "models",
             "settings",
         ]);
         expect(nav.querySelector(':scope > [data-view="models"]')).toBeNull();
+        expect(nav.querySelector(':scope > [data-view="feed"]')).toBeNull();
+        expect(nav.querySelector(':scope > [data-view="inbox"]')).not.toBeNull();
     });
 
     it("a secondary (settings) tab routes through onSetView", () => {

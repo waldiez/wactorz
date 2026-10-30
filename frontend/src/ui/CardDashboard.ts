@@ -28,6 +28,7 @@ import {
     releaseHeaderPopovers,
     releaseBottomNav,
     renderConnBadge,
+    renderInboxCount,
 } from "./dashboard/header";
 import { setSignOutVisible } from "./dashboard/signOut";
 import { stateLabel, sortAgents } from "./dashboard/agentState";
@@ -50,6 +51,10 @@ import { ViewRoutes } from "./dashboard/viewRoutes";
 import { ModelsView } from "./models/ModelsView";
 import { ModelCatalog } from "../models/ModelCatalog";
 import { ModelsApi } from "../io/modelsApi";
+import { QuestionsApi } from "../io/openQuestions";
+import { QuestionInbox } from "../questions/QuestionInbox";
+import { InboxView } from "./inbox/InboxView";
+import { toast } from "./ToastManager";
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -72,6 +77,11 @@ export class CardDashboard {
     private _trendPanel = new TrendPanel();
     /** The stored models and their pointers. */
     private _models = new ModelsView(new ModelCatalog(new ModelsApi(window.__WACTORZ_INGRESS_PATH ?? "")));
+    /** The questions agents wait on the person for, and the view of them. */
+    private _inbox = new QuestionInbox(new QuestionsApi(window.__WACTORZ_INGRESS_PATH ?? ""));
+    private _inboxView: InboxView;
+    /** Stops the inbox telling this dashboard its count. */
+    private readonly _unsubscribeInbox: () => void;
     private _removingIds = new Set<string>();
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
@@ -95,6 +105,14 @@ export class CardDashboard {
     constructor(private readonly store: AgentStore) {
         this.root = this.buildRoot();
         this._heartbeats = new Heartbeats(this.root);
+        this._inboxView = new InboxView(this._inbox, question => {
+            const agent = store.get(question.agent_id);
+            return agent ? store.label(agent) : question.agent;
+        });
+        this._unsubscribeInbox = this._inbox.subscribe(state => {
+            renderInboxCount(this.root, state.open.length);
+            this._closeQuestionToasts();
+        });
         this._chat = new DashboardChat({
             root: this.root,
             agents: store.agents,
@@ -118,6 +136,8 @@ export class CardDashboard {
             setChatTarget: name => this._chat.openByName(name),
             model: () => this._models.open,
             setModel: name => this._models.show(name),
+            inboxTab: () => this._inboxView.tab,
+            setInboxTab: tab => this._inboxView.show(tab),
         });
         this._overview = new OverviewView({
             root: this.root,
@@ -193,6 +213,8 @@ export class CardDashboard {
         this._unsubscribe();
         this._trendPanel.destroy();
         this._models.destroy();
+        this._inboxView.destroy();
+        this._unsubscribeInbox();
         releaseHeaderPopovers();
         releaseBottomNav();
         this.root.remove();
@@ -248,6 +270,9 @@ export class CardDashboard {
             this._chat.renderSidebar();
         }
         if (membership) {
+            if (this.view === "inbox") {
+                this._inboxView.redraw();
+            }
             this._chat.updateTargetSelect();
             // The open conversation's agent now shares its name, or no longer:
             // its header and the address name it as the page does, so a reload opens it.
@@ -359,6 +384,14 @@ export class CardDashboard {
         this._listeners.on("af-route", route => this._routes.open(route));
         this._listeners.on("af-register-view", v => this.registerView(v.key, v.icon, v.label, v.build));
         this._listeners.on("af-model-pointer", d => this._models.moved(d.name));
+        this._listeners.on("af-question-book", book => this._inbox.heard(book));
+        this._listeners.on("af-questions-listed", ({ listed }) => {
+            if (listed) {
+                this._inbox.listed(listed);
+            } else {
+                this._inbox.notListed();
+            }
+        });
     }
 
     private _wireFeedEvents(): void {
@@ -419,6 +452,8 @@ export class CardDashboard {
             this._chat.afterMount();
         } else if (this.view === "models") {
             body.appendChild(this._models.build());
+        } else if (this.view === "inbox") {
+            body.appendChild(this._inboxView.build());
         } else {
             const builder = this._viewBuilders.get(this.view);
             if (builder) {
@@ -470,9 +505,17 @@ export class CardDashboard {
             this._activity.pause();
         }
         this.view = v;
+        this._closeQuestionToasts();
         this._routes.moved();
         this._renderView();
         emit("af-view-changed", this._routes.current());
+    }
+
+    /** With the Inbox open each question is on screen, and on a phone its toast would lie over it. */
+    private _closeQuestionToasts(): void {
+        if (this.view === "inbox") {
+            this._inbox.state.open.forEach(question => toast.close(question.id));
+        }
     }
 
     private _renderHealth(): void {
@@ -538,6 +581,7 @@ export class CardDashboard {
                 extraViews: this._extraViews,
             });
             oldHeader.replaceWith(newHeader);
+            renderInboxCount(this.root, this._inbox.state.open.length);
             renderConnBadge(this.root, this.connState);
             this._renderHealth();
         }
@@ -549,6 +593,7 @@ export class CardDashboard {
                 extraViews: this._extraViews,
             });
             oldBottomNav.replaceWith(newNav);
+            renderInboxCount(this.root, this._inbox.state.open.length);
         }
     }
 

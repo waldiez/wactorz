@@ -8,8 +8,9 @@
  * reads what each view keeps in its route's path.
  *
  * A view's path is its own. The chat keeps the agent whose conversation is
- * open, as `[agent]`, and the Models view the model open, as `[name]`; a view
- * with levels of its own adds what it reads here.
+ * open, as `[agent]`, the Models view the model open, as `[name]`, and the
+ * Inbox the list open, as `[tab]`; a view with levels of its own adds what it
+ * reads here.
  */
 import { emit } from "../../events";
 import type { Route } from "../../router";
@@ -35,6 +36,10 @@ export interface ViewRoutesHost {
     model(): string;
     /** Open the model `name` in the Models view; "" for the list alone. */
     setModel(name: string): void;
+    /** The list the Inbox has open: "" for what is waiting. */
+    inboxTab(): string;
+    /** Open the list `tab` in the Inbox. */
+    setInboxTab(tab: string): void;
 }
 
 /** Opens routes for the dashboard, holding one that waits for an extension's view. */
@@ -68,6 +73,9 @@ export class ViewRoutes {
         if (route.view === "models") {
             this.host.setModel(route.path[0] ?? "");
         }
+        if (route.view === "inbox") {
+            this.host.setInboxTab(route.path[0] ?? "");
+        }
         this.host.setView(route.view);
     }
 
@@ -87,8 +95,19 @@ export class ViewRoutes {
     /** Where the dashboard is now, for the address. */
     current(): Route {
         const view = this.host.view();
-        const at = view === "chat" ? this.host.chatTarget() : view === "models" ? this.host.model() : "";
+        const at = this._within(view);
         return { view, path: at ? [at] : [] };
+    }
+
+    /** Where within `view` the dashboard is, if the view keeps a level of its own. */
+    private _within(view: View): string {
+        if (view === "chat") {
+            return this.host.chatTarget();
+        }
+        if (view === "models") {
+            return this.host.model();
+        }
+        return view === "inbox" ? this.host.inboxTab() : "";
     }
 }
 

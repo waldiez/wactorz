@@ -39,6 +39,9 @@ GONE_MS = 2_000
 
 WIDTH, HEIGHT = 1280, 800
 
+#: A phone held upright, for a journey that is about one.
+PHONE_WIDTH, PHONE_HEIGHT = 390, 844
+
 #: The dashboard is one page with these views, not one URL each: each by the
 #: words on its button.
 VIEWS = {"overview": "Overview", "chat": "Chat", "feed": "Feed", "settings": "Settings"}
@@ -736,6 +739,54 @@ class Dashboard:
     def accessibility_findings(self) -> list[str]:
         """The serious and critical axe findings on screen now that nobody accepted."""
         return axe.blocking_findings(self.page)
+
+    # ── Inbox ──────────────────────────────────────────────────────────────
+
+    def at_phone_size(self) -> Dashboard:
+        """Make the page a phone's size; `at_desktop_size` puts it back."""
+        self.page.set_viewport_size({"width": PHONE_WIDTH, "height": PHONE_HEIGHT})
+        return self
+
+    def at_desktop_size(self) -> Dashboard:
+        self.page.set_viewport_size({"width": WIDTH, "height": HEIGHT})
+        return self
+
+    def _inbox_tab(self) -> Locator:
+        """The Inbox's tab, in whichever navigation is on screen; its name counts what waits."""
+        nav = self.page.get_by_role("navigation", name=NAV, exact=True)
+        return nav.get_by_role("button", name=re.compile(r"^Inbox")).first
+
+    def inbox_tab_name(self) -> str:
+        """What the Inbox's tab says now: "Inbox", or "Inbox 1 waiting"."""
+        return str(self._inbox_tab().text_content() or "").strip()
+
+    def open_inbox(self) -> Dashboard:
+        """Tap the Inbox's tab, and wait for the view."""
+        self._inbox_tab().click()
+        self.page.get_by_test_id("view-inbox").wait_for(state="visible")
+        return self
+
+    def _inbox_card(self, question: str) -> Locator:
+        return self.page.get_by_role("listitem").filter(has_text=question)
+
+    def inbox_card_text(self, question: str) -> str:
+        """All that the card of ``question`` says, or "" when there is none on screen."""
+        cards = self._inbox_card(question)
+        return str(cards.first.inner_text()) if cards.count() else ""
+
+    def answer_in_inbox(self, question: str, option: str, note: str = "") -> Dashboard:
+        """Answer the card of ``question`` with ``option``, adding ``note`` when there is one."""
+        card = self._inbox_card(question)
+        if note:
+            card.get_by_text("Add a note", exact=True).click()
+            card.get_by_role("textbox", name="A note with your answer").fill(note)
+        card.get_by_role("button", name=option, exact=True).click()
+        return self
+
+    def open_answered(self) -> Dashboard:
+        """Follow the Inbox's link to what was answered."""
+        self.page.get_by_role("link", name="Answered", exact=True).click()
+        return self
 
     def assert_accessible(self, where: str) -> Dashboard:
         """Fail on any serious or critical axe finding on screen now, saying ``where`` it was."""

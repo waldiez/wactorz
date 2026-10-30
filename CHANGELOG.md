@@ -11,6 +11,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **An Inbox for what the agents wait on you for.** A new tab, `#/inbox`, lists every question still
+  open, from main and from nodes, whatever channel it went to, with who asked and a link to their
+  thread; `#/inbox/answered` lists the newest answered, with the pick, where it was made and the
+  note. A question is answered from its card, with an optional note, and a refusal is said on the
+  card. The tab counts what waits, in the header and in the phone's bar, and follows the agents'
+  books live. A question sent with `notify_user` alone, as the installer's are, keeps no book, so it
+  stays a toast and a thread message. On a phone the bar is now Overview, Chat, Inbox, Devices and
+  More, with Feed and Models under More.
+- **An agent can say why it asks.** `ask_operator(..., context="...")`, and `context` on a rule's
+  `ask_operator` action, where it may name trigger fields. It is kept in the question book and shown
+  on the Inbox's card; chat channels are sent the question alone.
+
 - **Where the model loop's data lives is decided, before it is built.** `docs/design/data-storage.md`
   records that readings from streams are recorded as Parquet files under the state directory, one
   file per source and hour, by a recorder that runs on main or on a node, with a node shipping each

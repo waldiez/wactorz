@@ -197,6 +197,7 @@ describe("main.ts bootstrap", () => {
             "raw",
             "answer",
             "model-pointer",
+            "question-book",
         ]) {
             expect(typeof mockRouter[ev]).toBe("function");
         }
@@ -413,6 +414,16 @@ describe("main.ts bootstrap", () => {
         expect(toast.close).toHaveBeenCalledWith("q2");
     });
 
+    it("empties a deleted agent's question book, which the server dropped with it", () => {
+        const books: unknown[] = [];
+        const stop = listen("af-question-book", d => books.push(d));
+
+        wsHandler("statePatch")([], "gone-agent", undefined);
+
+        document.removeEventListener("af-question-book", stop);
+        expect(books).toEqual([{ agentId: "gone-agent", questions: [] }]);
+    });
+
     it("going live shows each question still open as its toast, every time", async () => {
         wsHandler("mqttStatus")(false);
         vi.mocked(toast.show).mockClear();
@@ -451,6 +462,12 @@ describe("main.ts bootstrap", () => {
 
     it("tells the page a stored model's pointer moved", () => {
         const heard: unknown[] = [];
+        const books: unknown[] = [];
+        const stopBooks = listen("af-question-book", d => books.push(d));
+        routerHandler("question-book")({ agentId: "a1", questions: [] });
+        document.removeEventListener("af-question-book", stopBooks);
+        expect(books).toEqual([{ agentId: "a1", questions: [] }]);
+
         const stop = listen("af-model-pointer", d => heard.push(d));
 
         routerHandler("model-pointer")({ name: "hvac", pointer: "shadow" });

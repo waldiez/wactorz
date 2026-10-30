@@ -11,7 +11,8 @@
  * hands callers an already-typed detail. The one place a `CustomEvent` cast is
  * sanctioned is inside `listen`.
  */
-import type { Attachment, ChatMessage } from "./types/agent";
+import type { QuestionLedger } from "./io/openQuestions";
+import type { Attachment, ChatMessage, QuestionBook } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import type { ConnState } from "./ui/dashboard/types";
 import type { TTSVoice } from "./ext/tts/types";
@@ -63,7 +64,9 @@ export interface AppEventMap {
     /** The server's ledger of questions, each time the page goes live: the open ones, one
      *  asked while the page was away among them, and the newest answered. Not
      *  `af-chat-message`, which says a message arrived now and ends a turn on it. */
-    "af-questions-listed": { open: ChatMessage[]; answered: ChatMessage[] };
+    "af-questions-listed": QuestionLedger;
+    /** An agent's question book changed, on the broker: what the Inbox shows follows it. */
+    "af-question-book": QuestionBook;
     /** Everything was wiped; `survivors` are the ids of the agents still running. */
     "af-wipe-all": { survivors: string[] };
     /** The agent list is settled and can be trusted: a reset's survivors have

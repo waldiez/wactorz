@@ -83,6 +83,7 @@ describe("the header", () => {
             "Feed",
             "Chat",
             "Models",
+            "Inbox",
             "Settings",
         ]);
         expect(byRole(nav, "button", "Chat").getAttribute("aria-current")).toBe("page");

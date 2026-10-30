@@ -113,6 +113,25 @@ describe("the dashboard passes axe", () => {
         vi.unstubAllGlobals();
     });
 
+    it("on the Inbox, with a question waiting", async () => {
+        goTo("inbox");
+        emit("af-question-book", {
+            agentId: "a1",
+            questions: [
+                {
+                    id: "q",
+                    agent_id: "a1",
+                    agent: "asker",
+                    text: "Is the probe in place?",
+                    options: ["Yes", "No"],
+                    context: "The reading jumped.",
+                },
+            ],
+        });
+
+        expect(await blockingFindings(document.body)).toEqual([]);
+    });
+
     it("on the chat view, with the command list open", async () => {
         const commands = [
             { usage: "/plans", typed: "/plans", summary: "list pending pipeline proposals" },

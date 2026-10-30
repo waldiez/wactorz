@@ -13,10 +13,12 @@ import type {
     ChatMessage,
     HeartbeatPayload,
     HostStats,
+    LedgerQuestion,
     LogPayload,
     MetricsPayload,
     NodeHeartbeatPayload,
     QaFlagPayload,
+    QuestionBook,
     SpawnPayload,
     StatusPayload,
 } from "../types/agent";
@@ -32,6 +34,8 @@ export interface ServerEvents {
     chat: ChatMessage;
     /** A person answered a question an agent asked, on some channel. */
     answer: AnswerPayload;
+    /** An agent's question book changed; an emptied one carries an empty payload. */
+    "question-book": QuestionBook;
     "qa-flag": QaFlagPayload;
     /** LLM cost + token + message count metrics from an agent. */
     metrics: MetricsPayload;
@@ -50,6 +54,9 @@ export interface ServerEvents {
     /** Catch-all for raw messages not matching a known pattern. */
     raw: { topic: string; payload: unknown };
 }
+
+/** `agents/{id}/questions`: the agent's question book. */
+const QUESTION_BOOK = /^agents\/([^/]+)\/questions$/;
 
 /** `models/{name}/{pointer}`: where main says a stored model's pointer stands. */
 const MODEL_POINTER = /^models\/([^/]+)\/(active|shadow)$/;
@@ -88,6 +95,12 @@ export class ServerEventRouter {
         const pointer = MODEL_POINTER.exec(topic);
         if (pointer) {
             this.emit("model-pointer", { name: pointer[1] ?? "", pointer: pointer[2] ?? "" });
+            return;
+        }
+        // Before the shape check too: a book is cleared with an empty payload.
+        const book = QUESTION_BOOK.exec(topic);
+        if (book) {
+            this.emit("question-book", normaliseQuestionBook(payload, book[1] ?? ""));
             return;
         }
         // Structured routing needs an object. A null/primitive payload can't match
@@ -392,6 +405,47 @@ export function normaliseAnswer(p: unknown, agentId = ""): AnswerPayload {
         index: num(o["index"]) ?? 0,
         channel: str(o["channel"]) || "dashboard",
         timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
+    };
+}
+
+/** A question from a book or the ledger, its fields coerced; null for a record with no id. */
+export function normaliseQuestion(p: unknown, agentId: string, agent: string): LedgerQuestion | null {
+    const o = asObj(p);
+    const id = str(o["id"]);
+    if (!id) {
+        return null;
+    }
+    const answer = optStr(o["answer"]);
+    const channel = optStr(o["channel"]);
+    const askedAt = num(o["asked_at"]);
+    const answerChannel = optStr(o["answer_channel"]);
+    const answerNote = optStr(o["answer_note"]);
+    const answeredAt = num(o["answered_at"]);
+    const context = optStr(o["context"]);
+    return {
+        id,
+        agent_id: agentId,
+        agent,
+        text: str(o["text"]),
+        options: strArray(o["options"]),
+        ...(channel !== undefined && { channel }),
+        ...(askedAt !== undefined && { asked_at: askedAt }),
+        ...(answer !== undefined && { answer }),
+        ...(answerChannel && { answer_channel: answerChannel }),
+        ...(answerNote && { answer_note: answerNote }),
+        ...(answeredAt && { answered_at: answeredAt }),
+        ...(context && { context }),
+    };
+}
+
+/** Normalise the payload of `agents/{id}/questions`; anything that is not a book is an empty one. */
+export function normaliseQuestionBook(p: unknown, agentId: string): QuestionBook {
+    const o = asObj(p);
+    const agent = str(o["agent"]) || agentId.slice(0, 8);
+    const records: unknown[] = Array.isArray(o["questions"]) ? o["questions"] : [];
+    return {
+        agentId,
+        questions: records.flatMap(record => normaliseQuestion(record, agentId, agent) ?? []),
     };
 }
 

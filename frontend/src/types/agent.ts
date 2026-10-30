@@ -223,6 +223,40 @@ export interface AddressChoice {
     retryOf: string;
 }
 
+/** A question as the ledger and the agents' books list it: the question's record, and who asked it. */
+export interface LedgerQuestion {
+    /** The question's id, the one its answer names. */
+    id: string;
+    /** The id of the agent that asked. */
+    agent_id: string;
+    /** The name of the agent that asked. */
+    agent: string;
+    text: string;
+    options: string[];
+    /** Where else it went ("telegram"…), or "dashboard". */
+    channel?: string;
+    /** When it was asked, in Unix seconds. */
+    asked_at?: number;
+    /** The option picked, once there is one. */
+    answer?: string | null;
+    /** Where it was picked. */
+    answer_channel?: string;
+    /** What the person added to the pick, if anything. */
+    answer_note?: string;
+    /** When it was picked, in Unix seconds. */
+    answered_at?: number;
+    /** Why the agent says it asks, if it said. */
+    context?: string;
+}
+
+/** One agent's question book: every question it still keeps, open or answered. */
+export interface QuestionBook {
+    /** The id of the agent it is. */
+    agentId: string;
+    /** Its questions; none when the book was cleared, which is how an agent's goes. */
+    questions: LedgerQuestion[];
+}
+
 /** A person's pick among the options an agent offered, from whichever channel showed them. */
 export interface AnswerPayload {
     /** The id of the message answered. */

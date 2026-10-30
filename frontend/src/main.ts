@@ -254,6 +254,10 @@ ws.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
         markDeleted(deletedId);
         agentStore.removeAgent(deletedId);
+        // The server dropped the agent's book with it, and a withdrawn manifest clears
+        // no book. Here and not when the store drops an agent: a silent node's agents
+        // leave the store too, and what they asked still waits.
+        emit("af-question-book", { agentId: deletedId, questions: [] });
     }
     if (stats?.totalCostUsd !== undefined) {
         dashboard.setTotalCostUsd(stats.totalCostUsd);
@@ -321,6 +325,9 @@ router.on("alert", payload => {
 router.on("chat", msg => ingestChat(msg));
 // A stored model's pointer moved: the Models view reads it again.
 router.on("model-pointer", moved => emit("af-model-pointer", moved));
+
+// An agent's question book changed: the Inbox follows it.
+router.on("question-book", book => emit("af-question-book", book));
 
 // A question answered on any channel: the card closes on every open dashboard.
 router.on("answer", answer => {

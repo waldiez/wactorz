@@ -704,8 +704,9 @@ wactorz<span class="w"> </span>--no-monitor
 <ul>
 <li>The question is written into the agent's state until it is answered, so a restart in between loses nothing. When the agent starts it listens again, and a pick that arrives while nothing waits for it reaches <code>on_operator_answer(question, option)</code> on an <code>Actor</code>, or <code>async def on_answer(agent, question, option)</code> in a generated agent's program. <code>me.open_questions()</code> lists what is still unanswered, and <code>await me.wait_for_answer(question_id)</code> waits for one of them by id.</li>
 <li>A pick may come with a note, what the person added in their own words; it is kept as <code>question.answer_note</code>, empty when there is none.</li>
+<li><code>context="..."</code> says why the question is being asked: what the agent saw, what the answer will change. It is kept in the book and shown with the question in the dashboard's Inbox; chat channels are sent the question alone. It is redacted and cut to a thousand characters.</li>
 <li>The agent publishes its questions, retained, on <code>agents/{id}/questions</code> whenever one is asked or answered, and again when it starts. The monitor's <code>GET /api/questions</code> lists them from there, so one asked while the monitor was down is not missed.</li>
-<li>The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, so the operator can answer there as well.</li>
+<li>The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, in its Inbox (<code>#/inbox</code>), so the operator can answer there as well, with a note if they want; a question sent with <code>notify_user</code> alone keeps no book, so it shows as a notice and in the agent's thread but not in the Inbox.</li>
 <li>The answer is not authenticated. It arrives on the agent's <code>agents/{id}/answer</code> topic, and anything that can publish to the broker, any node included, can publish one there. Read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.</li>
 <li><code>timeout</code> is seconds; <code>None</code> waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then <code>asyncio.TimeoutError</code> is raised, and the question stays open: a later pick still reaches <code>on_operator_answer</code>.</li>
 </ul>
@@ -744,13 +745,14 @@ wactorz<span class="w"> </span>--no-monitor
             <span class="n">user</span><span class="o">=</span><span class="s2">"123456789"</span><span class="p">,</span>
             <span class="n">timeout</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
             <span class="n">topic</span><span class="o">=</span><span class="s2">"labels/hvac"</span><span class="p">,</span>
+            <span class="n">context</span><span class="o">=</span><span class="s2">"Above 20 for ten minutes on </span><span class="si">{sensor}</span><span class="s2">."</span><span class="p">,</span>
         <span class="p">),</span>
     <span class="p">),</span>
     <span class="n">cooldown_seconds</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
 <span class="p">)</span>
 </code></pre></div>
 
-<p>The text may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, <code>{"question", "option", "index", "trigger"}</code> is published on <code>topic</code>, or on <code>answers/&lt;rule name&gt;</code> when none is given, which is where a label store or a controller listens.</p>
+<p>The text and <code>context</code> may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, <code>{"question", "option", "index", "trigger"}</code> is published on <code>topic</code>, or on <code>answers/&lt;rule name&gt;</code> when none is given, which is where a label store or a controller listens.</p>
 <p>A rule can also record a label itself, with the <code>label</code> action: <code>{"type": "label", "source": "sensors/{entity_id}", "value": "maintenance", "text": "maintenance switch on"}</code> records that the source was under maintenance from when the trigger says it happened (its <code>ts</code> or <code>timestamp</code>, else now), as the rule's own label. <code>source</code> and <code>value</code> may name trigger fields in braces, and <code>text</code> is kept as the label's note.</p>
 <p>Two things a channel cannot do:</p>
 <ul>

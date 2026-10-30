@@ -820,7 +820,7 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see <em>Messages from an agent</em> in the interfaces guide)</td>
 </tr>
 <tr>
-<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
+<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
 <td>the same, waiting for the pick; a question outlives a restart, and with <code>label=</code> its answer becomes a label</td>
 </tr>
 <tr>

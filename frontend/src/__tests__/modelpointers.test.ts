@@ -67,10 +67,10 @@ describe("what a version is to its model", () => {
 
 describe("the moves offered", () => {
     it("name the version each puts in place", () => {
-        expect(modelOffers(detail()).map(o => [o.label, o.asksWhy, o.refused])).toEqual([
-            ["Promote v8", true, null],
-            ["Clear shadow", false, null],
-            ["Roll back to v6", true, null],
+        expect(modelOffers(detail()).map(o => [o.label, o.refused])).toEqual([
+            ["Promote v8", null],
+            ["Clear shadow", null],
+            ["Roll back to v6", null],
         ]);
     });
 

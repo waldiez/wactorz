@@ -202,16 +202,20 @@ describe("the Models view", () => {
         expect(posted()).toEqual([]);
     });
 
-    it("clears a shadow without asking why, since nothing would keep the answer", async () => {
+    it("clears a shadow after asking why, and sends the reason", async () => {
         await open("#/models/hvac");
         await vi.waitFor(() => model());
 
         press("Clear shadow");
         const dialog = byTestId(document, "confirm-dialog");
-        expect(allByRole(dialog, "textbox")).toEqual([]);
+        (byRole(dialog, "textbox", "Reason (optional)") as HTMLTextAreaElement).value = "noisy at night";
         byTestId(dialog, "confirm-ok").click();
 
-        await vi.waitFor(() => expect(posted()[0]?.[1]?.method).toBe("DELETE"));
+        await vi.waitFor(() => expect(posted()).toHaveLength(1));
+        expect(posted()[0]).toEqual([
+            "/api/models/hvac/shadow",
+            expect.objectContaining({ method: "DELETE", body: JSON.stringify({ reason: "noisy at night" }) }),
+        ]);
     });
 
     it("says the server's refusal in a notice", async () => {

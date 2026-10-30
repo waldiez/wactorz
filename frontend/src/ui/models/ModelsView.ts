@@ -16,7 +16,7 @@ import type { ModelCatalog, CatalogState } from "../../models/ModelCatalog";
 import type { ModelSummary } from "../../types/models";
 import { statusOf, summaryLine, type Offer } from "../../models/pointers";
 import { formatRoute } from "../../router";
-import { confirmDialog, confirmWithReason } from "../dashboard/confirmDialog";
+import { confirmWithReason } from "../dashboard/confirmDialog";
 import { toast } from "../ToastManager";
 import { el, labelled, list, named } from "../dom";
 import { buildModelDetail } from "./modelDetail";
@@ -164,16 +164,12 @@ export class ModelsView {
         }
     }
 
-    /** Ask whether to make `offer`'s move, with why when it takes one; then ask the server
-     *  to make it on the model whose button was pressed, whatever is open by then. */
+    /** Ask whether to make `offer`'s move, and why; then ask the server to make it on the
+     *  model whose button was pressed, whatever is open by then. */
     private async _choose(offer: Offer): Promise<void> {
         const model = this.catalog.state.open;
         const question = { title: `${offer.label}?`, message: offer.consequence, confirmLabel: offer.label };
-        const reason = offer.asksWhy
-            ? await confirmWithReason(question)
-            : (await confirmDialog(question))
-              ? ""
-              : null;
+        const reason = await confirmWithReason(question);
         if (reason === null) {
             return;
         }

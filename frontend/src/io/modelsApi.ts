@@ -27,8 +27,18 @@ function posting(body: object, reason: string): RequestInit {
     };
 }
 
-/** Where a move is asked for, and what is sent with it. Clearing takes no
- *  reason: the server records none for a pointer unset. */
+/** A DELETE, with a body only to carry `reason`: without one it is the bare unset. */
+function deleting(reason: string): RequestInit {
+    return reason
+        ? {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ reason }),
+          }
+        : { method: "DELETE" };
+}
+
+/** Where a move is asked for, and what is sent with it. */
 function route(action: ModelAction, reason: string): { path: string; init: RequestInit } {
     switch (action.kind) {
         case "shadow":
@@ -38,7 +48,7 @@ function route(action: ModelAction, reason: string): { path: string; init: Reque
         case "rollback":
             return { path: "rollback", init: posting({}, reason) };
         case "clear-shadow":
-            return { path: "shadow", init: { method: "DELETE" } };
+            return { path: "shadow", init: deleting(reason) };
     }
 }
 

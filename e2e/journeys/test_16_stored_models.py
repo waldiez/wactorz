@@ -4,7 +4,8 @@ Two versions of a model are stored, and the first made active, from the command
 line, as an operator does. The Models view marks the one served. The second is
 tried beside it and then promoted from the page, each with a reason; a second
 browser, signed in from a link to the model, opens on it and sees each move as
-main publishes it, and the history says who moved what, and why.
+main publishes it, and the history says who moved what, and why. The first is
+then tried again and its trial cleared, with a reason the history keeps too.
 
 It starts from what journey 15 left; it touches no agent.
 """
@@ -98,4 +99,29 @@ def test_a_version_tried_and_promoted_here_is_seen_in_another_browser(
     assert any(
         m.startswith("shadow → v2, by dashboard") and "“quieter at night”" in m for m in moves
     ), moves
+    dashboard.show("overview")
+
+
+def test_a_trial_cleared_here_keeps_its_reason(dashboard: browser.Dashboard) -> None:
+    dashboard.open_address(f"#/models/{MODEL}")
+    _steps_become(dashboard, ["v1, previous", "v2, active"], "the model as the promotion left it")
+
+    dashboard.press_on_model("Try v1 as shadow")
+    dashboard.confirm_with_reason("one more night")
+    _steps_become(dashboard, ["v1, shadow", "v2, active"], "v1 tried again")
+
+    dashboard.press_on_model("Clear shadow")
+    dashboard.confirm_with_reason("v2 holds up")
+
+    _steps_become(dashboard, ["v1, previous", "v2, active"], "the trial of v1 ended")
+    # The pointers show the clear at once; the history has it once main records it.
+    waiting.until(
+        lambda: any(
+            m.startswith("shadow cleared (was v1), by dashboard") and "“v2 holds up”" in m
+            for m in dashboard.model_moves()
+        ),
+        what="the clear in the history, with its reason",
+        timeout=SEEN_WITHIN_S,
+        interval=0.5,
+    )
     dashboard.show("overview")

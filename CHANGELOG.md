@@ -45,10 +45,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   previous active marked in words and colour, a table of versions with what was said of
   each, and the history of its pointer moves, each with who made it and why. From there
   a version is tried as shadow, the shadow promoted or cleared, and the active rolled
-  back to the version it replaced, each after a question that takes an optional reason
-  (a clear takes none, since nothing would keep it). A pointer moved anywhere else, by
-  the CLI, chat or an agent, shows there within seconds. On a phone it is in the More
-  sheet. Making a version active directly stays with the CLI and chat.
+  back to the version it replaced, each after a question that takes an optional reason.
+  A pointer moved anywhere else, by the CLI, chat or an agent, shows there within
+  seconds. On a phone it is in the More sheet. Making a version active directly stays with the CLI and chat.
 - **Agents written from chat know how to label.** Main's and the planner's prompts now say
   what `label=` on `ask_operator` does and when to use it, and that an agent on main can
   write a label itself with `agent.label(source, value, start=...)`, so a generated agent
@@ -83,7 +82,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   another within seconds, as when a shadow is set and promoted at once, and so is a change
   made while main was down. Clearing a pointer takes a reason: `DELETE
   /api/models/{name}/shadow` with `{"reason": "..."}`, `/artifacts clear active|shadow <name>
-  [reason]` in chat and `wactorz-artifacts clear --reason`.
+  [reason]` in chat, `wactorz-artifacts clear --reason` and the Models tab's question.
 - **A running agent follows its model's pointer, without a restart.** An agent whose
   spawn named a model by its bare name, or as `NAME:active` or `NAME:shadow`, serves the
   version that pointer moves to as soon as it has loaded: promote, roll back, point at a

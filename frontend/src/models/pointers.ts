@@ -47,8 +47,6 @@ export interface Offer {
     label: string;
     /** What confirming does, in full. */
     consequence: string;
-    /** Whether the move records why; clearing a pointer does not. */
-    asksWhy: boolean;
     /** Why it cannot be made now, or null when it can. */
     refused: string | null;
 }
@@ -68,7 +66,6 @@ export function modelOffers(detail: ModelDetail): Offer[] {
             action: { kind: "promote" },
             label: `Promote v${shadow.version}`,
             consequence: `${name} v${shadow.version} becomes the version agents serve, and the trial ends.`,
-            asksWhy: true,
             // A pointer whose version no longer holds its bytes is reported, never followed.
             refused: shadow.holds ? null : `v${shadow.version} no longer holds the bytes it was tried with.`,
         });
@@ -76,7 +73,6 @@ export function modelOffers(detail: ModelDetail): Offer[] {
             action: { kind: "clear-shadow" },
             label: "Clear shadow",
             consequence: `The trial of ${name} v${shadow.version} ends; the served version stays.`,
-            asksWhy: false,
             refused: null,
         });
     }
@@ -86,7 +82,6 @@ export function modelOffers(detail: ModelDetail): Offer[] {
             action: { kind: "rollback" },
             label: `Roll back to v${previous}`,
             consequence: `Agents serve ${name} v${previous} again, in place of v${pointers.active?.version}.`,
-            asksWhy: true,
             refused: stores(detail, previous) ? null : `v${previous} is no longer stored.`,
         });
     }
@@ -105,7 +100,6 @@ export function versionOffer(detail: ModelDetail, version: number): Offer | null
         consequence: detail.pointers.shadow
             ? `${detail.name} v${version} is tried beside the served version, in place of v${detail.pointers.shadow.version}.`
             : `${detail.name} v${version} is tried beside the served version.`,
-        asksWhy: true,
         refused: null,
     };
 }

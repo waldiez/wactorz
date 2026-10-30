@@ -89,16 +89,27 @@ describe("moving a pointer", () => {
         ]);
     });
 
-    it("clears a shadow with a DELETE and no reason, which the server would not keep", async () => {
+    it("clears a shadow with a DELETE that carries the reason", async () => {
         const fetched = answering(200, { pointer: {} });
         vi.stubGlobal("fetch", fetched);
 
-        expect(await new ModelsApi("").move("hvac", { kind: "clear-shadow" }, "ignored")).toEqual({
+        expect(await new ModelsApi("").move("hvac", { kind: "clear-shadow" }, "noisy at night")).toEqual({
             ok: true,
             value: null,
         });
 
         expect(fetched.mock.calls[0]![0]).toBe("/api/models/hvac/shadow");
+        expect(fetched.mock.calls[0]![1]).toEqual(
+            expect.objectContaining({ method: "DELETE", body: JSON.stringify({ reason: "noisy at night" }) }),
+        );
+    });
+
+    it("clears a shadow with a bare DELETE when no reason is given", async () => {
+        const fetched = answering(200, { pointer: {} });
+        vi.stubGlobal("fetch", fetched);
+
+        await new ModelsApi("").move("hvac", { kind: "clear-shadow" });
+
         expect(fetched.mock.calls[0]![1]).toEqual({ method: "DELETE", signal: expect.any(AbortSignal) });
     });
 });

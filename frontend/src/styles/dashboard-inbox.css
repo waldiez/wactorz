@@ -4,12 +4,11 @@
  */
 /* ── Inbox view (see ui/inbox/) ─────────────────────────────────────── */
 .af-inbox {
-  --af-inbox-width: 1200px;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   padding: 16px;
   overflow: hidden;
 }
@@ -18,34 +17,47 @@
   font-weight: 600;
   color: rgba(255, 255, 255, 0.92);
 }
-.af-inbox-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  max-width: var(--af-inbox-width);
-  margin-top: 10px;
+.af-inbox-lead {
+  margin-top: 2px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
 }
-.af-inbox-tab {
-  display: block;
-  color: rgba(255, 255, 255, 0.92);
-  text-decoration: none;
-}
-.af-inbox-tab.active {
-  border-color: #8ab4ff;
-}
-.af-inbox-lists {
+.af-inbox-columns {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  max-width: var(--af-inbox-width);
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
 }
-/* As many columns of at least 420px as fit: one on a phone, and at most two in the width above. */
+/* The panel the Models view has, but as tall as the view: there is nothing else in this column. */
+.af-inbox-side {
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+}
+.af-inbox-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.af-inbox-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-inbox-lists {
+  min-height: 0;
+  overflow-y: auto;
+}
 .af-inbox-list {
   list-style: none;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-  align-items: start;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  max-width: 860px;
   margin: 0;
   padding: 0;
 }
@@ -144,16 +156,27 @@
   color: rgba(255, 255, 255, 0.65);
   white-space: pre-wrap;
 }
+/* A phone: the panel is one short row above the questions. */
 @media (max-width: 639px) {
-  .af-inbox-tab {
-    padding: 10px 12px;
+  .af-inbox {
+    padding: 8px;
   }
-  .af-inbox-tab .af-stat-value {
-    margin-top: 4px;
-    font-size: 20px;
+  .af-inbox-heading,
+  .af-inbox-side .af-models-title {
+    display: none;
   }
-  .af-inbox-tab .af-stat-detail {
-    margin-top: 2px;
+  .af-inbox-columns {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+  .af-inbox-side {
+    padding: 8px;
+  }
+  .af-inbox-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 0;
   }
 }
 .af-inbox-none {

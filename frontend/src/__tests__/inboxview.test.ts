@@ -113,7 +113,7 @@ describe("the Inbox", () => {
         expect(byRole(document.body, "link", "asker").getAttribute("href")).toBe("#/chat/asker");
     });
 
-    it("shows each list as a card with its count and its newest moment", () => {
+    it("shows each list as a row with its count and its newest moment", () => {
         open();
         const waiting = () => document.querySelector('a[href="#/inbox"]')?.textContent;
         const answered = () => document.querySelector('a[href="#/inbox/answered"]')?.textContent;

@@ -27,24 +27,24 @@ function tabHref(tab: string): string {
     return formatRoute({ view: "inbox", path: tab ? [tab] : [] });
 }
 
-/** One of the two lists, as a stat card that is a link to it. */
-class ListCard {
-    /** The card's element. */
+/** One of the two lists, as a row of the side panel that is a link to it. */
+class ListRow {
+    /** The row's element. */
     readonly element: HTMLAnchorElement;
-    private readonly _value = el("div", "af-stat-value");
-    private readonly _detail = el("div", "af-stat-detail");
+    private readonly _count = el("span", "af-inbox-count");
+    private readonly _line = el("span", "af-model-row-line");
 
     constructor(label: string, tab: string) {
-        this.element = el("a", "af-stat-card af-inbox-tab");
+        this.element = el("a", "af-model-row");
         this.element.href = tabHref(tab);
-        this.element.append(el("div", "af-stat-label", label), this._value, this._detail);
+        this.element.append(el("span", "af-model-row-name", label), this._count, this._line);
     }
 
-    /** Show `value` and `detail`, marked as the list open when `current`. */
-    show(value: string, detail: string, current: boolean): void {
-        this._value.textContent = value;
-        this._detail.textContent = detail;
-        this.element.classList.toggle("active", current);
+    /** Show `count` and `line`, marked as the list open when `current`. */
+    show(count: string, line: string, current: boolean): void {
+        this._count.textContent = count;
+        this._line.textContent = line;
+        this.element.classList.toggle("open", current);
         if (current) {
             this.element.setAttribute("aria-current", "page");
         } else {
@@ -60,8 +60,8 @@ function moment(prefix: string, at: number | undefined, none: string): string {
 
 export class InboxView {
     private readonly _root = el("div", "af-inbox");
-    private readonly _waitingTab = new ListCard("Waiting", "");
-    private readonly _answeredTab = new ListCard("Answered", ANSWERED_TAB);
+    private readonly _waitingTab = new ListRow("Waiting", "");
+    private readonly _answeredTab = new ListRow("Answered", ANSWERED_TAB);
     private readonly _lists = el("div", "af-inbox-lists");
     private readonly _waiting = list(el("ul", "af-inbox-list"), "Questions waiting for you");
     private readonly _answered = list(el("ul", "af-inbox-list"), "Questions answered");
@@ -78,10 +78,17 @@ export class InboxView {
     ) {
         const tabs = labelled(el("nav", "af-inbox-tabs"), "Inbox lists");
         tabs.append(this._waitingTab.element, this._answeredTab.element);
+        const side = el("aside", "af-inbox-side");
+        side.append(el("h2", "af-models-title", "Questions"), tabs);
         const heading = el("header", "af-inbox-heading");
-        heading.append(el("h1", "af-inbox-title", "Inbox"), tabs);
+        heading.append(
+            el("h1", "af-inbox-title", "Inbox"),
+            el("p", "af-inbox-lead", "What the agents are waiting on you for, and what you answered."),
+        );
         this._lists.append(this._waiting, this._answered, this._none);
-        this._root.append(heading, this._lists);
+        const columns = el("div", "af-inbox-columns");
+        columns.append(side, this._lists);
+        this._root.append(heading, columns);
     }
 
     /** The list open, for the address: "" for what is waiting. */

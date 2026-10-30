@@ -19,7 +19,8 @@
  *
  * No DOM: the view reads `state` and is told when it changes.
  */
-import type { Answer, ModelsApi } from "../io/modelsApi";
+import type { Answer } from "../io/api";
+import type { ModelsApi } from "../io/modelsApi";
 import type { ModelAction, ModelDetail, ModelSummary, PointerMove } from "../types/models";
 
 /** What there is to show. */

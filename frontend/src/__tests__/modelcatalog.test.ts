@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { ModelCatalog } from "../models/ModelCatalog";
-import type { Answer } from "../io/modelsApi";
+import type { Answer } from "../io/api";
 import type { ModelDetail, ModelSummary, PointerMove } from "../types/models";
 
 const ok = <T>(value: T): Answer<T> => ({ ok: true, value });

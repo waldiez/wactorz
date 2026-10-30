@@ -7,7 +7,8 @@
  * request waits forever.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ModelsApi, MODELS_TIMEOUT_MS } from "../io/modelsApi";
+import { REQUEST_TIMEOUT_MS } from "../io/api";
+import { ModelsApi } from "../io/modelsApi";
 
 function answering(status: number, body: unknown) {
     return vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(body), { status }));
@@ -66,7 +67,7 @@ describe("reading models", () => {
         );
 
         const pending = new ModelsApi("").list();
-        await vi.advanceTimersByTimeAsync(MODELS_TIMEOUT_MS + 1);
+        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
 
         expect(await pending).toEqual({ ok: false, error: "the server did not answer in time" });
     });

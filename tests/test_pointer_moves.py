@@ -225,6 +225,51 @@ class TestMainRecordsWhatItSees:
         reasons = [move["reason"] for move in reversed(history(graph, "imu"))]
         assert reasons[-3:] == ["quieter at night", "fewer false alarms", "fewer false alarms"]
 
+    async def test_a_shadow_tried_and_cleared_between_two_looks_is_published_again(
+        self, store: ArtifactStore, service: ArtifactService, graph: Provenance
+    ) -> None:
+        store.move("active", "imu:1", by="cli")
+        await service.publish_pointers()
+        host = cast("_Host", service.host)
+        host.published.clear()
+
+        # The index ends where it began; only the history moved, and the
+        # dashboard reads it again when the pointer is published.
+        store.move("shadow", "imu:3", by="dashboard", reason="one more night")
+        store.clear("shadow", "imu", by="dashboard", reason="1 holds up")
+        await service.publish_pointers()
+
+        assert _changes(graph)[-2:] == [
+            (MOVED, "shadow", 3, "dashboard"),
+            (CLEARED, "shadow", None, "dashboard"),
+        ]
+        assert host.published == [("models/imu/shadow", b"", True, 1)]
+
+    async def test_a_look_with_nothing_journalled_publishes_nothing(
+        self, store: ArtifactStore, service: ArtifactService
+    ) -> None:
+        store.move("active", "imu:1", by="cli")
+        await service.publish_pointers()
+        host = cast("_Host", service.host)
+        host.published.clear()
+
+        await service.publish_pointers()
+
+        assert host.published == []
+
+    async def test_a_move_seen_in_the_index_is_published_once_though_also_journalled(
+        self, store: ArtifactStore, service: ArtifactService
+    ) -> None:
+        await service.publish_pointers()
+        host = cast("_Host", service.host)
+        host.published.clear()
+
+        store.move("active", "imu:2", by="cli")
+        await service.publish_pointers()
+
+        pointers = [topic for topic, *_ in host.published if topic.startswith("models/")]
+        assert pointers == ["models/imu/active"]
+
     async def test_a_clear_made_while_main_was_away_is_recorded(
         self, store: ArtifactStore, service: ArtifactService, graph: Provenance
     ) -> None:

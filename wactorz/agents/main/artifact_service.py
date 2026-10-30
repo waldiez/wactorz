@@ -100,7 +100,7 @@ def record_pointer_changes(
     store: ArtifactStore,
     changes: list[Change],
     standing: Mapping[tuple[str, str], Pointer | None],
-) -> None:
+) -> set[tuple[str, str]]:
     """Write the store's journal, then each change seen, into the provenance graph.
 
     The journal first: it says who made each change and why, in whichever
@@ -110,11 +110,18 @@ def record_pointer_changes(
     index covers a change the journal lost: a shadow that went because its
     version became active is the promotion's, by whoever promoted; any other
     clear is by nobody known.
+
+    Returns the (name, pointer) of each change written from the journal, so
+    main can say the history moved even when the index looks as it did: a
+    shadow tried and cleared between two looks.
     """
     prov = Provenance(db)
     journalled, read = store.pointer_changes()
+    recorded: set[tuple[str, str]] = set()
     for change in journalled:
-        record_change(prov, change)
+        if record_change(prov, change) is not None:
+            pointer = change["pointer"]
+            recorded.add((str(pointer["name"]), str(pointer["pointer"])))
     rejected = store.forget_pointer_changes(read)
     if rejected:
         logger.warning(
@@ -135,6 +142,7 @@ def record_pointer_changes(
             )
         else:
             record_clear(prov, was, at=time.time())
+    return recorded
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -282,7 +290,10 @@ class ArtifactService:
         not, so the broker agrees with the store after a restart, and says
         nothing on the feed: nothing moved, main only came back. Called by
         the watcher on its interval, and by whatever moves a pointer through
-        main, so that move is heard at once.
+        main, so that move is heard at once. A pointer whose change is
+        written into the history from the journal is published again too,
+        though it stands where it did: the dashboard reads a model's history
+        again on any publish of its pointers.
         """
         host = self.host
         if host is None:
@@ -290,6 +301,7 @@ class ArtifactService:
         standing = await asyncio.to_thread(self._standing)
         first = not self._looked
         changes: list[Change] = []
+        published: set[tuple[str, str]] = set()
         for key in sorted(set(standing) | set(self.announced)):
             now = standing.get(key)
             was = self.announced.get(key)
@@ -299,6 +311,7 @@ class ArtifactService:
             name, which = key
             payload: Any = b"" if now is None else now.payload()
             await host._mqtt_publish(pointer_topic(name, which), payload, retain=True, qos=1)
+            published.add(key)
             # The first look records where each pointer stands, silently: a
             # move made while main was away is written once, one already held
             # is passed over (`wactorz.core.pointer_moves`).
@@ -324,7 +337,13 @@ class ArtifactService:
         self._looked = True
         # After the look is taken, so a database that refuses the record does
         # not make every later look announce the same change again.
-        await self._record(changes, standing)
+        for name, which in sorted(await self._record(changes, standing) - published):
+            if (name, which) not in standing:
+                # The name was removed: its pointers were published empty already.
+                continue
+            now = standing[(name, which)]
+            payload = b"" if now is None else now.payload()
+            await host._mqtt_publish(pointer_topic(name, which), payload, retain=True, qos=1)
         if changes and self._follow is not None:
             try:
                 await self._follow(changes)
@@ -335,15 +354,21 @@ class ArtifactService:
 
     async def _record(
         self, changes: list[Change], standing: Mapping[tuple[str, str], Pointer | None]
-    ) -> None:
-        """Write ``changes`` into the provenance graph, where main has a database."""
+    ) -> set[tuple[str, str]]:
+        """Write ``changes`` into the provenance graph, where main has a database.
+
+        Returns the pointers whose change was written from the journal.
+        """
         db = get_db()
         if db is None:
-            return
+            return set()
         try:
-            await asyncio.to_thread(record_pointer_changes, db, self.store, changes, standing)
+            return await asyncio.to_thread(
+                record_pointer_changes, db, self.store, changes, standing
+            )
         except Exception as exc:
             logger.warning("cannot record the model pointer moves: %s", exc)
+            return set()
 
     async def pointer_watcher(self) -> None:
         """Keep the pointer topics true to the index, until the actor stops."""

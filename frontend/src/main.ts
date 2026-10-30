@@ -184,9 +184,12 @@ function pushFeed(item: FeedItem): void {
  *  read aloud, its agent's card, the chat and the feed, the same whichever way it came. */
 function ingestChat(msg: ChatMessage): void {
     if (msg.from !== "user") {
-        toast.show(
-            questionToast(msg) ?? { type: "chat", title: msg.from, message: msg.content.slice(0, 120) },
-        );
+        const asking = questionToast(msg);
+        if (!asking) {
+            toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
+        } else if (!dashboard.inboxOpen) {
+            toast.show(asking);
+        }
     }
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(msg.from);
@@ -394,7 +397,7 @@ function recomputeLive(): void {
         emit("af-questions-listed", ledger);
         ledger.open.forEach(msg => {
             const asking = questionToast(msg);
-            if (asking) {
+            if (asking && !dashboard.inboxOpen) {
                 toast.show(asking);
             }
         });

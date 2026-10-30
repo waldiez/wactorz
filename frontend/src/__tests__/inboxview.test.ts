@@ -192,9 +192,7 @@ describe("the Inbox", () => {
 
         open();
         expect(closed).toHaveBeenCalledWith("waiting");
-
-        book(asked("waiting"), asked("new"));
-        expect(closed).toHaveBeenCalledWith("new");
+        expect(dashboard.inboxOpen).toBe(true);
         closed.mockRestore();
     });
 

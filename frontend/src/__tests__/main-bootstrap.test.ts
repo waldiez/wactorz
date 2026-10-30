@@ -31,6 +31,7 @@ const mockDashboards: {
     setTotalCostUsd: ReturnType<typeof vi.fn>;
     setTotalMessages: ReturnType<typeof vi.fn>;
     setHostStats: ReturnType<typeof vi.fn>;
+    inboxOpen: boolean;
 }[] = [];
 // Who the socket was told the person addresses.
 const mockAddressed: string[] = [];
@@ -127,6 +128,7 @@ vi.mock("../ui/CardDashboard", () => ({
         setTotalCostUsd = vi.fn();
         setTotalMessages = vi.fn();
         setHostStats = vi.fn();
+        inboxOpen = false;
     },
 }));
 
@@ -412,6 +414,38 @@ describe("main.ts bootstrap", () => {
 
         routerHandler("answer")({ id: "q2", agentId: "i", option: "Refuse", index: 1, channel: "dashboard" });
         expect(toast.close).toHaveBeenCalledWith("q2");
+    });
+
+    it("shows no question's toast while the Inbox is open, live or from the ledger", async () => {
+        const question = {
+            id: "q9",
+            from: "triage",
+            to: "user",
+            content: "Maintenance?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Yes", "No"],
+        };
+        const dashboard = mockDashboards[0]!;
+        dashboard.inboxOpen = true;
+        wsHandler("mqttStatus")(false);
+        vi.mocked(toast.show).mockClear();
+        mockOpenQuestions.mockResolvedValue([question]);
+
+        const handed: unknown[] = [];
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
+        wsHandler("connected")();
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(handed).toHaveLength(1));
+        document.removeEventListener("af-questions-listed", stop);
+        await Promise.resolve();
+        routerHandler("chat")({ ...question, id: "q10" });
+
+        expect(toast.show).not.toHaveBeenCalled();
+        routerHandler("chat")({ id: "c1", from: "triage", to: "user", content: "hi", timestampMs: 1 });
+        expect(toast.show).toHaveBeenCalledTimes(1);
+        dashboard.inboxOpen = false;
+        mockOpenQuestions.mockResolvedValue([]);
     });
 
     it("empties a deleted agent's question book, which the server dropped with it", () => {

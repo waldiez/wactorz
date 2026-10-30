@@ -109,10 +109,9 @@ export class CardDashboard {
             const agent = store.get(question.agent_id);
             return agent ? store.label(agent) : question.agent;
         });
-        this._unsubscribeInbox = this._inbox.subscribe(state => {
-            renderInboxCount(this.root, state.open.length);
-            this._closeQuestionToasts();
-        });
+        this._unsubscribeInbox = this._inbox.subscribe(state =>
+            renderInboxCount(this.root, state.open.length),
+        );
         this._chat = new DashboardChat({
             root: this.root,
             agents: store.agents,
@@ -218,6 +217,11 @@ export class CardDashboard {
         releaseHeaderPopovers();
         releaseBottomNav();
         this.root.remove();
+    }
+
+    /** Whether the Inbox is open, where a question needs no toast. */
+    get inboxOpen(): boolean {
+        return this.view === "inbox";
     }
 
     /** Set the aggregate cost figure. */
@@ -511,7 +515,7 @@ export class CardDashboard {
         emit("af-view-changed", this._routes.current());
     }
 
-    /** With the Inbox open each question is on screen, and on a phone its toast would lie over it. */
+    /** Opening the Inbox: each question is on screen there, and on a phone its toast would lie over it. */
     private _closeQuestionToasts(): void {
         if (this.view === "inbox") {
             this._inbox.state.open.forEach(question => toast.close(question.id));

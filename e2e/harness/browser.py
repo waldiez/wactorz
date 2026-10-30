@@ -785,7 +785,7 @@ class Dashboard:
 
     def open_answered(self) -> Dashboard:
         """Follow the Inbox's link to what was answered."""
-        self.page.get_by_role("link", name="Answered", exact=True).click()
+        self.page.get_by_role("link", name=re.compile(r"^Answered")).click()
         return self
 
     def assert_accessible(self, where: str) -> Dashboard:

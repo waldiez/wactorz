@@ -70,7 +70,9 @@ describe("the Inbox", () => {
 
         open(["answered"]);
         expect(changes.at(-1)).toEqual({ view: "inbox", path: ["answered"] });
-        expect(byRole(document.body, "link", "Answered").getAttribute("aria-current")).toBe("page");
+        const answered = document.querySelector('a[href="#/inbox/answered"]');
+        expect(answered?.getAttribute("aria-current")).toBe("page");
+        expect(document.querySelector('a[href="#/inbox"]')?.hasAttribute("aria-current")).toBe(false);
 
         open(["no-such-list"]);
         expect(changes.at(-1)).toEqual({ view: "inbox", path: [] });
@@ -109,6 +111,22 @@ describe("the Inbox", () => {
         expect(document.body.textContent).toContain("The reading jumped.");
         expect(document.body.textContent).toContain("asked on telegram");
         expect(byRole(document.body, "link", "asker").getAttribute("href")).toBe("#/chat/asker");
+    });
+
+    it("shows each list as a card with its count and its newest moment", () => {
+        open();
+        const waiting = () => document.querySelector('a[href="#/inbox"]')?.textContent;
+        const answered = () => document.querySelector('a[href="#/inbox/answered"]')?.textContent;
+        expect(waiting()).toBe("Waiting–nothing waiting");
+        expect(answered()).toBe("Answered–none yet");
+
+        book(asked("one", { asked_at: 0 }), asked("done", { answer: "Yes", answered_at: 1_700_000_100 }));
+        expect(waiting()).toBe("Waiting1nothing waiting");
+        expect(answered()).toContain("Answered1latest ");
+
+        book(asked("one"), asked("two"));
+        expect(waiting()).toContain("Waiting2oldest ");
+        expect(answered()).toBe("Answered–none yet");
     });
 
     it("names an agent whose name is shared by its address", () => {

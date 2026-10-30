@@ -14,6 +14,7 @@
  */
 import type { InboxState, QuestionInbox } from "../../questions/QuestionInbox";
 import { formatRoute } from "../../router";
+import { timeLabel, toMs } from "../../time";
 import type { LedgerQuestion } from "../../types/agent";
 import { el, labelled, list } from "../dom";
 import { answeredCard, QuestionCard } from "./questionCard";
@@ -26,10 +27,41 @@ function tabHref(tab: string): string {
     return formatRoute({ view: "inbox", path: tab ? [tab] : [] });
 }
 
+/** One of the two lists, as a stat card that is a link to it. */
+class ListCard {
+    /** The card's element. */
+    readonly element: HTMLAnchorElement;
+    private readonly _value = el("div", "af-stat-value");
+    private readonly _detail = el("div", "af-stat-detail");
+
+    constructor(label: string, tab: string) {
+        this.element = el("a", "af-stat-card af-inbox-tab");
+        this.element.href = tabHref(tab);
+        this.element.append(el("div", "af-stat-label", label), this._value, this._detail);
+    }
+
+    /** Show `value` and `detail`, marked as the list open when `current`. */
+    show(value: string, detail: string, current: boolean): void {
+        this._value.textContent = value;
+        this._detail.textContent = detail;
+        this.element.classList.toggle("active", current);
+        if (current) {
+            this.element.setAttribute("aria-current", "page");
+        } else {
+            this.element.removeAttribute("aria-current");
+        }
+    }
+}
+
+/** `prefix` and the time `at`, or `none` when there is no time to give. */
+function moment(prefix: string, at: number | undefined, none: string): string {
+    return at ? `${prefix} ${timeLabel(toMs(at))}` : none;
+}
+
 export class InboxView {
     private readonly _root = el("div", "af-inbox");
-    private readonly _waitingTab = el("a", "af-inbox-tab");
-    private readonly _answeredTab = el("a", "af-inbox-tab", "Answered");
+    private readonly _waitingTab = new ListCard("Waiting", "");
+    private readonly _answeredTab = new ListCard("Answered", ANSWERED_TAB);
     private readonly _lists = el("div", "af-inbox-lists");
     private readonly _waiting = list(el("ul", "af-inbox-list"), "Questions waiting for you");
     private readonly _answered = list(el("ul", "af-inbox-list"), "Questions answered");
@@ -44,10 +76,8 @@ export class InboxView {
         /** How the page names the agent that asked. */
         private readonly label: (question: LedgerQuestion) => string,
     ) {
-        this._waitingTab.href = tabHref("");
-        this._answeredTab.href = tabHref(ANSWERED_TAB);
         const tabs = labelled(el("nav", "af-inbox-tabs"), "Inbox lists");
-        tabs.append(this._waitingTab, this._answeredTab);
+        tabs.append(this._waitingTab.element, this._answeredTab.element);
         const heading = el("header", "af-inbox-heading");
         heading.append(el("h1", "af-inbox-title", "Inbox"), tabs);
         this._lists.append(this._waiting, this._answered, this._none);
@@ -76,9 +106,17 @@ export class InboxView {
     redraw(): void {
         const state = this.inbox.state;
         const answering = this._tab === "";
-        this._waitingTab.textContent = state.open.length ? `Waiting (${state.open.length})` : "Waiting";
-        this._mark(this._waitingTab, answering);
-        this._mark(this._answeredTab, !answering);
+        const count = (shown: LedgerQuestion[]) => (state.read || shown.length ? `${shown.length}` : "–");
+        this._waitingTab.show(
+            count(state.open),
+            moment("oldest", state.open[0]?.asked_at, "nothing waiting"),
+            answering,
+        );
+        this._answeredTab.show(
+            count(state.answered),
+            moment("latest", state.answered[0]?.answered_at, "none yet"),
+            !answering,
+        );
         this._waiting.hidden = !answering;
         this._answered.hidden = answering;
         this._drawWaiting(state.open);
@@ -94,15 +132,6 @@ export class InboxView {
     destroy(): void {
         this._unsubscribe?.();
         this._unsubscribe = null;
-    }
-
-    private _mark(tab: HTMLElement, current: boolean): void {
-        tab.classList.toggle("active", current);
-        if (current) {
-            tab.setAttribute("aria-current", "page");
-        } else {
-            tab.removeAttribute("aria-current");
-        }
     }
 
     /** What an empty list says. */

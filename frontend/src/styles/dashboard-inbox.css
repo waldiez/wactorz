@@ -4,6 +4,7 @@
  */
 /* ── Inbox view (see ui/inbox/) ─────────────────────────────────────── */
 .af-inbox {
+  --af-inbox-width: 1200px;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -18,35 +19,32 @@
   color: rgba(255, 255, 255, 0.92);
 }
 .af-inbox-tabs {
-  display: flex;
-  gap: 16px;
-  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: var(--af-inbox-width);
+  margin-top: 10px;
 }
 .af-inbox-tab {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.65);
+  display: block;
+  color: rgba(255, 255, 255, 0.92);
   text-decoration: none;
-  border-bottom: 2px solid transparent;
 }
 .af-inbox-tab.active {
-  color: rgba(255, 255, 255, 0.92);
-  border-bottom-color: #8ab4ff;
+  border-color: #8ab4ff;
 }
 .af-inbox-lists {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  width: 100%;
-  max-width: 720px;
-  margin: 0 auto;
+  max-width: var(--af-inbox-width);
 }
+/* As many columns of at least 420px as fit: one on a phone, and at most two in the width above. */
 .af-inbox-list {
   list-style: none;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  align-items: start;
   gap: 12px;
   margin: 0;
   padding: 0;
@@ -145,6 +143,18 @@
   font-size: 13px;
   color: rgba(255, 255, 255, 0.65);
   white-space: pre-wrap;
+}
+@media (max-width: 639px) {
+  .af-inbox-tab {
+    padding: 10px 12px;
+  }
+  .af-inbox-tab .af-stat-value {
+    margin-top: 4px;
+    font-size: 20px;
+  }
+  .af-inbox-tab .af-stat-detail {
+    margin-top: 2px;
+  }
 }
 .af-inbox-none {
   padding: 16px 0;

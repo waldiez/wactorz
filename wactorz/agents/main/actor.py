@@ -31,6 +31,7 @@ from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import orchestrator_prompt
 from .addresses import resolve_address, task_refusal, task_topic_for
+from .alongside import Settled
 from .artifact_service import ArtifactService
 from .blocks import ActionBlockFilter
 from .code_refresh import CodeRefresh
@@ -406,6 +407,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _kept_actor_id(self, name: str, node: str, *, alongside: bool = False) -> str | None:
         """The id an agent spawned as ``name`` onto ``node`` keeps; see `SpawnService._kept_actor_id`."""
         return self.spawns._kept_actor_id(name, node, alongside=alongside)
+
+    async def _settle_spawn(self, config: dict[str, Any]) -> Settled:
+        """Decide a spawn the catalog makes; see `SpawnService.settle_spawn`."""
+        return await self.spawns.settle_spawn(config)
+
+    async def _put_back_spawn(self, source: Address) -> None:
+        """Undo what a settled spawn stopped; see `SpawnService.put_back_spawn`."""
+        await self.spawns.put_back_spawn(source)
 
     def _remove_from_spawn_registry(
         self, name: str, node: str | None = None, *, actor_id: str | None = None

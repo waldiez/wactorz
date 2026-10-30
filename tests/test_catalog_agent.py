@@ -19,8 +19,8 @@ import importlib.util
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import Mock
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -33,9 +33,13 @@ from wactorz.agents.catalog_agent import (
     get_native_factory,
 )
 from wactorz.agents.dynamic import DynamicAgent
-from wactorz.agents.mixins import spawning
+from wactorz.agents.main.alongside import Settled
+from wactorz.agents.main.hosts import SpawnHost
+from wactorz.agents.main.spawns import SpawnService
+from wactorz.agents.mixins import KeptHere, NotSpawned, spawning
 from wactorz.catalogue_agents.weather_agent import WeatherAgent
 from wactorz.core.actor import Message, MessageType
+from wactorz.core.addresses import Address
 from wactorz.core.identity import derive_actor_id
 
 
@@ -108,6 +112,18 @@ class _Main(_Actor):
         self.spawn_registry: list[dict[str, Any]] = []
         #: The ids main's spawn registry keeps, by name.
         self.kept_ids: dict[str, str] = {}
+
+        #: What main's settling answers a spawn with, and what it was asked.
+        self.settled = Settled()
+        self.asked: list[dict[str, Any]] = []
+        self.put_back: list[Address] = []
+
+    async def _settle_spawn(self, config: dict[str, Any]) -> Settled:
+        self.asked.append(config)
+        return self.settled
+
+    async def _put_back_spawn(self, source: Address) -> None:
+        self.put_back.append(source)
 
     def _save_to_spawn_registry(self, cfg: dict[str, Any]) -> None:
         self.spawn_registry.append(cfg)
@@ -391,6 +407,150 @@ class TestSpawnRefusals:
 
         assert result == {"ok": True, "message": "'smart-energy' is already running"}
         assert spawner.calls == []
+
+
+class TestANameThatRunsElsewhere:
+    """A spawn from the catalog is settled against where the name runs, as main's own are."""
+
+    @pytest.fixture(autouse=True)
+    def _running(self, catalog: CatalogAgent, main: _Main) -> None:
+        catalog._registry = _Registry(main)  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def test_it_asks_and_spawns_nothing(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawned = _spawner(catalog, monkeypatch)
+        main.settled = Settled(KeptHere("weather-agent", "main", ("weather-agent@pi",)))
+
+        result = await catalog._action_spawn("weather", {})
+
+        assert result["ok"] is False
+        assert result["elsewhere"] == ["weather-agent@pi"]
+        assert "'weather-agent@pi'" in result["message"]
+        assert "`@catalog spawn weather-agent replace`" in result["message"]
+        assert "`@catalog spawn weather-agent alongside`" in result["message"]
+        assert spawned.calls == []
+        assert main.spawn_registry == []
+
+    async def test_a_refusal_says_why(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawned = _spawner(catalog, monkeypatch)
+        main.settled = Settled(NotSpawned("weather-agent", "it runs on two hosts"))
+
+        result = await catalog._action_spawn("weather", {"replace": True})
+
+        assert result["ok"] is False
+        assert "it runs on two hosts" in result["message"]
+        assert main.asked == [{"name": "weather-agent", "replace": True, "alongside": False}]
+        assert spawned.calls == []
+
+    async def test_alongside_keeps_no_id_and_saves_an_entry_of_its_own(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spawned = _spawner(catalog, monkeypatch)
+        kept = str(uuid.uuid4())
+        main.kept_ids["weather-agent"] = kept
+
+        result = await catalog._action_spawn("weather", {"alongside": True})
+
+        assert result["ok"] is True
+        assert spawned.calls[0][1]["actor_id"] != kept
+        assert main.spawn_registry[0]["alongside"] is True
+
+    async def test_a_moved_agent_goes_back_when_the_spawn_fails(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _spawner(catalog, monkeypatch, result=None)
+        source = Address("weather-agent", "pi")
+        main.settled = Settled(moved_from=source)
+
+        result = await catalog._action_spawn("weather", {"replace": True})
+
+        assert result["ok"] is False
+        assert main.put_back == [source]
+
+    async def test_a_moved_agent_stays_moved_when_the_spawn_works(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _spawner(catalog, monkeypatch)
+        main.settled = Settled(moved_from=Address("weather-agent", "pi"))
+
+        result = await catalog._action_spawn("weather", {"replace": True})
+
+        assert result["ok"] is True
+        assert main.put_back == []
+
+    async def test_a_moved_agent_goes_back_when_a_background_install_fails(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = Address("reachy-mini", "pi")
+
+        async def _broken(*_args: Any) -> None:
+            raise RuntimeError("disk full")
+
+        async def _notify(_text: str, **_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(catalog, "notify_user", _notify)
+        monkeypatch.setattr(catalog_agent, "install_for_agent", _broken)
+
+        await catalog._install_then_spawn(
+            "reachy-mini",
+            catalog._catalog["reachy-mini"],
+            ["numpy"],
+            "",
+            catalog_agent._Placing(moved_from=source),
+        )
+
+        assert main.put_back == [source]
+
+    async def test_main_standing_the_catalog_in_reports_the_same_question(self) -> None:
+        catalogue = SimpleNamespace(
+            _action_spawn=AsyncMock(
+                return_value={"ok": False, "elsewhere": ["weather-agent@pi"], "message": "asks"}
+            )
+        )
+        registry = SimpleNamespace(
+            find_by_name=lambda name: catalogue if name == "catalog" else None
+        )
+        host = SimpleNamespace(
+            name="main", _registry=registry, _match_catalog_recipe=lambda _name: "weather-agent"
+        )
+
+        found = await SpawnService(cast("SpawnHost", host))._catalogue_substitute("weather")
+
+        assert found == KeptHere("weather-agent", "main", ("weather-agent@pi",))
+
+    @pytest.mark.parametrize(
+        ("typed", "wanted"),
+        [
+            ("spawn weather replace", {"replace": True}),
+            ("spawn weather alongside", {"alongside": True}),
+            ("weather replace", {"replace": True}),
+            ("spawn weather", {}),
+        ],
+    )
+    async def test_the_word_is_read_from_a_typed_spawn(
+        self,
+        catalog: CatalogAgent,
+        typed: str,
+        wanted: dict[str, bool],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen: list[tuple[str, dict[str, Any]]] = []
+
+        async def _spawn(
+            name: str, payload: dict[str, Any], *, background_install: bool = False
+        ) -> dict[str, Any]:
+            seen.append((name, payload))
+            return {"ok": True}
+
+        monkeypatch.setattr(catalog, "_action_spawn", _spawn)
+
+        await catalog._handle(typed)
+
+        assert seen == [("weather", wanted)]
 
 
 class TestNativeSpawn:

@@ -182,6 +182,8 @@ Pre-built agent recipe library. On startup it reads every recipe's program from 
 @catalog spawn anomaly-detector
 ```
 
+A recipe starts on main. If an agent of its name already runs on a node, nothing is spawned and the catalog says so: `@catalog spawn anomaly-detector replace` moves that agent to main, keeping its id, and `@catalog spawn anomaly-detector alongside` starts a second one on main.
+
 See the [Catalog recipes](#catalog-recipes) section below for available recipes.
 
 ---

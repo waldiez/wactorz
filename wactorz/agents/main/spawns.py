@@ -24,7 +24,7 @@ from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through, derive_actor_id
-from ...core.addresses import agent_name_error
+from ...core.addresses import MAIN_NODE, Address, agent_name_error
 from ...core.artifacts import ArtifactError
 from ...core.bundles import BundleError, bundle_for
 from ...core.identity import given_actor_id
@@ -37,8 +37,8 @@ from ...core.packages import (
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 from ..catalog_agent import current_recipe_config
-from ..mixins import NotSpawned, PlacedOnNode, agent_type
-from .alongside import put_back, settle
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type
+from .alongside import Settled, put_back, settle
 from .spawn_registry import (
     NAME_KEYED_REGISTRY_KEY,
     SPAWN_REGISTRY_KEY,
@@ -624,6 +624,8 @@ class SpawnService:
             recipe,
         )
         result = await catalogue._action_spawn(recipe, {})  # pyright: ignore[reportAttributeAccessIssue]
+        if result and result.get("elsewhere"):
+            return KeptHere(recipe, MAIN_NODE, tuple(result["elsewhere"]))
         if result and result.get("ok"):
             await asyncio.sleep(CATALOGUE_SETTLE_S)
             spawned = registry.find_by_name(recipe)
@@ -683,6 +685,14 @@ class SpawnService:
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, spawned
+
+    async def settle_spawn(self, config: dict[str, Any]) -> Settled:
+        """Decide a spawn made outside this service, by the catalog; see `alongside.settle`."""
+        return await settle(self.host, config)
+
+    async def put_back_spawn(self, source: Address) -> None:
+        """Start the agent a settled spawn stopped at ``source``; see `alongside.put_back`."""
+        await put_back(self.host, source)
 
     async def spawn_placed(self, config: dict[str, Any]) -> Any:
         """Place ``config``, settle it against where its name already runs, and spawn it.

@@ -8,10 +8,11 @@ other's tasks, or ran under its id, would show here.
 
 import asyncio
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from wactorz.agents.catalog_agent import CatalogAgent
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
@@ -59,6 +60,66 @@ async def _copied(main: MainActor, node: FastNode, shared: str) -> str:
         f"main seeing '{shared}' on {node.node_name}",
     )
     return said
+
+
+async def _on_the_node(main: MainActor, node: FastNode, shared: str) -> CatalogAgent:
+    """Run ``shared`` on ``node``, and a catalog that holds a recipe of that name."""
+    await _ready(main, node)
+    await main._spawn_from_config(
+        {"name": shared, "code": WHERE_AM_I, "node": node.node_name}, save=True
+    )
+    await until(
+        lambda: shared in main._known_nodes[node.node_name].get("agents", []),
+        f"main seeing '{shared}' on {node.node_name}",
+    )
+    spawned = await main.spawn(CatalogAgent, name=f"catalog-{uuid.uuid4().hex[:8]}")
+    catalog = cast("CatalogAgent", spawned)  # spawn is typed to the base class
+    catalog._catalog[shared] = {"name": shared, "type": "dynamic", "code": WHERE_AM_I}
+    return catalog
+
+
+class TestACatalogSpawnOfANameOnANode:
+    async def test_it_asks_and_starts_nothing_on_main(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        catalog = await _on_the_node(main, node, shared)
+
+        result = await catalog._action_spawn(shared, {})
+
+        assert result["ok"] is False
+        assert result["elsewhere"] == [f"{shared}@{node.node_name}"]
+        assert main._registry is not None and main._registry.find_by_name(shared) is None
+        assert main._get_spawn_registry().at(shared, "main") is None
+
+    async def test_alongside_adds_a_second_under_its_own_id(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        catalog = await _on_the_node(main, node, shared)
+
+        result = await catalog._action_spawn(shared, {"alongside": True})
+
+        registry = main._get_spawn_registry()
+        here, there = registry.at(shared, "main"), registry.at(shared, node.node_name)
+        assert result["ok"] is True
+        assert here is not None and there is not None
+        assert here["actor_id"] != there["actor_id"]
+        assert node.get(shared) is not None
+
+    async def test_replace_moves_it_to_main_under_the_same_id(
+        self, main: MainActor, node: FastNode, shared: str
+    ) -> None:
+        catalog = await _on_the_node(main, node, shared)
+        before = main._get_spawn_registry().at(shared, node.node_name)
+
+        result = await catalog._action_spawn(shared, {"replace": True})
+
+        await until(lambda: node.get(shared) is None, f"'{shared}' leaving the node")
+        registry = main._get_spawn_registry()
+        here = registry.at(shared, "main")
+        assert result["ok"] is True
+        assert before is not None and here is not None
+        assert here["actor_id"] == before["actor_id"]
+        assert registry.at(shared, node.node_name) is None
 
 
 class TestACopyOnANode:

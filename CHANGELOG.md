@@ -240,6 +240,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The catalog asks before starting an agent that already runs on a node.** `@catalog spawn x`
+  started a second `x` on main without a word. It now says where `x` runs and spawns nothing;
+  `@catalog spawn x replace` moves it to main, and `@catalog spawn x alongside` adds a second.
 - **No empty space at the bottom of the dashboard on a phone.** The message box sits at
   the bottom of the screen, with the phone bar right above it; on an iPhone, the room
   kept for the home indicator is under the message box only.

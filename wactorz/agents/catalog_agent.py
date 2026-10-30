@@ -28,16 +28,18 @@ import logging
 import pathlib
 import sys
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .. import plugins
 from ..core.actor import Actor, Message, MessageType, ReplyError
+from ..core.addresses import Address
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
 from .lookup import find_main_actor
-from .mixins import spawn_actor_id
+from .mixins import KeptHere, spawn_actor_id
 
 if TYPE_CHECKING:
     from .main import MainActor
@@ -93,6 +95,51 @@ def _wants_experimental(text: str) -> bool:
 #: package; its source travels, as text, in the spawn config's `code`, and is
 #: compiled into a DynamicAgent wherever the agent runs.
 _PROGRAMS = pathlib.Path(__file__).parent.parent / "catalogue_agents"
+
+
+#: What may end a spawn, for a name that already runs on another host: as in
+#: main's own spawns, ``replace`` moves it here and ``alongside`` adds a second.
+_SPAWN_WORDS = ("replace", "alongside")
+
+
+def _spawn_request(text: str) -> tuple[str, dict[str, bool]]:
+    """The recipe a typed spawn names, and the payload its closing word asks for."""
+    name, _, word = text.rpartition(" ")
+    if name.strip() and word.lower() in _SPAWN_WORDS:
+        return name.strip(), {word.lower(): True}
+    return text, {}
+
+
+@dataclass(frozen=True)
+class _Placing:
+    """How a settled spawn goes on: as a second agent of its name, or moved from a place."""
+
+    alongside: bool = False
+    moved_from: Address | None = None
+
+    @property
+    def saved(self) -> dict[str, bool]:
+        """What the spawn registry is told, so a second agent gets an entry of its own."""
+        return {"alongside": True} if self.alongside else {}
+
+
+#: The spawn of a name that runs nowhere else.
+_HERE = _Placing()
+
+
+def _runs_elsewhere(name: str, kept: KeptHere) -> dict[str, Any]:
+    """The answer to a spawn of ``name`` that runs on another host and said neither word."""
+    where = " and ".join(f"'{address}'" for address in kept.elsewhere)
+    return {
+        "ok": False,
+        "agent": name,
+        "elsewhere": list(kept.elsewhere),
+        "message": (
+            f"Did not spawn '{name}': it already runs as {where}. "
+            f"`@catalog spawn {name} replace` moves it to main, and "
+            f"`@catalog spawn {name} alongside` runs a second one there."
+        ),
+    }
 
 
 def _load_recipe(relative: str) -> str | None:
@@ -820,9 +867,9 @@ class CatalogAgent(Actor):
             if cmd == "info":
                 return self._action_info(arg)
             if cmd == "spawn":
-                return await self._action_spawn(arg, {}, background_install=True)
+                return await self._action_spawn(*_spawn_request(arg), background_install=True)
             if self._resolve_name(cmd):
-                return await self._action_spawn(cmd, {}, background_install=True)
+                return await self._action_spawn(*_spawn_request(text), background_install=True)
 
         return self._action_list()
 
@@ -954,7 +1001,49 @@ class CatalogAgent(Actor):
         if existing:
             return {"ok": True, "message": f"'{resolved}' is already running"}
 
-        beta_warning = recipe.get("warning") if recipe.get("experimental") else ""
+        placing = await self._settle(resolved, payload)
+        if isinstance(placing, dict):
+            return placing
+        result = await self._start_recipe(resolved, recipe, placing, background_install)
+        if not result.get("ok"):
+            await self._put_back(placing)
+        return result
+
+    async def _settle(self, name: str, payload: dict) -> dict | _Placing:
+        """Decide a spawn of ``name`` on main against where it already runs, as main's own are.
+
+        The result to answer with when nothing is to be spawned; else how to
+        place it, an agent moved here having been stopped where it was.
+        """
+        main = find_main_actor(self._registry)
+        if main is None:
+            return _HERE
+        alongside = bool(payload.get("alongside"))
+        settled = await main._settle_spawn(
+            {"name": name, "replace": bool(payload.get("replace")), "alongside": alongside}
+        )
+        refused = settled.refused
+        if isinstance(refused, KeptHere):
+            return _runs_elsewhere(name, refused)
+        if refused is not None:
+            return {
+                "ok": False,
+                "agent": name,
+                "message": f"Did not spawn '{name}': {refused.reason}",
+            }
+        return _Placing(alongside=alongside, moved_from=settled.moved_from)
+
+    async def _put_back(self, placing: _Placing) -> None:
+        """Start the agent this spawn stopped where it was, the spawn not having happened."""
+        main = find_main_actor(self._registry)
+        if main is not None and placing.moved_from is not None:
+            await main._put_back_spawn(placing.moved_from)
+
+    async def _start_recipe(
+        self, resolved: str, recipe: dict, placing: _Placing, background_install: bool
+    ) -> dict:
+        """Start the recipe ``resolved``, settled against where its name runs."""
+        beta_warning = (recipe.get("warning") or "") if recipe.get("experimental") else ""
         if beta_warning:
             await self._mqtt_publish(
                 f"agents/{self.actor_id}/alert",
@@ -980,15 +1069,14 @@ class CatalogAgent(Actor):
                 factory = recipe.get("factory")
                 if not factory:
                     return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
+                actor_id = spawn_actor_id(self._registry, resolved, alongside=placing.alongside)
                 native_kwargs: dict[str, Any] = {
                     "name": resolved,
                     "persistence_dir": persistence_dir,
                 }
                 if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
-                actor = await self.spawn(
-                    factory, actor_id=spawn_actor_id(self._registry, resolved), **native_kwargs
-                )
+                actor = await self.spawn(factory, actor_id=actor_id, **native_kwargs)
                 if actor:
                     if main:
                         # Persist a JSON-safe descriptor so the agent is restored
@@ -998,7 +1086,7 @@ class CatalogAgent(Actor):
                         # bypasses the safety validator like other catalog agents.
                         save_config = {k: v for k, v in recipe.items() if k != "factory"}
                         save_config["trusted"] = True
-                        main._save_to_spawn_registry(save_config)
+                        main._save_to_spawn_registry({**save_config, **placing.saved})
                     msg = _chat_message_with_beta_warning(
                         f"'{resolved}' spawned and running", beta_warning
                     )
@@ -1043,7 +1131,7 @@ class CatalogAgent(Actor):
                             exc,
                             resolved,
                         )
-                return await self._spawn_dynamic(resolved, recipe, beta_warning)
+                return await self._spawn_dynamic(resolved, recipe, beta_warning, placing)
 
             if resolved in self._installing:
                 return {
@@ -1060,7 +1148,7 @@ class CatalogAgent(Actor):
                     # would show it twice.
                     self._installing.add(resolved)
                     self.run_detached(
-                        self._install_then_spawn(resolved, recipe, needed, beta_warning),
+                        self._install_then_spawn(resolved, recipe, needed, beta_warning, placing),
                         name=f"install-{resolved}",
                     )
                     return {"ok": True, "installing": True, "agent": resolved, "message": heads_up}
@@ -1071,11 +1159,11 @@ class CatalogAgent(Actor):
                 finally:
                     self._installing.discard(resolved)
                 if not outcome.ok:
-                    return self._install_failed(resolved, recipe, outcome)
+                    return self._install_failed(resolved, recipe, outcome, placing)
             else:
                 logger.info("[%s] All deps for '%s' already installed", self.name, resolved)
 
-            return await self._spawn_dynamic(resolved, recipe, beta_warning)
+            return await self._spawn_dynamic(resolved, recipe, beta_warning, placing)
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
@@ -1092,7 +1180,9 @@ class CatalogAgent(Actor):
         )
         return f"{notice} {hint}" if hint else notice
 
-    def _install_failed(self, name: str, recipe: dict, outcome: InstallOutcome) -> dict:
+    def _install_failed(
+        self, name: str, recipe: dict, outcome: InstallOutcome, placing: _Placing = _HERE
+    ) -> dict:
         """The result for a recipe whose packages did not leave it ready to run.
 
         When only a restart stands in the way, the recipe is recorded now, so the
@@ -1102,7 +1192,7 @@ class CatalogAgent(Actor):
         if outcome.restart_required and not (outcome.failed or outcome.refused or outcome.error):
             main = find_main_actor(self._registry)
             if main:
-                main._save_to_spawn_registry({**recipe, "trusted": True})
+                main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
             # The way to not meet this again, said where it was met.
             if recipe.get("install_hint"):
                 message = f"{message} {recipe['install_hint']}"
@@ -1114,33 +1204,44 @@ class CatalogAgent(Actor):
         }
 
     async def _install_then_spawn(
-        self, name: str, recipe: dict, needed: list[str], beta_warning: str
+        self,
+        name: str,
+        recipe: dict,
+        needed: list[str],
+        beta_warning: str,
+        placing: _Placing = _HERE,
     ) -> None:
         """Install a recipe's packages, spawn it, and say how that went in chat."""
         try:
             main = find_main_actor(self._registry)
             outcome = await install_for_agent(self, main, needed, name)
             if not outcome.ok:
-                result = self._install_failed(name, recipe, outcome)
+                result = self._install_failed(name, recipe, outcome, placing)
             elif self._registry and self._registry.find_by_name(name):
                 result = {"ok": True, "message": f"'{name}' is already running"}
             else:
-                result = await self._spawn_dynamic(name, recipe, beta_warning)
+                result = await self._spawn_dynamic(name, recipe, beta_warning, placing)
         except Exception as e:
             logger.exception("[%s] Background install+spawn failed for '%s'", self.name, name)
             result = {"ok": False, "message": f"Failed to spawn '{name}': {e}"}
         finally:
             self._installing.discard(name)
+        if not result.get("ok"):
+            await self._put_back(placing)
         await self.notify_user(result["message"])
 
-    async def _spawn_dynamic(self, name: str, recipe: dict, beta_warning: str) -> dict:
+    async def _spawn_dynamic(
+        self, name: str, recipe: dict, beta_warning: str, placing: _Placing = _HERE
+    ) -> dict:
         """Start a dynamic recipe whose packages are in place, and record it."""
         if recipe.get("require_install_success") is True and (replaced := pending_restart()):
-            return self._install_failed(name, recipe, InstallOutcome(restart_required=replaced))
+            return self._install_failed(
+                name, recipe, InstallOutcome(restart_required=replaced), placing
+            )
         main = find_main_actor(self._registry)
         actor = await self.spawn(
             DynamicAgent,
-            actor_id=spawn_actor_id(self._registry, name),
+            actor_id=spawn_actor_id(self._registry, name, alongside=placing.alongside),
             name=name,
             code=recipe["code"],
             poll_interval=float(recipe.get("poll_interval", 3600)),
@@ -1156,7 +1257,7 @@ class CatalogAgent(Actor):
             return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}
         if main:
             # Mark as trusted so it bypasses safety validator on restore
-            main._save_to_spawn_registry({**recipe, "trusted": True})
+            main._save_to_spawn_registry({**recipe, "trusted": True, **placing.saved})
         msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(

@@ -122,7 +122,7 @@ class _Bus:
     def register_contract(self, contract: Any) -> None:
         self.contracts[contract.name] = contract
 
-    def unregister(self, name: str) -> None:
+    def unregister(self, name: str, _actor_id: str | None = None, _node: str | None = None) -> None:
         self.removed.append(name)
         self.contracts.pop(name, None)
 

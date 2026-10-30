@@ -459,7 +459,7 @@ class DynamicAgent(Actor):
 
             bus = get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
                 logger.debug("[%s] Unregistered from TopicBus", self.name)
         except Exception as exc:
             logger.debug("[%s] Could not unregister from TopicBus: %s", self.name, exc)

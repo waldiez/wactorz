@@ -358,7 +358,9 @@ async def show_bus(ctx: CommandContext, _argument: str) -> str:
         if pairs:
             lines.append("\nAuto-wiring opportunities:")
             for prod, cons, topic in pairs:
-                lines.append(f"  {prod.name} → {cons.name}  via {topic}")
+                lines.append(
+                    f"  {bus.registry.label(prod)} → {bus.registry.label(cons)}  via {topic}"
+                )
         return "\n".join(lines)
     except Exception as e:
         return f"TopicBus error: {e}"

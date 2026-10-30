@@ -10,6 +10,8 @@ import json
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
+import pytest
+
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.hosts import VoiceHost
@@ -20,7 +22,9 @@ from wactorz.agents.main.spawn_registry import SpawnRegistry, address_of, placed
 from wactorz.agents.main.turn_actions import TurnActions
 from wactorz.agents.main.voices import placed_node, speaks_for
 from wactorz.agents.mixins import KeptHere, PlacedOnNode
+from wactorz.core import topic_bus
 from wactorz.core.addresses import Address
+from wactorz.core.topic_bus import TopicBus
 
 #: The agent called counter on main, and the one on node pi.
 HERE = {
@@ -327,6 +331,33 @@ class TestTheManifestsOfASharedName:
         )
 
         assert len(registry.manifests) == 2
+
+    async def test_the_planner_keeps_a_contract_for_each(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bus = TopicBus()
+        monkeypatch.setattr(topic_bus, "_topic_bus", bus)
+        registry = ManifestRegistry(cast(Any, _ManifestHost()))
+
+        await _both(registry)
+
+        assert {c.actor_id for c in bus.registry.named("counter")} == {
+            HERE["actor_id"],
+            ON_PI["actor_id"],
+        }
+
+    async def test_one_withdrawing_takes_only_its_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bus = TopicBus()
+        monkeypatch.setattr(topic_bus, "_topic_bus", bus)
+        registry = ManifestRegistry(cast(Any, _ManifestHost()))
+        await _both(registry)
+        kept = bus.registry.get("counter", HERE["actor_id"])
+
+        await registry.receive_manifest(f"agents/{ON_PI['actor_id']}/manifest", b"")
+
+        assert bus.registry.named("counter") == [kept]
 
     async def test_one_withdrawing_leaves_the_other(self) -> None:
         host = _ManifestHost()

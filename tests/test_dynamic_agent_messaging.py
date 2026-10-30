@@ -198,6 +198,23 @@ class TestPublish:
         assert contract.publishes == ["sensors/raw"]
         assert contract.produces_schema == {}
 
+    async def test_another_agent_of_the_name_keeps_its_contract(
+        self, api: AgentAPI, bus: TopicBus
+    ) -> None:
+        other = TopicContract(
+            name="probe",
+            publishes=["elsewhere"],
+            actor_id="22222222-2222-4222-8222-222222222222",
+            node="pi",
+        )
+        bus.register_contract(other)
+
+        await api.publish("sensors/temp", {"temp": 21.5})
+
+        own = bus.registry.get("probe", api.actor_id)
+        assert other.publishes == ["elsewhere"]
+        assert own is not None and own.publishes == ["sensors/temp"]
+
     async def test_an_existing_contract_gains_the_topic_and_its_fields(
         self, api: AgentAPI, bus: TopicBus
     ) -> None:

@@ -119,7 +119,9 @@ class MessagingMixin(_Host):
 
             bus = get_topic_bus()
             if bus:
-                existing = bus.registry.get(self.name)
+                existing = bus.registry.get(
+                    self.name, self.actor_id, getattr(self._actor, "_node", None)
+                )
                 if existing:
                     if is_new_topic and topic not in existing.publishes:
                         existing.publishes.append(topic)

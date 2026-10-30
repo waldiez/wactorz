@@ -729,7 +729,7 @@ class Actor(ABC):
 
             bus = get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
         actor_metrics.forget(self.name)

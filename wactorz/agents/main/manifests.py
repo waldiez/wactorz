@@ -35,7 +35,7 @@ from ...core.mqtt import (
     session_kwargs,
     user_properties,
 )
-from ...core.node_publications import admit
+from ...core.node_publications import admit, signed_stamp
 from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
@@ -263,8 +263,8 @@ class ManifestRegistry:
         """Forget the manifest kept under ``key``, and the topics and contract it declared.
 
         ``actor_id`` says which agent it was. Another agent of the same name
-        keeps its own manifest and topics, and the planner's contract is
-        registered again from it.
+        keeps its own manifest, topics and contract; with no id to tell them
+        apart, its contract is registered again from its manifest.
         """
         held = self.manifests.pop(key, None) or {}
         name = str(held.get("name") or key)
@@ -275,9 +275,9 @@ class ManifestRegistry:
                 self.topic_registry[topic] = kept
             else:
                 self.topic_registry.pop(topic, None)
-        self._drop_contract(name)
+        self._drop_contract(name, gone, held.get("node"))
         other = next((m for m in self.manifests.values() if m.get("name") == name), None)
-        if other is not None:
+        if other is not None and not gone:
             self._register_contract(name, other, other.get("publishes", []) or [])
 
     def key_of(self, name: str, actor_id: str | None) -> str | None:
@@ -385,14 +385,14 @@ class ManifestRegistry:
             logger.debug("[main] TopicBus register from manifest failed for %r: %s", name, exc)
 
     @staticmethod
-    def _drop_contract(name: str) -> None:
+    def _drop_contract(name: str, actor_id: str | None = None, node: str | None = None) -> None:
         """Stop the planner seeing a deleted agent as a wiring target."""
         from ...core.topic_bus import get_topic_bus
 
         try:
             bus = get_topic_bus()
             if bus:
-                bus.unregister(name)
+                bus.unregister(name, actor_id, node)
         except Exception as exc:
             logger.debug("[main] TopicBus unregister failed for %r: %s", name, exc)
 
@@ -401,8 +401,8 @@ class ManifestRegistry:
         """The owning actor's name, for log lines, or a placeholder without one."""
         return self.host.name if self.host is not None else "main"
 
-    def _producer_of(self, topic: str) -> str | None:
-        """The agent the bus says publishes `topic`, or None.
+    def _producers_of(self, topic: str) -> list[Any]:
+        """The contracts the bus says publish ``topic``, main's first.
 
         Best-effort: an answer nobody can give is not a fault, and guessing an
         owner would attribute one agent's fields to another.
@@ -412,33 +412,26 @@ class ManifestRegistry:
 
             bus = get_topic_bus()
             if bus:
-                producers = bus.registry.producers_of(topic)
-                if producers:
-                    return producers[0].name
+                found = bus.registry.producers_of(topic)
+                return sorted(found, key=lambda c: bool(c.node) and node_of(c.node) != MAIN_NODE)
         except Exception as exc:
             logger.debug("[%s] TopicBus producer lookup failed: %s", self.host_name, exc)
-        return None
+        return []
 
-    def _record_sample(self, agent_name: str, topic: str, payload: dict[str, Any]) -> None:
-        """Add one real payload to what `agent_name` is known to publish."""
+    def _record_sample(self, contract: Any, topic: str, payload: dict[str, Any]) -> None:
+        """Add one real payload to what the agent of ``contract`` is known to publish."""
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
-            if bus:
-                contract = bus.registry.get(agent_name)
-                if contract:
-                    contract.update_observed(topic, payload)
+            contract.update_observed(topic, payload)
         except Exception as exc:
             logger.debug(
                 "[%s] Recording observed sample for %r failed: %s",
                 self.host_name,
-                agent_name,
+                contract.name,
                 exc,
             )
 
-    def _sample_from(self, message: Any) -> tuple[str, str, dict[str, Any]] | None:
-        """The agent, topic and payload a message carries, if it carries one.
+    def _sample_from(self, message: Any) -> tuple[Any, str, dict[str, Any]] | None:
+        """The contract, topic and payload a message carries, if it carries one.
 
         None for everything that is not a data sample: internal machinery, a
         payload that is not a JSON object, or a topic no contract claims.
@@ -449,29 +442,58 @@ class ManifestRegistry:
         payload = _decoded_json(message.payload)
         if not isinstance(payload, dict):
             return None
-        agent_name = self._producer_of(topic)
-        if not agent_name or not self._from_producer(agent_name, topic, message):
-            return None
-        return agent_name, topic, payload
+        contract = self._sender(self._producers_of(topic), topic, message)
+        return None if contract is None else (contract, topic, payload)
 
-    def _from_producer(self, agent_name: str, topic: str, message: Any) -> bool:
-        """Whether a sample may be recorded for ``agent_name``: signed by its node, if it has one.
+    def _sender(self, producers: list[Any], topic: str, message: Any) -> Any | None:
+        """Which of ``producers`` a sample is from: the one whose node signed it, else the first
+        it may be taken for. Several may publish one topic, and only a signature tells them apart.
+        """
+        for contract in producers:
+            node = self._signing_node(contract)
+            if node and self._signed_for(contract, node, topic, message):
+                return contract
+        return next((c for c in producers if self._from_producer(c, topic, message)), None)
+
+    def _signing_node(self, contract: Any) -> str | None:
+        """The node that signs for the agent of ``contract``, or None for one of main's own.
+
+        Empty when nothing says where it runs.
+        """
+        host = self.host
+        if host is None:
+            return None
+        if contract.node:
+            node = node_of(contract.node)
+            return None if node == MAIN_NODE else node
+        if host._registry is not None and host._registry.find_by_name(contract.name):
+            return None
+        return placed_node(host, contract.name, contract.actor_id or "") or _claimed_node(
+            host._known_nodes, contract.name, {}
+        )
+
+    def _signed_for(self, contract: Any, node: str, topic: str, message: Any) -> bool:
+        """Whether ``node`` signed the sample and may speak for the agent of ``contract``."""
+        stamp = signed_stamp(node, topic, bytes(message.payload or b""), user_properties(message))
+        return (
+            stamp is not None
+            and self.host is not None
+            and speaks_for(self.host, node, contract.name)
+        )
+
+    def _from_producer(self, contract: Any, topic: str, message: Any) -> bool:
+        """Whether a sample may be recorded for ``contract``: signed by its node, if it has one.
 
         A sample for main's own agent is taken as it comes: main's agents do not
         sign, so there is nothing to tell their messages from another's by.
         """
-        host = self.host
-        if host is None:
+        node = self._signing_node(contract)
+        if node is None or self.host is None:
             return True
-        if host._registry is not None and host._registry.find_by_name(agent_name):
-            return True
-        contract_node = placed_node(host, agent_name) or _claimed_node(
-            host._known_nodes, agent_name, {}
-        )
-        if not speaks_for(host, contract_node, agent_name):
+        if not speaks_for(self.host, node, contract.name):
             return False
         return admit(
-            contract_node,
+            node,
             topic,
             bytes(message.payload or b""),
             user_properties(message),

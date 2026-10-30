@@ -533,7 +533,7 @@ class PipelineMixin(_Host):
                             example = info.get("example", {})
                             fields = info.get("fields", {})
                             sample_lines.append(
-                                f"  Topic: {topic}  (published by {contract.name})\n"
+                                f"  Topic: {topic}  (published by {bus.registry.label(contract)})\n"
                                 f"    Fields: {fields}\n"
                                 f"    Example payload: {example}"
                             )

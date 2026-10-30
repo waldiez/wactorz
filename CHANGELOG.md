@@ -240,6 +240,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The planner sees both agents of a shared name.** It kept one contract per name, so with
+  `tally` on main and on a node it saw whichever was heard last, and one stopping took the
+  other's contract with it. Each is now kept by its id and shown as `tally@main` and
+  `tally@pi`; `/bus` lists both.
 - **The catalog asks before starting an agent that already runs on a node.** `@catalog spawn x`
   started a second `x` on main without a word. It now says where `x` runs and spawns nothing;
   `@catalog spawn x replace` moves it to main, and `@catalog spawn x alongside` adds a second.

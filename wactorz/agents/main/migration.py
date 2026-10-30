@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
+from ...core.addresses import MAIN_NODE
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsTooLarge,
@@ -1462,7 +1463,7 @@ class Migration:
 
             bus = get_topic_bus()
             if bus:
-                c = bus.registry.get(agent_name)
+                c = bus.registry.at(agent_name, MAIN_NODE)
                 if c is not None:
                     live_contract = {
                         "publishes": list(c.publishes or []),

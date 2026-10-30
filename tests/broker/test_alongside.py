@@ -16,6 +16,8 @@ from wactorz.agents.catalog_agent import CatalogAgent
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
+from wactorz.core import topic_bus
+from wactorz.core.topic_bus import TopicBus
 
 from .conftest import FastNode, until
 
@@ -153,6 +155,24 @@ class TestACopyOnANode:
         assert there["actor_id"] != here["actor_id"]
         assert node.get(shared) is not None
         assert node.get(shared).actor_id == there["actor_id"]  # pyright: ignore[reportOptionalMemberAccess]
+
+    async def test_the_planner_can_see_both(
+        self, main: MainActor, node: FastNode, shared: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bus = TopicBus()
+        monkeypatch.setattr(topic_bus, "_topic_bus", bus)
+        await _copied(main, node, shared)
+        registry = main._get_spawn_registry()
+        here, there = registry.at(shared, "main"), registry.at(shared, node.node_name)
+        assert here is not None and there is not None
+
+        await until(
+            lambda: (
+                {c.actor_id for c in bus.registry.named(shared)}
+                == {here["actor_id"], there["actor_id"]}
+            ),
+            "a contract for each",
+        )
 
     async def test_the_bare_name_is_refused_with_both_addresses(
         self, main: MainActor, node: FastNode, shared: str

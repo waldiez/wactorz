@@ -6,6 +6,7 @@ silent: the wrong agent is wired, or none is, and nothing raises.
 
 import pytest
 
+from wactorz.core.addresses import Address
 from wactorz.core.topic_bus import (
     PLANNER_DESCRIPTION_CHARS,
     TopicContract,
@@ -178,7 +179,7 @@ class TestRegistry:
         assert not reg.find_wiring_opportunities()
 
     def test_prune_stale_drops_contracts_whose_agent_is_gone(self, registry: TopicRegistry) -> None:
-        pruned = registry.prune_stale({"thermo", "alarm"})
+        pruned = registry.prune_stale({Address("thermo", "main"), Address("alarm", "main")})
         assert pruned == ["idle"]
         assert registry.get("idle") is None
         assert registry.get("thermo") is not None
@@ -186,7 +187,15 @@ class TestRegistry:
     def test_prune_stale_with_everything_live_removes_nothing(
         self, registry: TopicRegistry
     ) -> None:
-        assert not registry.prune_stale({"thermo", "alarm", "idle"})
+        live = {Address(name, "main") for name in ("thermo", "alarm", "idle")}
+        assert not registry.prune_stale(live)
+
+    def test_a_contract_naming_no_node_is_kept_while_its_name_runs_anywhere(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="thermo", publishes=["x/y"]))
+
+        assert not reg.prune_stale({Address("thermo", "pi")})
+        assert reg.prune_stale({Address("other", "pi")}) == ["thermo"]
 
     def test_summary_counts_topics_and_pairs(self, registry: TopicRegistry) -> None:
         summary = registry.summary()
@@ -229,3 +238,134 @@ class TestRegistry:
         contract = TopicContract(name="flic", description="Buttons: 'Desk'.")
 
         assert TopicContract.from_dict(contract.to_dict()).description == "Buttons: 'Desk'."
+
+
+#: What a lookup that should have found one is read through, for a plain failure.
+_NONE = TopicContract(name="")
+HERE_ID = "11111111-1111-4111-8111-111111111111"
+THERE_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def _shared() -> TopicRegistry:
+    """``tally`` on main, publishing, and on node pi, subscribing."""
+    reg = TopicRegistry()
+    reg.register(TopicContract(name="tally", publishes=["t/here"], actor_id=HERE_ID))
+    reg.register(TopicContract(name="tally", subscribes=["t/here"], actor_id=THERE_ID, node="pi"))
+    return reg
+
+
+class TestTwoAgentsOfOneName:
+    def test_both_are_kept(self) -> None:
+        assert [c.actor_id for c in _shared().named("tally")] == [HERE_ID, THERE_ID]
+
+    def test_a_later_contract_of_one_replaces_only_that_one(self) -> None:
+        reg = _shared()
+
+        reg.register(TopicContract(name="tally", publishes=["t/new"], actor_id=THERE_ID, node="pi"))
+
+        assert [c.publishes for c in reg.named("tally")] == [["t/here"], ["t/new"]]
+
+    def test_each_is_found_by_its_id_and_its_place(self) -> None:
+        reg = _shared()
+
+        assert (reg.get("tally", THERE_ID) or _NONE).node == "pi"
+        assert (reg.at("tally", "local") or _NONE).actor_id == HERE_ID
+        assert (reg.at("tally", "pi") or _NONE).actor_id == THERE_ID
+        assert reg.at("tally", "garage") is None
+
+    def test_a_bare_name_finds_mains(self) -> None:
+        assert (_shared().get("tally") or _NONE).actor_id == HERE_ID
+
+    def test_an_agent_with_no_contract_yet_is_not_given_the_other_ones(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/x"], actor_id=THERE_ID, node="pi"))
+
+        assert reg.get("tally", HERE_ID) is None
+
+    def test_an_id_does_not_reach_another_hosts_contract_without_one(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/x"], node="pi"))
+
+        assert reg.get("tally", HERE_ID) is None
+        assert reg.get("tally", THERE_ID, "pi") is not None
+
+    def test_an_agent_finds_its_own_contract_written_before_its_id(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/x"]))
+
+        assert reg.get("tally", HERE_ID) is not None
+
+    def test_stopping_one_leaves_another_hosts_contract_without_an_id(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/x"], actor_id=HERE_ID))
+        reg.register(TopicContract(name="tally", publishes=["t/y"], node="pi"))
+
+        reg.unregister("tally", HERE_ID)
+
+        assert [c.place for c in reg.named("tally")] == ["pi"]
+
+    def test_stopping_an_agent_takes_its_contract_written_before_its_id(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/y"], node="pi"))
+
+        reg.unregister("tally", THERE_ID, "pi")
+
+        assert reg.named("tally") == []
+
+    def test_removing_one_leaves_the_other(self) -> None:
+        reg = _shared()
+
+        reg.unregister("tally", HERE_ID)
+
+        assert [c.actor_id for c in reg.named("tally")] == [THERE_ID]
+
+    def test_removing_by_name_alone_removes_both(self) -> None:
+        reg = _shared()
+
+        reg.unregister("tally")
+
+        assert reg.named("tally") == []
+
+    def test_a_copy_on_a_node_gone_is_pruned_and_the_other_stays(self) -> None:
+        reg = _shared()
+
+        assert reg.prune_stale({Address("tally", "main")}) == ["tally"]
+        assert [c.actor_id for c in reg.named("tally")] == [HERE_ID]
+
+    def test_a_contract_without_an_id_gives_way_to_the_one_with_it(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/asked"], node="pi"))
+
+        reg.register(
+            TopicContract(name="tally", publishes=["t/real"], actor_id=THERE_ID, node="pi")
+        )
+
+        assert [c.publishes for c in reg.named("tally")] == [["t/real"]]
+
+    def test_a_contract_without_an_id_stays_for_another_place(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="tally", publishes=["t/asked"], node="garage"))
+
+        reg.register(
+            TopicContract(name="tally", publishes=["t/real"], actor_id=THERE_ID, node="pi")
+        )
+
+        assert len(reg.named("tally")) == 2
+
+    def test_the_planner_sees_both_by_address(self) -> None:
+        context = _shared().to_planner_context()
+
+        assert "[tally@main]" in context
+        assert "[tally@pi] on pi" in context
+        assert "tally@main → tally@pi  via t/here" in context
+
+    def test_a_name_held_once_is_still_shown_bare(self) -> None:
+        reg = TopicRegistry()
+        reg.register(TopicContract(name="thermo", publishes=["t"], actor_id=HERE_ID, node="pi"))
+
+        assert reg.label(reg.named("thermo")[0]) == "thermo"
+
+    def test_a_spawn_config_carries_its_id(self) -> None:
+        contract = TopicContract.from_spawn_config({"name": "tally", "actor_id": HERE_ID})
+
+        assert contract.actor_id == HERE_ID

@@ -73,9 +73,16 @@ class _Broker:
         return False
 
 
+class _Contracts(dict[str, Any]):
+    """The bus's registry, as the heartbeat reads it: one agent per name."""
+
+    def at(self, name: str, _node: str) -> Any | None:
+        return self.get(name)
+
+
 class _Bus:
     def __init__(self, registered: dict[str, Any] | None = None) -> None:
-        self.registry: dict[str, Any] = dict(registered or {})
+        self.registry = _Contracts(registered or {})
 
     def register_contract(self, contract: Any) -> None:
         self.registry[contract.name] = contract

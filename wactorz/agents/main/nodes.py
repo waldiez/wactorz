@@ -941,7 +941,7 @@ class NodeManager:
                 return
             spawn_registry = host._get_spawn_registry()
             for name in agents:
-                if bus.registry.get(name) is not None:
+                if bus.registry.at(name, node_name) is not None:
                     continue
                 if name in self.manifest_registry.manifests:
                     continue

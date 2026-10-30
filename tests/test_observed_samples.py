@@ -15,6 +15,7 @@ to nothing it can record against.
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,6 +26,7 @@ from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
+from wactorz.core.topic_bus import TopicBus, TopicContract
 
 from .node_messages import SignedMessage
 
@@ -34,6 +36,9 @@ class _Contract:
 
     def __init__(self, name: str) -> None:
         self.name = name
+        #: Placed by main's spawn registry, as a contract with no node is.
+        self.node: str | None = None
+        self.actor_id: str | None = None
         self.observed: list[tuple[str, dict[str, Any]]] = []
 
     def update_observed(self, topic: str, payload: dict[str, Any]) -> None:
@@ -44,16 +49,10 @@ class _BusRegistry:
     def __init__(self, producers: dict[str, str], contracts: dict[str, _Contract]) -> None:
         self._producers = producers
         self._contracts = contracts
-        #: Every name a recording was attempted against.
-        self.lookups: list[str | None] = []
 
     def producers_of(self, topic: str) -> list[_Contract]:
         name = self._producers.get(topic)
         return [self._contracts[name]] if name and name in self._contracts else []
-
-    def get(self, name: str) -> _Contract | None:
-        self.lookups.append(name)
-        return self._contracts.get(name)
 
 
 class _Bus:
@@ -144,6 +143,89 @@ async def run_listener(
 
     await asyncio.wait_for(main.manifests._remote_observed_samples_listener(), timeout=5)
     return bus, broker
+
+
+HERE_ID = "11111111-1111-4111-8111-111111111111"
+RPI_ID = "22222222-2222-4222-8222-222222222222"
+
+
+async def _shared(
+    monkeypatch: pytest.MonkeyPatch, messages: list[Any], *pi_topics: str
+) -> dict[str, list[str]]:
+    """``tally`` on main, publishing custom/here, and on rpi: the topics each was seen on."""
+    bus = TopicBus()
+    here = TopicContract(name="tally", publishes=["custom/here"], actor_id=HERE_ID)
+    there = TopicContract(name="tally", publishes=list(pi_topics), actor_id=RPI_ID, node="rpi")
+    bus.register_contract(here)
+    bus.register_contract(there)
+    main = MainActor.__new__(MainActor)
+    main.name = "main"
+    main.manifests = ManifestRegistry(main)
+    main.nodes = NodeManager(main, main.manifests)
+    main.migration = Migration(main, main.nodes)
+    main.state = ActorState.RUNNING
+    main._mqtt_broker = "localhost"
+    main._mqtt_port = 1883
+    entries = {
+        HERE_ID: {"name": "tally", "node": "", "actor_id": HERE_ID},
+        RPI_ID: {"name": "tally", "node": "rpi", "actor_id": RPI_ID},
+    }
+    setattr(main, "_registry", SimpleNamespace(find_by_name=lambda _name: object()))
+    setattr(main, "_get_spawn_registry", lambda: SpawnRegistry(entries))
+
+    def _stop() -> None:
+        main.state = ActorState.STOPPED
+
+    monkeypatch.setattr("wactorz.agents.main.manifests.mqtt_client", _Broker(messages, _stop))
+    monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: bus)
+    await asyncio.wait_for(main.manifests._remote_observed_samples_listener(), timeout=5)
+    return {"main": list(here.observed_samples), "rpi": list(there.observed_samples)}
+
+
+class TestAShareOfOneName:
+    """A sample is the agent's that published it, not the first of its name."""
+
+    async def test_one_only_a_nodes_agent_publishes_is_that_agents(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen = await _shared(monkeypatch, [sample("custom/pi", x=1)], "custom/pi")
+
+        assert seen == {"main": [], "rpi": ["custom/pi"]}
+
+    async def test_one_mains_agent_publishes_is_mains(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unsigned = SignedMessage("custom/here", b'{"x": 1}', node="rpi", signed=False)
+
+        seen = await _shared(monkeypatch, [unsigned], "custom/pi")
+
+        assert seen == {"main": ["custom/here"], "rpi": []}
+
+    async def test_on_a_topic_both_publish_the_signature_says_whose(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen = await _shared(monkeypatch, [sample("custom/here", x=1)], "custom/here")
+
+        assert seen == {"main": [], "rpi": ["custom/here"]}
+
+    async def test_on_a_topic_both_publish_an_unsigned_one_is_mains(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        unsigned = SignedMessage("custom/here", b'{"x": 1}', node="rpi", signed=False)
+
+        seen = await _shared(monkeypatch, [unsigned], "custom/here")
+
+        assert seen == {"main": ["custom/here"], "rpi": []}
+
+    async def test_a_nodes_unsigned_sample_is_not_taken_because_main_has_the_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.core.node_publications.NODE_SIGNING", "enforce")
+        unsigned = SignedMessage("custom/pi", b'{"x": 1}', node="rpi", signed=False)
+
+        seen = await _shared(monkeypatch, [unsigned], "custom/pi")
+
+        assert seen == {"main": [], "rpi": []}
 
 
 class TestWhatItListensTo:
@@ -268,16 +350,12 @@ class TestWhatItSkips:
     async def test_a_topic_no_contract_claims_is_skipped(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Asserted on the attempt rather than the outcome: with a contract in
-        # the bus for another agent, recording against nobody still writes
-        # nothing, so only the lookup shows whether it was tried at all.
         bus, _ = await run_listener(
             monkeypatch,
             [sample("sensors/attic", x=1)],
             producers={"sensors/kitchen": "thermometer"},
         )
 
-        assert not bus.registry.lookups
         assert not bus.contracts["thermometer"].observed
 
 

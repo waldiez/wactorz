@@ -240,6 +240,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **No empty space at the bottom of the dashboard on a phone.** The message box sits at
+  the bottom of the screen, with the phone bar right above it; on an iPhone, the room
+  kept for the home indicator is under the message box only.
 - **An agent is moved once at a time.** From the moment a move is asked for until the agent is
   confirmed where it went, or put back where it was, another `/migrate` of it is refused, saying
   where it is going, including one asked at the same moment: the agent may already run there

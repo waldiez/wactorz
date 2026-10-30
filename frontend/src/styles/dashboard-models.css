@@ -276,16 +276,24 @@ tr.shadow .af-model-role,
   border-style: dashed;
 }
 
-/* Versions beside the pointer moves where there is room for both. */
+/* Versions beside the pointer moves where the table fits whole beside them; else
+   the moves go below and the table has the full width. The versions card starts
+   at its table's own width, so the row wraps before the table would scroll. */
 .af-model-below {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 16px;
-  align-items: start;
+  align-items: flex-start;
 }
-/* A narrow screen scrolls the table sideways rather than breaking its words. */
+/* A screen narrower than the table scrolls it sideways rather than breaking its words. */
 .af-model-versions-card {
+  flex: 3 1 auto;
+  min-width: 0;
   overflow-x: auto;
+}
+.af-model-below .af-model-moves {
+  flex: 2 1 260px;
+  min-width: 0;
 }
 .af-model-versions {
   width: 100%;
@@ -374,12 +382,6 @@ tr.shadow .af-model-role,
   padding: 6px 8px;
   font: inherit;
   color: rgba(255, 255, 255, 0.85);
-}
-
-@media (max-width: 1100px) {
-  .af-model-below {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* On a phone: the list, or the model open with a way back to it. */

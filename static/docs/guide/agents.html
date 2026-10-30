@@ -426,6 +426,7 @@ plans, memory, notifications, diagnostics. <code>/help</code> on the dashboard l
 <span class="nv">@catalog</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">anomaly</span><span class="o">-</span><span class="n">detector</span>
 </code></pre></div>
 
+<p>A recipe starts on main. If an agent of its name already runs on a node, nothing is spawned and the catalog says so: <code>@catalog spawn anomaly-detector replace</code> moves that agent to main, keeping its id, and <code>@catalog spawn anomaly-detector alongside</code> starts a second one on main.</p>
 <p>See the <a href="#catalog-recipes">Catalog recipes</a> section below for available recipes.</p>
 <hr />
 <h3 id="homeassistantagent-core-llm">HomeAssistantAgent <code>[core]</code> <code>[LLM]</code></h3>

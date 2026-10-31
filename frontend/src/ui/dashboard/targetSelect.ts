@@ -38,13 +38,18 @@ function byPriorityThenName(a: AgentInfo, b: AgentInfo): number {
  * picked. The select falls back so the control is never blank; the target itself
  * is the user's, and only a user action changes it.
  */
-export function renderTargetSelect(select: HTMLSelectElement, agents: AgentInfo[], target: string): void {
+export function renderTargetSelect(
+    select: HTMLSelectElement,
+    agents: AgentInfo[],
+    target: string,
+    label: (agent: AgentInfo) => string = agent => agent.name,
+): void {
     select.innerHTML = "";
     agents
         .filter(canDirectMessage)
         .sort(byPriorityThenName)
         .forEach(agent => {
-            select.appendChild(option(agent.name, `@${agent.name}`));
+            select.appendChild(option(agent.id, `@${label(agent)}`));
         });
     const hasTarget = [...select.options].some(o => o.value === target);
     select.value = hasTarget ? target : (select.options[0]?.value ?? "");

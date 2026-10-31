@@ -11,6 +11,7 @@
  * cookie travels because the browser attaches it, and it is `HttpOnly`, so
  * script could not read it even to try.
  */
+import { ingressBase } from "../../io/api";
 import { iconMarkup } from "./icons";
 import { safeStorage } from "../../safeStorage";
 import { iconButton } from "../dom";
@@ -31,7 +32,7 @@ export function canSignOut(): boolean {
 
 /** Submit a POST to `/logout` and let the browser follow where it leads. */
 export function signOut(): void {
-    const base = window.__WACTORZ_INGRESS_PATH ?? "";
+    const base = ingressBase();
     const form = document.createElement("form");
     form.method = "post";
     form.action = `${base}/logout`;

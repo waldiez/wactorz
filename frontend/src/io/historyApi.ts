@@ -9,40 +9,17 @@
  * database to keep a history in, a node manager absent — so a caller draws
  * nothing rather than an error where a trend would be.
  */
-import type { Sample } from "./trend";
+import type { NodeListing, Sample } from "../types/agent";
+import { apiUrl, requestJson } from "./api";
 
 /** One stored sample of an agent or a node: its time and whatever fields were kept. */
 export type HistoryRow = Record<string, unknown> & { ts: number };
 
-/** What a node's listing entry carries that the dashboard reads. */
-export interface NodeListing {
-    /** The node's name. */
-    node: string;
-    /** Whether main has heard from it lately. */
-    online: boolean;
-    /** Seconds since the epoch it was last heard from. */
-    last_seen?: number;
-    /** What its machine is, or null from a node that has not said. */
-    manifest?: Record<string, unknown> | null;
-    /** Its latest readings, under the names its heartbeat uses. */
-    [reading: string]: unknown;
-}
-
-function base(): string {
-    return window.__WACTORZ_INGRESS_PATH ?? "";
-}
-
 async function getJson(path: string): Promise<Record<string, unknown> | null> {
-    try {
-        const res = await fetch(`${base()}${path}`);
-        if (!res.ok) {
-            return null;
-        }
-        const body: unknown = await res.json();
-        return body && typeof body === "object" ? (body as Record<string, unknown>) : null;
-    } catch {
-        return null;
-    }
+    const got = await requestJson<unknown>(apiUrl(path));
+    return got.ok && got.value && typeof got.value === "object"
+        ? (got.value as Record<string, unknown>)
+        : null;
 }
 
 /** One agent's or node's samples over the last ``hours``, oldest first. */

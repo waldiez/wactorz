@@ -27,16 +27,21 @@ from . import models
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .identity import derive_actor_id
+from .labels import Label, LabelError, Labels, LabelSpec
 from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .persistence.stores import get_db
 from .questions import (
+    CUT_SHORT,
     QUESTIONS_KEY,
     Question,
     answered,
     book_frame,
     book_of,
+    context_text,
     questions_in,
     questions_topic,
 )
@@ -93,31 +98,45 @@ def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
     return (protected and command == "delete") or (essential and command == "stop")
 
 
-def derive_actor_id(name: str) -> str:
-    """The actor id a named actor gets, derived from its name and nothing else.
+def has_stable_id(actor: object) -> bool:
+    """Whether this actor's id survives a restart, and so can hold a broker session.
 
-    Deterministic on purpose: the same agent must come back as the same id
-    across restarts, because the broker keys a held session on it and the
-    registry keys everything else on it.
-
-    Exported because several places need to *recognise* a derived id rather than
-    mint one -- deciding whether an actor can hold a broker session, addressing
-    an agent by name. Spelled once so those cannot drift apart: if the formula
-    changed under a copy, nothing would raise, sessions would simply stop being
-    resumed and durability would quietly become clean.
+    An actor's id is stable when it was given one, as an agent main spawned is
+    given the id its spawn registry keeps, or when it derives one from its name.
+    Either way the same agent reconnects as the same client and resumes whatever
+    the broker held for it. An anonymous actor is given a fresh id every
+    incarnation, so a session kept under the old id is unreachable -- keeping
+    one is not harmful, it is pointless, and it costs the broker state until it
+    expires.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+    return bool(getattr(actor, "stable_id", False))
 
 
-def has_derived_id(name: str, actor_id: str) -> bool:
-    """Whether this identity comes from the name, and so survives a restart.
+def _takes_actor_id(actor_class: Callable[..., Any]) -> bool:
+    """Whether ``actor_class`` can be handed ``actor_id`` when it is called."""
+    try:
+        parameters = inspect.signature(actor_class).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "actor_id" or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
 
-    A named actor reconnects as the same client and resumes whatever the broker
-    held for it. An anonymous one is given a fresh id every incarnation, so a
-    session kept under the old id is unreachable -- keeping one is not harmful,
-    it is pointless, and it costs the broker state until it expires.
+
+def build_actor(
+    actor_class: Callable[..., Actor], actor_id: str | None, kwargs: Mapping[str, Any]
+) -> Actor:
+    """``actor_class(**kwargs)``, running under ``actor_id`` when one is given.
+
+    The id is handed to a constructor that takes it, and set on the actor once
+    built otherwise, before anything has started: a catalogue class or a
+    factory written without the parameter still runs under the id main keeps.
     """
-    return derive_actor_id(name) == str(actor_id)
+    if actor_id and _takes_actor_id(actor_class):
+        return actor_class(**kwargs, actor_id=actor_id)
+    actor = actor_class(**kwargs)
+    if actor_id:
+        actor.actor_id = actor_id
+        actor.stable_id = True
+    return actor
 
 
 class ActorState(str, Enum):
@@ -466,6 +485,9 @@ class Actor(ABC):
             self.actor_id = derive_actor_id(name)
         else:
             self.actor_id = str(uuid.uuid4())
+        #: Whether the id outlives this incarnation: given, or derived from the
+        #: name. See `has_stable_id`.
+        self.stable_id: bool = bool(actor_id or name)
         self.name = name or f"actor-{self.actor_id[:8]}"
         self.state = ActorState.IDLE
         self.metrics = ActorMetrics()
@@ -569,6 +591,9 @@ class Actor(ABC):
         self._artifacts: dict[str, dict[str, Any]] = {}
         #: What `load_model` has loaded, by key, so a model is read once.
         self._loaded_models: dict[str, Any] = {}
+        #: Whether each loaded key was read with ``allow_code``, so a swap
+        #: reads the new version the way the program read the old one.
+        self._model_load_flags: dict[str, bool] = {}
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -595,8 +620,13 @@ class Actor(ABC):
         await self.on_start()
         # A question asked before a restart is still open: listen for its
         # answer, which goes to `on_operator_answer` since nothing awaits it,
-        # and say again what the book holds, for a reader that missed it.
-        if self.open_questions():
+        # and say again what the book holds, for a reader that missed it. A
+        # permission is closed instead: what waited for it did not survive.
+        still_open = self.open_questions()
+        for question in still_open:
+            if question.permission:
+                await self.close_permission(question.id, CUT_SHORT)
+        if any(not question.permission for question in still_open):
             self._hear_answers()
         if self.questions():
             await self._publish_questions()
@@ -706,7 +736,7 @@ class Actor(ABC):
 
             bus = get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
         actor_metrics.forget(self.name)
@@ -1093,7 +1123,7 @@ class Actor(ABC):
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
-                    main._remove_from_spawn_registry(self.name)  # pyright: ignore[reportAttributeAccessIssue]
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)  # pyright: ignore[reportAttributeAccessIssue]
                 await self._registry.unregister(self.actor_id)
             await self.stop()
         else:
@@ -1127,7 +1157,7 @@ class Actor(ABC):
         # Same rule the subscription hub follows: only an identity that
         # survives a restart can resume a session, so an anonymous actor
         # connects clean rather than leaving one behind per incarnation.
-        durable = has_derived_id(self.name, self.actor_id)
+        durable = has_stable_id(self)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         # A `commands` purpose: SubscriptionHub already holds this agent's
         # unqualified id, and two connections sharing an id kick each other off
@@ -1283,8 +1313,10 @@ class Actor(ABC):
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
-    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
-        """Spawn a child actor. The child inherits:
+    async def spawn(
+        self, actor_class: type[Actor], *, actor_id: str | None = None, **kwargs: Any
+    ) -> Actor:
+        """Spawn a child actor, under ``actor_id`` when one is given. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
@@ -1297,7 +1329,7 @@ class Actor(ABC):
         # Default persistence to same root as parent
         kwargs.setdefault("persistence_dir", str(self._persistence_dir.parent))
 
-        child = actor_class(**kwargs)
+        child = build_actor(actor_class, actor_id, kwargs)
 
         # Inherit everything from parent
         child._mqtt_client = self._mqtt_client  # MQTT publish connection
@@ -1348,13 +1380,15 @@ class Actor(ABC):
                     # actor's settings have become since.
                     cls = actor_class
                     kw = dict(kwargs)
+                    # The id it runs under, not the one a rebuild would derive.
+                    kept_id = child.actor_id if child.stable_id else None
                     mc = self._mqtt_client
                     mb = self._mqtt_broker
                     mp = self._mqtt_port
                     papi = self._persistence_api
 
                     async def _child_factory() -> Actor:
-                        c = cls(**kw)
+                        c = build_actor(cls, kept_id, kw)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
                         c._mqtt_port = mp
@@ -1527,7 +1561,46 @@ class Actor(ABC):
             self._loaded_models[key] = await asyncio.to_thread(
                 models.load, entry, allow_code=allow_code
             )
+            self._model_load_flags[key] = allow_code
         return self._loaded_models[key]
+
+    async def swap_model(self, key: str, entry: Mapping[str, Any]) -> Any:
+        """Serve the version ``entry`` names under ``key`` from now on, without a restart.
+
+        ``entry`` is a pinned artifact with the ``path`` it is read at on this
+        host, as `artifacts` holds them. A model the program loaded through
+        `load_model` is read again first, off the event loop and with the same
+        ``allow_code`` as before, so the old one is served until the new one is
+        in memory; then the path and the loaded object change together, in one
+        assignment, and `on_model_swapped` tells the program. One the program
+        opens itself through `artifact_path` changes path only, and the hook
+        says so with ``None``.
+
+        Returns what is now loaded, or None. Raises what the loader raises when
+        the new version cannot be read, and then nothing has changed: the agent
+        keeps serving what it served. Raises `UnnamedModelError` for a key this
+        agent does not name.
+        """
+        self._artifact(key)
+        loaded: Any = None
+        if key in self._loaded_models:
+            loaded = await asyncio.to_thread(
+                models.load, entry, allow_code=self._model_load_flags.get(key, False)
+            )
+        self._artifacts[key] = dict(entry)
+        if key in self._loaded_models:
+            self._loaded_models[key] = loaded
+        await self.on_model_swapped(key, loaded)
+        return loaded
+
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The version under ``key`` changed; ``model`` is the new one, or None. Override to react.
+
+        Called after `swap_model` has put the new version in place, so a
+        program that kept the old object somewhere replaces it here. The
+        default does nothing: a program that reads through `load_model` or
+        `artifact_path` on each call already sees the new version.
+        """
 
     def _artifact(self, key: str) -> dict[str, Any]:
         entry = self._artifacts.get(key)
@@ -1896,6 +1969,8 @@ class Actor(ABC):
         channel: str = DASHBOARD,
         user: str = "",
         timeout: float | None = None,
+        label: Mapping[str, Any] | None = None,
+        context: str = "",
     ) -> str:
         """Ask the person ``text``, offer ``options``, and return the one they pick.
 
@@ -1915,20 +1990,36 @@ class Actor(ABC):
         ``asyncio.TimeoutError`` is raised. The question stays open, and a
         later pick still reaches :meth:`on_operator_answer`.
 
-        Raises ``ValueError`` for no options, or options or a channel the
-        channels cannot show.
+        ``label`` makes the answer a label of the provenance graph: the
+        ``source`` it is about, the window from ``start`` (and to ``end``, open
+        when unsaid) in event time, and ``values``, which option stands for
+        which label value; an option left out, such as "Not sure", makes none.
+        Main records the label once the answer is in the question book, for an
+        agent here or on a node. See docs/design/labels-and-provenance.md.
+
+        ``context`` says why this is being asked: what the agent saw, what the
+        answer will change. It is shown with the question in the dashboard's
+        Inbox, and is not sent to chat channels.
+
+        Raises ``ValueError`` for no options, options or a channel the channels
+        cannot show, or a ``label`` that cannot be used -- before anything is
+        sent.
         """
         if not options:
             raise OptionsError.none()
+        checked = check_options(options)
+        spec = None if label is None else LabelSpec.parse(label, checked)
         self._hear_answers()
         question_id = await self.notify_user(text, options=options, channel=channel, user=user)
         question = Question(
             id=question_id,
             text=str(text),
-            options=check_options(options),
+            options=checked,
             channel=check_channel(channel),
             user=str(user).strip(),
             asked_at=time.time(),
+            label=None if spec is None else spec.to_dict(),
+            context=context_text(context),
         )
         await self._write_question(question)
         try:
@@ -1947,6 +2038,41 @@ class Actor(ABC):
             Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
         )
         return await self.wait_for_answer(question_id, timeout=timeout)
+
+    async def label(
+        self,
+        source: str,
+        value: str,
+        *,
+        start: Any,
+        end: Any = None,
+        note: str = "",
+        model: str = "",
+    ) -> Label:
+        """Record that ``source`` was ``value`` from ``start`` (to ``end``, open when unsaid).
+
+        Times are event times: Unix seconds, or ISO 8601 with an offset. The
+        label is recorded as this agent's, superseding the earlier labels it
+        overlaps on ``source`` (see :class:`wactorz.core.labels.Labels`).
+
+        Main keeps the labels, so an agent on a node cannot write one this way
+        yet; its questions' answers still become labels through
+        :meth:`ask_operator`. Raises :class:`~wactorz.core.labels.LabelError`
+        for a label that cannot be taken as written, or there.
+        """
+        db = get_db()
+        if getattr(self, "reads_history_from_main", False) or db is None:
+            raise LabelError.not_here()
+        return await asyncio.to_thread(
+            Labels(db).write,
+            source=source,
+            start=start,
+            end=end,
+            value=value,
+            actor=f"agent:{self.name}",
+            note=note,
+            model=model,
+        )
 
     async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
         """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.
@@ -1990,6 +2116,52 @@ class Actor(ABC):
     def open_questions(self) -> list[Question]:
         """The questions still waiting for an answer, oldest first."""
         return sorted((q for q in self.questions().values() if q.open), key=lambda q: q.asked_at)
+
+    async def ask_permission(self, text: str, options: Sequence[str]) -> str:
+        """Ask the person on the dashboard for leave to do something, and return the question's id.
+
+        The question is in the book, so it stays in the Inbox and survives a
+        reload, but unlike :meth:`ask_operator` nothing here listens for the
+        answer: the topic it would arrive on is open to anything on the broker,
+        which could then grant itself the permission. The caller waits for its
+        own ``dashboard_answer`` (see
+        :class:`~wactorz.core.outbound.TakesDashboardAnswers`), records the
+        pick with :meth:`permission_answered`, and ends a wait with no pick by
+        :meth:`close_permission`.
+        """
+        question_id = await self.notify_user(text, options=options)
+        await self._write_question(
+            Question(
+                id=question_id,
+                text=str(text),
+                options=check_options(options),
+                channel=DASHBOARD,
+                asked_at=time.time(),
+                permission=True,
+            )
+        )
+        return question_id
+
+    async def permission_answered(self, answer: Answer) -> None:
+        """Record ``answer`` in the book, for a question still open."""
+        question = self.questions().get(answer.id)
+        if question is not None and question.open:
+            await self._write_question(
+                answered(question, answer.option, answer.index, answer.channel, answer.note)
+            )
+
+    async def close_permission(self, question_id: str, option: str) -> None:
+        """End the question ``question_id`` with ``option``, in the book and on every dashboard."""
+        closing = Answer(
+            id=question_id,
+            agent_id=self.actor_id,
+            option=option,
+            index=-1,
+            channel=self.name,
+            timestamp=time.time(),
+        )
+        await self.permission_answered(closing)
+        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
 
     async def on_operator_answer(self, question: Question, option: str) -> None:
         """Called with the person's pick when nothing awaits it.
@@ -2041,6 +2213,9 @@ class Actor(ABC):
         question = self.questions().get(answer.id)
         if question is None:
             logger.debug("[%s] an answer to a question not asked here: %s", self.name, answer.id)
+            return
+        if question.permission:
+            logger.debug("[%s] a broker answer to a permission, ignored: %s", self.name, answer.id)
             return
         if question.answer is not None:
             logger.debug(

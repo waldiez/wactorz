@@ -13,7 +13,7 @@
  * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { emit } from "../events";
+import { emit, listen } from "../events";
 import { toast } from "../ui/ToastManager";
 import type { FeedItem } from "../types/feed";
 
@@ -22,10 +22,19 @@ const mockRouter: Record<string, (...a: any[]) => void> = {};
 const mockWs: Record<string, (...a: any[]) => void> = {};
 // Every frame main.ts sent over the mocked transport with sendRaw.
 const mockSent: unknown[] = [];
-// A single known agent so `getAgents().find(...)` resolves in the metrics path.
+// A single known agent so `get(...)` resolves in the metrics path.
 const mockStoreAgents = [{ id: "a", name: "A", state: "running", protected: false }];
 // The store main.ts builds, so a test can see what reached it.
 const mockStores: { onHeartbeat: ReturnType<typeof vi.fn> }[] = [];
+// The dashboard main.ts builds over it.
+const mockDashboards: {
+    setTotalCostUsd: ReturnType<typeof vi.fn>;
+    setTotalMessages: ReturnType<typeof vi.fn>;
+    setHostStats: ReturnType<typeof vi.fn>;
+    inboxOpen: boolean;
+}[] = [];
+// Who the socket was told the person addresses.
+const mockAddressed: string[] = [];
 
 // Fetch a registered handler (asserting it exists) so the call sites below stay
 // branch-free — keeps each test's cyclomatic complexity low.
@@ -70,6 +79,7 @@ vi.mock("../io/WSClient", () => ({
         onStreamEnd = vi.fn();
         connect = vi.fn();
         disconnect = vi.fn();
+        addressed = vi.fn((agent: string) => mockAddressed.push(agent));
         sendRaw = vi.fn((frame: unknown) => {
             mockSent.push(frame);
             return true;
@@ -91,23 +101,61 @@ vi.mock("../agents/AgentStore", () => ({
         constructor() {
             mockStores.push(this);
         }
-        mount = vi.fn();
         reconcileAgents = vi.fn();
         onChat = vi.fn();
         removeAgent = vi.fn();
-        setTotalCostUsd = vi.fn();
-        setTotalMessages = vi.fn();
         addOrUpdateAgent = vi.fn();
-        getAgents = () => mockStoreAgents;
+        list = () => mockStoreAgents;
+        get = (id: string) => mockStoreAgents.find(a => a.id === id);
+        byName = (name: string) => mockStoreAgents.filter(a => a.name === name);
+        label = (agent: { name: string }) => agent.name;
         onHeartbeat = vi.fn();
         onSpawn = vi.fn();
         onAlert = vi.fn();
         pruneSilentRemoteAgents = vi.fn();
         updateRemoteNode = vi.fn();
-        setHostStats = vi.fn();
         clearAll = vi.fn();
-        dispose = vi.fn();
     },
+}));
+
+vi.mock("../ui/CardDashboard", () => ({
+    CardDashboard: class {
+        constructor() {
+            mockDashboards.push(this);
+        }
+        show = vi.fn();
+        destroy = vi.fn();
+        setTotalCostUsd = vi.fn();
+        setTotalMessages = vi.fn();
+        setHostStats = vi.fn();
+        inboxOpen = false;
+    },
+}));
+
+// What had happened by the time main.ts installed the session-expiry hook.
+const mockAtExpiryInstall: { requests: number; stores: number; dashboards: number }[] = [];
+vi.mock("../io/sessionExpiry", () => ({
+    installSessionExpiry: () => {
+        const requests = vi.isMockFunction(globalThis.fetch)
+            ? vi.mocked(globalThis.fetch).mock.calls.length
+            : 0;
+        mockAtExpiryInstall.push({ requests, stores: mockStores.length, dashboards: mockDashboards.length });
+    },
+}));
+
+// The ledger's open questions, as main.ts asks for them each time it goes live.
+const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
+const mockLedgerRead = { fails: false };
+vi.mock("../io/openQuestions", () => ({
+    // As the real one answers: a failed read has empty lists and no `listed`.
+    fetchQuestionLedger: async (apiBase: string) =>
+        mockLedgerRead.fails
+            ? { open: [], answered: [] }
+            : {
+                  open: await mockOpenQuestions(apiBase),
+                  answered: [],
+                  listed: { questions: [], askedAt: 0 },
+              },
 }));
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
@@ -136,6 +184,11 @@ describe("main.ts bootstrap", () => {
         globalThis.fetch = origFetch;
     });
 
+    it("installs session expiry before any request, and before the dashboard mounts", () => {
+        // Mounting starts the dashboard's polling, so it too must come after.
+        expect(mockAtExpiryInstall).toEqual([{ requests: 0, stores: 0, dashboards: 0 }]);
+    });
+
     it("registers every router handler and the WS handlers", () => {
         for (const ev of [
             "heartbeat",
@@ -151,6 +204,8 @@ describe("main.ts bootstrap", () => {
             "host-stats",
             "raw",
             "answer",
+            "model-pointer",
+            "question-book",
         ]) {
             expect(typeof mockRouter[ev]).toBe("function");
         }
@@ -209,6 +264,46 @@ describe("main.ts bootstrap", () => {
         routerHandler("status")({ agentId: "a", agentName: "A", state: "running", protected: false });
         routerHandler("status")({ agentId: "a", agentName: "A", state: "stopped" }); // stopped branch
         expect(true).toBe(true);
+    });
+
+    it("says when the socket opens and closes, whatever the broker is doing", () => {
+        const said: boolean[] = [];
+        const stop = listen("af-socket", detail => said.push(detail.open));
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("connected")();
+        wsHandler("disconnected")();
+        document.removeEventListener("af-socket", stop);
+
+        expect(said).toEqual([true, false]);
+    });
+
+    it("takes a reply on the socket and an agent's own message down the same path", () => {
+        const feed: FeedItem[] = [];
+        const arrived: unknown[] = [];
+        const onFeed = listen("af-feed-push", detail => feed.push(detail.item));
+        const onChat = listen("af-chat-message", detail => arrived.push(detail.msg));
+
+        wsHandler("chat")("on the socket", "weather", 1_000, "user");
+        routerHandler("chat")({
+            id: "r1",
+            from: "weather",
+            to: "user",
+            content: "on its own",
+            timestampMs: 2_000,
+        });
+        routerHandler("chat")({
+            id: "r2",
+            from: "weather",
+            to: "catalog",
+            content: "do it",
+            timestampMs: 3_000,
+        });
+
+        document.removeEventListener("af-feed-push", onFeed);
+        document.removeEventListener("af-chat-message", onChat);
+        expect(feed.map(i => i.label)).toEqual(["on the socket", "on its own", "→ catalog: do it"]);
+        expect(arrived).toHaveLength(3);
     });
 
     it("goes live only when both the /ws is open and the broker is up, then seeds once", () => {
@@ -276,6 +371,20 @@ describe("main.ts bootstrap", () => {
         expect(true).toBe(true);
     });
 
+    it("hands the totals and the host's readings to the dashboard", () => {
+        const dashboard = mockDashboards[0]!;
+        wsHandler("statePatch")([], undefined, { totalCostUsd: 7, totalMessages: 4 });
+        routerHandler("host-stats")({ cpu: 1, memUsedMb: 2, memTotalMb: 3 });
+        expect(dashboard.setTotalCostUsd).toHaveBeenLastCalledWith(7);
+        expect(dashboard.setTotalMessages).toHaveBeenLastCalledWith(4);
+        expect(dashboard.setHostStats).toHaveBeenLastCalledWith(1, 2, 3);
+    });
+
+    it("tells the socket whom the chat addresses", () => {
+        emit("af-addressed", { agent: "weather" });
+        expect(mockAddressed.at(-1)).toBe("weather");
+    });
+
     it("sends a pressed option to the agent, and closes the question on an answer", () => {
         const answered: unknown[] = [];
         const seen = (e: Event): void => {
@@ -313,12 +422,183 @@ describe("main.ts bootstrap", () => {
         expect(toast.close).toHaveBeenCalledWith("q2");
     });
 
+    it("shows no question's toast while the Inbox is open, live or from the ledger", async () => {
+        const question = {
+            id: "q9",
+            from: "triage",
+            to: "user",
+            content: "Maintenance?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Yes", "No"],
+        };
+        const dashboard = mockDashboards[0]!;
+        dashboard.inboxOpen = true;
+        wsHandler("mqttStatus")(false);
+        vi.mocked(toast.show).mockClear();
+        mockOpenQuestions.mockResolvedValue([question]);
+
+        const handed: unknown[] = [];
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
+        wsHandler("connected")();
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(handed).toHaveLength(1));
+        document.removeEventListener("af-questions-listed", stop);
+        await Promise.resolve();
+        routerHandler("chat")({ ...question, id: "q10" });
+
+        expect(toast.show).not.toHaveBeenCalled();
+        routerHandler("chat")({ id: "c1", from: "triage", to: "user", content: "hi", timestampMs: 1 });
+        expect(toast.show).toHaveBeenCalledTimes(1);
+        dashboard.inboxOpen = false;
+        mockOpenQuestions.mockResolvedValue([]);
+    });
+
+    it("does not raise again a question that came live, once the page reconnects", async () => {
+        const question = {
+            id: "q20",
+            from: "triage",
+            to: "user",
+            content: "Restart it?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Yes", "No"],
+        };
+        routerHandler("chat")(question);
+        vi.mocked(toast.show).mockClear();
+        mockOpenQuestions.mockResolvedValue([question]);
+        const handed: unknown[] = [];
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(handed).toHaveLength(1));
+
+        document.removeEventListener("af-questions-listed", stop);
+        expect(toast.show).not.toHaveBeenCalled();
+        mockOpenQuestions.mockResolvedValue([]);
+    });
+
+    it("keeps what it has shown through a failed ledger read, which says nothing of what is open", async () => {
+        const question = {
+            id: "q30",
+            from: "triage",
+            to: "user",
+            content: "Restart it?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Yes", "No"],
+        };
+        routerHandler("chat")(question);
+        vi.mocked(toast.show).mockClear();
+        let reads = 0;
+        const stop = listen("af-questions-listed", () => {
+            reads += 1;
+        });
+
+        mockLedgerRead.fails = true;
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(reads).toBe(1));
+
+        mockLedgerRead.fails = false;
+        mockOpenQuestions.mockResolvedValue([question]);
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(reads).toBe(2));
+
+        document.removeEventListener("af-questions-listed", stop);
+        expect(toast.show).not.toHaveBeenCalled();
+        mockOpenQuestions.mockResolvedValue([]);
+    });
+
+    it("empties a deleted agent's question book, which the server dropped with it", () => {
+        const books: unknown[] = [];
+        const stop = listen("af-question-book", d => books.push(d));
+
+        wsHandler("statePatch")([], "gone-agent", undefined);
+
+        document.removeEventListener("af-question-book", stop);
+        expect(books).toEqual([{ agentId: "gone-agent", questions: [] }]);
+    });
+
+    it("going live shows a question still open as its toast, once", async () => {
+        wsHandler("mqttStatus")(false);
+        vi.mocked(toast.show).mockClear();
+        const question3 = () => ({
+            id: "q3",
+            from: "triage",
+            to: "user",
+            content: "Maintenance?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Maintenance", "Real problem"],
+        });
+        mockOpenQuestions.mockResolvedValue([
+            question3(),
+            // Not a question: no options, so no toast to answer it with.
+            { id: "m1", from: "triage", to: "user", content: "hello", timestampMs: 1 },
+        ]);
+
+        const handed: { id: string }[] = [];
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
+        wsHandler("connected")();
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(1));
+        document.removeEventListener("af-questions-listed", stop);
+
+        const shown = vi.mocked(toast.show).mock.calls[0]![0];
+        expect(shown.key).toBe("q3");
+        expect(handed.map(m => m.id)).toEqual(["q3", "m1"]);
+        expect(shown.actions!.map(a => a.label)).toEqual(["Maintenance", "Real problem"]);
+
+        // A question arrives while the socket is down; the one already shown is not raised again.
+        const later = { ...question3(), id: "q4", content: "And this?" };
+        mockOpenQuestions.mockResolvedValue([question3(), later]);
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(2));
+        expect(vi.mocked(toast.show).mock.calls[1]![0].key).toBe("q4");
+        expect(mockOpenQuestions).toHaveBeenLastCalledWith("");
+        mockOpenQuestions.mockResolvedValue([]);
+    });
+
+    it("tells the page a stored model's pointer moved", () => {
+        const heard: unknown[] = [];
+        const books: unknown[] = [];
+        const stopBooks = listen("af-question-book", d => books.push(d));
+        routerHandler("question-book")({ agentId: "a1", questions: [] });
+        document.removeEventListener("af-question-book", stopBooks);
+        expect(books).toEqual([{ agentId: "a1", questions: [] }]);
+
+        const stop = listen("af-model-pointer", d => heard.push(d));
+
+        routerHandler("model-pointer")({ name: "hvac", pointer: "shadow" });
+        document.removeEventListener("af-model-pointer", stop);
+
+        expect(heard).toEqual([{ name: "hvac", pointer: "shadow" }]);
+    });
+
     it("handles the app-event listeners", () => {
-        emit("af-stream-end", { text: "done", from: "A" });
-        emit("af-stream-end", { text: "", from: "A" }); // !text → return
+        emit("af-stream-end", { text: "done", from: "A", agentId: "a" });
+        emit("af-stream-end", { text: "", from: "A", agentId: "a" }); // !text → return
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
-        emit("af-send-message", { content: "hi", target: "A", attachments: [] }); // agent found
-        emit("af-send-message", { content: "hi", target: "nope", attachments: [] }); // null
+        emit("af-send-message", {
+            id: "s1",
+            content: "hi",
+            target: "a",
+            name: "A",
+            answerer: "a",
+            attachments: [],
+        }); // agent found
+        emit("af-send-message", {
+            id: "s2",
+            content: "hi",
+            target: "nope",
+            name: "nope",
+            answerer: "nope",
+            attachments: [],
+        }); // null
         emit("af-wipe-all", { survivors: ["a"] });
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));

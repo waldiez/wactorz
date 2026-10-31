@@ -39,6 +39,9 @@ GONE_MS = 2_000
 
 WIDTH, HEIGHT = 1280, 800
 
+#: A phone held upright, for a journey that is about one.
+PHONE_WIDTH, PHONE_HEIGHT = 390, 844
+
 #: The dashboard is one page with these views, not one URL each: each by the
 #: words on its button.
 VIEWS = {"overview": "Overview", "chat": "Chat", "feed": "Feed", "settings": "Settings"}
@@ -184,6 +187,13 @@ class Dashboard:
         self.page.get_by_test_id("agent-card").first.wait_for(state="visible")
         return self
 
+    def sign_in_at(self, hash_: str, key: str) -> Dashboard:
+        """Open a link to ``hash_`` (``#/models/x``), be sent to the sign-in page, and sign in."""
+        self.page.goto(f"{self.base_url.rstrip('/')}/{hash_}", wait_until="domcontentloaded")
+        self.submit_key(key)
+        self._wait_until_drawn()
+        return self
+
     def submit_key(self, key: str) -> Dashboard:
         """Type ``key`` into the sign-in page and send it."""
         field = self.page.get_by_label(LOGIN_KEY, exact=True)
@@ -305,6 +315,12 @@ class Dashboard:
         self.show("overview")
         return self._card(name).get_by_test_id("agent-state").inner_text().strip()
 
+    def card_node(self, name: str) -> str:
+        """The node the agent's card says it runs on; empty for one on main, which says none."""
+        self.show("overview")
+        line = self._card(name).get_by_test_id("agent-node")
+        return line.inner_text().strip() if line.is_visible() else ""
+
     def card_actions(self, name: str) -> list[str]:
         """The buttons the agent's card offers, by what each says."""
         self.show("overview")
@@ -337,6 +353,50 @@ class Dashboard:
         answer.click()
         self.page.get_by_test_id("confirm-dialog").wait_for(state="detached")
         return self
+
+    def confirm_with_reason(self, reason: str) -> Dashboard:
+        """Write ``reason`` in the dialog's box for why, and confirm."""
+        dialog = self.page.get_by_test_id("confirm-dialog")
+        dialog.get_by_role("textbox", name="Reason (optional)", exact=True).fill(reason)
+        return self.confirm()
+
+    # ── Stored models ───────────────────────────────────────────────────────
+
+    def _model(self) -> Locator:
+        """The model open in the Models view."""
+        return self.page.get_by_role("article")
+
+    def model_steps(self) -> list[str]:
+        """The open model's versions along its line, as each is read out: ``v7, active``."""
+        steps = self._model().get_by_role("list", name="Versions over time").get_by_role("listitem")
+        return [
+            str(label)
+            for label in steps.evaluate_all("items => items.map(i => i.getAttribute('aria-label'))")
+        ]
+
+    def model_moves(self) -> list[str]:
+        """The open model's pointer moves, newest first, each as its line reads."""
+        moves = self._model().get_by_role("list", name="Pointer moves").get_by_role("listitem")
+        return [" ".join(text.split()) for text in moves.all_inner_texts()]
+
+    def press_on_model(self, name: str) -> Dashboard:
+        """Press the button called ``name`` on the open model."""
+        self._model().get_by_role("button", name=name, exact=True).click()
+        return self
+
+    def model_trial(self) -> str:
+        """What the open model's trial card says, or "" with no trial under way."""
+        card = self._model().get_by_role("region", name="Shadow trial", exact=True)
+        return card.inner_text() if card.count() else ""
+
+    def model_offers(self) -> list[str]:
+        """The moves the open model offers that can be made now."""
+        buttons = self._model().get_by_role("group", name="Moves", exact=True).get_by_role("button")
+        return [
+            buttons.nth(i).inner_text().strip()
+            for i in range(buttons.count())
+            if buttons.nth(i).is_enabled()
+        ]
 
     # ── Clearing what the install has stored ────────────────────────────────
 
@@ -453,9 +513,13 @@ class Dashboard:
         return self
 
     def read_thread_of(self, agent: str) -> Dashboard:
-        """Address the composer to ``agent``, which puts its thread on screen."""
+        """Address the composer to ``agent``, which puts its thread on screen.
+
+        ``agent`` as the page calls it: its name, or ``name@node`` where another
+        agent has the name.
+        """
         self.show("chat")
-        self._target_select().select_option(agent)
+        self._target_select().select_option(label=f"@{agent}")
         return self
 
     def _target_select(self) -> Locator:
@@ -463,12 +527,17 @@ class Dashboard:
 
     @property
     def talking_to(self) -> str:
-        """The agent whose thread is on screen."""
-        return self._target_select().input_value()
+        """The agent whose thread is on screen, as the dropdown names it: ``name@node`` where shared."""
+        chosen = self._target_select().evaluate("s => s.selectedOptions[0]?.text ?? ''")
+        return str(chosen).removeprefix("@")
 
     def _targets(self) -> list[str]:
+        """The agents the dropdown offers, as it names them: an option's value is
+        the agent's id, which no person reads.
+        """
         options = self._target_select().locator("option")
-        return list(options.evaluate_all("options => options.map(o => o.value)"))
+        names = options.evaluate_all("options => options.map(o => o.text)")
+        return [str(name).removeprefix("@") for name in names]
 
     def sent(self) -> list[str]:
         """What the user has said, as the thread shows it."""
@@ -510,7 +579,7 @@ class Dashboard:
             if agent not in self._targets():
                 continue
             try:
-                self._target_select().select_option(agent, timeout=GONE_MS)
+                self._target_select().select_option(label=f"@{agent}", timeout=GONE_MS)
             except PlaywrightTimeoutError:
                 continue
             threads[agent] = self.said()
@@ -596,11 +665,17 @@ class Dashboard:
         )
 
     def question_from(self, sender: str) -> str:
-        """The question ``sender`` is asking in a notice on screen, or "" when there is none."""
-        notice = self._question_toast(sender)
-        if notice.count() == 0:
-            return ""
-        return notice.first.get_by_test_id("toast-message").inner_text().strip()
+        """The question ``sender`` is asking in a notice on screen, or "" when there is none.
+
+        Read in one step inside the page: a notice closed between finding it and
+        reading it would otherwise leave the read waiting for one that is gone.
+        A notice fading out is hidden, so it is not found.
+        """
+        asked = self._question_toast(sender).evaluate_all(
+            """notices => notices.map(n =>
+                (n.querySelector('[data-testid="toast-message"]')?.innerText || '').trim())"""
+        )
+        return str(asked[0]) if asked else ""
 
     def answer_notice(self, sender: str, option: str) -> Dashboard:
         """Press ``option`` on the notice of ``sender``'s question."""
@@ -627,6 +702,18 @@ class Dashboard:
         """``agent``'s row in the chat's list of agents."""
         rows = self.page.get_by_test_id("chat-agent-list")
         return rows.get_by_role("button", name=agent, exact=True)
+
+    def press_in_thread(self, option: str) -> Dashboard:
+        """Press ``option`` among the answers the thread on screen offers."""
+        self.page.get_by_test_id("chat-option").and_(
+            self.page.get_by_role("button", name=option, exact=True)
+        ).click()
+        return self
+
+    def follow_link(self, name: str) -> Dashboard:
+        """Follow the link on the page named ``name``, as a person clicks it."""
+        self.page.get_by_role("link", name=name, exact=True).click()
+        return self
 
     def options_in_thread(self) -> list[str]:
         """The answers the thread on screen offers that can still be pressed."""
@@ -657,6 +744,54 @@ class Dashboard:
     def accessibility_findings(self) -> list[str]:
         """The serious and critical axe findings on screen now that nobody accepted."""
         return axe.blocking_findings(self.page)
+
+    # ── Inbox ──────────────────────────────────────────────────────────────
+
+    def at_phone_size(self) -> Dashboard:
+        """Make the page a phone's size; `at_desktop_size` puts it back."""
+        self.page.set_viewport_size({"width": PHONE_WIDTH, "height": PHONE_HEIGHT})
+        return self
+
+    def at_desktop_size(self) -> Dashboard:
+        self.page.set_viewport_size({"width": WIDTH, "height": HEIGHT})
+        return self
+
+    def _inbox_tab(self) -> Locator:
+        """The Inbox's tab, in whichever navigation is on screen; its name counts what waits."""
+        nav = self.page.get_by_role("navigation", name=NAV, exact=True)
+        return nav.get_by_role("button", name=re.compile(r"^Inbox")).first
+
+    def inbox_tab_name(self) -> str:
+        """What the Inbox's tab says now: "Inbox", or "Inbox 1 waiting"."""
+        return str(self._inbox_tab().text_content() or "").strip()
+
+    def open_inbox(self) -> Dashboard:
+        """Tap the Inbox's tab, and wait for the view."""
+        self._inbox_tab().click()
+        self.page.get_by_test_id("view-inbox").wait_for(state="visible")
+        return self
+
+    def _inbox_card(self, question: str) -> Locator:
+        return self.page.get_by_role("listitem").filter(has_text=question)
+
+    def inbox_card_text(self, question: str) -> str:
+        """All that the card of ``question`` says, or "" when there is none on screen."""
+        cards = self._inbox_card(question)
+        return str(cards.first.inner_text()) if cards.count() else ""
+
+    def answer_in_inbox(self, question: str, option: str, note: str = "") -> Dashboard:
+        """Answer the card of ``question`` with ``option``, adding ``note`` when there is one."""
+        card = self._inbox_card(question)
+        if note:
+            card.get_by_text("Add a note", exact=True).click()
+            card.get_by_role("textbox", name="A note with your answer").fill(note)
+        card.get_by_role("button", name=option, exact=True).click()
+        return self
+
+    def open_answered(self) -> Dashboard:
+        """Follow the Inbox's link to what was answered."""
+        self.page.get_by_role("link", name=re.compile(r"^Answered")).click()
+        return self
 
     def assert_accessible(self, where: str) -> Dashboard:
         """Fail on any serious or critical axe finding on screen now, saying ``where`` it was."""

@@ -24,7 +24,7 @@ from ..core.artifacts import POINTERS
 #: are consumed not by `ServerEventRouter` but by the raw-fallback feed mappers
 #: in `frontend/src/agents/mapping.ts` (actuation audit trail, anomaly alerts) —
 #: the other place a topic addition must mirror. `questions` is each agent's
-#: question book, relayed so the dashboard can follow it live; no view reads it yet.
+#: question book, relayed so the Inbox follows it live.
 _AGENT_LEAVES = frozenset(
     {
         "heartbeat",

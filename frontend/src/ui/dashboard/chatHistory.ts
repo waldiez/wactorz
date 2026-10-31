@@ -12,10 +12,9 @@
 import type { Attachment, ChatMessage } from "../../types/agent";
 import { toMs } from "../../time";
 import { stripActionBlocks } from "../../agents/actionBlocks";
-
-function ingressBase(): string {
-    return window.__WACTORZ_INGRESS_PATH ?? "";
-}
+import { apiUrl } from "../../io/api";
+import { readActorHistory, readChatLog, type StoredAttachment } from "../../io/chatHistoryApi";
+import { questionMessage } from "../../io/openQuestions";
 
 /**
  * Drop internal bookkeeping turns the backend records into an agent's
@@ -56,9 +55,6 @@ function shownContent(row: { role: string; content: string }): string {
     return row.role === "user" ? row.content : stripActionBlocks(row.content);
 }
 
-/** What the server records on a turn — the file's identity, but no address. */
-type StoredAttachment = { id: string; name: string; mime: string; size: number };
-
 /**
  * Rebuild a turn's attachment chips from what was stored with it.
  *
@@ -73,30 +69,29 @@ function restoreAttachments(stored: StoredAttachment[] | undefined): Attachment[
     }
     return stored.map(a => ({
         ...a,
-        url: `${ingressBase()}/api/upload/${encodeURIComponent(a.id)}`,
+        url: apiUrl(`/api/upload/${encodeURIComponent(a.id)}`),
     }));
 }
 
 /** Primary source: chat_log table — carries real persisted timestamps.
  *  Returns null on a failed request so callers can retry later. */
-async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
-    const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentName)}&limit=200`);
-    if (!res.ok) {
+async function fromChatLog(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
+    const rows = await readChatLog(agentId);
+    if (rows === null) {
         return null;
     }
-    const rows = (await res.json()) as {
-        id: number;
-        ts: number;
-        role: string;
-        content: string;
-        attachments?: StoredAttachment[];
-    }[];
     return stripInternalTurns(rows.reverse()).map(r => {
+        if (r.question) {
+            // By the question's own id: a live copy already shown is then the
+            // same message, and an answer names the question by it.
+            return questionMessage({ ...r.question, agent: agentName, asked_at: r.ts });
+        }
         const attachments = restoreAttachments(r.attachments);
         return {
-            id: `hist-${agentName}-${r.id}`,
+            id: `hist-${agentId}-${r.id}`,
             from: r.role === "user" ? "user" : agentName,
             to: r.role === "user" ? agentName : "user",
+            threadId: agentId,
             content: shownContent(r),
             timestampMs: toMs(r.ts),
             // Spread rather than set: `exactOptionalPropertyTypes` refuses an
@@ -108,92 +103,37 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
 
 /** Fallback: actor kv_store history — no timestamps, so synthesise them.
  *  Returns null on a failed request so callers can retry later. */
-async function fromKvStore(agentName: string): Promise<ChatMessage[] | null> {
-    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentName)}/history`);
-    if (!res.ok) {
+async function fromKvStore(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
+    const rawAll = await readActorHistory(agentId);
+    if (rawAll === null) {
         return null;
     }
-    const rawAll = (await res.json()) as { role: string; content: string }[];
     const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({
-        id: `hist-${agentName}-${i}`,
+        id: `hist-${agentId}-${i}`,
         from: m.role === "user" ? "user" : agentName,
         to: m.role === "user" ? agentName : "user",
+        threadId: agentId,
         content: shownContent(m),
         timestampMs: base + i * 2000,
     }));
 }
 
-/** Fetch an agent's persisted chat history by NAME — history is keyed by agent
- *  name (the chat target), not the actor id. Returns null on any failure (so
- *  the caller can retry) and [] only when the agent genuinely has no history. */
-export async function fetchChatHistory(agentName: string): Promise<ChatMessage[] | null> {
+/** Fetch the persisted chat history of the agent `agentId`, called `agentName` — kept
+ *  by id, since two agents may share a name. Returns null on any failure (so the
+ *  caller can retry) and [] only when the agent genuinely has no history. */
+export async function fetchChatHistory(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
     try {
-        const primary = await fromChatLog(agentName);
+        const primary = await fromChatLog(agentId, agentName);
         if (primary === null) {
             return null;
         }
         if (primary.length) {
             return primary;
         }
-        return await fromKvStore(agentName);
+        return await fromKvStore(agentId, agentName);
     } catch {
         return null;
     }
-}
-
-/** How far apart the page's time for a message and the server's may be. */
-const SAME_MESSAGE_WINDOW_MS = 120_000;
-
-/** The copy of a persisted message the thread already shows, if it has one. */
-function alreadyShown(existing: ChatMessage[], m: ChatMessage): ChatMessage | undefined {
-    // A message that arrived while the page was open has an id the page made
-    // up ("user-…" for what was typed, "stream-…" for a reply), and its
-    // persisted copy has "hist-…": id de-dup misses the pair, and the message
-    // renders twice. History is fetched again when an agent goes and comes back
-    // under its name, as one that is moved to another machine does, so this is
-    // reached with replies already on screen and not only with the user's own
-    // turns. Match on who, what, and a tight timestamp window; and for the
-    // user's own turns on whom they were to, which is the thread they are in. A
-    // reply is in its sender's thread whoever it names, and the page and the
-    // server name different things there.
-    return existing.find(
-        x =>
-            !x.id.startsWith("hist-") &&
-            x.from === m.from &&
-            (m.from !== "user" || x.to === m.to) &&
-            x.content.trim() === m.content.trim() &&
-            Math.abs(x.timestampMs - m.timestampMs) < SAME_MESSAGE_WINDOW_MS,
-    );
-}
-
-/**
- * Reconcile `incoming` history against `existing`: returns the messages to
- * prepend, adopting persisted ids in place onto the messages already shown.
- */
-export function mergeChatHistory(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
-    const ids = new Set(existing.map(m => m.id));
-    const toAdd: ChatMessage[] = [];
-    for (const raw of incoming) {
-        if (ids.has(raw.id)) {
-            continue;
-        }
-        // Strip the `@agent ` routing prefix IOManager adds on send so restored
-        // history matches the live thread AND the echo comparison can pair up.
-        // Normalise onto a copy — never mutate the caller's incoming messages.
-        const m: ChatMessage =
-            raw.from === "user" ? { ...raw, content: raw.content.replace(/^@[\w-]+\s+/, "") } : raw;
-        const shown = alreadyShown(existing, m);
-        if (shown) {
-            // Adopt the persisted id onto the message the thread already shows,
-            // in place — the caller relies on this to reconcile what it rendered,
-            // and a second persisted message with the same words then pairs
-            // with the next one shown, not with this one again.
-            shown.id = m.id;
-            continue;
-        }
-        toAdd.push(m);
-    }
-    return toAdd;
 }

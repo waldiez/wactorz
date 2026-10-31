@@ -28,6 +28,7 @@ import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/d
 import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
 import { tts } from "../ext/tts";
 import { ambient } from "../io/AmbientManager";
+import { RESET_TIMEOUT_MS } from "../io/resetApi";
 import { toast } from "../ui/ToastManager";
 
 describe("buildAudioPopover", () => {
@@ -211,6 +212,25 @@ describe("buildResetPopover", () => {
         );
     });
 
+    it("does not call a reset that timed out failed: the server may be finishing it", async () => {
+        vi.useFakeTimers();
+        globalThis.fetch = vi.fn(
+            (_url: string, init?: RequestInit) =>
+                new Promise((_resolve, reject) =>
+                    init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+                ),
+        ) as unknown as typeof fetch;
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!;
+        btn.click(); // arm
+        btn.click(); // fire
+        await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+
+        expect(toast.show).toHaveBeenCalledWith(
+            expect.objectContaining({ type: "alert-warning", title: "Reset unconfirmed" }),
+        );
+    });
+
     it("falls back to the status code when the error body is unparseable", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: false,
@@ -225,7 +245,7 @@ describe("buildResetPopover", () => {
         btn.click(); // fire
         await vi.waitFor(() =>
             expect(toast.show).toHaveBeenCalledWith(
-                expect.objectContaining({ title: "Reset failed", message: "503" }),
+                expect.objectContaining({ title: "Reset failed", message: "HTTP 503" }),
             ),
         );
     });

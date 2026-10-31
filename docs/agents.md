@@ -34,32 +34,57 @@ Its prompts are assembled for the installation: a core every installation shares
 | `OTHER` | `main.chat()` | "what's the weather like?" |
 | `@mention` | named actor directly | `@my-agent {"action": "status"}` |
 
+#### Addressing an agent
+
+An agent's full address is `name@node`: `@counter@pi-kitchen`, `@weather@main` (main is the
+node `main`, also spelled `local`). A bare name is enough while one agent has it. When agents
+on more than one node have the name, nothing is sent: a person is told the addresses, and a
+program (`send_to`, `delegate_task`, `POST /api/chat`, `POST /api/reset`) is refused with
+them. Main never picks one. The dashboard offers the addresses as buttons, and sends the
+message again to the one pressed; it calls each agent of a shared name by its address, in
+the chat list, the target picker and the `@mention` suggestions, and `#/chat/<name>@<node>`
+opens that one's conversation. The same address works in the terminal chat and in
+`/agents restart|stop|delete`, `/start` and `/migrate`, and one naming a node the agent is
+not on is refused. `@` is not allowed in a new agent's name or a new node's name.
+
+A task for an agent on a node goes on that node's own topic, `agents/at/<node>/<name>/task`,
+so it reaches that agent alone. A node from before that takes tasks only by name, and every
+node running the name hears a task sent by name, so while another node runs the name, a task
+for the agent on such a node is refused even by its full address; deploying the node again
+lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
+a reset clears by name.
+
+#### Two agents of one name
+
+A name is unique on one host, so two hosts may each run an agent of the same name. A spawn
+naming a node where the name does not run, while it runs on another host, says what it
+means: `"replace": true` moves that agent there, keeping its id, and `"alongside": true`
+runs a second agent of the name there, under an id of its own. A spawn that says neither
+spawns nothing, and you are told both. `/agents copy <agent> <node>` does the second from
+chat: `/agents copy counter pi-kitchen` leaves `counter@main` running and starts
+`counter@pi-kitchen` from the same config, with none of its state.
+
+Two agents of one name on one host would share an address, so a spawn, a move or a copy
+onto a host that already runs the name is refused, and so is a second agent of a name on a
+node from before ids were kept, which would give it the first one's id; deploy that node
+again first. `"replace"` with the name on more than one host does not say which one moves:
+move one with `/migrate <agent>@<node> <node>`. Every command that acts on one agent —
+`/agents restart|stop|delete`, `/start`, `/migrate`, `/agents copy`, a `<delete>` block —
+takes the address, and a bare name kept on more than one host acts on none of them.
+
 #### Memory
 
 After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into `_user_facts`, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.
 
 #### Spawn registry
 
-Every DynamicAgent spawned during the session is saved to the `_spawned_agents` key in SQLite. On restart, MainActor re-spawns every entry so pipelines survive reboots. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.
+Every DynamicAgent spawned during the session is saved to the spawn registry in SQLite, one entry per agent, kept by its id (`_spawned_agents_by_id`). On restart, MainActor re-spawns every entry so pipelines survive reboots. A registry from before entries were kept by id (`_spawned_agents`, by name) is read once and left as it was. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.
 
 #### Commands
 
-```
-/agents                   — list all running agents with type and status
-/agents <keyword>         — filter agents by capability keyword
-/agents stop <name>       — stop and remove an agent
-/rules                    — list active pipeline rules
-/rules delete <id>        — stop agents and remove rule
-/memory                   — show user facts and conversation summary
-/memory clear             — wipe all memory
-/memory forget <key>      — remove one fact
-/webhook discord <url>    — store a Discord webhook URL
-/webhook                  — list stored webhooks
-/topics                   — list MQTT topics published by known agents
-/nodes                    — list remote nodes and their agents
-/bus                      — list TopicBus — Reactive Pub/Sub Registry
-/help                     — show all commands
-```
+Main answers slash commands without a model call: agents, nodes, models, pipelines and
+plans, memory, notifications, diagnostics. `/help` on the dashboard lists them all, and the
+[reference's command table](reference.md#13-interfaces) is written from the same source.
 
 ---
 
@@ -156,6 +181,8 @@ Pre-built agent recipe library. On startup it reads every recipe's program from 
 @catalog info anomaly-detector
 @catalog spawn anomaly-detector
 ```
+
+A recipe starts on main. If an agent of its name already runs on a node, nothing is spawned and the catalog says so: `@catalog spawn anomaly-detector replace` moves that agent to main, keeping its id, and `@catalog spawn anomaly-detector alongside` starts a second one on main.
 
 See the [Catalog recipes](#catalog-recipes) section below for available recipes.
 
@@ -429,7 +456,7 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `async def process(agent)` | Every `poll_interval` seconds | For periodic work. Timeout: 120s per call. Only started after `setup()` returns (or immediately if no setup). |
 | `async def handle_task(agent, payload)` | On every inbound TASK message | Must return a dict. Timeout: 60s per call. Used for command/response interactions. |
 
-> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
+> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, on its node's topic (`agents/at/<node>/<name>/task`) or by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
 
 #### Agent API (`agent` object inside generated code)
 

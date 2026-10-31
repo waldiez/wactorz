@@ -14,7 +14,7 @@ Usage
     wactorz-artifacts activate NAME:V [--reason TEXT]
     wactorz-artifacts shadow NAME:V [--reason TEXT]
     wactorz-artifacts promote NAME [--reason TEXT]
-    wactorz-artifacts clear {active,shadow} NAME
+    wactorz-artifacts clear {active,shadow} NAME [--reason TEXT]
 
 A reference is ``NAME:3`` for the third version, ``NAME:latest`` for the
 newest, ``NAME:active`` or ``NAME:shadow`` for the version a pointer names, and
@@ -195,7 +195,7 @@ def _promote(args: argparse.Namespace) -> None:
 
 
 def _clear(args: argparse.Namespace) -> None:
-    was = _store(args).clear(args.pointer, args.name)
+    was = _store(args).clear(args.pointer, args.name, by="cli", reason=args.reason)
     logger.info("%s has no %s version now (was %s)", was.name, was.pointer, was.reference)
 
 
@@ -271,7 +271,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "promote", parents=[state_dir, reason], help="make the shadow version active"
     )
     promote.add_argument("name", help="the model whose shadow becomes active")
-    clear = commands.add_parser("clear", parents=[state_dir], help="unset a pointer")
+    clear = commands.add_parser("clear", parents=[state_dir, reason], help="unset a pointer")
     clear.add_argument("pointer", choices=POINTERS, help="which pointer")
     clear.add_argument("name", help="the model")
     return parser

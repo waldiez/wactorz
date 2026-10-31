@@ -29,6 +29,7 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...core.actor import ReplyError, ask_through
+from ...core.addresses import MAIN_NODE, Address, parse
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -112,7 +113,12 @@ def _readable(result: Any) -> str:
     answered in an unexpected shape still answered.
     """
     if isinstance(result, dict):
-        return str(result.get("result") or result.get("response") or result)
+        # The dashboard reads the same fields in the same order (`reply_text` in
+        # web/chat.py), so an agent reads alike whichever way it was asked.
+        for field in ("result", "response", "reply", "text", "message", "content"):
+            value = result.get(field)
+            if value:
+                return str(value)
     return str(result)
 
 
@@ -198,17 +204,16 @@ class DelegationManager:
             self.host._result_futures.pop(topic, None)
 
     async def delegate_task(
-        self, target_name: str, task: str, timeout: float = 60.0
+        self, target_name: str, task: Any, timeout: float = 60.0
     ) -> dict | None:
-        """Send a task to a named agent and wait for its result.
-
-        Routing priority:
-          1. Local registry — fast in-process mailbox path
-          2. Remote node   — MQTT request/reply via agents/by-name/{name}/task
-          3. Returns None if the agent is unknown in both
-        """
+        """Send text or a structured task through the same validated delegation routes."""
+        if isinstance(task, dict):
+            payload = dict(task)
+            payload.setdefault("text", json.dumps(task))
+            return await self._delegate(target_name, payload, payload, timeout)
+        text = str(task)
         return await self._delegate(
-            target_name, {"text": task}, {"text": task, "payload": task}, timeout
+            target_name, {"text": text}, {"text": text, "payload": text}, timeout
         )
 
     async def delegate_payload(
@@ -232,8 +237,17 @@ class DelegationManager:
         if not self.host._registry:
             return None
 
-        target = self.host._registry.find_by_name(target_name)
-        if target:
+        resolution = self.host.resolve_address(target_name)
+        if resolution.ambiguous:
+            logger.warning("[%s] delegate_task: %s", self.host.name, resolution.refusal())
+            return {"error": resolution.refusal()}
+        found = resolution.found
+        refusal = self.host.task_refusal(found) if found is not None else None
+        if refusal:
+            logger.warning("[%s] delegate_task: %s", self.host.name, refusal)
+            return {"error": refusal}
+        target_name = found.name if found is not None else target_name
+        if found is not None and found.node == MAIN_NODE:
             # ── Local path (fast, in-process) ────────────────────────────────
             try:
                 return await ask_through(self.host, target_name, local, timeout=timeout)
@@ -246,8 +260,8 @@ class DelegationManager:
                 # agent that never replies, without the wait.
                 return None
 
-        # ── Remote path: check if agent is on a known node ───────────────────
-        remote_node = self.host.nodes.node_for(target_name)
+        # ── Remote path: the agent is on a known node ────────────────────────
+        remote_node = found.node if found is not None else ""
         if not remote_node:
             logger.warning(
                 "[%s] delegate_task: %r not found locally or remotely", self.host.name, target_name
@@ -262,7 +276,7 @@ class DelegationManager:
 
         async with self._reply_topic(remote_node) as (reply_topic, future):
             await self.host._mqtt_publish(
-                f"agents/by-name/{target_name}/task",
+                self.host.task_topic_for(Address(target_name, remote_node)),
                 {**remote, "_reply_topic": reply_topic, "_remote_task": True},
             )
             try:
@@ -324,7 +338,7 @@ class DelegationManager:
                 # it is sent as one rather than as task text.
                 result = await self.delegate_to_installer(payload, timeout=300.0)
             else:
-                result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+                result = await self.delegate_task(agent_name, payload, timeout=300.0)
         except Exception as e:
             return f"[{agent_name} error: {e}]"
         # Formatting the reply is outside the guard on purpose: only the
@@ -572,7 +586,7 @@ class DelegationManager:
             return f"{target_name} was not asked: {refusal}."
         async with self._reply_topic(node) as (reply_topic, future):
             await self.host._mqtt_publish(
-                f"agents/by-name/{target_name}/task",
+                self.host.task_topic_for(Address(target_name, node)),
                 {
                     "text": message,
                     "_reply_topic": reply_topic,
@@ -625,19 +639,25 @@ class DelegationManager:
         # agent is given what was typed rather than an empty string.
         message = parts[1].strip() if len(parts) > 1 else text
 
-        registry = self.host._registry
-        target = registry.find_by_name(target_name) if registry else None
-        if not target:
-            target, refusal = await self._spawn_from_catalogue(target_name)
+        resolution = self.host.resolve_address(target_name)
+        if resolution.ambiguous:
+            return resolution.refusal(mention=True)
+        found = resolution.found
+        if found is not None and found.node != MAIN_NODE:
+            return self.host.task_refusal(found) or await self._ask_node(
+                found.name, found.node, message
+            )
+        if found is not None:
+            return await self._ask_here(found.name, message)
+
+        # A recipe is spawned here, so only for a name that asks for no other node.
+        address = parse(target_name)
+        if address.node in ("", MAIN_NODE):
+            target, refusal = await self._spawn_from_catalogue(address.name)
             if refusal is not None:
-                return f"Could not spawn '{target_name}': {refusal}"
-
-        if target:
-            return await self._ask_here(target_name, message)
-
-        node = self.host.nodes.node_for(target_name)
-        if node:
-            return await self._ask_node(target_name, node, message)
+                return f"Could not spawn '{address.name}': {refusal}"
+            if target:
+                return await self._ask_here(address.name, message)
 
         # Naming the agents that do exist turns "not found" into something the
         # reader can act on: the usual cause is a name typed from memory.

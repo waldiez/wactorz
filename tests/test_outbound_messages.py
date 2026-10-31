@@ -83,6 +83,9 @@ class TestNumberedChoices:
         assert text.endswith("Reply with the number.")
         assert numbered("plain", []) == "plain"
 
+    def test_without_the_hint_the_list_is_only_a_record(self) -> None:
+        assert numbered("Changed?", ["yes", "no"], reply_hint=False) == "Changed?\n\n1. yes\n2. no"
+
     @pytest.mark.parametrize(
         ("reply", "index"),
         [
@@ -545,7 +548,7 @@ class TestTheDashboardShowsTheQuestion:
         events.parse_topic("agents/agent-1/answer", json.dumps({"index": 0}))
         assert runtime.state["log_feed"] == []
 
-    async def test_a_question_is_stored_with_its_options(
+    async def test_a_question_is_stored_with_its_options_and_no_reply_hint(
         self, quiet_monitor: list, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows: list[dict[str, Any]] = []
@@ -559,7 +562,8 @@ class TestTheDashboardShowsTheQuestion:
         (row,) = rows
         assert row["agent_name"] == "hvac"
         assert row["role"] == "assistant"
-        assert row["content"] == "Changed?\n\n1. yes\n2. no\n\nReply with the number."
+        # The dashboard answers with a button: "reply with the number" would be wrong there.
+        assert row["content"] == "Changed?\n\n1. yes\n2. no"
 
 
 class TestTheDashboardAnswers:

@@ -8,12 +8,13 @@ config is merged in.
 import json
 import logging
 import time
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
 from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
-from . import cost, origins, probes, runtime
+from . import cost, origins, probes, questions, runtime
 from .metrics import known_nodes
 
 logger = logging.getLogger(__name__)
@@ -91,24 +92,57 @@ async def cost_reset_handler(_request: web.Request) -> Response:
         return web.json_response({"error": "Could not reset the cost ledger"}, status=500)
 
 
+def with_question(row: dict[str, Any]) -> dict[str, Any]:
+    """``row``, with the question it is when the ledger still knows it.
+
+    A chat-log row keeps only the words an agent sent, so a question comes
+    back without its buttons; the ledger has the rest. The row then says which
+    question, from which agent, offering what, and the pick once there is one.
+    """
+    if row.get("role") != "assistant":
+        return row
+    asked = questions.asked_in(
+        str(row.get("agent_name", "")), str(row.get("content", "")), float(row.get("ts") or 0.0)
+    )
+    if asked is None:
+        return row
+    agent_id, question = asked
+    return {
+        **row,
+        "question": {
+            "id": question.id,
+            "agent_id": agent_id,
+            "text": question.text,
+            "options": list(question.options),
+            "answer": question.answer,
+        },
+    }
+
+
 async def chat_log_handler(request: web.Request) -> Response:
     """GET /api/chats — query the persistent chat_log table.
 
     Query params:
-      agent   — filter by agent name
+      agent_id — one agent's history, by its id
+      agent   — filter by agent name: every agent that went by it
       role    — filter by role (user | assistant)
       since   — Unix timestamp float, only return rows newer than this
       limit   — max rows to return (default 200, max 1000)
+
+    A row that is a question the ledger knows carries it as ``question``.
     """
     if runtime.db is None:
         return web.json_response([], status=200)
     try:
         agent = request.rel_url.query.get("agent")
+        agent_id = request.rel_url.query.get("agent_id")
         role = request.rel_url.query.get("role")
         since = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
         limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
-        rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
-        return web.json_response(rows)
+        rows = runtime.db.query_chat_log(
+            agent_name=agent, agent_id=agent_id, role=role, since=since, limit=limit
+        )
+        return web.json_response([with_question(row) for row in rows])
     except Exception:
         logger.exception("[api] chat log query failed")
         return web.json_response({"error": "Could not read the chat log"}, status=500)

@@ -21,7 +21,7 @@ from typing import Any
 
 from wactorz.config import CONFIG
 
-from ..core.actor import Actor, ActorState, Message, MessageType, has_derived_id
+from ..core.actor import Actor, ActorState, Message, MessageType, has_stable_id
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 from ..core.mqtt import (
@@ -285,7 +285,7 @@ class HomeAssistantActuatorAgent(Actor):
         # `actuator` detail keeps this connection distinct from the actor's
         # command listener and from any subscription hub it may own.
         identifier = agent_client_id(str(self.actor_id), self._node, "actuator")
-        durable = has_derived_id(self.name, str(self.actor_id))
+        durable = has_stable_id(self)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:

@@ -10,6 +10,7 @@ Driven through the real monitor app on a test server.
 """
 
 import time
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -17,9 +18,11 @@ from typing import Any
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from wactorz.core.identity import derive_actor_id
+from wactorz.core.outbound import numbered
 from wactorz.core.persistence import PickleStore, WactorzDB
 from wactorz.core.persistence.stores import install_stores
-from wactorz.web import api_actors, chat, cost, lifecycle, runtime, ws
+from wactorz.web import api_actors, chat, cost, lifecycle, questions, runtime, ws
 from wactorz.web.app import build_app
 
 
@@ -78,6 +81,29 @@ def db_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WactorzDB:
     return db
 
 
+#: The words and options of the question the chat-log tests ask.
+_ASKED = ("Maintenance, or a real problem?", ["Maintenance", "Real problem"])
+
+
+def _asked(question_id: str, *, at: float, answer: str | None = None) -> dict[str, Any]:
+    """One record of a question book, as an agent publishes it."""
+    record: dict[str, Any] = {
+        "id": question_id,
+        "text": _ASKED[0],
+        "options": _ASKED[1],
+        "channel": "dashboard",
+        "asked_at": at,
+    }
+    if answer is not None:
+        record.update(answer=answer, answer_index=_ASKED[1].index(answer), answered_at=at + 5)
+    return record
+
+
+def _book(*records: dict[str, Any]) -> dict[str, Any]:
+    """A questions-topic frame from the `triage` agent."""
+    return {"agent": "triage", "questions": list(records)}
+
+
 class TestCost:
     async def test_a_limit_is_validated_then_stored(
         self, client: TestClient, db: WactorzDB
@@ -128,8 +154,8 @@ class TestChatLogAndFeed:
         assert await (await client.get("/api/feed")).json() == []
 
     async def test_the_chat_log_is_filtered(self, client: TestClient, db: WactorzDB) -> None:
-        db.write_chat_log(time.time() - 10, "main", "user", "old")
-        db.write_chat_log(time.time(), "main", "assistant", "new")
+        db.write_chat_log(time.time() - 10, "main", "user", "old", agent_id=derive_actor_id("main"))
+        db.write_chat_log(time.time(), "main", "assistant", "new", agent_id=derive_actor_id("main"))
 
         rows = await (
             await client.get(
@@ -138,6 +164,122 @@ class TestChatLogAndFeed:
         ).json()
 
         assert [r["content"] for r in rows] == ["new"]
+
+    async def test_one_agents_history_is_asked_for_by_its_id(
+        self, client: TestClient, db: WactorzDB
+    ) -> None:
+        # Two agents that went by one name: the id says whose turns are whose.
+        here, there = str(uuid.uuid4()), str(uuid.uuid4())
+        db.write_chat_log(time.time(), "counter", "assistant", "on main", agent_id=here)
+        db.write_chat_log(time.time(), "counter", "assistant", "on the pi", agent_id=there)
+
+        rows = await (await client.get("/api/chats", params={"agent_id": there})).json()
+
+        assert [(r["content"], r["agent_id"]) for r in rows] == [("on the pi", there)]
+
+    async def test_a_question_the_ledger_knows_comes_back_with_its_buttons(
+        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(questions, "_books", {})
+        questions.record("agent-1", _book(_asked("q-1", at=100.0)))
+        db.write_chat_log(
+            100.5,
+            "triage",
+            "assistant",
+            numbered(*_ASKED, reply_hint=False),
+            agent_id=derive_actor_id("triage"),
+        )
+
+        (row,) = await (await client.get("/api/chats", params={"agent": "triage"})).json()
+
+        assert row["question"] == {
+            "id": "q-1",
+            "agent_id": "agent-1",
+            "text": "Maintenance, or a real problem?",
+            "options": ["Maintenance", "Real problem"],
+            "answer": None,
+        }
+
+    async def test_an_answered_question_carries_its_pick(
+        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(questions, "_books", {})
+        questions.record("agent-1", _book(_asked("q-1", at=100.0, answer="Maintenance")))
+        db.write_chat_log(
+            100.5,
+            "triage",
+            "assistant",
+            numbered(*_ASKED, reply_hint=False),
+            agent_id=derive_actor_id("triage"),
+        )
+
+        (row,) = await (await client.get("/api/chats", params={"agent": "triage"})).json()
+
+        assert row["question"]["answer"] == "Maintenance"
+
+    async def test_a_row_stored_with_the_old_hint_is_still_found(
+        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(questions, "_books", {})
+        questions.record("agent-1", _book(_asked("q-1", at=100.0)))
+        db.write_chat_log(
+            100.5, "triage", "assistant", numbered(*_ASKED), agent_id=derive_actor_id("triage")
+        )
+
+        (row,) = await (await client.get("/api/chats", params={"agent": "triage"})).json()
+
+        assert row["question"]["id"] == "q-1"
+
+    async def test_the_same_words_asked_twice_are_told_apart_by_time(
+        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(questions, "_books", {})
+        questions.record(
+            "agent-1",
+            _book(_asked("early", at=100.0, answer="Maintenance"), _asked("late", at=500.0)),
+        )
+        for ts in (100.5, 500.5):
+            db.write_chat_log(
+                ts,
+                "triage",
+                "assistant",
+                numbered(*_ASKED, reply_hint=False),
+                agent_id=derive_actor_id("triage"),
+            )
+
+        rows = await (await client.get("/api/chats", params={"agent": "triage"})).json()
+
+        assert sorted((r["ts"], r["question"]["id"]) for r in rows) == [
+            (100.5, "early"),
+            (500.5, "late"),
+        ]
+
+    async def test_a_row_the_ledger_does_not_know_stays_as_it_was(
+        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(questions, "_books", {})
+        questions.record("agent-1", _book(_asked("q-1", at=100.0)))
+        db.write_chat_log(
+            100.5,
+            "other-agent",
+            "assistant",
+            numbered(*_ASKED, reply_hint=False),
+            agent_id=derive_actor_id("other-agent"),
+        )
+        db.write_chat_log(
+            101.0, "triage", "assistant", "just a reply", agent_id=derive_actor_id("triage")
+        )
+        db.write_chat_log(
+            102.0,
+            "triage",
+            "user",
+            numbered(*_ASKED, reply_hint=False),
+            agent_id=derive_actor_id("triage"),
+        )
+
+        rows = await (await client.get("/api/chats")).json()
+
+        assert [r for r in rows if "question" in r] == []
 
     async def test_a_bad_query_is_a_500_without_details(
         self, client: TestClient, db: WactorzDB
@@ -150,8 +292,8 @@ class TestChatLogAndFeed:
     async def test_the_feed_is_the_chat_log_oldest_first(
         self, client: TestClient, db: WactorzDB
     ) -> None:
-        db.write_chat_log(100.0, "main", "user", "first")
-        db.write_chat_log(200.0, "main", "assistant", "second")
+        db.write_chat_log(100.0, "main", "user", "first", agent_id=derive_actor_id("main"))
+        db.write_chat_log(200.0, "main", "assistant", "second", agent_id=derive_actor_id("main"))
 
         items = await (await client.get("/api/feed")).json()
 

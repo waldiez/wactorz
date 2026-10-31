@@ -53,6 +53,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - No framework: components are plain DOM classes that communicate through the typed event bus in
   `src/events.ts` (`emit`/`listen` + `AppEventMap`) — fire events, don't call other components directly.
 - Build elements in code; never `innerHTML` with untrusted/remote strings (escape or use `textContent`).
+- Every request goes through `src/io/api.ts`, which gives it a timeout; lint refuses `fetch` anywhere else.
 
 ## Python conventions
 

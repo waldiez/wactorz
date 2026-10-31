@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ...core.actor import Actor, Message, MessageType
+from ...core.addresses import MAIN_NODE, Address
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
@@ -276,13 +277,13 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
             bus = get_topic_bus()
             if bus and self._registry:
-                live = {a.name for a in self._registry.all_actors()}
+                live = {Address(a.name, MAIN_NODE) for a in self._registry.all_actors()}
                 # Add remotely-running agents from main's known_nodes
                 main = find_main_actor(self._registry)
                 if main:
-                    for nd in main._known_nodes.values():
+                    for node, nd in main._known_nodes.items():
                         if time.time() - nd.get("last_seen", 0) < 30:
-                            live.update(nd.get("agents", []))
+                            live.update(Address(name, node) for name in nd.get("agents", []))
                 pruned = bus.registry.prune_stale(live)
                 if pruned:
                     await self._log(f"Pruned {len(pruned)} stale TopicBus contract(s): {pruned}")
@@ -479,7 +480,8 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                         example = info.get("example", {})
                         fields = info.get("fields", {})
                         sample_lines.append(
-                            f"  {topic} (by {contract.name}): fields={fields}  example={example}"
+                            f"  {topic} (by {bus.registry.label(contract)}): "
+                            f"fields={fields}  example={example}"
                         )
                 if not sample_lines:
                     sample_lines = await self._sample_live_topics(bus)

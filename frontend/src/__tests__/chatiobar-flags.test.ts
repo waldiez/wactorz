@@ -4,17 +4,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Force the gated features ON for this file so the mic + paste paths (dead while
-// STT is off and the server has not said it takes uploads) are exercised. The
-// gates themselves are covered in feature-flags.test.ts and uploads-gate.test.ts.
-vi.mock("../io/SpeechToText", () => {
-    class SpeechToText {
-        static isSupported() {
-            return true;
-        }
-    }
-    return { STT_ENABLED: true, SpeechToText };
-});
+// Force uploads ON for this file so the paste and attach paths (dead until the
+// server has said it takes uploads) are exercised. The gate itself is covered in
+// uploads-gate.test.ts.
 vi.mock("../ui/dashboard/uploads", () => ({
     uploadsEnabled: () => true,
     uploadFile: vi.fn(async () => ({ id: "att-1" })),
@@ -26,27 +18,9 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
 import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
-import type { SpeechToText } from "../io/SpeechToText";
 import { uploadFile } from "../ui/dashboard/uploads";
-import { toast } from "../ui/ToastManager";
 
-interface FakeStt {
-    recording: boolean;
-    start: ReturnType<typeof vi.fn>;
-    stopAndTranscribe: ReturnType<typeof vi.fn>;
-    cancel: ReturnType<typeof vi.fn>;
-}
-
-function makeStt(): FakeStt {
-    return {
-        recording: false,
-        start: vi.fn(async () => {}),
-        stopAndTranscribe: vi.fn(async () => "hello there"),
-        cancel: vi.fn(),
-    };
-}
-
-function makeDeps(stt: FakeStt): IobarDeps {
+function makeDeps(): IobarDeps {
     return {
         chatInput: {
             onChange: vi.fn(),
@@ -54,7 +28,6 @@ function makeDeps(stt: FakeStt): IobarDeps {
             closePanel: vi.fn(),
             commands: new CommandCompletion(new CommandCatalog(async () => [])),
         } as unknown as ChatInput,
-        stt: stt as unknown as SpeechToText,
         target: () => "main",
         setTarget: vi.fn(),
         populateSelect: vi.fn(),
@@ -63,52 +36,11 @@ function makeDeps(stt: FakeStt): IobarDeps {
     };
 }
 
-function mount(stt: FakeStt): HTMLElement {
-    const bar = buildIobar(makeDeps(stt));
+function mount(): HTMLElement {
+    const bar = buildIobar(makeDeps());
     document.body.appendChild(bar);
     return bar;
 }
-
-describe("chatIobar with STT enabled — mic button", () => {
-    beforeEach(() => {
-        document.body.innerHTML = "";
-        vi.clearAllMocks();
-    });
-
-    it("renders the mic button when STT is enabled and supported", () => {
-        expect(mount(makeStt()).querySelector(".af-mic-btn")).not.toBeNull();
-    });
-
-    it("starts recording on first click", async () => {
-        const stt = makeStt();
-        const btn = mount(stt).querySelector<HTMLButtonElement>(".af-mic-btn")!;
-        btn.click();
-        await vi.waitFor(() => expect(stt.start).toHaveBeenCalled());
-        expect(btn.classList.contains("recording")).toBe(true);
-    });
-
-    it("transcribes into the input on the second click", async () => {
-        const stt = makeStt();
-        const bar = mount(stt);
-        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
-        const input = bar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
-        stt.recording = true; // pretend we're mid-recording
-        btn.click();
-        await vi.waitFor(() => expect(stt.stopAndTranscribe).toHaveBeenCalled());
-        expect(input.value).toBe("hello there");
-        expect(btn.classList.contains("recording")).toBe(false);
-    });
-
-    it("toasts when mic permission is denied", async () => {
-        const stt = makeStt();
-        stt.start.mockRejectedValueOnce(new Error("denied"));
-        const btn = mount(stt).querySelector<HTMLButtonElement>(".af-mic-btn")!;
-        btn.click();
-        await vi.waitFor(() =>
-            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
-        );
-    });
-});
 
 describe("chatIobar with uploads enabled — paste", () => {
     beforeEach(() => {
@@ -117,7 +49,7 @@ describe("chatIobar with uploads enabled — paste", () => {
     });
 
     it("uploads a pasted file and emits af-attachment-added", async () => {
-        const bar = mount(makeStt());
+        const bar = mount();
         const input = bar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
         const seen: unknown[] = [];
         document.addEventListener("af-attachment-added", e =>
@@ -142,11 +74,11 @@ describe("chatIobar — the attach button", () => {
     });
 
     it("offers one where the server takes uploads", () => {
-        expect(mount(makeStt()).querySelector(".af-attach-btn")).not.toBeNull();
+        expect(mount().querySelector(".af-attach-btn")).not.toBeNull();
     });
 
     it("keeps the picker out of the button", () => {
-        const bar = mount(makeStt());
+        const bar = mount();
 
         // Interactive content nested inside a button is invalid markup, hidden
         // or not, so the picker is a sibling.
@@ -155,13 +87,13 @@ describe("chatIobar — the attach button", () => {
     });
 
     it("accepts several files at once", () => {
-        const picker = mount(makeStt()).querySelector('input[type="file"]') as HTMLInputElement;
+        const picker = mount().querySelector('input[type="file"]') as HTMLInputElement;
 
         expect(picker.multiple).toBe(true);
     });
 
     it("asks only for the types the server takes", () => {
-        const picker = mount(makeStt()).querySelector('input[type="file"]') as HTMLInputElement;
+        const picker = mount().querySelector('input[type="file"]') as HTMLInputElement;
 
         // A prefix takes a wildcard and an exact type does not: "application/pdf*"
         // is not a token any browser understands.
@@ -171,7 +103,7 @@ describe("chatIobar — the attach button", () => {
     });
 
     it("uploads what was chosen and offers it as an attachment", async () => {
-        const bar = mount(makeStt());
+        const bar = mount();
         const picker = bar.querySelector('input[type="file"]') as HTMLInputElement;
         const seen: unknown[] = [];
         document.addEventListener("af-attachment-added", e =>

@@ -13,10 +13,12 @@ import type {
     ChatMessage,
     HeartbeatPayload,
     HostStats,
+    LedgerQuestion,
     LogPayload,
     MetricsPayload,
     NodeHeartbeatPayload,
     QaFlagPayload,
+    QuestionBook,
     SpawnPayload,
     StatusPayload,
 } from "../types/agent";
@@ -32,6 +34,8 @@ export interface ServerEvents {
     chat: ChatMessage;
     /** A person answered a question an agent asked, on some channel. */
     answer: AnswerPayload;
+    /** An agent's question book changed; an emptied one carries an empty payload. */
+    "question-book": QuestionBook;
     "qa-flag": QaFlagPayload;
     /** LLM cost + token + message count metrics from an agent. */
     metrics: MetricsPayload;
@@ -45,9 +49,17 @@ export interface ServerEvents {
     "system-health": unknown;
     /** Host-level CPU + memory stats from the backend. */
     "host-stats": HostStats;
+    /** A stored model's pointer moved (`models/{name}/{active|shadow}`); an unset one carries an empty payload. */
+    "model-pointer": { name: string; pointer: string };
     /** Catch-all for raw messages not matching a known pattern. */
     raw: { topic: string; payload: unknown };
 }
+
+/** `agents/{id}/questions`: the agent's question book. */
+const QUESTION_BOOK = /^agents\/([^/]+)\/questions$/;
+
+/** `models/{name}/{pointer}`: where main says a stored model's pointer stands. */
+const MODEL_POINTER = /^models\/([^/]+)\/(active|shadow)$/;
 
 export type Listener<T> = (data: T) => void;
 type Listeners = { [K in keyof ServerEvents]: Array<Listener<ServerEvents[K]>> };
@@ -76,7 +88,21 @@ export class ServerEventRouter {
         return this;
     }
 
-    route(topic: string, payload: unknown): void {
+    /** Hand on one relayed frame. `threadId` is the thread the server says a chat
+     *  message is in, when that is not its sender's own. */
+    route(topic: string, payload: unknown, threadId = ""): void {
+        // Before the shape check: an unset pointer is published as an empty payload.
+        const pointer = MODEL_POINTER.exec(topic);
+        if (pointer) {
+            this.emit("model-pointer", { name: pointer[1] ?? "", pointer: pointer[2] ?? "" });
+            return;
+        }
+        // Before the shape check too: a book is cleared with an empty payload.
+        const book = QUESTION_BOOK.exec(topic);
+        if (book) {
+            this.emit("question-book", normaliseQuestionBook(payload, book[1] ?? ""));
+            return;
+        }
         // Structured routing needs an object. A null/primitive payload can't match
         // any known shape and would throw on property access inside the routers,
         // so surface it as `raw` instead of letting it escape the message handler.
@@ -86,7 +112,7 @@ export class ServerEventRouter {
         }
 
         if (
-            this._routeAgentEvent(topic, payload) ||
+            this._routeAgentEvent(topic, payload, threadId) ||
             this._routeSystemEvent(topic, payload) ||
             this._routeParameterised(topic, payload)
         ) {
@@ -108,7 +134,7 @@ export class ServerEventRouter {
     }
 
     /** Fixed-shape agent topics: `agents/{id}/{heartbeat|status|alert|chat|answer|spawn}`. */
-    private _routeAgentEvent(topic: string, payload: unknown): boolean {
+    private _routeAgentEvent(topic: string, payload: unknown, threadId: string): boolean {
         if (/^agents\/.+\/heartbeat$/.test(topic)) {
             this.emit("heartbeat", normaliseHeartbeat(payload));
         } else if (/^agents\/.+\/status$/.test(topic)) {
@@ -116,7 +142,7 @@ export class ServerEventRouter {
         } else if (/^agents\/.+\/alert$/.test(topic)) {
             this.emit("alert", normaliseAlert(payload));
         } else if (/^agents\/.+\/chat$/.test(topic)) {
-            this.emit("chat", normaliseChat(payload, agentIdOf(topic)));
+            this.emit("chat", normaliseChat(payload, agentIdOf(topic), threadId));
         } else if (/^agents\/.+\/answer$/.test(topic)) {
             this.emit("answer", normaliseAnswer(payload, agentIdOf(topic)));
         } else if (/^agents\/.+\/spawn$/.test(topic)) {
@@ -345,8 +371,9 @@ function questionFields(o: RawObj, agentId: string): Pick<ChatMessage, "agentId"
 
 /** Normalise a raw chat payload; defaults `to` to "user" and synthesises an id when absent.
  *  `agentId` is the sender's id from the topic the frame arrived on, which an
- *  answer to the frame's options has to name. */
-export function normaliseChat(p: unknown, agentId = ""): ChatMessage {
+ *  answer to the frame's options has to name; `threadId` the thread the server
+ *  says the message is in, the sender's own unless it says otherwise. */
+export function normaliseChat(p: unknown, agentId = "", threadId = ""): ChatMessage {
     const o = asObj(p);
     const timestampMs = toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]);
     const source = optStr(o["source"]);
@@ -357,6 +384,7 @@ export function normaliseChat(p: unknown, agentId = ""): ChatMessage {
         id: str(o["id"]) || uid("chat"), // WID, not `chat-${ms}`: same-ms ids collide and dedupe-drop
         from: str(o["from"] ?? o["agentName"] ?? o["name"]),
         to: str(o["to"]) || "user", // default to "user" when field absent
+        threadId: threadId || agentId,
         content: str(o["content"]),
         timestampMs,
         ...(source !== undefined && { source }),
@@ -377,6 +405,47 @@ export function normaliseAnswer(p: unknown, agentId = ""): AnswerPayload {
         index: num(o["index"]) ?? 0,
         channel: str(o["channel"]) || "dashboard",
         timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
+    };
+}
+
+/** A question from a book or the ledger, its fields coerced; null for a record with no id. */
+export function normaliseQuestion(p: unknown, agentId: string, agent: string): LedgerQuestion | null {
+    const o = asObj(p);
+    const id = str(o["id"]);
+    if (!id) {
+        return null;
+    }
+    const answer = optStr(o["answer"]);
+    const channel = optStr(o["channel"]);
+    const askedAt = num(o["asked_at"]);
+    const answerChannel = optStr(o["answer_channel"]);
+    const answerNote = optStr(o["answer_note"]);
+    const answeredAt = num(o["answered_at"]);
+    const context = optStr(o["context"]);
+    return {
+        id,
+        agent_id: agentId,
+        agent,
+        text: str(o["text"]),
+        options: strArray(o["options"]),
+        ...(channel !== undefined && { channel }),
+        ...(askedAt !== undefined && { asked_at: askedAt }),
+        ...(answer !== undefined && { answer }),
+        ...(answerChannel && { answer_channel: answerChannel }),
+        ...(answerNote && { answer_note: answerNote }),
+        ...(answeredAt && { answered_at: answeredAt }),
+        ...(context && { context }),
+    };
+}
+
+/** Normalise the payload of `agents/{id}/questions`; anything that is not a book is an empty one. */
+export function normaliseQuestionBook(p: unknown, agentId: string): QuestionBook {
+    const o = asObj(p);
+    const agent = str(o["agent"]) || agentId.slice(0, 8);
+    const records: unknown[] = Array.isArray(o["questions"]) ? o["questions"] : [];
+    return {
+        agentId,
+        questions: records.flatMap(record => normaliseQuestion(record, agentId, agent) ?? []),
     };
 }
 

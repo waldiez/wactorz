@@ -444,18 +444,8 @@ class SubscriptionHub:
 def is_durable_actor(actor: Any) -> bool:
     """Whether this actor's id survives a restart, and so can hold a session.
 
-    A named actor derives its id from its name, so the same agent reconnects as
-    the same client and resumes what the broker held. An anonymous one gets a
-    fresh id every incarnation, so a session kept under the old id is
-    unreachable -- durability there is not harmful, it is meaningless.
-
-    This asks whether the id is name-derived, not whether it is stable. An
-    actor constructed with an explicit `actor_id` that happens to be stable is
-    classified as not durable. That is the safe direction -- a clean session
-    and no broker state -- but such an actor forgoes durability it could in
-    principle have had.
+    The hub's half of `has_stable_id`, which says what makes an id stable.
     """
-    from .actor import has_derived_id  # circular import: core.actor imports this module
+    from .actor import has_stable_id  # circular import: core.actor imports this module
 
-    name = getattr(actor, "name", "") or ""
-    return has_derived_id(name, str(getattr(actor, "actor_id", "")))
+    return has_stable_id(actor)

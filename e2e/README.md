@@ -75,6 +75,10 @@ Fix rather than list where it is in reach.
 | 11 | Main's model checks the node's disk by a named operation and is refused a command of its own; `/nodes run` runs one; an agent needing a package nobody allowed waits for the operator's answer on a notice, and the installer's thread opens while it asks. |
 | 12 | Code the model writes runs on main until a node is set for it; then the agents that can move there do, the chat says which stayed and why, and new ones start there. |
 | 13 | The address names the open view: a refresh returns to it, Back steps through the views visited, a link opens the conversation it names, and an address with no view opens the last one. |
+| 14 | A question an agent on the node asked while the page was away is there when it opens, as a notice and in the thread; answering it reaches the agent and closes both. |
+| 15 | An agent on the node is copied to main: each is called by its address and answers in its own thread; a message to the bare name is answered with both addresses as buttons, and the one pressed gets it; the bare name's address opens neither and links both. |
+| 16 | Two versions of a model are stored and one made active from the command line; the Models view marks it, and a version tried and promoted from the page, each with a reason, is seen in a second browser and in the history. |
+| 17 | A question from an agent on the node is answered from a phone: the Inbox's tab counts it, its card says why it is asked, the answer goes with a note, and it moves to Answered. |
 
 ## Order
 

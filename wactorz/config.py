@@ -509,6 +509,7 @@ def deploy_name_error(node_name: str) -> str | None:
 def reserved_node_name_error(node_name: str) -> str | None:
     """Why ``node_name`` may not be given to a new node, or None if it may.
 
+    A name that already means main, or one holding the address separator.
     Checked where a node is made -- ``/deploy`` and ``setup-local`` -- and not
     where one starts: a node already running under such a name keeps starting,
     and is renamed by deploying it again under another.
@@ -519,6 +520,11 @@ def reserved_node_name_error(node_name: str) -> str | None:
             f"Node name {name!r} already means main itself: `/migrate <agent> {name}` moves an "
             "agent to main, and the dashboard lists main's agents under 'local'. Give the "
             "node another name; a node on main's own machine is usually 'sandbox'."
+        )
+    if "@" in name:
+        return (
+            f"Node name {name!r} contains '@', which separates an agent's name from its node "
+            "in an address (name@node). Give the node a name without it."
         )
     return None
 

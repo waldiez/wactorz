@@ -17,6 +17,29 @@ import type { ChatMessage } from "../types/agent";
 import type { ToastOptions } from "./ToastManager";
 import { emit } from "../events";
 
+/**
+ * Which open questions this page has already put in front of the person, so
+ * each gets one toast however many times the page goes live. A toast closed
+ * unanswered stays closed: the question is still open, in the Inbox and its
+ * thread, and a dropped connection is no reason to raise it again.
+ */
+export class QuestionNotices {
+    private readonly _told = new Set<string>();
+
+    /** Whether the question `id` is new to this page, and from now on it is not. */
+    firstTime(id: string): boolean {
+        const first = !this._told.has(id);
+        this._told.add(id);
+        return first;
+    }
+
+    /** Forget all but the questions in `open`: the rest are answered, and need no remembering. */
+    keepOnly(open: readonly { id: string }[]): void {
+        const still = new Set(open.map(msg => msg.id));
+        [...this._told].filter(id => !still.has(id)).forEach(id => this._told.delete(id));
+    }
+}
+
 /** The toast asking `msg`'s question, or null when `msg` asks nothing still open. */
 export function questionToast(msg: ChatMessage): ToastOptions | null {
     const options = msg.options ?? [];

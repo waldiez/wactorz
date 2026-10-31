@@ -25,6 +25,7 @@ from wactorz.agents.main.commands import models as models_commands
 from wactorz.agents.main.commands import registry
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.hosts import ArtifactHost
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import (
     INDEX_FORMAT,
@@ -445,9 +446,17 @@ class TestTheCommand:
         code, out = self.run("promote", "imu", state=state, capsys=capsys)
         assert code == 0 and "imu:3 is now active (was imu:1)" in out
 
-        code, out = self.run("clear", "active", "imu", state=state, capsys=capsys)
+        code, out = self.run(
+            "clear", "active", "imu", "--reason", "retired", state=state, capsys=capsys
+        )
         assert code == 0 and "imu has no active version now (was imu:3)" in out
         assert imu.pointers("imu") == {}
+        cleared = imu.pointer_changes()[0][-1]
+        assert (cleared["change"], cleared["by"], cleared["reason"]) == (
+            "cleared",
+            "cli",
+            "retired",
+        )
 
     def test_show_includes_the_pointers(
         self, imu: ArtifactStore, state: Path, capsys: pytest.CaptureFixture[str]
@@ -490,8 +499,8 @@ class _Host:
         self._mqtt_port = 1883
         self.published: list[tuple[str, Any, bool, int]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return {}
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
@@ -708,6 +717,20 @@ class TestTheChatVerbs:
         )
         assert imu.pointers("imu") == {}
         assert actor.artifact_service.announced == 4
+
+    async def test_a_clear_keeps_its_reason(self, imu: ArtifactStore) -> None:
+        context, _actor = ctx()
+        await models_commands.shadow_model(context, "imu:3")
+
+        reply = await models_commands.clear_model_pointer(context, "shadow imu too noisy")
+
+        assert reply == "imu has no shadow version now (was imu:3)."
+        cleared = imu.pointer_changes()[0][-1]
+        assert (cleared["change"], cleared["by"], cleared["reason"]) == (
+            "cleared",
+            "chat",
+            "too noisy",
+        )
 
     async def test_a_refusal_is_the_stores_reason(self, imu: ArtifactStore) -> None:
         context, actor = ctx()

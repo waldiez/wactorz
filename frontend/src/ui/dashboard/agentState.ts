@@ -6,23 +6,8 @@
  * Shared agent-state helpers for the dashboard: messageability rules, state
  * colour/label mapping and relative-time formatting.
  */
-import type { AgentState, ChatMessage } from "../../types/agent";
+import type { AgentState } from "../../types/agent";
 import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
-
-/** Heartbeat age (ms) after which a remote node / agent is treated as stale:
- *  a node is drawn offline, and an agent's dot turns red. */
-export const STALE_MS = 180_000;
-
-/**
- * How long a remote node, or an agent on one, may go unheard before it is
- * forgotten entirely. Deliberately far beyond `STALE_MS`, which only decides
- * that it is drawn offline or missing -- worth showing for a good while.
- */
-export const NODE_EVICT_MS = STALE_MS * 10;
-
-/** Heartbeat age (ms) after which an agent's dot turns yellow: a few missed
- *  heartbeats, not yet gone. Heartbeats come every ten seconds. */
-export const QUIET_MS = 30_000;
 
 /** System agents that exist but cannot be chatted with directly. */
 export const SYSTEM_AGENT_NAMES: Set<string> = new Set([
@@ -51,26 +36,17 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
     return !agent.protected;
 }
 
-/** The names of the agents with a question still waiting for an answer in `messages`. */
-export function askingAgents(messages: ChatMessage[]): Set<string> {
-    return new Set(
-        messages
-            .filter(m => m.from !== "user" && (m.options?.length ?? 0) > 0 && m.answer === undefined)
-            .map(m => m.from),
-    );
-}
-
 /**
  * Whether the user may open this agent's thread: any agent they may message,
  * and one that may not be messaged while it is asking them something
- * (`asking` holds the names of agents with a question still open), so its
+ * (`asking` holds the ids of agents with a question still open), so its
  * question can be answered there.
  */
 export function canOpenThread(
-    agent: { name: string; protected?: boolean },
+    agent: { id: string; name: string; protected?: boolean },
     asking: ReadonlySet<string>,
 ): boolean {
-    return canDirectMessage(agent) || asking.has(agent.name);
+    return canDirectMessage(agent) || asking.has(agent.id);
 }
 
 /**
@@ -90,15 +66,20 @@ export function isReachable(agent: { state: AgentState }): boolean {
 }
 
 /**
- * Names of the agents the user may directly message. Single source for both the
- * target `<select>` and the `@mention` suggestions, so a mention can never offer
- * an agent the picker can't target (which would silently fail to switch target).
+ * What the agents the user may directly message are called, by `label`: the
+ * `@mention` suggestions, spelled as the target `<select>` spells them, so a
+ * mention can never offer an agent the picker can't target (which would
+ * silently fail to switch target). With the page's label, a name two agents
+ * share is offered as each one's address.
  */
-export function messageableNames(agents: Iterable<{ name: string; protected?: boolean }>): string[] {
+export function messageableNames<T extends { name: string; protected?: boolean }>(
+    agents: Iterable<T>,
+    label: (agent: T) => string = agent => agent.name,
+): string[] {
     return [...agents]
         .filter(canDirectMessage)
-        .map(a => a.name)
-        .filter(Boolean);
+        .filter(a => Boolean(a.name))
+        .map(label);
 }
 
 /** Accent colour for an agent state (object state = failed/red). */

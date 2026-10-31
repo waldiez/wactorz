@@ -25,6 +25,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD, NodeManager
 from wactorz.agents.main.placement import Placement
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.mqtt import publish_properties
 from wactorz.core.node_publications import PublicationSigner
@@ -72,9 +73,16 @@ class _Broker:
         return False
 
 
+class _Contracts(dict[str, Any]):
+    """The bus's registry, as the heartbeat reads it: one agent per name."""
+
+    def at(self, name: str, _node: str) -> Any | None:
+        return self.get(name)
+
+
 class _Bus:
     def __init__(self, registered: dict[str, Any] | None = None) -> None:
-        self.registry: dict[str, Any] = dict(registered or {})
+        self.registry = _Contracts(registered or {})
 
     def register_contract(self, contract: Any) -> None:
         self.registry[contract.name] = contract
@@ -144,8 +152,14 @@ async def run_heartbeats(
 
     run = _Run(main, bus or _Bus())
 
-    setattr(main, "_get_spawn_registry", lambda: dict(spawn_registry or {}))
-    setattr(main, "_remove_from_spawn_registry", run.removed_from_registry.append)
+    setattr(
+        main, "_get_spawn_registry", lambda: SpawnRegistry.from_names(dict(spawn_registry or {}))
+    )
+    setattr(
+        main,
+        "_remove_from_spawn_registry",
+        lambda name, *_, **__: run.removed_from_registry.append(name),
+    )
     setattr(
         main, "_record_agent_deletion", lambda name, reason="": run.deletions.append((name, reason))
     )
@@ -699,14 +713,14 @@ class TestWhereATaskGoes:
             spawn_registry={"camera": {"node": "rpi"}},
         )
 
-        assert run.main.nodes.node_for("camera") == "rpi"
+        assert run.main.nodes.nodes_for("camera") == ["rpi"]
 
     async def test_an_agent_main_placed_nowhere_goes_to_the_node_listing_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         run = await run_heartbeats(monkeypatch, [heartbeat("rpi", agents=["local-only"])])
 
-        assert run.main.nodes.node_for("local-only") == "rpi"
+        assert run.main.nodes.nodes_for("local-only") == ["rpi"]
 
     async def test_an_agent_on_main_goes_to_no_node(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_heartbeats(
@@ -715,7 +729,7 @@ class TestWhereATaskGoes:
             spawn_registry={"planner": {"node": ""}},
         )
 
-        assert run.main.nodes.node_for("planner") == ""
+        assert run.main.nodes.nodes_for("planner") == []
 
 
 class TestWithdrawingANotice:

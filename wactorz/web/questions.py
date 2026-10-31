@@ -20,8 +20,9 @@ from typing import Any
 
 from aiohttp import web
 
-from ..core.outbound import Answer
+from ..core.outbound import Answer, numbered
 from ..core.questions import ANSWERED_KEPT, Question, questions_in_frame
+from ..monitoring.log_redaction import redact
 from . import runtime
 
 #: agent id -> (the agent's name, the questions in its newest book).
@@ -78,6 +79,33 @@ def find(agent_id: str, question_id: str) -> Question | None:
         return None
     _, questions = _books.get(agent_id, ("", []))
     return next((q for q in questions if q.id == question_id), None)
+
+
+def stored_forms(question: Question) -> tuple[str, ...]:
+    """The words a chat-log row holds for ``question``, as the server stores an agent's message.
+
+    With and without the reply hint: rows stored before the dashboard's copy
+    dropped it still say "Reply with the number."
+    """
+    return tuple(
+        redact(numbered(question.text, question.options, reply_hint=hint)) for hint in (False, True)
+    )
+
+
+def asked_in(agent_name: str, content: str, ts: float) -> tuple[str, Question] | None:
+    """The question a chat-log row of ``agent_name`` is, with its agent's id, or None.
+
+    The row holds only the question's words, so the same words asked twice
+    are told apart by time: the one asked nearest ``ts``.
+    """
+    found = [
+        (agent_id, question)
+        for agent_id, (name, questions) in _books.items()
+        if name == agent_name and not runtime.is_deleted(agent_id)
+        for question in questions
+        if content in stored_forms(question)
+    ]
+    return min(found, key=lambda pair: abs(pair[1].asked_at - ts), default=None)
 
 
 def checked(answer: Answer, *, known_only: bool = False) -> Answer:

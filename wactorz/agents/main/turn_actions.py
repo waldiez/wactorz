@@ -37,6 +37,8 @@ class TurnActions:
     spawned: tuple[Any, ...] = ()
     deleted: tuple[str, ...] = ()
     missing: tuple[str, ...] = ()
+    #: Why a delete that named an agent was not done, one sentence each.
+    refused: tuple[str, ...] = ()
 
     def summary(self, response: str) -> str:
         """One line naming what happened, or empty when nothing did.
@@ -64,9 +66,12 @@ class TurnActions:
                 )
             )
         for kept in (a for a in self.spawned if isinstance(a, KeptHere)):
+            where = " and ".join(f"'{a}'" for a in kept.elsewhere) or "main"
             parts.append(
-                f"'{kept.name}' is already running here, so it was not spawned again; "
-                f"\"replace\": true moves it to node '{kept.node}'"
+                f"Did not spawn '{kept.name}' on '{kept.node}': it already runs as {where}. "
+                f'"replace": true moves it to \'{kept.node}\', and "alongside": true runs a '
+                f"second one there (/agents copy {kept.elsewhere[0] if kept.elsewhere else kept.name} "
+                f"{kept.node})"
             )
         for refused in (a for a in self.spawned if isinstance(a, NotSpawned)):
             parts.append(f"Did not spawn '{refused.name}': {refused.reason}")
@@ -79,6 +84,7 @@ class TurnActions:
             parts.append(f"Deleted {', '.join(self.deleted)}")
         if self.missing:
             parts.append(f"Could not delete {', '.join(self.missing)} — not currently registered")
+        parts.extend(f"Did not delete: {reason}" for reason in self.refused)
         return " | ".join(parts)
 
 

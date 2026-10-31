@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents import installer_agent
 from wactorz.agents.catalog_agent import _build_catalog
@@ -36,7 +38,9 @@ from wactorz.core.packages import (
     normalized,
     unlisted,
 )
+from wactorz.core.questions import book_frame
 from wactorz.web import answers, runtime
+from wactorz.web import questions as web_questions
 
 MAIN_ID = "main-id"
 
@@ -81,13 +85,13 @@ class _Installer:
             if topic.endswith("/chat") and isinstance(payload, dict) and payload.get("options"):
                 self.asked.set()
 
-        async def _pip(package: str) -> tuple[bool, str]:
+        async def _pip(package: str, **_options: Any) -> tuple[bool, str]:
             self.installed.append(package)
             return True, ""
 
         monkeypatch.setattr(self.agent, "_mqtt_publish", _publish)
         monkeypatch.setattr(self.agent, "_pip_install", _pip)
-        monkeypatch.setattr(self.agent, "_is_installed", lambda _name: False)
+        monkeypatch.setattr(installer_agent, "requirement_is_satisfied", lambda _name: False)
 
     async def ask(self, action: str, sender: str = MAIN_ID, **payload: Any) -> dict[str, Any]:
         msg = Message(
@@ -407,6 +411,95 @@ class TestWhoMaySayYes:
     )
     def test_the_model_may_not_ask_to_change_it(self, action: str) -> None:
         assert action not in MODEL_INSTALLER_ACTIONS
+
+
+class TestTheQuestionIsListed:
+    """In the book, so the Inbox has it and a reload keeps it, and still only the dashboard's."""
+
+    def book(self, installer: _Installer) -> Any:
+        return installer.agent.questions()[installer.question["id"]]
+
+    async def test_it_waits_in_the_ledger_as_a_permission(self, installer: _Installer) -> None:
+        pending = installer.install(UNLISTED)
+        await installer.until_asked()
+
+        assert self.book(installer).permission
+        assert self.book(installer).open
+        pending.cancel()
+
+    async def test_a_forged_answer_on_the_broker_lets_nothing_through(
+        self, installer: _Installer
+    ) -> None:
+        pending = installer.install(UNLISTED)
+        await installer.until_asked()
+
+        await installer.agent._on_answer_frame(
+            {
+                "id": installer.question["id"],
+                "option": installer_agent.INSTALL,
+                "index": 0,
+                "channel": "dashboard",
+            }
+        )
+
+        assert self.book(installer).open
+        assert not pending.done()
+        assert installer.installed == []
+        pending.cancel()
+
+    async def test_the_inbox_answers_it_with_a_note(
+        self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Broker:
+            async def publish(self, _topic: str, _payload: str, qos: int = 0) -> None:
+                return None
+
+        monkeypatch.setattr(runtime, "registry", cast("Any", installer.registry))
+        monkeypatch.setattr(runtime, "mqtt_client_ref", _Broker())
+        pending = installer.install(UNLISTED)
+        await installer.until_asked()
+        agent_id = installer.agent.actor_id
+        web_questions.record(agent_id, book_frame("installer", installer.agent.questions()))
+        app = web.Application()
+        app.router.add_post(
+            "/api/questions/{agent_id}/{question_id}/answer", answers.answer_handler
+        )
+
+        try:
+            async with TestClient(TestServer(app)) as client:
+                answer = await client.post(
+                    f"/api/questions/{agent_id}/{installer.question['id']}/answer",
+                    json={"option": installer_agent.INSTALL, "note": "known package"},
+                )
+                status = answer.status
+        finally:
+            web_questions.forget(agent_id)
+
+        assert status == 200
+        assert (await pending)["success"]
+        assert (self.book(installer).answer, self.book(installer).answer_note) == (
+            installer_agent.INSTALL,
+            "known package",
+        )
+
+    async def test_no_answer_in_time_closes_it_as_that(
+        self, installer: _Installer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(installer_agent, "APPROVAL_TIMEOUT_S", 0.01)
+
+        result = await installer.install(UNLISTED)
+
+        assert not result["success"]
+        assert self.book(installer).answer == installer_agent.NO_ANSWER
+
+    async def test_the_operators_list_closes_it_as_allowed(self, installer: _Installer) -> None:
+        pending = installer.install(UNLISTED)
+        await installer.until_asked()
+
+        await installer.agent._change_the_list("packages_allow", {"packages": [UNLISTED]})
+
+        assert (await pending)["success"]
+        assert self.book(installer).answer == installer_agent.ALLOWED
 
 
 class TestTheOperatorsList:

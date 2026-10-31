@@ -133,11 +133,16 @@ class DynamicAgent(Actor):
         output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider: Any = None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
+        task_timeout_s: float | None = None,  # recipe's own handle_task() limit
         artifacts: Mapping[str, Mapping[str, Any]] | None = None,  # see `AgentAPI.artifact_path`
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._code = code
+        if task_timeout_s is not None:
+            # A recipe whose tasks legitimately run long (real-time playback, a
+            # hardware move) declares so; every other agent keeps the default.
+            self._HANDLE_TASK_TIMEOUT = float(task_timeout_s)
         #: The program this agent was given, before any repair. A repair keeps
         #: to the modules it imports (see `imports_a_repair_adds`); measured
         #: against this rather than the last repair, so rounds cannot add one
@@ -350,7 +355,7 @@ class DynamicAgent(Actor):
             main = find_main_actor(registry)
             if main is not None:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:
                     logger.debug("[%s] Could not drop the spawn entry", self.name, exc_info=True)
             try:
@@ -454,7 +459,7 @@ class DynamicAgent(Actor):
 
             bus = get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
                 logger.debug("[%s] Unregistered from TopicBus", self.name)
         except Exception as exc:
             logger.debug("[%s] Could not unregister from TopicBus: %s", self.name, exc)
@@ -477,6 +482,33 @@ class DynamicAgent(Actor):
             logger.warning("[%s] on_answer() error: %s", self.name, halted.original)
         except Exception as e:
             logger.warning("[%s] on_answer() error: %s", self.name, e)
+
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The new version, to the program's ``on_model(agent, key, model)`` if it has one.
+
+        A program that keeps what it loaded in a local or in ``agent.state``
+        replaces it here; one that reads ``agent.load_model(key)`` on each
+        call needs nothing. ``model`` is None when the program opens the file
+        itself through ``agent.artifact_path(key)``, which now names the new
+        version. An error in the hook is the program's, said in the log: the
+        swap itself has landed.
+        """
+        hook = self._ns.get("on_model")
+        if not callable(hook):
+            await super().on_model_swapped(key, model)
+            return
+        try:
+            result = hook(self._api, key, model)
+            if inspect.isawaitable(result):
+                await _bounded_call(result, self._HANDLE_TASK_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] on_model() timed out", self.name)
+        except _ProgramHalted as halted:
+            if isinstance(halted.original, KeyboardInterrupt):
+                raise halted.original from None
+            logger.warning("[%s] on_model() error: %s", self.name, halted.original)
+        except Exception as e:
+            logger.warning("[%s] on_model() error: %s", self.name, e)
 
     async def _run_generated_cleanup(self) -> None:
         """Give the generated code its chance to let go, under a timeout."""
@@ -603,7 +635,7 @@ class DynamicAgent(Actor):
             self._fn_handle_task = self._ns.get("handle_task")
             fns = [
                 f
-                for f in ["setup", "process", "handle_task", "cleanup", "on_answer"]
+                for f in ["setup", "process", "handle_task", "cleanup", "on_answer", "on_model"]
                 if f in self._ns
             ]
             logger.info("[%s] Code compiled OK. Functions: %s", self.name, fns)
@@ -736,6 +768,15 @@ class DynamicAgent(Actor):
                 if attempt >= self._MAX_SETUP_RETRIES:
                     break  # exhausted retries
 
+                if self._trusted and isinstance(e, ModuleNotFoundError):
+                    # A package that is not installed is not a bug in the code,
+                    # and the model cannot install it. Asked anyway, it rewrites
+                    # working code around the import, and a rewrite that happens
+                    # to start is saved over the original — for a catalogue
+                    # agent, over code that was reviewed.
+                    await self._report_missing_module(e)
+                    break
+
                 # Ask LLM to fix the runtime error
                 fixed = await self._fix_runtime_with_llm(current_code, str(e), err)
                 if fixed is None:
@@ -777,6 +818,21 @@ class DynamicAgent(Actor):
                     attempt + 1,
                 )
         return last_error
+
+    async def _report_missing_module(self, error: ModuleNotFoundError) -> None:
+        """Tell the user which package this agent could not import, and what to do."""
+        module = error.name or str(error)
+        logger.error(
+            "[%s] setup() needs module %r, which is not installed — not asking the model "
+            "to rewrite the code",
+            self.name,
+            module,
+        )
+        await self.notify_user(
+            f"{self.name} could not start: the Python module '{module}' is not installed. "
+            f"Spawn {self.name} again to install its packages, or install the package that "
+            f"provides '{module}' on this machine and then run /agents restart {self.name}."
+        )
 
     async def _run_setup(self) -> None:
         """Run setup() as a background task with LLM self-correction on failure.
@@ -1424,22 +1480,22 @@ class DynamicAgent(Actor):
             if self._registry:
                 main = find_main_actor(self._registry)
                 if main is not None:
-                    reg = main._get_spawn_registry()
-                    if self.name in reg:
-                        entry = dict(reg[self.name])
-                        if entry.get("code") != fixed_code or "trusted" in entry:
-                            entry["code"] = fixed_code
-                            entry["_code_fixed_at"] = time.time()
-                            # `trusted` vouches for the catalogue's own source;
-                            # kept, a restart would run the model's repair past
-                            # the safety check.
-                            entry.pop("trusted", None)
-                            main._save_to_spawn_registry(entry)
-                            logger.info(
-                                "[%s] Fixed code written to spawn registry (%s chars).",
-                                self.name,
-                                len(fixed_code),
-                            )
+                    entry = main._get_spawn_registry().by_id(self.actor_id)
+                    if entry is not None and (
+                        entry.get("code") != fixed_code or "trusted" in entry
+                    ):
+                        entry["code"] = fixed_code
+                        entry["_code_fixed_at"] = time.time()
+                        # `trusted` vouches for the catalogue's own source;
+                        # kept, a restart would run the model's repair past
+                        # the safety check.
+                        entry.pop("trusted", None)
+                        main._save_to_spawn_registry(entry)
+                        logger.info(
+                            "[%s] Fixed code written to spawn registry (%s chars).",
+                            self.name,
+                            len(fixed_code),
+                        )
 
             # ── 2. Update Supervisor factory (survives Supervisor-driven restart) ─
             # The factory closure captures the original kwargs including the old code.

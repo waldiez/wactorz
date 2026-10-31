@@ -32,21 +32,24 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 
 import asyncio
 import hashlib
-import importlib
 import logging
+import sys
 import time
+import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
-from ...core.actor import Actor, ActorState, ReplyError, ask_through
+from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
+from ...core.addresses import MAIN_NODE, agent_name_error
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
 from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
-from ...core.pip import PIP_TIMEOUT_S
+from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements, pending_restart
 from ...core.state_codec import decode_state
 from ...core.topics import topic_name_error
 from ...plugins import for_target
+from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
 from ..rule_agent import RuleAgent, RuleConfig
 
@@ -105,6 +108,26 @@ def agent_type(config: dict) -> str:
     return kind
 
 
+def spawn_actor_id(
+    registry: Any, name: str, running: str | None = None, *, alongside: bool = False
+) -> str:
+    """The id a spawn of ``name`` in main's process runs under, by whoever spawns it.
+
+    Never the spawn config's own: a config is often written by a model, and an
+    id taken from it could be another agent's. The id main's spawn registry
+    keeps for the agent comes first, so a restart, a replace or a move keeps it
+    (``alongside``, a second agent of a name that runs on a node, keeps none);
+    then the id of the agent being replaced (``running``); and only then a new
+    one. With no main to keep an id, the name's derived id, which is the same
+    at every start.
+    """
+    main = find_main_actor(registry) if registry is not None else None
+    if main is None:
+        return running or derive_actor_id(name)
+    kept = main._kept_actor_id(name, MAIN_NODE, alongside=alongside)
+    return str(kept or running or uuid.uuid4())
+
+
 class SpawnPlaceholder:
     """Returned when an agent is being installed+spawned in the background.
 
@@ -135,13 +158,16 @@ class PlacedOnNode:
 
 @dataclass(frozen=True)
 class KeptHere:
-    """A spawn not sent, because an agent of its name already runs here.
+    """A spawn not made, because an agent of its name already runs on another host.
 
-    ``node`` is where the spawn would have gone; ``replace`` moves it there.
+    ``node`` is where the spawn would have gone, and ``elsewhere`` the
+    addresses of the agents of the name: ``replace`` moves one there, and
+    ``alongside`` adds a second one there.
     """
 
     name: str
     node: str
+    elsewhere: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -160,6 +186,19 @@ if TYPE_CHECKING:
     _Host = SpawnHost
 else:
     _Host = object
+
+
+def _name_problem(name: str, config: dict, existing: bool) -> str | None:
+    """Why an agent cannot be spawned under ``name``, or None if it can.
+
+    A new agent's name is checked in full (`agent_name_error`). One that
+    already exists -- read back from the spawn registry, or replacing itself
+    -- keeps a name taken before the address separator was refused in one,
+    so it is held only to what its topics need.
+    """
+    if existing or config.get("replace"):
+        return topic_name_error(name)
+    return agent_name_error(name)
 
 
 class SpawnMixin(_Host):
@@ -197,11 +236,11 @@ class SpawnMixin(_Host):
         ``SpawnPlaceholder`` (background install), or ``None`` on failure.
         """
         name = config.get("name", "spawned-agent")
-        problem = topic_name_error(str(name))
+        problem = _name_problem(str(name), config, from_registry)
         if problem:
             # The name becomes a level of every topic the agent uses, so an agent
             # built with it could never be reached — and a message to it that the
-            # outbox cannot send used to stall every message behind it.
+            # outbox cannot send would stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
             return None
         try:
@@ -236,6 +275,14 @@ class SpawnMixin(_Host):
 
         # ── Idempotency / replace ──────────────────────────────────────────
         existing = self._find_existing(name)
+        config = {
+            **config,
+            "actor_id": self._spawn_actor_id(
+                name,
+                existing.actor_id if existing else None,
+                alongside=bool(config.get("alongside")),
+            ),
+        }
         if existing is not None:
             if getattr(existing, "protected", False):
                 # `replace: true` would stop the system actor holding this name,
@@ -357,7 +404,7 @@ class SpawnMixin(_Host):
         if llm is not None:
             kwargs["llm_provider"] = llm
         logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
-        return await self.spawn(factory, **kwargs)
+        return await self.spawn(factory, actor_id=config.get("actor_id"), **kwargs)
 
     async def _spawn_ha_actuator(self, config: dict, name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).
@@ -391,6 +438,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning HomeAssistantActuatorAgent '%s'", self.name, name)
         return await self.spawn(
             HomeAssistantActuatorAgent,
+            actor_id=config.get("actor_id"),
             config=actuator_cfg,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
@@ -415,6 +463,7 @@ class SpawnMixin(_Host):
         try:
             actor = await self.spawn(
                 ScheduledAgent,
+                actor_id=config.get("actor_id"),
                 name=name,
                 schedule=schedule_spec,
                 timezone=self._resolve_user_timezone(),
@@ -450,6 +499,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
         return await self.spawn(
             RuleAgent,
+            actor_id=config.get("actor_id"),
             config=rule,
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
@@ -484,6 +534,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning %r from %s", self.name, name, target)
         return await self.spawn(
             cast("type[Actor]", plugin.build),
+            actor_id=config.get("actor_id"),
             name=name,
             persistence_dir=str(self._persistence_dir.parent),
             llm_provider=self.llm,
@@ -501,6 +552,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning LLM agent '%s'", self.name, name)
         return await self.spawn(
             LLMAgent,
+            actor_id=config.get("actor_id"),
             name=name,
             llm_provider=self.llm,
             system_prompt=config.get("system_prompt", "You are a helpful assistant."),
@@ -527,11 +579,17 @@ class SpawnMixin(_Host):
         the operator: the config came from the spawn registry, whose packages
         were cleared when the agent was first placed.
         """
+        minimum = config.get("minimum_python", [])
+        if tuple(sys.version_info[:2]) < tuple(minimum):
+            logger.error("[%s] %s requires Python %s", self.name, name, minimum)
+            return None
         packages = config.get("install", [])
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split() if p.strip()]
 
-        needed = self._packages_needing_install(packages) if packages else []
+        needed = (
+            await asyncio.to_thread(self._packages_needing_install, packages) if packages else []
+        )
 
         if not needed:
             return await self._do_spawn_dynamic(config, name, code)
@@ -539,9 +597,12 @@ class SpawnMixin(_Host):
         if blocking_install:
             # Pipeline path: the next step may depend on this agent being live.
             logger.info("[%s] Installing %s for '%s' (blocking)…", self.name, needed, name)
-            refusal = await self._install_packages(needed, agent_name=name, restoring=restoring)
-            if refusal:
-                logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
+            strict = config.get("require_install_success") is True
+            outcome = await self._install_packages(
+                needed, agent_name=name, restoring=restoring, require_install_success=strict
+            )
+            if outcome.refused or (strict and not outcome.ok):
+                await self._report_install_problem(config, name, outcome)
                 return None
             return await self._do_spawn_dynamic(config, name, code)
 
@@ -584,14 +645,18 @@ class SpawnMixin(_Host):
                         "timestamp": time.time(),
                     },
                 )
-            refusal = await self._install_packages(packages, agent_name=name, restoring=restoring)
-            if refusal:
+            strict = config.get("require_install_success") is True
+            outcome = await self._install_packages(
+                packages, agent_name=name, restoring=restoring, require_install_success=strict
+            )
+            if outcome.refused:
+                refusal = outcome.problem(name)
                 logger.error("[%s] Not spawning '%s': %s", self.name, name, refusal)
                 if registered:
                     # The entry was saved when the placeholder was returned, and
                     # a refused agent must not be restored at the next start. An
                     # entry this spawn did not save belongs to whoever saved it.
-                    self._unregister_spawn(name)
+                    self._unregister_spawn(name, config.get("actor_id"))
                 if publish is not None:
                     await publish(
                         f"agents/{self.actor_id}/logs",
@@ -607,6 +672,11 @@ class SpawnMixin(_Host):
                 # An install can outlast the stop meant to cancel it. Spawning
                 # now would register an agent into a system that has shut down.
                 logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
+                return
+            if strict and not outcome.ok:
+                # Spawning now starts the agent against packages that are
+                # missing or that this process cannot load until it restarts.
+                await self._report_install_problem(config, name, outcome)
                 return
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
@@ -631,6 +701,11 @@ class SpawnMixin(_Host):
         and registers a TopicContract when the config declares pub/sub topics so
         the agent is eligible for auto-wiring on the TopicBus.
         """
+        if config.get("require_install_success") is True and (replaced := pending_restart()):
+            await self._report_install_problem(
+                config, name, InstallOutcome(restart_required=replaced)
+            )
+            return None
         artifacts, problem = await asyncio.to_thread(_readable_here, config)
         if problem:
             logger.error("[%s] Not spawning '%s': its artifacts: %s", self.name, name, problem)
@@ -641,6 +716,7 @@ class SpawnMixin(_Host):
 
         actor = await self.spawn(
             DynamicAgent,
+            actor_id=config.get("actor_id"),
             name=name,
             code=code,
             poll_interval=float(config.get("poll_interval") or 1.0),
@@ -651,6 +727,7 @@ class SpawnMixin(_Host):
             persistence_dir=str(self._persistence_dir.parent),
             trusted=bool(config.get("trusted", False)),
             artifacts=artifacts,
+            task_timeout_s=config.get("task_timeout_s"),
         )
 
         if actor is not None and (config.get("publishes") or config.get("subscribes")):
@@ -677,92 +754,77 @@ class SpawnMixin(_Host):
 
     @staticmethod
     def _packages_needing_install(packages: list[str]) -> list[str]:
-        """Subset of ``packages`` not already importable in this process. The
-        import name often differs from the pip name (opencv-python → cv2), so
-        this is a heuristic; re-installing an present package is a cheap no-op.
-        """
-        needed = []
-        for pkg in packages:
-            import_name = pkg.replace("-", "_").split("[")[0]
-            try:
-                importlib.import_module(import_name)
-            except ImportError:
-                needed.append(pkg)
-        return needed
+        """Requirements absent from installed metadata, including version pins."""
+        return missing_requirements(packages)
 
     async def _install_packages(
-        self, packages: list[str], agent_name: str = "?", *, restoring: bool = False
-    ) -> str | None:
-        """Install packages by delegating to the 'installer' agent and blocking
-        until it replies, or until the operator's answer and every pip run have
-        had their time. No-op when nothing is needed or the registry or the
-        installer is unavailable.
+        self,
+        packages: list[str],
+        agent_name: str = "?",
+        *,
+        restoring: bool = False,
+        require_install_success: bool = False,
+    ) -> InstallOutcome:
+        """Ask the installer under its approval rules and report its complete outcome.
 
-        Returns why the agent must not be spawned: a package the operator did
-        not allow. Anything else that goes wrong is logged and the agent is
-        spawned, to report the import it lacks itself. ``restoring`` installs
-        without asking: see `_spawn_dynamic_agent`.
+        Generic spawns retain best-effort installation. A recipe opting into
+        ``require_install_success`` waits for the longer native-package limit
+        and refuses to start against a failed or stale environment.
         """
         if not packages or not self._registry:
-            return None
-
-        needed = self._packages_needing_install(packages)
+            return InstallOutcome()
+        needed = await asyncio.to_thread(self._packages_needing_install, packages)
         if not needed:
-            logger.info(
-                "[%s] All packages for '%s' already available: %s", self.name, agent_name, packages
-            )
-            return None
-
-        installer = self._registry.find_by_name("installer")
-        if not installer:
+            return InstallOutcome()
+        if not self._registry.find_by_name("installer"):
             logger.warning(
-                "[%s] installer agent not found — cannot install %s for '%s'. Agent may crash on import.",
+                "[%s] installer agent not found — cannot install %s for '%s'.",
                 self.name,
                 needed,
                 agent_name,
             )
-            return None
-
-        logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-        action = "install_restored" if restoring else "install"
-        request = {"action": action, "packages": needed, "agent": agent_name}
+            return InstallOutcome(unavailable=True)
+        request = {
+            "action": "install_restored" if restoring else "install",
+            "packages": needed,
+            "agent": agent_name,
+            "for_agent": agent_name,
+            "notify": require_install_success,
+            "require_install_success": require_install_success,
+        }
+        answer = 0 if restoring else APPROVAL_TIMEOUT_S
+        wait = answer + (
+            install_wait_s(len(needed))
+            if require_install_success
+            else PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
+        )
         try:
-            # A restore asks nothing, so it waits for pip alone.
-            answer = 0 if restoring else APPROVAL_TIMEOUT_S
-            wait = answer + PIP_WAIT_PER_PACKAGE_S * len(needed) + 30
             result = await ask_through(self, "installer", request, timeout=wait)
         except asyncio.TimeoutError:
-            logger.warning(
-                "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
-                self.name,
-                needed,
-                agent_name,
-            )
-            return None
+            logger.warning("[%s] Install timed out for %s ('%s')", self.name, needed, agent_name)
+            return InstallOutcome(timed_out=True)
         except ReplyError as exc:
-            if exc.reply.get("refused"):
-                return str(exc.reply["error"])
-            logger.warning(
-                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
-            )
-            return None
+            logger.warning("[%s] Install failed: %s", self.name, exc)
+            return outcome_from_result(exc.reply)
         except RuntimeError as exc:
-            # A failed install, or an installer not taking messages: either way
-            # the agent is spawned and says so itself if the import fails.
-            logger.warning(
-                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
-            )
-            return None
-        reported = result.get("message", result) if isinstance(result, dict) else result
-        logger.info("[%s] Install result for '%s': %s", self.name, agent_name, reported)
-        if isinstance(result, dict) and result.get("failed"):
-            logger.warning(
-                "[%s] Failed to install: %s — '%s' may not work correctly",
-                self.name,
-                result["failed"],
-                agent_name,
-            )
-        return None
+            logger.warning("[%s] Install failed: %s", self.name, exc)
+            return InstallOutcome(busy=True)
+        outcome = outcome_from_result(result)
+        if outcome.failed:
+            logger.warning("[%s] Failed to install: %s", self.name, list(outcome.failed))
+        return outcome
+
+    async def _report_install_problem(
+        self, config: dict, name: str, outcome: InstallOutcome
+    ) -> None:
+        """Report a strict spawn's failure, saving a restart only after a successful install."""
+        problem = outcome.problem(name)
+        logger.warning("[%s] %s", self.name, problem)
+        if outcome.restart_required and not (outcome.failed or outcome.refused or outcome.error):
+            self._register_spawn(config)
+        notify = getattr(self, "notify_user", None)
+        if notify is not None:
+            await notify(problem)
 
     # ── Migrated state ─────────────────────────────────────────────────────
 
@@ -863,17 +925,24 @@ class SpawnMixin(_Host):
                     return None
         return None
 
-    def _unregister_spawn(self, name: str) -> None:
-        """Take ``name`` out of main's spawn registry, as `_register_spawn` put it in."""
+    def _spawn_actor_id(self, name: str, running: str | None, *, alongside: bool = False) -> str:
+        """The id a spawn of ``name`` here runs under; see `spawn_actor_id`."""
+        own = getattr(self, "_kept_actor_id", None)
+        if callable(own):
+            return str(own(name, MAIN_NODE, alongside=alongside) or running or uuid.uuid4())
+        return spawn_actor_id(self._registry, name, running, alongside=alongside)
+
+    def _unregister_spawn(self, name: str, actor_id: str | None = None) -> None:
+        """Take the agent ``name`` (``actor_id``) out of main's spawn registry, as `_register_spawn` put it in."""
         own_remover = getattr(self, "_remove_from_spawn_registry", None)
         if callable(own_remover):
-            own_remover(name)
+            own_remover(name, actor_id=actor_id)
             return
         if self._registry is None:
             return
         main = find_main_actor(self._registry)
         if main is not None:
-            main._remove_from_spawn_registry(name)  # pyright: ignore[reportAttributeAccessIssue]
+            main._remove_from_spawn_registry(name, actor_id=actor_id)  # pyright: ignore[reportAttributeAccessIssue]
 
     def _register_spawn(self, config: dict) -> None:
         """Record a spawn in main's spawn registry so it survives restarts.

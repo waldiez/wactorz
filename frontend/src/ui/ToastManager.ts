@@ -384,11 +384,16 @@ export class ToastManager {
         document.body.appendChild(this.container);
     }
 
-    /** Display a toast (evicting the oldest at capacity); auto-dismisses after `durationMs`. */
+    /** Display a toast (evicting the oldest at capacity); auto-dismisses after `durationMs`.
+     *  One with a `key` replaces the toast already shown with it, so a question
+     *  shown again stays one toast. */
     show(opts: ToastOptions): void {
         const type: ToastType = opts.type ?? "system";
         const theme = THEME[type];
         const duration = opts.durationMs ?? (opts.actions?.length ? 8000 : 5000);
+        if (opts.key) {
+            this.close(opts.key);
+        }
 
         // Evict oldest if at cap
         if (this.active.length >= this.MAX) {
@@ -479,6 +484,10 @@ export class ToastManager {
             return;
         }
         clearTimeout(Number(toastEl.dataset["timer"]));
+        // Gone as far as anyone reading or pressing is concerned, while it fades:
+        // a notice closed is neither read out nor focused, nor its buttons pressed.
+        toastEl.setAttribute("aria-hidden", "true");
+        toastEl.inert = true;
         toastEl.classList.remove("wz-toast--in");
         toastEl.classList.add("wz-toast--out");
         this.active = this.active.filter(t => t !== toastEl);

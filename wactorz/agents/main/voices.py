@@ -15,36 +15,49 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...config import RESERVED_NODE_NAMES
+from .spawn_registry import placed_on
 
 if TYPE_CHECKING:
     from .hosts import VoiceHost
 
 
-def placed_node(host: VoiceHost, agent_name: str) -> str:
-    """The node main's spawn registry places ``agent_name`` on, or "" for none or for main."""
-    entry = host._get_spawn_registry().get(agent_name) or {}
-    placed = str(entry.get("node") or "").strip()
-    return "" if placed.lower() in RESERVED_NODE_NAMES else placed
+def placed_node(host: VoiceHost, agent_name: str, actor_id: str = "") -> str:
+    """The node main's spawn registry places the agent ``agent_name`` on, or "" for none or main.
+
+    The agent ``actor_id`` is, when the registry keeps that id under that name
+    -- what a message's topic says -- or else the only agent of the name; a
+    name kept in several places, with no id to tell them apart, gives "".
+    """
+    registry = host._get_spawn_registry()
+    entry = registry.by_id(actor_id) if actor_id else None
+    if entry is None or entry["name"] != agent_name:
+        entry = registry.only(agent_name)
+    return placed_on(entry) if entry is not None else ""
+
+
+def placed_nodes(host: VoiceHost, agent_name: str) -> list[str]:
+    """Every node main's spawn registry places an agent called ``agent_name`` on; main is not one."""
+    return [n for e in host._get_spawn_registry().named(agent_name) if (n := placed_on(e))]
 
 
 def speaks_for(host: VoiceHost, node_name: str, agent_name: str) -> bool:
-    """Whether a message from ``node_name`` may speak for ``agent_name``.
+    """Whether a message from ``node_name`` may speak for its agent called ``agent_name``.
 
-    An agent in main's process, or one the spawn registry keeps on main, is
-    spoken for by no node, and one it places on a node by that node alone. An
-    agent being moved is spoken for by the node it is moving to as well, which
-    starts it before the registry is changed. An agent main has no record of --
-    a node started it itself -- is its node's, whichever signs for it.
+    A name is unique on a host, so this is a question about one agent: the
+    one of that name on that node. The spawn registry placing an agent of the
+    name there says it may. An agent being moved is spoken for by the node it
+    is moving to as well, which starts it before the registry is changed. An
+    agent main has no record of anywhere -- a node started it itself -- is its
+    node's, whichever signs for it. Otherwise the registry keeps the name
+    somewhere else, or main runs it in its own process, and that node may not.
     """
     if not node_name:
         return False
     if host.migration.moving_to(agent_name) == node_name:
         return True
+    registry = host._get_spawn_registry()
+    if registry.at(agent_name, node_name) is not None:
+        return True
     if host._registry is not None and host._registry.find_by_name(agent_name):
         return False
-    entry = host._get_spawn_registry().get(agent_name)
-    if entry is None:
-        return True
-    placed = placed_node(host, agent_name)
-    return bool(placed) and placed == node_name
+    return not registry.named(agent_name)

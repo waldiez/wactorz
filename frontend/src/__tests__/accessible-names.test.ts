@@ -78,7 +78,14 @@ describe("the header", () => {
     it("puts the view buttons in a navigation landmark, the open one marked current", () => {
         const nav = byRole(header(), "navigation", "Views");
 
-        expect(allByRole(nav, "button").map(nameOf)).toEqual(["Overview", "Feed", "Chat", "Settings"]);
+        expect(allByRole(nav, "button").map(nameOf)).toEqual([
+            "Overview",
+            "Feed",
+            "Chat",
+            "Models",
+            "Inbox",
+            "Settings",
+        ]);
         expect(byRole(nav, "button", "Chat").getAttribute("aria-current")).toBe("page");
     });
 

@@ -12,6 +12,7 @@
  * rather than a line across it: an agent that was stopped for an hour did not
  * do anything during it, and a straight line would say it did a little.
  */
+import type { Sample } from "../../types/agent";
 import { el } from "../dom";
 
 /** One point of a trend: a time in milliseconds and a value, or null for a gap. */
@@ -32,8 +33,7 @@ export interface Series {
     points: Point[];
 }
 
-/** A stored sample as the history endpoints serve it: seconds since the epoch, then a value. */
-export type Sample = [number, number | null];
+export type { Sample };
 
 /** How far apart two samples may be before the time between them is a gap: a
  *  few missed minutes, not one late write. */

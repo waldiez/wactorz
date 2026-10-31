@@ -34,7 +34,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ...config import CONFIG, MODEL_CODE_NODE, MODEL_CODE_ON_MAIN
@@ -43,11 +42,13 @@ from ...core.packages import APPROVAL_TIMEOUT_S
 from ...core.refusals import REFUSED, UNANSWERED, RecentRefusals
 from ..dynamic.safety import parse_program
 from ..mixins import KeptHere, NotSpawned, PlacedOnNode
+from .spawn_registry import address_of
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from .migration import Migration
+    from .spawn_registry import SpawnRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -115,13 +116,17 @@ class PlacementHost(Protocol):
         """The nodes main has heard from: a node with no deploy target, in a container, is one."""
         ...
 
-    async def notify_user(self, text: str, *, options: Sequence[str] = ...) -> str: ...
+    async def ask_permission(self, text: str, options: Sequence[str]) -> str: ...
+
+    async def permission_answered(self, answer: Answer) -> None: ...
+
+    async def close_permission(self, question_id: str, option: str) -> None: ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
     ) -> None: ...
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
 
     def _node_refuses_tasks(self, node_name: str) -> str | None: ...
 
@@ -218,18 +223,19 @@ class Placement:
         moved: list[str] = []
         kept: list[tuple[str, str]] = []
         registry = self.host._registry
-        for name, config in sorted(self.host._get_spawn_registry().items()):
+        here = self.host._get_spawn_registry().on_node("")
+        for config in sorted(here, key=lambda entry: entry["name"]):
+            name = config["name"]
             if (
                 not runs_model_code(config)
                 or config.get("trusted")
-                or str(config.get("node") or "").strip()
                 or registry is None
                 or registry.find_by_name(name) is None
             ):
                 continue
             why = stays_on_main(str(config.get("code") or ""))
             if why is None:
-                result = await self.host.migration.migrate_agent(name, node)
+                result = await self.host.migration.migrate_agent(str(address_of(config)), node)
                 if result.get("success"):
                     moved.append(name)
                     continue
@@ -265,11 +271,11 @@ class Placement:
 
     async def _operator_allows(self, name: str, node: str) -> bool:
         """Ask on the dashboard, and wait for the press; no answer in time is a no."""
-        question_id = await self.host.notify_user(
+        question_id = await self.host.ask_permission(
             f"The model wrote an agent, '{name}', and asks to run it on main, where it would "
             "hold every credential this server has. Run it on main, or refuse? Refused, it "
             f"can run on node '{node}' instead: ask for it without naming main.",
-            options=(RUN_ON_MAIN, REFUSE),
+            (RUN_ON_MAIN, REFUSE),
         )
         answered: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._asking[question_id] = answered
@@ -285,7 +291,7 @@ class Placement:
             # Closed, so a press that comes later cannot let a spawn through
             # that has already been refused.
             if self._asking.pop(question_id, None) is not None:
-                await self._close(question_id, NO_ANSWER)
+                await self.host.close_permission(question_id, NO_ANSWER)
             self._refusals.remember(name, UNANSWERED)
             return False
         if allowed:
@@ -300,23 +306,12 @@ class Placement:
         if answered is None or answered.done():
             return
         answered.set_result(answer.option == RUN_ON_MAIN)
+        await self.host.permission_answered(answer)
         logger.warning(
             "[%s] The operator answered %r about running model-written code on main",
             self.host.name,
             answer.option,
         )
-
-    async def _close(self, question_id: str, option: str) -> None:
-        """Mark ``question_id`` answered with ``option`` on every dashboard."""
-        closing = Answer(
-            id=question_id,
-            agent_id=self.host.actor_id,
-            option=option,
-            index=-1,
-            channel=self.host.name,
-            timestamp=time.time(),
-        )
-        await self.host._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
 
 
 def _rehomed(node: str, moved: list[str], kept: list[tuple[str, str]]) -> str:

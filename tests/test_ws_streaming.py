@@ -19,7 +19,8 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
-from wactorz.web import chat, runtime, ws
+from wactorz.core.identity import derive_actor_id
+from wactorz.web import answers, chat, runtime, ws
 
 
 class _Registry:
@@ -27,7 +28,11 @@ class _Registry:
         return []
 
     def find_by_name(self, name: str) -> Any:
-        return SimpleNamespace(name=name) if name == "main" else None
+        return (
+            SimpleNamespace(name=name, actor_id=derive_actor_id(name))
+            if name in ("main", "catalog")
+            else None
+        )
 
 
 class _Db:
@@ -60,12 +65,15 @@ async def client_fixture(db: _Db) -> AsyncIterator[TestClient[Any, Any]]:
 
 
 async def _frames_until(socket: Any, last_type: str) -> list[dict[str, Any]]:
-    """Frames after the opening two, up to and including the first of `last_type`."""
+    """Frames after the opening two, up to and including the first of `last_type`.
+
+    The frame saying whose turn it is is left out too: test_ws_handler covers it.
+    """
     frames: list[dict[str, Any]] = []
     while True:
         msg = await socket.receive(timeout=5)
         frame = json.loads(msg.data)
-        if frame["type"] in ("full_snapshot", "mqtt_status"):
+        if frame["type"] in ("full_snapshot", "mqtt_status", "turn"):
             continue
         frames.append(frame)
         if frame["type"] == last_type:
@@ -84,7 +92,12 @@ class TestStreaming:
         self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def _route(
-            text: str, reply: Any, stream_fn: Any, stream_end_fn: Any, attachments: Any
+            text: str,
+            reply: Any,
+            stream_fn: Any,
+            stream_end_fn: Any,
+            attachments: Any,
+            choices_fn: Any,
         ) -> None:
             await stream_fn("Hel")
             await stream_fn("")
@@ -113,7 +126,12 @@ class TestStreaming:
         self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def _route(
-            text: str, reply: Any, stream_fn: Any, stream_end_fn: Any, attachments: Any
+            text: str,
+            reply: Any,
+            stream_fn: Any,
+            stream_end_fn: Any,
+            attachments: Any,
+            choices_fn: Any,
         ) -> None:
             await stream_fn("partial")
             raise asyncio.CancelledError
@@ -204,7 +222,12 @@ class TestAFailingSocket:
         done = asyncio.Event()
 
         async def _route(
-            text: str, reply: Any, stream_fn: Any, stream_end_fn: Any, attachments: Any
+            text: str,
+            reply: Any,
+            stream_fn: Any,
+            stream_end_fn: Any,
+            attachments: Any,
+            choices_fn: Any,
         ) -> None:
             await stream_fn("kept")
             await stream_end_fn()
@@ -219,7 +242,9 @@ class TestAFailingSocket:
                 SimpleNamespace(type=WSMsgType.TEXT, data="{not json"),
                 SimpleNamespace(type=WSMsgType.CLOSE, data=None),
             ],
-            fail_after=3,
+            # The opening two, the frame naming the turn and the chunk go out;
+            # the end of the stream is what fails.
+            fail_after=4,
         )
         monkeypatch.setattr(ws.web, "WebSocketResponse", lambda heartbeat: socket)
         monkeypatch.setattr(ws.origins, "refuse", lambda request, strict_origin: None)
@@ -236,3 +261,84 @@ class TestAFailingSocket:
             ("assistant", "kept"),
         ]
         assert runtime.ws_clients == set()
+
+
+async def _overlapping_turns(
+    client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
+) -> list[dict[str, Any]]:
+    """A slow turn to main and a quick one to catalog that starts and ends inside it."""
+    finish_first = asyncio.Event()
+
+    async def _route(content: str, _reply: Any, *, stream_fn: Any, stream_end_fn: Any, **_: Any):
+        if "slow" in content:
+            await stream_fn("main one, ")
+            await finish_first.wait()
+            await stream_fn("main two")
+        else:
+            await stream_fn("catalog says")
+        await stream_end_fn()
+        if "slow" not in content:
+            finish_first.set()
+
+    monkeypatch.setattr(chat, "route_chat", _route)
+    frames: list[dict[str, Any]] = []
+    async with client.ws_connect("/ws") as socket:
+        await socket.send_str(json.dumps({"type": "chat", "content": "@main slow"}))
+        while not any(f.get("content") == "main one, " for f in frames):
+            frames.append(await socket.receive_json(timeout=30))
+        await socket.send_str(json.dumps({"type": "chat", "content": "@catalog list"}))
+        while sum(f["type"] == "stream_end" for f in frames) < 2:
+            frames.append(await socket.receive_json(timeout=30))
+    return frames
+
+
+async def test_overlapping_turns_keep_their_own_frames(
+    client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frames = await _overlapping_turns(client, monkeypatch)
+
+    sent = [
+        (f["type"], f["from"], f.get("content"))
+        for f in frames
+        if f["type"] in ("stream_chunk", "stream_end")
+    ]
+    assert sent == [
+        ("stream_chunk", "main", "main one, "),
+        ("stream_chunk", "catalog", "catalog says"),
+        ("stream_end", "catalog", None),
+        ("stream_chunk", "main", "main two"),
+        ("stream_end", "main", None),
+    ]
+
+
+async def test_overlapping_turns_store_their_own_replies(
+    client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _overlapping_turns(client, monkeypatch)
+
+    assert [(r["agent_name"], r["content"]) for r in db.rows if r["role"] == "assistant"] == [
+        ("catalog", "catalog says"),
+        ("main", "main one, main two"),
+    ]
+
+
+async def test_what_arrives_outside_a_turn_goes_to_the_latest_turns_agent(
+    client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _route(_content: str, reply: Any, **_: Any) -> None:
+        await reply("done")
+
+    async def _refused(_data: dict[str, Any]) -> str:
+        return "that question has been answered"
+
+    monkeypatch.setattr(chat, "route_chat", _route)
+    monkeypatch.setattr(answers, "answer_from_dashboard", _refused)
+    async with client.ws_connect("/ws") as socket:
+        await socket.send_str(json.dumps({"type": "chat", "content": "@catalog list"}))
+        await socket.send_str(json.dumps({"type": "answer"}))
+        while True:
+            frame = await socket.receive_json(timeout=30)
+            if str(frame.get("content", "")).startswith("[error]"):
+                break
+
+    assert frame["from"] == "catalog"

@@ -3,7 +3,7 @@
 The glue between the stages of a pipeline, without a program per rule. A rule
 subscribes to one or more trigger topics, checks conditions against the
 payload, waits out a cooldown, and runs its actions: publish a message, send a
-task to an agent, or call a webhook. A Home Assistant service call stays with
+task to an agent, call a webhook, ask the operator, or record a label. A Home Assistant service call stays with
 the ``ha_actuator`` type; a rule is for everything that is not Home Assistant.
 
 A spawn config, a pipeline definition and chat all describe a rule the same way:
@@ -24,6 +24,17 @@ A spawn config, a pipeline definition and chat all describe a rule the same way:
 An action's payload may name fields of the trigger payload in braces, by the
 same dotted path a condition uses (``{reading.score}``), and carries the
 trigger payload itself under ``trigger`` unless told not to.
+
+A ``label`` action records that a source was doing something from the moment
+the trigger says it happened (its ``ts`` or ``timestamp``, else now), as the
+rule's own label in the provenance graph -- see
+docs/design/labels-and-provenance.md:
+
+    {"type": "label", "source": "sensors/{entity_id}", "value": "maintenance",
+     "text": "maintenance switch on"}
+
+``source`` and ``value`` may name trigger fields in braces; ``text``, if given,
+is kept as the label's note.
 """
 
 from __future__ import annotations
@@ -40,7 +51,9 @@ from typing import Any
 import aiohttp
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.labels import LabelError, Labels, event_time
 from ..core.outbound import check_channel, check_options
+from ..core.persistence.stores import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +76,7 @@ _ALIASES = {"==": "eq", "=": "eq", "!=": "ne", ">": "gt", ">=": "gte", "<": "lt"
 #: Operators that need no value: whether the field is there at all.
 _PRESENCE = ("exists", "absent")
 
-ACTION_TYPES = ("publish", "task", "webhook", "ask_operator")
+ACTION_TYPES = ("publish", "task", "webhook", "ask_operator", "label")
 
 #: Where an ``ask_operator`` action publishes the pick when it names no topic.
 ANSWERS_TOPIC = "answers/{rule}"
@@ -106,6 +119,14 @@ class RuleError(ValueError):
     @classmethod
     def webhook_without_url(cls) -> RuleError:
         return cls("a webhook action needs an http(s) 'url'")
+
+    @classmethod
+    def label_without_source(cls) -> RuleError:
+        return cls("a label action needs the 'source' it is about")
+
+    @classmethod
+    def label_without_value(cls) -> RuleError:
+        return cls("a label action needs the 'value' to record")
 
     @classmethod
     def no_trigger(cls) -> RuleError:
@@ -174,6 +195,28 @@ class RuleCondition:
             return False
 
 
+def _checked_question(
+    raw: dict[str, Any], options: tuple[str, ...], channel: str, timeout: float
+) -> tuple[tuple[str, ...], str]:
+    """An ``ask_operator`` action's options and channel, cleaned, or why it cannot ask.
+
+    The checks run in the order a reader meets the fields, so a question with
+    more than one fault is refused for the first.
+    """
+    if not str(raw.get("text", "")).strip():
+        raise RuleError.question_without_text()
+    try:
+        options = check_options(options)
+        channel = check_channel(channel)
+    except ValueError as exc:
+        raise RuleError.bad_question(exc) from None
+    if not options:
+        raise RuleError.question_without_options()
+    if timeout < 0:
+        raise RuleError.negative_timeout()
+    return options, channel
+
+
 @dataclass(frozen=True)
 class RuleAction:
     """What a rule does once its conditions hold."""
@@ -187,12 +230,18 @@ class RuleAction:
     #: Whether the trigger payload travels with the action, under ``trigger``.
     include_trigger: bool = True
     #: For ``ask_operator``: the question, its options, where and to whom it
-    #: goes, and how long to wait before the dashboard is tried and given up on.
+    #: goes, how long to wait before the dashboard is tried and given up on,
+    #: and why it is asked, which may name trigger fields in braces.
     text: str = ""
     options: tuple[str, ...] = ()
     channel: str = ""
     user: str = ""
     timeout: float = 0.0
+    context: str = ""
+    #: For ``label``: the source it is about and the value to record, either of
+    #: which may name trigger fields in braces. ``text`` is kept as its note.
+    source: str = ""
+    value: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleAction:
@@ -203,17 +252,7 @@ class RuleAction:
         channel = str(raw.get("channel", ""))
         timeout = float(raw.get("timeout", 0.0) or 0.0)
         if kind == "ask_operator":
-            if not str(raw.get("text", "")).strip():
-                raise RuleError.question_without_text()
-            try:
-                options = check_options(options)
-                channel = check_channel(channel)
-            except ValueError as exc:
-                raise RuleError.bad_question(exc) from None
-            if not options:
-                raise RuleError.question_without_options()
-            if timeout < 0:
-                raise RuleError.negative_timeout()
+            options, channel = _checked_question(raw, options, channel, timeout)
         action = cls(
             type=kind,
             topic=str(raw.get("topic", "")),
@@ -227,14 +266,41 @@ class RuleAction:
             channel=channel,
             user=str(raw.get("user", "")),
             timeout=timeout,
+            context=str(raw.get("context", "")),
+            source=str(raw.get("source", "")).strip(),
+            value=str(raw.get("value", "")).strip(),
         )
-        if kind == "publish" and not action.topic:
-            raise RuleError.publish_without_topic()
-        if kind == "task" and not action.agent:
-            raise RuleError.task_without_agent()
-        if kind == "webhook" and not action.url.startswith(("http://", "https://")):
-            raise RuleError.webhook_without_url()
+        action._check_required()
         return action
+
+    def _check_required(self) -> None:
+        """Refuse an action that lacks what its kind cannot run without."""
+        if self.type == "label":
+            if not self.source:
+                raise RuleError.label_without_source()
+            if not self.value:
+                raise RuleError.label_without_value()
+        elif self.type == "publish" and not self.topic:
+            raise RuleError.publish_without_topic()
+        elif self.type == "task" and not self.agent:
+            raise RuleError.task_without_agent()
+        elif self.type == "webhook" and not self.url.startswith(("http://", "https://")):
+            raise RuleError.webhook_without_url()
+
+    def _question_fields(self) -> dict[str, Any]:
+        """What an ``ask_operator`` action says beyond the fields every action has."""
+        fields: dict[str, Any] = {
+            "text": self.text,
+            "options": list(self.options),
+            "channel": self.channel,
+        }
+        if self.user:
+            fields["user"] = self.user
+        if self.timeout:
+            fields["timeout"] = self.timeout
+        if self.context:
+            fields["context"] = self.context
+        return fields
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type, "payload": dict(self.payload)}
@@ -248,13 +314,12 @@ class RuleAction:
         if not self.include_trigger:
             out["include_trigger"] = False
         if self.type == "ask_operator":
-            out["text"] = self.text
-            out["options"] = list(self.options)
-            out["channel"] = self.channel
-            if self.user:
-                out["user"] = self.user
-            if self.timeout:
-                out["timeout"] = self.timeout
+            out.update(self._question_fields())
+        if self.type == "label":
+            out["source"] = self.source
+            out["value"] = self.value
+            if self.text:
+                out["text"] = self.text
         return out
 
     def body(self, trigger: Any) -> dict[str, Any]:
@@ -427,6 +492,28 @@ class RuleAgent(Actor):
             # The person may take hours: the rule goes on evaluating meanwhile,
             # and the pick is published when it comes.
             self.run_detached(self._ask_operator(action, trigger, body), name="ask_operator")
+        elif action.type == "label":
+            await self._write_label(action, trigger)
+
+    async def _write_label(self, action: RuleAction, trigger: Any) -> None:
+        """Record the action's label, from when the trigger says it happened, as this rule's."""
+        db = get_db()
+        if db is None:
+            logger.warning("[%s] label action: persistence is not running", self.name)
+            return
+        source = str(_render(action.source, trigger))
+        value = str(_render(action.value, trigger))
+        try:
+            await asyncio.to_thread(
+                Labels(db).write,
+                source=source,
+                start=event_time(trigger),
+                value=value,
+                actor=f"rule:{self.name}",
+                note=str(_render(action.text, trigger)),
+            )
+        except LabelError as exc:
+            logger.warning("[%s] label action: %s", self.name, exc)
 
     async def _ask_operator(self, action: RuleAction, trigger: Any, body: dict[str, Any]) -> None:
         """Ask the person, and publish what they picked beside the trigger."""
@@ -438,6 +525,7 @@ class RuleAgent(Actor):
                 channel=action.channel,
                 user=action.user,
                 timeout=action.timeout or None,
+                context=str(_render(action.context, trigger)),
             )
         except asyncio.TimeoutError:
             logger.warning("[%s] nobody answered %r; the question stays open", self.name, text[:60])

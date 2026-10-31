@@ -85,7 +85,7 @@ def _register_with_topic_bus(api: Any, actor: Any, topic: str) -> None:
         bus = get_topic_bus()
         if not bus:
             return
-        existing = bus.registry.get(api.name)
+        existing = bus.registry.get(api.name, api.actor_id, getattr(actor, "_node", None))
         if existing is None:
             bus.register_contract(
                 TopicContract(

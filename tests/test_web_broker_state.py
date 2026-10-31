@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import events, lifecycle, mqtt, runtime, ws
 
 
@@ -228,14 +229,21 @@ class _Registry:
 
 
 class _Main:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, kept: tuple[dict[str, Any], ...] = ()) -> None:
         self.deleted: list[str] = []
+        #: Which agent of its name each delete named: its node, "" for main.
+        self.nodes: list[str | None] = []
         self.fail = fail
+        self.kept = kept
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry({entry["actor_id"]: entry for entry in self.kept})
+
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         if self.fail:
             raise RuntimeError("spawn registry locked")
         self.deleted.append(name)
+        self.nodes.append(node)
 
 
 async def _settle() -> None:
@@ -264,6 +272,25 @@ class TestDelete:
         assert routed == "via main.delete_spawned_agent('weather')"
         assert main.deleted == ["weather"]
         assert runtime.is_deleted("a1") and runtime.state["agents"] == {}
+
+    async def test_the_agent_deleted_is_the_one_its_id_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two agents called weather: the dashboard deletes by id, and main is
+        # told which one by where its registry keeps that id.
+        main = _Main(
+            kept=(
+                {"name": "weather", "node": "", "actor_id": "here"},
+                {"name": "weather", "node": "pi", "actor_id": "a1"},
+            )
+        )
+        monkeypatch.setattr(runtime, "registry", _Registry())
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+        runtime.state["agents"]["a1"] = {"name": "weather"}
+
+        await lifecycle.delete_agent("a1")
+
+        assert (main.deleted, main.nodes) == (["weather"], ["pi"])
 
     async def test_a_failing_main_falls_back_to_the_local_registry(
         self, monkeypatch: pytest.MonkeyPatch

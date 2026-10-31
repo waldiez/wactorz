@@ -14,8 +14,10 @@ produced order-dependent failures before. Nothing here needs a broker, because
 the part with rules was deliberately extracted from the part that needs one.
 """
 
+import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import patch
 
@@ -97,6 +99,25 @@ class TestWhatReachesTheBrowser:
         relayed = [f for f in sent if f.get("type") == "server_event"]
         assert relayed[0]["payload"] == "not json at all"
 
+    async def test_a_chat_message_comes_with_the_thread_it_is_in(
+        self, sent: list[dict[str, Any]]
+    ) -> None:
+        # The page keeps its threads by id; a voice surface relays the person's
+        # words to another agent, which it names only by name.
+        runtime.state["agents"].update({"a1": {"name": "reachy"}, "w1": {"name": "weather"}})
+        payload = {"from": "user", "to": "weather", "content": "rain today?"}
+
+        await mqtt.handle_message("agents/a1/chat", json.dumps(payload))
+
+        (relayed,) = [f for f in sent if f.get("type") == "server_event"]
+        assert relayed["thread_id"] == "w1"
+
+    async def test_anything_else_comes_with_no_thread(self, sent: list[dict[str, Any]]) -> None:
+        await mqtt.handle_message("agents/a1/metrics", json.dumps({"cpu": 1.5}))
+
+        (relayed,) = [f for f in sent if f.get("type") == "server_event"]
+        assert "thread_id" not in relayed
+
 
 class _WithMain:
     """A registry holding main, whose node table the dashboard shows nodes from."""
@@ -170,6 +191,73 @@ class TestANodesHeartbeat:
             await mqtt.handle_message("nodes/rpi/heartbeat", "{}")
 
         assert len(registry.main.nodes.watchers) == 1
+
+
+class _Client:
+    """A broker client that says, at each subscription, whether main was watched by then."""
+
+    def __init__(self, registry: _WithMain) -> None:
+        self.registry = registry
+        self.watched_at_subscribe: list[bool] = []
+
+    async def subscribe(self, _topic: str, qos: int = 0) -> None:
+        self.watched_at_subscribe.append(bool(self.registry.main.nodes.watchers))
+
+    @property
+    def messages(self) -> AsyncIterator[Any]:
+        return self._messages()
+
+    async def _messages(self) -> AsyncIterator[Any]:
+        # Ends the listener as a shutdown would: it reconnects on anything else.
+        raise asyncio.CancelledError
+        yield  # pragma: no cover - makes this an async generator
+
+
+class TestMainIsWatchedFromTheStart:
+    """Main reads heartbeats on a client of its own, so the server must be watching first."""
+
+    async def test_watching_begins_when_the_server_connects(
+        self, sent: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = _WithMain()
+        runtime.registry = registry
+        client = _Client(registry)
+
+        @asynccontextmanager
+        async def _connect(*_args: Any, **_kwargs: Any) -> AsyncIterator[_Client]:
+            yield client
+
+        monkeypatch.setattr(mqtt, "mqtt_client", _connect)
+        monkeypatch.setattr(runtime, "MQTT_TOPICS", ["nodes/+/heartbeat"])
+
+        with pytest.raises(asyncio.CancelledError):
+            await mqtt.mqtt_listener()
+
+        assert client.watched_at_subscribe == [True]
+
+    async def test_a_heartbeat_main_took_before_it_was_watched_is_shown(
+        self, sent: list[dict[str, Any]]
+    ) -> None:
+        registry = _WithMain()
+        runtime.registry = registry
+        await registry.main.nodes.receive_heartbeat("rpi", {"agents": ["camera"]})
+
+        await mqtt.handle_message("nodes/rpi/heartbeat", json.dumps({"agents": ["claimed"]}))
+
+        shown = _node_frames(sent)
+        assert [frame["agents"] for frame in shown] == [["camera"]]
+
+    async def test_what_main_held_is_shown_once_however_many_follow(
+        self, sent: list[dict[str, Any]]
+    ) -> None:
+        registry = _WithMain()
+        runtime.registry = registry
+        await registry.main.nodes.receive_heartbeat("rpi", {"agents": ["camera"]})
+
+        for _ in range(3):
+            await mqtt.handle_message("nodes/rpi/heartbeat", "{}")
+
+        assert len(_node_frames(sent)) == 1
 
 
 class TestAResetSilencesStateUpdates:

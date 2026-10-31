@@ -73,6 +73,8 @@ def _placed_and_kept(dashboard: browser.Dashboard, agent: str, row: str) -> None
     )
     seen = dashboard.card_comings_and_goings(agent)
     assert "removed" not in seen, seen
+    # The card says where it runs too, as the panel does.
+    assert dashboard.card_node(agent) == ("" if row == "local" else f"on {row}")
 
 
 def test_main_starts_an_agent_on_the_node(

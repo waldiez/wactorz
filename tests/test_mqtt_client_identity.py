@@ -14,7 +14,7 @@ import pytest
 
 from wactorz.agents.dynamic.listener import SubscriptionHub
 from wactorz.core import mqtt
-from wactorz.core.actor import derive_actor_id, has_derived_id
+from wactorz.core.actor import Actor, Message, derive_actor_id, has_stable_id
 from wactorz.core.mqtt import (
     AGENT_SESSION_EXPIRY_SECONDS,
     SERVER_SESSION_EXPIRY_SECONDS,
@@ -48,6 +48,13 @@ def state_dir_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(mqtt, "_install_id", None)
     return tmp_path
+
+
+class _Probe(Actor):
+    """A real actor, for what `Actor.__init__` decides about its id."""
+
+    async def handle_message(self, msg: Message) -> None:
+        pass
 
 
 class TestInstallId:
@@ -181,17 +188,18 @@ class TestThePublisher:
 class TestAgentScopedSessions:
     """Every connection an agent owns follows the same rule and the same clock.
 
-    Only a name-derived identity can resume a session, and an agent's
+    Only a stable identity can resume a session, and an agent's
     connections age out together rather than by two separate numbers.
     """
 
     def test_a_named_identity_can_hold_a_session(self) -> None:
-        assert has_derived_id("kitchen-sensor", derive_actor_id("kitchen-sensor"))
+        assert has_stable_id(_Probe(name="kitchen-sensor"))
+
+    def test_a_given_identity_can_hold_one(self) -> None:
+        assert has_stable_id(_Probe(name="kitchen-sensor", actor_id=str(uuid.uuid4())))
 
     def test_an_anonymous_identity_cannot(self) -> None:
-        anonymous = str(uuid.uuid4())
-
-        assert not has_derived_id(f"actor-{anonymous[:8]}", anonymous)
+        assert not has_stable_id(_Probe())
 
     def test_the_hub_and_the_command_listener_share_one_expiry(self) -> None:
         # They belong to the same agent; two numbers would be two things to
@@ -206,13 +214,13 @@ class TestAgentScopedSessions:
     def test_the_command_listener_gates_on_the_same_rule(self) -> None:
         source = Path("wactorz/core/actor.py").read_text(encoding="utf-8")
 
-        assert "has_derived_id(self.name, self.actor_id)" in source
+        assert "durable = has_stable_id(self)" in source
         assert "AGENT_SESSION_EXPIRY_SECONDS" in source
 
     def test_the_actuator_gates_on_the_same_rule(self) -> None:
         source = Path("wactorz/agents/home_assistant_actuator_agent.py").read_text(encoding="utf-8")
 
-        assert "has_derived_id(self.name, str(self.actor_id))" in source
+        assert "durable = has_stable_id(self)" in source
         assert "AGENT_SESSION_EXPIRY_SECONDS" in source
 
 

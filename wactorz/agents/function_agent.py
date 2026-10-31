@@ -24,6 +24,15 @@ takes a while does not hold the event loop; a coroutine function runs on the
 loop. A function that also wants the actor -- to persist, recall or publish --
 takes it as a second parameter, one without a default or annotated
 ``FunctionAgent``; a second parameter with a default is the function's own.
+
+A function serving a model by its bare name follows that model's ``active``
+pointer, and while the model's ``shadow`` pointer is set, runs that version too:
+after each message is answered with the active version, the function is called
+once more with a view of the actor that reads the shadow version and publishes
+under ``shadow/``, and the two answers are kept as a pair for the trial's
+comparison (`wactorz.agents.shadow_serving`). A shadow pass is skipped, never
+queued, while the previous one is still running, so a trial never slows what
+is served. Tasks are answered with the active version only.
 """
 
 from __future__ import annotations
@@ -34,12 +43,15 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..core import models
 from ..core.actor import Actor, Message, MessageType, run_callable
+from ..core.paths import resolve_state_dir
 from ..core.subscriptions import ConcurrencyError
+from .shadow_serving import PairRecorder, ShadowView, flush_every, now_ms, pair_row, shadow_topic
 
 logger = logging.getLogger(__name__)
 
@@ -136,14 +148,17 @@ class AgentSpec:
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
         actor_class: type[FunctionAgent] | None = None,
+        actor_id: str | None = None,
     ) -> FunctionAgent:
         """The actor for this specification, under ``name`` or the spec's own.
 
         ``actor_class`` is a subclass of :class:`FunctionAgent` to build
         instead, for a host that adds to what the actor does where it runs.
+        ``actor_id`` is the id its spawn registry keeps for it, when it has one.
         """
         return (actor_class or FunctionAgent)(
             self,
+            actor_id=actor_id,
             name=name or self.name,
             persistence_dir=persistence_dir,
             llm_provider=llm_provider,
@@ -259,12 +274,13 @@ class FunctionAgent(Actor):
         self,
         spec: AgentSpec,
         *,
+        actor_id: str | None = None,
         name: str | None = None,
         persistence_dir: str | None = None,
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(name=name or spec.name, persistence_dir=persistence_dir)
+        super().__init__(actor_id=actor_id, name=name or spec.name, persistence_dir=persistence_dir)
         self.spec = spec
         self.description = spec.description
         self.capabilities = list(spec.capabilities)
@@ -276,6 +292,22 @@ class FunctionAgent(Actor):
         self.llm: Any = MeteredLLM(llm_provider, self) if llm_provider is not None else None
         #: Bounds the tasks in flight when the spec allows more than one.
         self._slots = asyncio.Semaphore(spec.concurrency)
+        #: The version on trial beside each model this agent serves, by the key
+        #: the function reads it under, with the path it is read at here; only
+        #: keys whose model's ``shadow`` pointer is set. See the module docstring.
+        self._shadow_artifacts: dict[str, dict[str, Any]] = {}
+        #: What the shadow pass has loaded, by key, so a version is read once.
+        self._shadow_loaded: dict[str, Any] = {}
+        #: Whether a shadow pass is running: the next input skips its pass while one is.
+        self._shadow_busy = False
+        #: The pairs of each model on trial, by model name.
+        self._pairs: dict[str, PairRecorder] = {}
+        self._pairs_flusher: asyncio.Task[Any] | None = None
+        #: Said once on the feed when pairs cannot be kept.
+        self._said_pairs_unavailable = False
+        #: How many inputs got a shadow pass, and how many were passed over.
+        self.shadow_passes = 0
+        self.shadow_skipped = 0
 
     def declared_models(self) -> dict[str, Any]:
         """The models the decorator named, resolved before `on_start`."""
@@ -295,6 +327,151 @@ class FunctionAgent(Actor):
             self.subscribe(topic, self._listener(topic), concurrency=self.spec.concurrency)
         if self.spec.subscribes:
             await self.log(f"Listening on {', '.join(self.spec.subscribes)}")
+        await self._resolve_shadows()
+
+    async def on_stop(self) -> None:
+        if self._pairs_flusher is not None:
+            self._pairs_flusher.cancel()
+            self._pairs_flusher = None
+        for recorder in list(self._pairs.values()):
+            try:
+                await recorder.close()
+            except Exception as exc:
+                logger.warning(
+                    "[%s] cannot write the pairs of %s: %s", self.name, recorder.model, exc
+                )
+        await super().on_stop()
+
+    # ── The shadow version ────────────────────────────────────────────────
+
+    @property
+    def shadow(self) -> dict[str, dict[str, Any]]:
+        """Each model on trial beside one this agent serves, by key: name, version, format, size, path."""
+        return {key: dict(entry) for key, entry in self._shadow_artifacts.items()}
+
+    async def _resolve_shadows(self) -> None:
+        """Find the version on trial beside each model that follows ``active``, on main.
+
+        An agent on a node runs no shadow yet: its pairs would be kept there,
+        where the comparison cannot read them until the data package ships
+        them to main.
+        """
+        if self._node or not self._artifacts:
+            return
+        for key, entry in list(self._artifacts.items()):
+            try:
+                found = await asyncio.to_thread(models.resolve_shadow, entry, resolve_state_dir())
+            except Exception as exc:
+                await self.log(f"no shadow for {key}: {exc}", level="warning")
+                continue
+            if found is not None:
+                await self.swap_shadow(key, found)
+
+    async def swap_shadow(self, key: str, entry: Mapping[str, Any] | None) -> None:
+        """Try the version ``entry`` names beside the one served as ``key``; None ends the trial.
+
+        ``entry`` is pinned with the ``path`` it is read at here. A model the
+        function loads through ``load_model`` is read now, off the loop and
+        with the same ``allow_code`` as the served one, so the first shadow
+        pass does not wait on the disk; one it opens itself through
+        ``artifact_path`` changes path only. Raises what the loader raises,
+        and then the trial is as it was. ``None`` drops the version and closes
+        the pairs.
+        """
+        self._artifact(key)
+        if entry is None:
+            was = self._shadow_artifacts.pop(key, None)
+            self._shadow_loaded.pop(key, None)
+            if was is not None:
+                recorder = self._pairs.pop(str(was["name"]), None)
+                if recorder is not None:
+                    await recorder.close()
+                await self.log(f"no longer trying {was['name']}:{was['version']} as {key}")
+            if not self._shadow_artifacts and self._pairs_flusher is not None:
+                self._pairs_flusher.cancel()
+                self._pairs_flusher = None
+            return
+        loaded: Any = None
+        if key in self._loaded_models:
+            loaded = await asyncio.to_thread(
+                models.load, entry, allow_code=self._model_load_flags.get(key, False)
+            )
+            self._shadow_loaded[key] = loaded
+        else:
+            self._shadow_loaded.pop(key, None)
+        self._shadow_artifacts[key] = dict(entry)
+        name = str(entry["name"])
+        self._pairs.setdefault(name, PairRecorder(name))
+        if self._pairs_flusher is None:
+            self._pairs_flusher = self.run_detached(
+                flush_every(self._pairs), name=f"{self.name}:pairs"
+            )
+        served = self._artifacts[key]
+        await self.log(
+            f"trying {name}:{entry['version']} beside {served['name']}:{served['version']} as {key}"
+        )
+
+    async def load_shadow_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """The shadow version under ``key``, loaded once; the served one for a key with no shadow."""
+        entry = self._shadow_artifacts.get(key)
+        if entry is None:
+            return await self.load_model(key, allow_code=allow_code)
+        if key not in self._shadow_loaded:
+            self._shadow_loaded[key] = await asyncio.to_thread(
+                models.load, entry, allow_code=allow_code
+            )
+        return self._shadow_loaded[key]
+
+    async def call_shadow(self, payload: Any) -> Any:
+        """Run the function on ``payload`` against the shadow version; see `ShadowView`."""
+        view = ShadowView(self)
+        args = (payload, view) if self.spec.wants_actor else (payload,)
+        return await run_callable(self.spec.fn, *args)
+
+    async def _shadow_pass(
+        self, payload: Any, topic: str, active_result: Any, active_ms: float, arrived: float
+    ) -> None:
+        """The shadow's turn on one input, after the active answer went out; one pair per model on trial."""
+        started = time.perf_counter()
+        error: str | None = None
+        result: Any = None
+        try:
+            try:
+                result = await self.call_shadow(payload)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "[%s] %s() failed on the shadow pass: %s", self.name, self.spec.fn.__name__, exc
+                )
+            shadow_ms = now_ms(started)
+            if result is not None and self.spec.publishes:
+                await self.publish(shadow_topic(self.spec.publishes), result)
+            self.shadow_passes += 1
+            for key, entry in list(self._shadow_artifacts.items()):
+                recorder = self._pairs.get(str(entry["name"]))
+                if recorder is None:
+                    continue
+                row = pair_row(
+                    payload=payload,
+                    topic=topic,
+                    arrived=arrived,
+                    active_version=int(self._artifacts[key]["version"]),
+                    shadow_version=int(entry["version"]),
+                    active_output=active_result,
+                    shadow_output=result,
+                    active_ms=active_ms,
+                    shadow_ms=shadow_ms,
+                    shadow_error=error,
+                )
+                try:
+                    unavailable = await recorder.record(row)
+                except Exception as exc:
+                    unavailable = f"pairs are not kept: {exc}"
+                if unavailable and not self._said_pairs_unavailable:
+                    self._said_pairs_unavailable = True
+                    await self.log(unavailable, level="warning")
+        finally:
+            self._shadow_busy = False
 
     def _current_task_description(self) -> str:
         return self.spec.description or f"running {self.spec.fn.__name__}()"
@@ -334,6 +511,8 @@ class FunctionAgent(Actor):
         topic is not shown there and a detector that only publishes looks idle,
         and so is a failure, which the hub otherwise reports only in the log.
         """
+        arrived = time.time()
+        started = time.perf_counter()
         try:
             result = await self.call(payload)
         except Exception as exc:
@@ -342,12 +521,26 @@ class FunctionAgent(Actor):
                 f"{self.spec.fn.__name__}() failed on {topic or 'a message'}: {exc}", level="error"
             )
             raise
+        active_ms = now_ms(started)
         self.metrics.messages_processed += 1
         self.metrics.tasks_completed += 1
-        if result is None or not self.spec.publishes:
+        if result is not None and self.spec.publishes:
+            await self.publish(self.spec.publishes, result)
+            await self.log(f"→ {self.spec.publishes}: {_summary(result)}")
+        if not self._shadow_artifacts:
             return
-        await self.publish(self.spec.publishes, result)
-        await self.log(f"→ {self.spec.publishes}: {_summary(result)}")
+        if self._shadow_busy:
+            # Skipped, not queued: the trial never slows what is served.
+            self.shadow_skipped += 1
+            return
+        # Taken here, before the loop turns, so the next message sees it.
+        self._shadow_busy = True
+        task = self.run_detached(
+            self._shadow_pass(payload, topic, result, active_ms, arrived),
+            name=f"{self.name}:shadow",
+        )
+        if task.cancelled():
+            self._shadow_busy = False
 
     async def handle_message(self, msg: Message) -> None:
         """A task from chat or another agent: run the function, answer with the result.

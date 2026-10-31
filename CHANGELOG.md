@@ -3,6 +3,401 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements and Python 3.11+ support; core Wactorz keeps Python 3.10 support. General Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
+
+- Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
+
+### Added
+
+- **A model's shadow trial on its page.** While a shadow is set, the Models tab shows what the trial
+  shows so far: how often the two versions agreed, what each flagged, the tried version's errors,
+  each side's latency and, when outputs carry one, their scores, as figures and as charts over the
+  trial, with a gap where no input came (`GET /api/models/{name}/trial/series`). It says so when
+  there are no pairs yet, or why they cannot be read, and a Refresh button reads them again. Below,
+  Past trials lists how earlier trials ended and what they showed.
+- **An Inbox for what the agents wait on you for.** A new tab, `#/inbox`, lists every question still
+  open, from main and from nodes, whatever channel it went to, with who asked and a link to their
+  thread; `#/inbox/answered` lists the newest answered, with the pick, where it was made and the
+  note. A question is answered from its card, with an optional note, and a refusal is said on the
+  card. The tab counts what waits, in the header and in the phone's bar, and follows the agents'
+  books live. The installer's question about a package and main's about running
+  model-written code are there too, kept across a reload, and still take their answer only from the
+  dashboard. A question an agent sends with `notify_user` alone keeps no book, so it
+  stays a toast and a thread message. On a phone the bar is now Overview, Chat, Inbox, Devices and
+  More, with Feed and Models under More.
+- **An agent can say why it asks.** `ask_operator(..., context="...")`, and `context` on a rule's
+  `ask_operator` action, where it may name trigger fields. It is kept in the question book and shown
+  on the Inbox's card; chat channels are sent the question alone.
+
+- **Where the model loop's data lives is decided, before it is built.** `docs/design/data-storage.md`
+  records that readings from streams are recorded as Parquet files under the state directory, one
+  file per source and hour, by a recorder that runs on main or on a node, with a node shipping each
+  closed file to main over the blob path; that shadow pairs and serving logs are written the same
+  way under their own prefixes; that SQLite keeps what is small and transactional, labels, the
+  graph, questions, pointer moves, and a short live window of readings for the dashboard; that one
+  loader, `wactorz.data`, reads frames, cuts them into segments, makes time-based and leave-k-out
+  splits that never shuffle, joins the effective labels and profiles a source; that pyarrow is the
+  data package's one dependency, as the `data` extra, with no DuckDB; and what was decided against.
+- **A model's shadow version runs beside the one served, and the trial is compared and kept.**
+  A function agent serving a model by its bare name takes the version the `shadow` pointer
+  names as soon as it is set, from the Models tab, chat or `train.py --set shadow`: after
+  each reading is answered with the active version, the same function runs once more with
+  the shadow version, publishing under `shadow/` and never writing the agent's state, and
+  the two answers are kept as a pair. A pass is skipped, never queued, while the last one
+  runs, so a trial never slows what is served. `GET /api/models/{name}/trial` shows how
+  often the two agree, how their scores differ, their latencies, and, given a source and
+  which label values count as positive, each side's precision and recall against the labels.
+  Clearing or promoting the shadow ends the trial, records its outcome in the provenance
+  graph (`GET /api/models/{name}/trials`) and says what it showed on the feed. Pairs are
+  Parquet files under the state directory's `data/shadow/<model>`, the layout
+  `docs/design/data-storage.md` decided, written by the new `wactorz.data` package; the
+  `data` extra now carries pyarrow for it. Function agents on main only in this step; a
+  program written from chat, and an agent on a node, run no shadow yet.
+- **A library agent the system started follows a moved pointer too.** The hot swap now finds
+  the agents on main among those running, not only among those main spawned, so an agent
+  brought by `WACTORZ_AGENTS` or `wactorz.run(agents=...)` swaps its model when its
+  pointer moves.
+- **A Models tab on the dashboard.** It lists every stored model, saying which serves
+  a version, which is trying one beside it and which has none active, and opens one at
+  `#/models/<name>`: its versions along a line with the active, the shadow and the
+  previous active marked in words and colour, a table of versions with what was said of
+  each, and the history of its pointer moves, each with who made it and why. From there
+  a version is tried as shadow, the shadow promoted or cleared, and the active rolled
+  back to the version it replaced, each after a question that takes an optional reason.
+  A pointer moved anywhere else, by the CLI, chat or an agent, shows there within
+  seconds. On a phone it is in the More sheet. Making a version active directly stays with the CLI and chat.
+- **Agents written from chat know how to label.** Main's and the planner's prompts now say
+  what `label=` on `ask_operator` does and when to use it, and that an agent on main can
+  write a label itself with `agent.label(source, value, start=...)`, so a generated agent
+  asks about a source in a way that trains the next model rather than only reporting.
+- **How two agents can share a name is decided, before it is built.** `docs/design/agent-identity.md` records the following. A name is unique per node, and `name@node` is the full address, with a bare name working while it is unique. An agent's id is minted at spawn and kept across restarts and moves. An ambiguous bare name is answered with a question, never guessed. Tasks are routed by node. A spawn says whether it moves an agent or adds a second one. An optional `WACTORZ_NAMESPACE` puts an install's own control topics under a prefix, while the world topics stay shared. An upgrade changes nothing that is configured. The record also lists what was decided against. Nothing changes until it is built.
+- **An operator's answer can become a label, and labels live in a provenance graph.** `ask_operator(..., label={"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance": "maintenance", "Real problem": "fault"}})` makes the answer a record that the source was doing something from `start` (to `end`, open when unsaid), in event time; an option the spec leaves out, such as "Not sure", makes none, and a spec that cannot be used is refused before the question is sent. The agent keeps the spec in its question book, and main writes the label once the book says the question was answered, for an agent on main or on a node; it takes a book only from where its agent is, as it takes a manifest, so a node cannot answer for another node's agent. A later label on the same source supersedes an earlier one wherever their windows overlap, without editing it: the earlier one is kept, `partly_superseded` or `superseded`, and what held when is the newest label at each moment. A label from an answer the dashboard sent is marked verified; one heard on the broker, where anything can publish an answer, is not. An agent on main can write its own with `agent.label(source, value, start=...)`, and a rule with the new `label` action, from when its trigger says it happened. `GET /api/labels` lists labels by source and event-time window, and `GET /api/labels/effective` resolves a source into what held when. Labels are nodes of a new provenance graph in main's database, two tables of nodes and of edges from cause to effect, which the rest of the model loop will record its decisions and actions in; the database migrates to it at start. See `docs/design/labels-and-provenance.md`.
+
+- **Event time, labels and the provenance graph are decided, before they are built.** `docs/design/event-time.md` records that the model loop reads when a thing happened, as the payload says (`ts`, then `timestamp`, then the arrival time marked as such), rather than when the message arrived; that clocks far in the future are reported rather than trusted; that "now" is per source; and what the collector and `StreamWindow` change for it. `docs/design/labels-and-provenance.md` records that a label covers a period of a source; that an answer becomes one when its question says how; that a later answer supersedes an earlier one over their overlap without editing it; that labels, questions, decisions, actions, model versions and outcomes are nodes of one graph in main's database, joined from cause to effect; that an overridden answer produces a plan for review rather than undoing what followed; who may write the graph; and what was decided against. The rest of the model loop builds on both; nothing changes until it is built.
+
+- **Reachy now has built-in, topic-aware help.** Typed or spoken requests such as `help`,
+  `what can you do?`, and `how do I use the camera?` return commands and keywords without
+  an LLM call or robot connection. Focused guides cover movement, voice, camera, connection,
+  volume, and Wactorz/Home Assistant.
+- **Reachy says what voice input is missing before it listens.** Without a Deepgram key, or with the chosen recognizer not installed, `start conversation` and `listen and ask Wactorz` now refuse with the fix instead of failing after someone has spoken. A conversation that ends by itself (nobody spoke, repeated failures) says why in chat. New guides in `docs/reachy/` for users, developers and demonstrators, and `scripts/reachy_sim_check.py` runs the agent against the SDK's simulated robot.
+
+- **The IMU example trains versions you can compare, and asks about what it finds.**
+  `train.py --seed --samples` stores each version with how it did on the same held-out
+  readings (`caught`, `false_alarms`), and `--set active` or `--set shadow` points at it;
+  the agent serves the active one. A new `triage` agent asks on the dashboard whether a
+  strong jolt was maintenance or a real problem, and with main running the answer is kept
+  as a label of the device (`GET /api/labels`). `publish_imu.py` uses the broker settings
+  and credentials Wactorz itself is configured with, so it reaches a broker with a password,
+  and each reading carries its device and time.
+
+- **A model keeps the history of its pointers.** Every move of `active` or `shadow` is
+  recorded with who made it, why, and from which version to which, whether it was made on
+  the dashboard, in chat or with `wactorz-artifacts`; `GET /api/models/{name}/moves` lists
+  them, newest first. A clear says who cleared it and why, and a shadow ended by a
+  promotion is recorded as part of it. Each change is journalled beside the store's index
+  as it is made, and kept in the provenance graph in main's database once main has read
+  it; the store's index format does not change. Both moves are listed when one follows
+  another within seconds, as when a shadow is set and promoted at once, and so is a change
+  made while main was down. Clearing a pointer takes a reason: `DELETE
+  /api/models/{name}/shadow` with `{"reason": "..."}`, `/artifacts clear active|shadow <name>
+  [reason]` in chat, `wactorz-artifacts clear --reason` and the Models tab's question.
+- **A running agent follows its model's pointer, without a restart.** An agent whose
+  spawn named a model by its bare name, or as `NAME:active` or `NAME:shadow`, serves the
+  version that pointer moves to as soon as it has loaded: promote, roll back, point at a
+  new version from `train.py --set active`, the dashboard or chat, and every agent that
+  follows the pointer, on main or on a node, swaps in place. The old version is served
+  until the new one is in memory, and one that will not load leaves the agent as it was,
+  with the reason on the feed. An agent that named a version is left alone, and a
+  pointer cleared moves nobody. Generated code that keeps what it loaded in `agent.state`
+  can define `async def on_model(agent, key, model)` to take the new one; code that calls
+  `await agent.load_model(key)` as it goes, like the IMU example's function, needs
+  nothing. Each swap that landed is an `action` in the provenance graph, joined to the
+  move that caused it, and one line on the feed. A node takes the new version only from
+  a command main signed; the version is fetched the way the first was.
+- **An agent can be named by its full address, `name@node`.** `@counter@pi-kitchen` in
+  chat or the terminal, `send_to("counter@pi-kitchen", ...)`, `delegate_task`,
+  `POST /api/chat`, `POST /api/reset` and `/agents restart|stop|delete`, `/start` and
+  `/migrate` all take one; main is the node `main` (or `local`). A bare name works as
+  before while one agent has it. When agents on more than one node report the same name,
+  nothing is sent to either: a person is told the addresses (the dashboard offers them
+  as buttons, and the one pressed is sent the message), and a program is refused with
+  them (`409` from the REST routes). A task for an agent on a node goes on that
+  node's own topic, `agents/at/<node>/<name>/task`, so the full address reaches that
+  agent alone, from main or from an agent on another node (which learns where agents
+  run from their retained manifests). A node says it takes tasks there with
+  `"tasks_by_node": true` in its manifest; one from before that is still sent tasks by
+  name, which every node running the name hears, so while another node runs the name a
+  task for it is refused until it is deployed again. An agent whose manifest names no
+  node, as main's own and those on older nodes do, is still sent tasks by name from a
+  node. A reset of a name kept in more than one place is refused,
+  since what it clears is kept by name. An address naming a node the agent is not on is
+  refused rather than taken as the bare name. `@` is no longer allowed in the name of a
+  new agent or a new node; an agent that already has one keeps it and is still reached
+  by its whole name.
+- **Two agents may share a name, one per host.** A spawn naming a node where the name
+  does not run, while it runs on another host, says what it means: `"replace": true`
+  moves the agent there, keeping its id, and `"alongside": true` runs a second agent of
+  the name there, under an id of its own. One that says neither spawns nothing, and the
+  chat says both; before, a spawn onto a node left the first agent running where it was
+  and started another. `/agents copy <agent> <node>` runs a second one from chat, from the
+  first one's config and with none of its state. A spawn, move or copy onto a host that
+  already runs the name is refused, and so is a second agent of a name on a node from
+  before ids were kept, which would give it the first one's id. A move whose spawn is
+  refused puts the agent back where it was. `/agents restart|stop|delete`, `/start`,
+  `/migrate`, `/agents copy`, a `<delete>` block and a delete from the dashboard each act
+  on the one agent named, by its address; a bare name kept on more than one host acts on
+  none and says the addresses. Main keeps each one's manifest, so `/agents` lists both.
+  On the dashboard, the `@mention` suggestions offer each by its address, a message typed
+  in one's thread goes to that one, and a turn, a streaming reply and the "is working"
+  row each follow the agent's id, so a reply from the other one of the name neither ends
+  the turn nor joins it.
+  Main's spawn registry keeps each agent by its id: the
+  registry by name is read once on upgrade, every agent keeping its id, and left as it
+  was. A reset of a name kept in more than one place is still refused.
+
+### Changed
+
+- **An agent's card says which node it runs on, and two agents may share a name on the dashboard.**
+  A card for an agent on a node reads "on <node>", and follows it when it moves. A second
+  agent with a name already shown gets a card of its own, each called `name@node`, rather
+  than replacing the first. The dashboard is ready for it, and the server lets two agents
+  share a name, one per host (see Added). A heartbeat that changes an agent's state now shows on its card
+  at once. The chat's agent picker no longer comes up blank when the agent you were talking
+  to is not in the list. After a voice turn moves the chat to the agent spoken to (a
+  robot), a reply the server does not name is credited to that agent in the notices and
+  the activity feed too, not only in the chat.
+
+- **A message sent while an agent is still answering waits its turn instead of being blocked.**
+  It shows in the thread at once, marked "Waiting to send", and goes when the reply ends,
+  one at a time and in order. One written while the dashboard's connection to the server is
+  down, or that could not go out because it dropped, is kept the same way and goes once the
+  connection is back; a broker outage alone holds nothing back, since main answers without
+  it. Send and Enter both work during a turn; Stop shows while one is under way.
+
+- **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
+  first-run installation, connection checks, first commands, and recovery steps are presented
+  before the advanced MQTT, media, and motion reference. It says what to expect before
+  starting, which systems Reachy works on and what each supports, how to prepare Linux,
+  what the chat shows during a first install and what each outcome means, how to add voice
+  input, and what to do about the common problems. It also corrects two claims: an edited
+  `.env` needs Wactorz restarted, not just the agent; and streaming voice input handles
+  English and Greek together by default. Reachy is not supported in the Docker image or the
+  Home Assistant add-ons, whose images cannot install the robot SDK.
+- **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
+  API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
+  faster-whisper alternative without including any credential.
+- **Reachy distinguishes working audio from failed motor commands.** A movement-task timeout now
+  directs the user to reconnect instead of implying the robot is offline, animation presets say
+  when they are only saved for later, and health reports whether its live motor-fault monitor is
+  actually connected. “Overheating status” now reaches Reachy's local health check.
+- **Reachy understands natural volume adjustments locally.** “Raise,” “increase,” “lower,” and
+  “decrease” volume or voice wording now controls the robot speaker without falling through to
+  the general chat agent.
+- **The README now has a maker-first onboarding path.** It states the intended audience,
+  removes product comparisons, and gives a Docker Compose quick start that includes the
+  broker password required by current releases.
+- **Reachy routes framework, health, and Home Assistant questions more reliably.** Questions about
+  running Wactorz agents now bypass smart-home planning, natural connection-health wording reads
+  live robot diagnostics, and device-state questions use Home Assistant's information path rather
+  than an actuator. Reachy no longer claims to perform gestures with hands or arms it does not have,
+  and dashboard-formatted answers are cleaned before speech.
+- **Reachy's network media failures recover locally.** A dropped WebRTC microphone or speaker link
+  gets one bounded reconnect-and-retry with a cooldown. Empty Deepgram results no longer trigger a
+  second language request, Home Assistant status tables are reduced to their answer for speech,
+  repeated verified unknown device requests use a short-lived negative cache, and health replies
+  use conversational wording.
+- **Long Reachy speech is no longer canceled at the generated-agent timeout.** A catalogue
+  recipe can now declare its own `task_timeout_s`, and Reachy's allows for real-time playback
+  while staying below the dashboard gateway's own deadline. Every other agent keeps the default
+  limit.
+- **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
+  weather city are no longer converted into JSON text before local or remote dispatch, preventing
+  an agent from silently falling back to its default input.
+- **Reachy's lifecycle messages are concise and actionable.** The startup log collapses
+  connection, audio, and ambient-motion details into one ready message with the next voice
+  action. Setup-only internals now stay in debug logs; a failed connection names the recovery
+  action first.
+
+- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
+  conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor
+  noise, cancellation, and timeouts; Deepgram endpointing closes a turn sooner and interim text is
+  published as it arrives. A broken stream falls back to prerecorded transcription of the same
+  captured audio. Set `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local
+  `faster-whisper`, Whisper, and OpenAI transcription remain available through
+  `REACHY_STT_BACKEND`.
+- **Reachy's bilingual voice-control path is safer and more responsive.** Nova-3 streaming uses
+  multilingual English/Greek recognition, explicitly flushes a locally-ended turn before closing
+  the socket, and keeps prerecorded recognition as a same-audio fallback. A low-confidence
+  multilingual result gets one Greek retry using the same recording, while confident English stays
+  on the fast single-pass path.
+  Raw delegation blocks are removed from durable conversation history, and an unrelated voice turn
+  cannot replay an older Home Assistant action. Conversation state antenna cues can be enabled
+  independently from continuous listening motion, which remains opt-in because servo noise can
+  reach the live microphone.
+
+- **An agent keeps an id of its own, across restarts and moves, and its chat history follows the id.**
+  A new agent is given an id when it is first spawned, kept in main's spawn registry; a restart,
+  a `replace` or a move to another node keeps it, and a node runs the agent under it. Deleting an
+  agent and spawning one of the same name makes a new agent, whose history starts empty. Main's
+  own agents, and every agent spawned before this, keep the id derived from their name, so an
+  upgrade changes nothing: registry entries and stored chat turns read back with the id they
+  already had. Chat history is kept by that id (`GET /api/chats?agent_id=`; `?agent=` still
+  returns every agent that went by the name), and the dashboard's WebSocket frames carry it,
+  with a `turn` frame naming the agent a turn reached. The dashboard keeps its chat threads by
+  that id: two agents of one name have a thread each, the chat list and the target picker name
+  them `name@node`, and a message whose `@mention` reaches another agent moves to that agent's
+  thread, the view with it. The chat's address names the agent (`#/chat/<name>`, and
+  `#/chat/<name>@<node>` where the name is shared, which the open conversation's header and
+  address follow as another agent of its name comes or goes; a shared name alone opens
+  neither and links both); the browser remembers the open conversation by id. A node says in its manifest that it
+  honours the id (`actor_ids`); one deployed before this gives a new agent the id derived from
+  its name, and main refuses to move an agent with an id of its own there until the node is
+  deployed again. One restored onto such a node before its manifest arrived, as at a restart,
+  runs there under the derived id: main says so in chat once the manifest comes, naming the
+  agents and saying to deploy the node again.
+
+### Fixed
+
+- **The attach button follows the server from the first visit.** A browser that had never opened
+  the dashboard got no attach button until it reloaded, which on a phone was the only way to attach
+  a file; a server that turned uploads off kept showing one.
+- **Replies that overlap on one dashboard stay with the agent that gave them.** While one agent was
+  still answering, a message to another took over the first one's reply: the rest of it showed
+  under the second agent, and it was stored in that agent's history, mixed into its answer. A turn
+  the dashboard gave up on after a minute of silence was enough to cause it. Each turn now keeps its
+  own reply. History stored before this is not repaired.
+- **The dashboard no longer waits forever on a server that has stopped answering.** Every request
+  has a timeout now: most give up after 15 seconds, a reset after two minutes and an upload after
+  five. A change that timed out is shown as unconfirmed, not failed, since the server may be
+  finishing it, and the Models page reads the model again to show what happened. Speech that takes
+  over a minute is said in the browser's voice for that reply only. Refusals show the
+  server's own words instead of a status code.
+- **One of two agents of a name can be reset.** A reset of `tally@pi` was refused while `tally`
+  also ran elsewhere. Now it clears that agent alone, in every scope; a bare `tally` is still
+  refused, with the addresses to choose from.
+- **The planner sees both agents of a shared name.** It kept one contract per name, so with
+  `tally` on main and on a node it saw whichever was heard last, and one stopping took the
+  other's contract with it. Each is now kept by its id and shown as `tally@main` and
+  `tally@pi`; `/bus` lists both.
+- **The catalog asks before starting an agent that already runs on a node.** `@catalog spawn x`
+  started a second `x` on main without a word. It now says where `x` runs and spawns nothing;
+  `@catalog spawn x replace` moves it to main, and `@catalog spawn x alongside` adds a second.
+- **No empty space at the bottom of the dashboard on a phone.** The message box sits at
+  the bottom of the screen, with the phone bar right above it; on an iPhone, the room
+  kept for the home indicator is under the message box only.
+- **An agent is moved once at a time.** From the moment a move is asked for until the agent is
+  confirmed where it went, or put back where it was, another `/migrate` of it is refused, saying
+  where it is going, including one asked at the same moment: the agent may already run there
+  while main still places it where it left, and a second move would start from the wrong one.
+  An agent of the same name on another host moves freely, unless it would arrive where the
+  first is leaving or going.
+
+- **A node shows on the dashboard from the first heartbeat main takes.** After a start, the first
+  heartbeat could reach main before the dashboard was listening for what main took from it, so
+  a node appeared one heartbeat later than it should, and one heard before the dashboard began
+  listening was not shown until its next. The dashboard now listens from the moment it connects
+  to the broker, and shows the nodes main already knows when it begins.
+
+- **Moving an agent that runs on main moves it.** When the agent had once run on a node, `/migrate`
+  could take that node's old record for where it is now: it asked the node to hand back an agent
+  it no longer had and reported the move as under way, while the agent stayed on main and never
+  reached the target. Main now goes by its own record of where the agent runs. `/migrate <agent>
+  local` for an agent already on main is refused as such, rather than taken as a move to a node
+  named `local`.
+
+- **A link into the dashboard leads there after signing in.** A link such as
+  `#/models/imu-detector`, opened in a browser that is not signed in, now opens that view once
+  the key is accepted, rather than the dashboard's start. The sign-in page is served with the
+  dashboard's Content-Security-Policy.
+
+- **Two package checks at once no longer fail with a `KeyError`.** Checking or installing packages for two agents at the same time could fail inside Python's import system, which is not safe to refresh from two threads at once; Wactorz now refreshes it from one thread at a time.
+
+- **Reachy cannot promote forwarded text to operator authority.** Main processes actor-forwarded interface turns through its existing restricted entry point. Package approval, node administration, executable spawn/delete actions, plan approval, and unrestricted delegation remain on the existing operator interfaces; payload labels and the robot microphone do not authenticate a person. Conversation, everyday device control and bounded delegation remain available.
+
+- **A required package restart cannot be bypassed by retrying a spawn.** Replacements of loaded packages remain recorded for the lifetime of the Python process, including when catalogue or installer actors are recreated. Strict recipes check this state even when all packages are installed; a fresh process clears it. Ordinary recipes retain best-effort installation.
+
+- **Node-hosted dynamic agents honor their configured task timeout.** Reachy receives the same 140-second limit locally and on a node; agents without an override retain the 60-second default.
+
+- `stop` holds the head where it is instead of snapping it to neutral in a tenth of a second.
+- `REACHY_IDLE_LIFE=1`, `{"idle_life": true}` and `{"cmd": "life", "enabled": true}` now move the robot (the `alive` mood) instead of reporting motion on while it stays still.
+- `health` reports the IMU temperature with the pinned SDK.
+- Motion commands over MQTT while Reachy is offline say it is not connected, not `'NoneType' object has no attribute`.
+- Speech synthesis gives up after 20 s without data instead of hanging a reply or conversation; OpenAI transcription honours `REACHY_STT_TIMEOUT_S`; shutdown closes the robot link off the event loop.
+- **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
+  `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
+  occasional attract beats, and word-timed movement while speaking. Ambient motion remains off
+  until explicitly enabled so motor noise cannot interfere with microphone capture.
+
+- Structured delegations - keep agent fields and supply JSON text when no prompt is provided.
+- Home Assistant history - remove delegation blocks while preserving surrounding conversation and outcomes.
+
+- Fix Reachy Mini presenter deployments getting stuck after a transient motor-link failure: failed animations now trigger continuous automatic reconnection with backoff, use a fast motion-only recovery while preserving live WebRTC media, health no longer reports a stale motor connection as live, and common presenter-volume phrasing is handled locally.
+
+- **Reachy moves and speaks when Wactorz runs on Linux.** The robot SDK streams Reachy's camera and microphone over WebRTC through a GStreamer plugin that Linux distributions do not package, so on Linux every connection attempt failed and Reachy did nothing at all. The agent now connects without the camera and microphone when that plugin is what is missing, says so once, and speaks through the robot daemon's own HTTP API, which needs no GStreamer. Movement, speech, volume and health work, and waking plays its chime through the daemon too; listening, conversation and the camera are refused up front with what is missing, rather than a conversation that announces itself and then ends. Earlier hardware testing covered Ubuntu 26.04 with Python 3.13 and SDK 1.8.4; movement and media on SDK 1.12.0 still need hardware validation. The SDK itself needs Python 3.13 or older on Linux.
+
+- **Every Reachy command answers in a sentence.** Commands that returned no text, `go to sleep` among them, reached chat as a raw dictionary, and so did any command that failed. A dropped motor link now says Reachy is already reconnecting instead of asking for a reconnect, and a planned move that wakes the robot first no longer answers "I'm awake."
+
+- **`pip install 'wactorz[reachy]'` installs Reachy with Wactorz, and its first spawn needs no restart.** The Reachy Mini SDK requires an older `websockets` than the one Wactorz loads at startup, so installing its packages from a running Wactorz meant one restart before Reachy could start. The new `reachy` extra lists the same packages the catalogue installs, so they resolve together with Wactorz's own before it starts; the first spawn then finds nothing to install. It stays out of `all`, because the Docker image and the Home Assistant add-ons cannot build the robot SDK. A spawn that does install at runtime says how to avoid it next time, and the Reachy guide now installs this way.
+
+- **Agents can install packages into an environment made by `uv venv`.** Such an environment has no pip, so every install an agent asked for failed, once per package, with pip's own error. Wactorz now installs with `uv` when the environment has no pip and `uv` is on the `PATH`; with neither, it says once how to add pip.
+
+- **A reply to `@agent` in chat shows the answer, not the dictionary it came in.** Asked through main, as the REST API, Discord and Telegram do, an agent's reply was shown only when it put its text in `result` or `response`; the catalog and most built-in agents use `message`, so `@catalog spawn` answered with a Python dictionary. Main now reads the same fields in the same order as the dashboard. `@catalog list` names the agents in its text, and `@catalog info` gives the agent's description and, for Reachy, its setup steps. Reachy answers `wake up` with "I'm awake.", understands `start listening`, which its own ready message suggests, and no longer shows an internal reason code when a conversation stops.
+
+- **A package an agent installs in the Docker image can be imported straight away.** The image points pip at a user site-packages folder in the state directory, and Python adds that folder to its path at startup only if it already exists. On a new container it did not, so the first agent to install anything got a successful install it could not import until Wactorz restarted. The folder is now added once an install creates it. Where a package is installed both there and in the image, the copy Python imports is the one Wactorz reports.
+
+- **Reachy explains a quiet voice, and is louder without ffmpeg.** Reachy's loudness boost needs the `ffmpeg` program, and when it was missing the only sign was one line in the log. Reachy now says once in chat, the first time it speaks, that its voice is quieter and why, with the install command for the system Wactorz runs on, the reminder to restart, and on the Home Assistant add-on, which cannot install it, how to turn Reachy up instead. `health` reports whether the boost is on. Without `ffmpeg`, speech is also synthesized at the loudest level the speech service offers, so it is louder than before even without the boost.
+
+- **Opted-in trusted catalogue recipes pick up reviewed code after an update.** Reachy refreshes its code on restore while retaining saved settings, state and placement. A changed dependency list requires a fresh approved catalogue spawn. Other recipes and model-written programs retain their saved code.
+
+- **Reachy no longer stops talking when its motor link recovers.** An automatic recovery from a dropped motor link ended by waking the robot, and waking plays a sound on the robot; the robot stops whatever it is playing to start a new sound, so a recovery that landed mid-sentence cut Reachy off with a chime and a head jerk. Recovery now waits for the current speech to end and brings the head and antennas to rest without the sound. Saying `wake up` or `reconnect` still plays it.
+
+- **A first `@catalog spawn reachy-mini` no longer needs a mystery restart, and says what it is doing.** Spawning an agent that declares packages waited two minutes for the installer and then started the agent regardless, but the Reachy Mini SDK alone takes about 2.5 minutes to install on a fast connection with no pip cache, and the installer gave each package only 3 minutes. The agent started against a half-finished install and crashed, while the chat stayed silent and then reported that the catalog did not respond. Installing the SDK also downgrades `websockets` (it requires `<16`), which Wactorz has already loaded, so even a finished install left Deepgram voice input failing with `cannot import name 'Proxy' from 'websockets.uri'` until a restart. Now the catalog replies at once that it is installing, the installer posts each package to chat as it starts, and spawning waits for the installer's actual answer: a package that failed is named with pip's error, and an install that replaced a package this process had loaded asks for one restart and keeps the agent, so it starts by itself afterwards. Each package may take up to 15 minutes. Installed packages are recognised by their metadata, version pins and ranges included, so `reachy-mini==1.12.0` and `pillow` are no longer sent to pip on every spawn and restore. A trusted catalogue agent whose `setup()` fails because a module is not installed reports the missing module instead of asking the model to rewrite its reviewed code. Untrusted programs retain validated repair.
+
+- **The docs list the chat commands `/help` lists.** The reference's command table is now
+  written from the commands themselves, so it names every command main answers and no
+  others (it listed `/cost` and `/clear`, which no chat answers). The agents and interfaces
+  pages point at it instead of keeping shorter lists of their own.
+
+- **A question asked before the dashboard was open is no longer lost.** When the
+  dashboard connects it shows each question still waiting as its toast, with the buttons
+  to answer it, once per page: one closed unanswered stays closed through a reconnect, and
+  stays open in the Inbox and its thread. An agent's thread shows a question it asked earlier with its
+  buttons, or with the pick once answered. The thread no longer says "Reply with the
+  number." under a question: on the dashboard an answer is a button, and a typed reply
+  goes to the agent as a message. Discord and WhatsApp keep the hint.
+
+- **The Activity view keeps showing the server's log as it happens after you leave it and
+  come back.** It stopped taking pushed lines once left, and only its five-second refresh
+  brought new ones in.
+- **A message that could not be sent no longer leaves the chat box locked.** Send stayed
+  off and Stop stayed up for up to a minute after the dashboard reported it disconnected.
+- **A dashboard opened after its session ended asks you to sign in at once.** Its first
+  requests went out before it watched for a refused session, so the sign-in page waited
+  for a later poll.
+- **Heartbeats no longer push real events out of the Activity view.** They are held under a
+  cap of their own, so with a few agents running an event no longer disappears within
+  minutes; the newest beats are still there when heartbeats are shown.
+
+- **The chat keeps every thread whole and in order.** A question listed when the dashboard
+  connects goes where its time is in the agent's thread, not below everything since. A busy
+  agent no longer pushes another agent's restored history out of that agent's thread: each
+  thread keeps its own last 500 messages. A message delivered twice shows once.
+- **Questions settle when the dashboard reconnects.** One answered on another channel while
+  the dashboard was away shows its answer and loses its notice; one its agent no longer
+  lists goes from the thread and its notice with it.
+- **A notice being closed is no longer read out or reachable with Tab while it fades.**
+
+- **Speaking to an agent through a voice surface opens its conversation as typing to it does.**
+  The address names it and a reload opens there; before, the thread switched but the address
+  stayed on the previous agent, and outside the chat view so did the composer.
+- **The attachment tray's remove buttons say what they remove** ("Remove notes.txt") to a
+  screen reader, which read each one as "times".
+- **The activity feed shows a message to you as its words, the same from every channel.** The
+  `→ user:` prefix is gone from agents' own messages; one an agent sends to another still
+  says whom it was to.
+
 ## [0.7.2] - 2026-10-25
 
 Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.

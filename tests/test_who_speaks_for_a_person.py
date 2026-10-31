@@ -1,13 +1,8 @@
-"""Which agents may hand main a person's turn.
+"""Which agents may supply interface conversation context to main.
 
-A task marked ``_via_interface`` is answered as a person's message: slash
-commands run, and ``<spawn>`` and ``<delegate>`` blocks in the reply are acted
-on. That is how an interface such as the Reachy robot passes on what it hears.
-From any other agent it would let code the model wrote type ``/nodes run`` or
-``/packages allow`` as the operator, getting round the checks that keep a
-command and a package the operator's to decide. So main takes it only from a
-catalogue agent still running the catalogue's own program; anyone else gets an
-error saying why.
+Main admits this context only from reviewed local catalogue programs. Admission
+allows restricted conversation, never operator commands: neither the proxy's
+trust nor caller-controlled flags authenticate the person who originated it.
 """
 
 import asyncio
@@ -42,7 +37,7 @@ class _Main:
             self.replies.append(payload)
             self.replied.set()
 
-        self.actor.process_user_input = AsyncMock(side_effect=_turn)
+        self.actor.process_user_input_restricted = AsyncMock(side_effect=_turn)
         setattr(self.actor, "send", _send)
         setattr(
             self.actor,

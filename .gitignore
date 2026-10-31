@@ -189,6 +189,10 @@ infra/mosquitto/*.db
 # creates it as root.
 infra/mosquitto/generated/*
 !infra/mosquitto/generated/.gitkeep
+# The same files, and the access list and node accounts beside them, from a run
+# started inside an example's folder: main writes its broker files under the
+# folder it runs from.
+examples/*/infra/
 # An Alertmanager configuration written by whoever runs the stack, used instead
 # of the generated one. It names where alerts go, often with a credential.
 infra/alertmanager/alertmanager.yml

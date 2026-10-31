@@ -5,11 +5,11 @@ Renders a live dashboard as HTML/CSS card components driven by real-time server-
 
 ## Stack
 
-| Layer | Library | Purpose |
-| ----- | ------- | ------- |
-| Transport | WebSocket (native) | One `/ws` connection: live server events + chat |
-| IDs | vendored HLC-WID (`src/vendor/hlcWid.ts`) | Time-ordered collision-resistant IDs |
-| Build | Vite 8 + TypeScript 6 | Strict mode, ES2022 target |
+| Layer     | Library                                   | Purpose                                         |
+| --------- | ----------------------------------------- | ----------------------------------------------- |
+| Transport | WebSocket (native)                        | One `/ws` connection: live server events + chat |
+| IDs       | vendored HLC-WID (`src/vendor/hlcWid.ts`) | Time-ordered collision-resistant IDs            |
+| Build     | Vite 8 + TypeScript 6                     | Strict mode, ES2022 target                      |
 
 ## Directory layout
 
@@ -31,9 +31,11 @@ frontend/
 │   │       ├── TTSManager.ts
 │   │       └── types.ts
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
+│   ├── chat/              # The chat's state, no DOM: ChatLog, the one writer of its messages
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
-│   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
-│   │                      #   AmbientManager, logger
+│   │                      #   (topic→typed-event decoder), IOManager,
+│   │                      #   AmbientManager, logger; api.ts, the one caller of
+│   │                      #   fetch, and the *Api readers built on it
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard;
 │   │                      #   dom.ts builds elements and their ARIA, testIds.ts lists the test ids
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
@@ -62,18 +64,18 @@ bun run dev          # http://localhost:3000
 
 ## Available scripts
 
-| Script | What it does |
-| ------ | ------------ |
-| `bun run dev` | Vite dev server on :3000, proxying `/api`, `/ws` to :8888 |
-| `bun run build` | TypeScript check + Vite bundle → `../static/app` |
-| `bun run preview` | Serve the production bundle locally |
-| `bun run typecheck` | `tsc --noEmit` only |
-| `bun run lint` | typecheck + Prettier check + ESLint + markdownlint (what CI runs) |
-| `bun run fmt` | Prettier write over `src/**/*.{ts,tsx,css,json}` |
+| Script                 | What it does                                                          |
+| ---------------------- | --------------------------------------------------------------------- |
+| `bun run dev`          | Vite dev server on :3000, proxying `/api`, `/ws` to :8888             |
+| `bun run build`        | TypeScript check + Vite bundle → `../static/app`                      |
+| `bun run preview`      | Serve the production bundle locally                                   |
+| `bun run typecheck`    | `tsc --noEmit` only                                                   |
+| `bun run lint`         | typecheck + Prettier check + ESLint + markdownlint (what CI runs)     |
+| `bun run fmt`          | Prettier write over `src/**/*.{ts,tsx,css,json}`                      |
 | `bun run markdownlint` | markdownlint-cli2 `--fix` over `*.md` (`:check` variant is in `lint`) |
-| `bun run test` | Vitest unit tests (happy-dom) |
-| `bun run coverage` | Vitest with coverage; **fails below the gated thresholds** |
-| `bun run docs` | TypeDoc → `../site/api/js` |
+| `bun run test`         | Vitest unit tests (happy-dom)                                         |
+| `bun run coverage`     | Vitest with coverage; **fails below the gated thresholds**            |
+| `bun run docs`         | TypeDoc → `../site/api/js`                                            |
 
 ## Testing
 
@@ -91,35 +93,46 @@ never lower it. New components and bug fixes should ship with a test in `src/__t
 
 ## Event bus
 
-Components communicate exclusively through **DOM `CustomEvent`s** — no shared mutable state, no framework store.
+Components communicate through **DOM `CustomEvent`s**. The state they share lives in models that hold no DOM —
+`AgentStore` for the agents and nodes, `ChatLog` for the messages — and a view reads a model and is told of its
+changes (`AgentStore.subscribe`); it never keeps a copy of its own.
 Use the typed helpers in `src/events.ts`: `emit(type, detail)` to dispatch and `listen(type, handler)` to
 subscribe. `AppEventMap` there is the single source of truth for every event name and its payload (the table
 below mirrors it); add new events to that map so dispatch and handlers stay type-checked.
 
-| Event | Direction | Payload |
-| ------ | --------- | ------- |
-| `af-agent-command` | CardDashboard → main.ts (WSClient) | `{ command, agentId }` |
-| `af-send-message` | DashboardChat → main.ts (IOManager) | `{ content, target, attachments }` |
-| `af-feed-push` | IOManager / main.ts → CardDashboard | `{ item: FeedItem }` |
-| `af-chat-message` | main.ts (WSClient) → DashboardChat | `{ msg: ChatMessage }` |
-| `af-stream-chunk` | IOManager → DashboardChat | `{ chunk, from }` |
-| `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
-| `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "disconnected" }` |
-| `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
-| `af-send-failed` | IOManager → DashboardChat | `{ content, target }` |
-| `af-reset-chat` | WSClient → DashboardChat | `{ agent: string \| null }` |
-| `af-agents-settled` | WSClient → CardDashboard | `{ reason: "reset" \| "deleted" }` |
-| `af-clear-feed` | WSClient / main.ts → CardDashboard | _(none)_ |
-| `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
-| `af-answer-option` | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }` |
-| `af-answered` | main.ts → DashboardChat | `{ id, option }` |
-| `af-app-log` | WSClient → appLogFeed | `{ entries }` |
-| `af-route` | router → CardDashboard | `{ view, path }` (the address changed) |
-| `af-view-changed` | CardDashboard / viewRoutes → router | `{ view, path }` (the dashboard moved) |
-| `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |
-| `tts-audio-start` | TTSManager → AmbientManager | _(none)_ |
-| `tts-audio-end` | TTSManager → AmbientManager | _(none)_ |
-| `tts-stop` | DashboardChat → TTSManager | _(none)_ (the turn was stopped) |
+| Event                  | Direction                                                      | Payload                                                                |
+| ---------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `af-agent-command`     | CardDashboard → main.ts (WSClient)                             | `{ command, agentId }`                                                 |
+| `af-send-message`      | DashboardChat → main.ts (IOManager)                            | `{ id, content, target, name, answerer, attachments }` (ids)           |
+| `af-addressed`         | DashboardChat → main.ts (WSClient)                             | `{ agent }` (whom the person now talks to, typed or by voice)          |
+| `af-feed-push`         | IOManager / main.ts → CardDashboard                            | `{ item: FeedItem }`                                                   |
+| `af-chat-message`      | main.ts (WSClient) → DashboardChat                             | `{ msg: ChatMessage }`                                                 |
+| `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text }`                                       |
+| `af-stream-end`        | IOManager → DashboardChat                                      | `{ text, from, agentId }`                                              |
+| `af-socket`            | main.ts → DashboardChat                                        | `{ open }`                                                             |
+| `af-turn`              | DashboardChat → iobar                                          | `{ agent, queued }`                                                    |
+| `af-turn-reached`      | WSClient → DashboardChat                                       | `{ id, agentId, name }` (the agent the person's message `id` reached)  |
+| `af-connection-status` | main.ts (WSClient) → CardDashboard                             | `{ status: "live" \| "connecting" \| "disconnected" }`                 |
+| `af-attachment-added`  | DropZone / chatIobar → DashboardChat                           | `{ attachment }`                                                       |
+| `af-send-failed`       | IOManager → DashboardChat                                      | `{ id, content, target }`                                              |
+| `af-reset-chat`        | WSClient → DashboardChat                                       | `{ agent: string \| null }`                                            |
+| `af-agents-settled`    | WSClient → CardDashboard                                       | `{ reason: "reset" \| "deleted" }`                                     |
+| `af-clear-feed`        | WSClient / main.ts → CardDashboard                             | _(none)_                                                               |
+| `af-wipe-all`          | WSClient / main.ts → CardDashboard                             | `{ survivors }` (ids of the agents still running)                      |
+| `af-answer-option`     | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }`                                       |
+| `af-pick-address`      | chatThread → DashboardChat                                     | `{ id, address }` (one of the addresses the reply `id` offered)        |
+| `af-answered`          | main.ts → DashboardChat                                        | `{ id, option }`                                                       |
+| `af-model-pointer`     | main.ts (ServerEventRouter) → CardDashboard (Models view)      | `{ name, pointer }` (a stored model's pointer moved, from anywhere)    |
+| `af-questions-listed`  | main.ts → DashboardChat, CardDashboard (Inbox)                 | `{ open, answered, listed? }` (`listed` absent when the read failed)   |
+| `af-question-book`     | main.ts (ServerEventRouter) → CardDashboard (Inbox)            | `{ agentId, questions }` (an agent's book changed)                     |
+| `af-app-log`           | WSClient → appLogFeed                                          | `{ entries }`                                                          |
+| `af-route`             | router → CardDashboard                                         | `{ view, path }` (the address changed)                                 |
+| `af-view-changed`      | CardDashboard / viewRoutes → router                            | `{ view, path }` (the dashboard moved)                                 |
+| `af-register-view`     | an extension → CardDashboard                                   | `{ key, icon, label, build }` (a view of its own)                      |
+| `tts-voices-loaded`    | TTSManager → popovers                                          | `{ voices }`                                                           |
+| `tts-audio-start`      | TTSManager → AmbientManager                                    | _(none)_                                                               |
+| `tts-audio-end`        | TTSManager → AmbientManager                                    | _(none)_                                                               |
+| `tts-stop`             | DashboardChat → TTSManager                                     | _(none)_ (the turn was stopped)                                        |
 
 ## Server events consumed
 
@@ -157,7 +170,7 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
    `config/serverConfig.ts`; register your extension's fields from the barrel via
    `registerConfigEntry()` at module load
 5. **Registers custom icons** via `registerIcon(name, svgPaths)` from
-   `ui/dashboard/icons.ts` before calling `registerView` — core never needs to
+   `ui/dashboard/icons.ts` before asking for its view with `af-register-view` — core never needs to
    know your icon names
 6. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
 
@@ -168,10 +181,10 @@ PR checklist, and the branch target (`dev`).
 
 During development, Vite proxies:
 
-| Path | Target | Protocol |
-| ---- | ------ | -------- |
-| `/api` | `localhost:8888` | HTTP |
-| `/ws` | `localhost:8888` | WebSocket |
+| Path   | Target           | Protocol  |
+| ------ | ---------------- | --------- |
+| `/api` | `localhost:8888` | HTTP      |
+| `/ws`  | `localhost:8888` | WebSocket |
 
 Both proxy to the backend monitor server on `:8888` (see `vite.config.ts`).
 Set `VITE_OPEN=true` to auto-open the browser on `bun run dev`.
@@ -180,9 +193,9 @@ Set `VITE_OPEN=true` to auto-open the browser on `bun run dev`.
 
 The same bundle serves two targets, distinguished at runtime:
 
-| Mode | How API/WS URLs resolve |
-| ---- | ----------------------- |
-| Standalone | Paths are root-relative (`/api`, `/ws`) |
+| Mode                  | How API/WS URLs resolve                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Standalone            | Paths are root-relative (`/api`, `/ws`)                                                                         |
 | Home Assistant add-on | The Python add-on injects `window.__WACTORZ_INGRESS_PATH`; all API/WS URLs are rebased onto that ingress prefix |
 
 `__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
@@ -203,25 +216,8 @@ topic there without touching the router.
 
 ## Gated UI
 
-Two things are gated, for two different reasons — and the difference decides
-where the switch belongs.
-
-### Not built yet — build-time
-
-| Flag | Enables | Needs backend |
-| ---- | ------- | ------------- |
-| `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt` |
-
-`STT_ENABLED` (`src/io/SpeechToText.ts`) is off by default because **`/api/stt`
-does not exist**. The client half is written and waiting; turning the flag on
-without the endpoint gives a mic button whose every recording fails. It is a
-switch for developing the feature, not a per-deploy option — when the endpoint
-lands, this should become a server capability like the one below and the flag
-should go.
-
-### Optional per deployment — runtime, from the server
-
-Attachments (drag-drop + paste) are **not** a build-time flag. The server only
+Attachments (drag-drop + paste) are optional per deployment, so they are switched at
+runtime, from the server, and **not** by a build-time flag. The server only
 registers `/api/upload` when it has uploads on, so the browser asks rather than
 assumes: the `uploads.enabled` field of `/api/config` is seeded into
 `wactorz-uploads-enabled` and read by `uploadsEnabled()`.

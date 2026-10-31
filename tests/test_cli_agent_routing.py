@@ -22,8 +22,13 @@ import pytest
 
 from wactorz import config
 from wactorz.agents.main import MainActor
+from wactorz.agents.main.addresses import resolve_address, task_refusal, task_topic_for
+from wactorz.agents.main.hosts import AddressHost
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import DeployTarget
+from wactorz.core.actor import ActorMetrics
+from wactorz.core.addresses import Address, Resolution
 from wactorz.core.registry import ActorRegistry
 from wactorz.interfaces.chat import cli
 from wactorz.interfaces.chat.cli import CLIInterface, resolve_host
@@ -55,6 +60,21 @@ class _Main:
         self.delegated: Any = None
         self.installer_result: dict[str, Any] = {"success": True}
         self.installer_calls: list[dict[str, Any]] = []
+        #: Started long ago: only the node table says where an agent is.
+        self.metrics = ActorMetrics(start_time=0.0)
+
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
+
+    def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
+        # As main's: the real lookup, over this registry and node table.
+        return resolve_address(cast(AddressHost, self), wanted, heard_within=heard_within)
+
+    def task_refusal(self, address: Address) -> str | None:
+        return task_refusal(cast(AddressHost, self), address)
+
+    def task_topic_for(self, address: Address) -> str:
+        return task_topic_for(cast(AddressHost, self), address)
 
     @property
     def _known_nodes(self) -> dict[str, Any]:
@@ -244,10 +264,23 @@ class TestRemoteAgents:
         client = _Client(payload)
         monkeypatch.setattr(cli, "mqtt_client", client)
 
-        assert await _cli(main)._get_remote_agent_response("cam", "snap") == reply
+        assert await _cli(main)._get_remote_agent_response("cam", "snap", "rpi") == reply
         (topic, task) = main.published[0]
         assert topic == "agents/by-name/cam/task"
         assert client.subscribed == [task["_reply_topic"]]
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, monkeypatch: pytest.MonkeyPatch, quick: None
+    ) -> None:
+        main = _Main()
+        main._known_nodes = {"rpi": {"agents": ["cam"]}}
+        main.nodes.node_manifests = {"rpi": {"tasks_by_node": True}}
+        monkeypatch.setattr(cli, "mqtt_client", _Client(b"{}"))
+
+        await _cli(main)._get_remote_agent_response("cam", "snap", "rpi")
+
+        (topic, _task) = main.published[0]
+        assert topic == "agents/at/rpi/cam/task"
 
     async def test_the_reply_is_read_over_mqtt_5(
         self, monkeypatch: pytest.MonkeyPatch, quick: None
@@ -259,7 +292,7 @@ class TestRemoteAgents:
         client = _Client(b"{}")
         monkeypatch.setattr(cli, "mqtt_client", client)
 
-        await _cli(main)._get_remote_agent_response("cam", "snap")
+        await _cli(main)._get_remote_agent_response("cam", "snap", "rpi")
 
         assert client.connected[0]["protocol"] == aiomqtt.ProtocolVersion.V5
 
@@ -270,7 +303,7 @@ class TestRemoteAgents:
         main._known_nodes = {"rpi": {"agents": ["cam"]}}
         monkeypatch.setattr(cli, "mqtt_client", _Client(None))
 
-        assert await _cli(main)._get_remote_agent_response("cam", "snap") == (
+        assert await _cli(main)._get_remote_agent_response("cam", "snap", "rpi") == (
             "[timeout] cam on rpi did not respond within 30s"
         )
 
@@ -278,7 +311,7 @@ class TestRemoteAgents:
         main = _Main()
         main._known_nodes = {"rpi": {"agents": ["cam"]}}
 
-        reply = await _cli(main)._get_remote_agent_response("cam", "snap")
+        reply = await _cli(main)._get_remote_agent_response("cam", "snap", "rpi")
 
         assert reply.startswith("[error] no broker in tests")
 

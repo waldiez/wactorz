@@ -13,7 +13,7 @@
  */
 import type { AppLogItem, FeedItem } from "../../types/feed";
 import { appendFeedItemToView, feedKey, type FeedFilters } from "./feedView";
-import { fetchAppLogs, toEntry } from "./appLogs";
+import { fetchAppLogs, toEntry } from "../../io/appLogs";
 import { listen } from "../../events";
 
 /** How often "follow" re-fetches. Slow enough that an idle dashboard is not a

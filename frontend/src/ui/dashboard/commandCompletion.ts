@@ -17,17 +17,8 @@
  * the highlight while the caret stays in the text.
  */
 
+import { fetchCommandForms, type CommandForm } from "../../io/commandsApi";
 import { el } from "../dom";
-
-/** One way to type a command, as the server lists it. */
-export interface CommandForm {
-    /** What is typed, arguments in `<…>` and optional parts in `[…]`. */
-    usage: string;
-    /** What is typed before the first argument: what accepting a form puts in the box. */
-    typed: string;
-    /** What it does; empty for an orchestrator that does not say. */
-    summary: string;
-}
 
 /** The most options shown at once: past this, typing more narrows faster than scrolling. */
 export const MAX_SHOWN = 12;
@@ -48,7 +39,7 @@ export class CommandCatalog {
     private forms: CommandForm[] | null = null;
     private pending: Promise<CommandForm[]> | null = null;
 
-    constructor(private readonly fetchForms: () => Promise<CommandForm[]> = fetchFromServer) {}
+    constructor(private readonly fetchForms: () => Promise<CommandForm[]> = fetchCommandForms) {}
 
     /** Whether the forms have arrived. Asks for nothing. */
     get ready(): boolean {
@@ -79,21 +70,6 @@ export class CommandCatalog {
             });
         return this.pending;
     }
-}
-
-async function fetchFromServer(): Promise<CommandForm[]> {
-    const base = window.__WACTORZ_INGRESS_PATH ?? "";
-    const response = await fetch(`${base}/api/commands`);
-    if (!response.ok) {
-        throw new Error(`/api/commands answered ${response.status}`);
-    }
-    const body = (await response.json()) as { commands?: unknown };
-    return Array.isArray(body.commands) ? body.commands.filter(isForm) : [];
-}
-
-function isForm(value: unknown): value is CommandForm {
-    const v = value as Partial<CommandForm> | null;
-    return typeof v?.usage === "string" && typeof v.typed === "string" && typeof v.summary === "string";
 }
 
 /** The listbox under the chat box, and the keys that drive it. */

@@ -14,6 +14,8 @@ export const BUILTIN_VIEWS: { key: View; label: string; icon: IconName }[] = [
     { key: "overview", label: "Overview", icon: "grid" },
     { key: "feed", label: "Feed", icon: "list" },
     { key: "chat", label: "Chat", icon: "chat" },
+    { key: "models", label: "Models", icon: "models" },
+    { key: "inbox", label: "Inbox", icon: "inbox" },
 ];
 export const SETTINGS_VIEW = { key: "settings" as View, label: "Settings", icon: "settings" as IconName };
 

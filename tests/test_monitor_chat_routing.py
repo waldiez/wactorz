@@ -63,4 +63,22 @@ def test_voice_transcript_is_forwarded_as_user_chat():
         "surface_label": "Reachy",
         "brain": "main",
         "timestamp": 123.5,
+        "thread_id": agent_id,
     }
+
+
+def test_a_turn_relayed_to_another_agent_is_kept_in_that_agents_thread():
+    # A voice surface hands the user's words to the agent that answers them.
+    runtime.state["agents"].update(
+        {"reachy-id": {"name": "reachy-mini"}, "weather-id": {"name": "weather"}}
+    )
+    try:
+        event = events.parse_topic(
+            "agents/reachy-id/chat", '{"from":"user","to":"weather","content":"rain today?"}'
+        )
+    finally:
+        runtime.state["agents"].pop("reachy-id", None)
+        runtime.state["agents"].pop("weather-id", None)
+
+    assert event is not None
+    assert event["_push_chat"]["thread_id"] == "weather-id"

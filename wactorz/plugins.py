@@ -71,6 +71,7 @@ class AgentPlugin:
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
         mixin: type | None = None,
+        actor_id: str | None = None,
         **_ignored: Any,
     ) -> Actor:
         """The actor, built the way the catalogue builds a native one.
@@ -83,10 +84,15 @@ class AgentPlugin:
         adds something to every agent it runs -- a node, which routes its
         commands and keeps its state its own way -- without the agent's author
         knowing where it will run.
+
+        ``actor_id`` is the id the spawn registry keeps for the agent. A class
+        whose own ``__init__`` does not take one is given it once built, so the
+        agent runs under the id main keeps whatever its author wrote.
         """
         if self.kind == "function":
             spec: AgentSpec = self.obj
             return spec.build(
+                actor_id=actor_id,
                 name=name,
                 persistence_dir=persistence_dir,
                 llm_provider=llm_provider,
@@ -103,7 +109,13 @@ class AgentPlugin:
         for key, value in (options or {}).items():
             if accepted is None or key in accepted:
                 kwargs[key] = value
-        return cls(**kwargs)
+        if actor_id and (accepted is None or "actor_id" in accepted):
+            kwargs["actor_id"] = actor_id
+        actor = cls(**kwargs)
+        if actor_id and actor.actor_id != actor_id:
+            actor.actor_id = actor_id
+            actor.stable_id = True
+        return actor
 
     @property
     def models(self) -> dict[str, Any]:

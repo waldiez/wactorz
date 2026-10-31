@@ -244,6 +244,13 @@ TYPE 3 — "dynamic"
                                                         arrives on agents/{id}/answer ({"id","option","index"})
     await agent.ask_operator(text, options=[...], channel="dashboard", user="", timeout=None)
                                                       — the same, waiting for the pick; returns the option (ASYNC)
+                                                        context="why it is asked" is shown with it in the Inbox
+                                                        label={"source": topic, "start": ts, "values": {option: value}}
+                                                        makes the pick a label of that source from ts (event time)
+                                                        on; an option left out of values makes none. Use it when the
+                                                        question is about what a source was doing
+    await agent.label(source, value, start=ts, end=None)  — record a label yourself, no question (ASYNC); event
+                                                        times; on main only, a node labels through ask_operator
     await agent.send_to("name", payload)              — delegate to agent (ASYNC, must await)
     await agent.mqtt_get("topic")                     — one-shot MQTT read (ASYNC, must await)
     agent.subscribe("topic", async_callback)          — subscribe to MQTT (SYNC, NO await!)
@@ -258,6 +265,10 @@ TYPE 3 — "dynamic"
                                                         npz → dict of numpy arrays, npy → array, safetensors → dict
                                                         of arrays, onnx → onnxruntime session, state_dict → tensors
     agent.artifact_path("key")                        — where that model's file is, as a str (SYNC, NO await!)
+    async def on_model(agent, key, model)             — optional; called when the version a model's pointer names
+                                                        changes while the agent runs, with the newly loaded model
+                                                        (None when the code opens the file itself); replace what
+                                                        setup() kept in agent.state here
   CRITICAL RULES FOR DYNAMIC AGENT CODE:
     NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()
     NEVER import or use aiomqtt directly — use agent.subscribe() instead

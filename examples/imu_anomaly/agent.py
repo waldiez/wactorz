@@ -2,17 +2,17 @@
 
 Subscribed to every IMU topic, it scores each reading with the trained model
 and publishes the ones that are far from normal. The model is named with
-``models=``: Wactorz finds the newest ``imu-detector`` among the models kept
-on main before the agent starts, and refuses to start it without one. On a
-node, the node fetches it by name first.
+``models=``: before the agent starts, Wactorz finds the version of
+``imu-detector`` that is active among the models kept on main (the newest when
+none is set active), and refuses to start it without one. On a node, the node
+fetches it by name first. When ``active`` moves, a running agent serves the
+version it moved to from the next reading: it reads the model through
+``load_model`` on each call, which is what the swap replaces.
 """
 
-from model import MODEL_NAME, score
+from model import MODEL_NAME, THRESHOLD, score
 
 import wactorz
-
-#: Readings this far from normal, in units of its spread, are anomalies.
-THRESHOLD = 4.0
 
 
 @wactorz.agent(
@@ -28,7 +28,8 @@ THRESHOLD = 4.0
 )
 async def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None:
     """Score one reading; return it with its score when it is abnormal."""
-    # Loaded on the first reading and kept: the arrays `train.py` saved.
+    # Loaded on the first reading and kept, until `active` moves: the arrays
+    # `train.py` saved.
     model = await me.load_model("model")
     value = score(model, reading)
     if value < float(me.options.get("threshold", THRESHOLD)):

@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { ChatStreamUI, type StreamHost } from "../ui/dashboard/chatStreaming";
 import { buildChatMessageEl } from "../ui/dashboard/chatThread";
 import type { ChatMessage } from "../types/agent";
+import { chunk } from "./streamFeed";
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
 const SNAPSHOT = `here you go\n\n![snapshot](${PNG})`;
@@ -27,8 +28,7 @@ function inlineImage(root: ParentNode): HTMLImageElement | null {
 function makeHost(thread: HTMLElement): StreamHost {
     return {
         isChatView: () => true,
-        lastSentTarget: () => "camera",
-        belongsHere: () => true,
+        lastSentTarget: () => ({ name: "camera", id: "camera" }),
         isOpenThread: () => true,
         thread: () => thread,
         scrollThread: () => {},
@@ -46,8 +46,8 @@ describe("inline images from a finished stream", () => {
         document.body.appendChild(thread);
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.onChunk({ chunk: SNAPSHOT, from: "camera" });
-        ui.onEnd({ text: SNAPSHOT, from: "camera" });
+        chunk(ui, SNAPSHOT, "camera");
+        ui.onEnd({ text: SNAPSHOT, from: "camera", agentId: "camera" });
 
         const img = inlineImage(thread);
         expect(img).not.toBeNull();
@@ -63,8 +63,8 @@ describe("inline images from a finished stream", () => {
         document.body.appendChild(thread);
         const ui = new ChatStreamUI(makeHost(thread));
 
-        ui.onChunk({ chunk: SNAPSHOT, from: "camera" });
-        ui.onEnd({ text: SNAPSHOT, from: "camera" });
+        chunk(ui, SNAPSHOT, "camera");
+        ui.onEnd({ text: SNAPSHOT, from: "camera", agentId: "camera" });
 
         const img = inlineImage(thread)!;
         expect(img.tabIndex).toBe(0);
@@ -79,6 +79,7 @@ describe("inline images replayed from history", () => {
             id: "1",
             from: "camera",
             to: "user",
+            threadId: "camera",
             content: SNAPSHOT,
             timestampMs: 1_700_000_000_000,
         };

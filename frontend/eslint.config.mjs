@@ -63,6 +63,40 @@ const defaultConfig = defineConfig({
         // Guard the init-time circular-import invariant statically (the codebase
         // leans on function-local imports to avoid cycles at module load).
         "import/no-cycle": "error",
+        // Every request goes through src/io/api.ts, which gives it a timeout and
+        // the server's words for a refusal.
+        "no-restricted-globals": [
+            "error",
+            { name: "fetch", message: "Ask through src/io/api.ts (requestJson, requestBytes)." },
+        ],
+        "no-restricted-properties": [
+            "error",
+            {
+                object: "window",
+                property: "fetch",
+                message: "Ask through src/io/api.ts (requestJson, requestBytes).",
+            },
+            {
+                object: "globalThis",
+                property: "fetch",
+                message: "Ask through src/io/api.ts (requestJson, requestBytes).",
+            },
+        ],
+        // The models never reach into the views: a view observes a model, and
+        // a model that imported one could be tested only with a DOM. `io/` and
+        // `config/` still import from `ui/` and join this list once they do not.
+        "import/no-restricted-paths": [
+            "error",
+            {
+                zones: [
+                    {
+                        target: ["./src/agents", "./src/chat", "./src/models", "./src/types"],
+                        from: "./src/ui",
+                        message: "Models do not import views; let the view observe the model.",
+                    },
+                ],
+            },
+        ],
         "@typescript-eslint/no-namespace": "off",
         "@typescript-eslint/no-unused-expressions": "off",
         "@typescript-eslint/no-use-before-define": "off",
@@ -101,12 +135,21 @@ export default [
         files: ["**/*.{ts,tsx}"],
     })),
     {
+        // The client itself, and tests, which stub what it calls.
+        files: ["src/io/api.ts", "**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
+        rules: {
+            "no-restricted-globals": "off",
+            "no-restricted-properties": "off",
+        },
+    },
+    {
         // Test suites legitimately have long describe/it blocks with many
         // sequential assertions; size/statement caps don't model them well.
-        // `any` is also allowed here: mocks and poking private members
-        // (`let cd: any`, class-returns-mock) are idiomatic in tests and not
-        // shipped. Correctness rules (complexity, prettier, headers, unused)
-        // still apply.
+        // `any` is allowed for the mocks of whole modules (a class whose
+        // constructor returns the mock) and the browser APIs happy-dom lacks.
+        // A test reaches what it checks through public seams -- the store, the
+        // bus, the screen -- and never a private member. Correctness rules
+        // (complexity, prettier, headers, unused) still apply.
         files: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
         rules: {
             "max-lines": "off",
@@ -114,6 +157,19 @@ export default [
             "max-statements": "off",
             "max-nested-callbacks": "off",
             "@typescript-eslint/no-explicit-any": "off",
+        },
+    },
+    {
+        // Suites that test through public seams only: an `any` here would be a
+        // way back to the private members they no longer reach.
+        files: [
+            "src/__tests__/dashboard.ts",
+            "src/__tests__/agentstore.test.ts",
+            "src/__tests__/carddashboard-*.test.ts",
+            "src/__tests__/axe.test.ts",
+        ],
+        rules: {
+            "@typescript-eslint/no-explicit-any": "error",
         },
     },
     {

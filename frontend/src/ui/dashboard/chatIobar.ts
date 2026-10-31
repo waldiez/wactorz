@@ -12,6 +12,7 @@ import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
+import { ingressBase } from "../../io/api";
 import { el, iconButton, named } from "../dom";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
@@ -163,7 +164,7 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
 
 /** Upload files and offer each as a pending attachment, however it was chosen. */
 async function attachFiles(files: File[]): Promise<void> {
-    const apiBase: string = window.__WACTORZ_INGRESS_PATH ?? "";
+    const apiBase = ingressBase();
     for (const file of files) {
         try {
             const attachment = await uploadFile(file, apiBase);

@@ -117,27 +117,44 @@ describe("the catalogue", () => {
         await catalog.open("hvac");
         api.detail.mockClear();
 
-        expect(await catalog.act("hvac", { kind: "promote" }, "F1 up")).toBe("");
+        expect(await catalog.act("hvac", { kind: "promote" }, "F1 up")).toBeNull();
 
         expect(api.move).toHaveBeenCalledWith("hvac", { kind: "promote" }, "F1 up");
         expect(api.detail).toHaveBeenCalled();
         expect(catalog.state.moving).toBe(false);
     });
 
+    it("reads the model again after a timeout, which may have made the move, not after a refusal", async () => {
+        const api = server();
+        const catalog = new ModelCatalog(api);
+        await catalog.open("hvac");
+        api.detail.mockClear();
+
+        api.move.mockResolvedValueOnce({ ok: false, error: "nothing to roll back", status: 409 });
+        await catalog.act("hvac", { kind: "rollback" });
+        expect(api.detail).not.toHaveBeenCalled();
+
+        api.move.mockResolvedValueOnce({ ok: false, error: "no answer", timedOut: true });
+        expect(await catalog.act("hvac", { kind: "promote" })).toMatchObject({ timedOut: true });
+        expect(api.detail).toHaveBeenCalledWith("hvac");
+    });
+
     it("gives back the server's refusal, and asks nothing for no model or with a move on its way", async () => {
         const api = server();
         api.move.mockResolvedValueOnce({ ok: false, error: "nothing to roll back" });
         const catalog = new ModelCatalog(api);
-        expect(await catalog.act("", { kind: "rollback" })).toBe("");
+        expect(await catalog.act("", { kind: "rollback" })).toBeNull();
         expect(api.move).not.toHaveBeenCalled();
 
         await catalog.open("hvac");
-        expect(await catalog.act("hvac", { kind: "rollback" })).toBe("nothing to roll back");
+        expect(await catalog.act("hvac", { kind: "rollback" })).toMatchObject({
+            error: "nothing to roll back",
+        });
 
         let finish: () => void = () => {};
         api.move.mockImplementationOnce(() => new Promise(resolve => (finish = () => resolve(ok(null)))));
         const first = catalog.act("hvac", { kind: "promote" });
-        expect(await catalog.act("hvac", { kind: "promote" })).toBe("");
+        expect(await catalog.act("hvac", { kind: "promote" })).toBeNull();
         finish();
         await first;
         expect(api.move).toHaveBeenCalledTimes(2);

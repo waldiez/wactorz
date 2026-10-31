@@ -10,13 +10,10 @@
  * exposure than serving them to a caller who asked, and it waits on the
  * handshake work.
  */
-import type { AppLogItem, LogLevel } from "../../types/feed";
+import type { AppLogItem, LogLevel } from "../types/feed";
+import { apiUrl, requestJson } from "./api";
 
 const LEVELS: readonly string[] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
-
-function ingressBase(): string {
-    return window.__WACTORZ_INGRESS_PATH ?? "";
-}
 
 /**
  * One record, or null if the server sent something this view cannot draw.
@@ -57,17 +54,9 @@ export function toEntry(raw: unknown): AppLogItem | null {
 /** Recent application-log records, oldest first. Null when the fetch failed,
  *  so the caller can tell "nothing logged" from "could not ask". */
 export async function fetchAppLogs(limit = 200): Promise<AppLogItem[] | null> {
-    try {
-        const res = await fetch(`${ingressBase()}/api/logs?limit=${encodeURIComponent(String(limit))}`);
-        if (!res.ok) {
-            return null;
-        }
-        const body = (await res.json()) as { entries?: unknown };
-        if (!Array.isArray(body.entries)) {
-            return null;
-        }
-        return body.entries.map(toEntry).filter((e): e is AppLogItem => e !== null);
-    } catch {
-        return null;
-    }
+    const got = await requestJson<{ entries?: unknown } | null>(
+        apiUrl(`/api/logs?limit=${encodeURIComponent(String(limit))}`),
+    );
+    const entries = got.ok ? got.value?.entries : null;
+    return Array.isArray(entries) ? entries.map(toEntry).filter((e): e is AppLogItem => e !== null) : null;
 }

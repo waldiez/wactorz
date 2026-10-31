@@ -141,6 +141,16 @@ show. A serious or critical finding fails either. One that has to stay for now g
 Colours for text come from the tokens in `src/styles/base.css`: `--af-text-dim` is the dimmest
 text that keeps 4.5:1 on the dashboard's backgrounds, so nothing dimmer is used for words.
 
+**Talking to the server**
+
+- Every request goes through `src/io/api.ts`: `requestJson` or `requestBytes`, with the address
+  from `apiUrl()`. Lint refuses `fetch` anywhere else. They never reject: they answer with an
+  `Answer`, the body or why not, so a failure is handled where the call is, in the server's words
+- The default timeout suits a read or a small change. A route that is slow when healthy passes its
+  own, generous one; `io/resetApi.ts` and `io/uploadsApi.ts` are the examples
+- A timed-out change may still have happened: check `timedOut` and do not tell the user it failed
+- Readers live in `src/io/`, not `src/ui/`: a view is handed data, it does not go and get it
+
 **Events**
 
 - Always clean up `addEventListener` on component destroy

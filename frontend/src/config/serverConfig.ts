@@ -19,6 +19,7 @@
  * Keys not registered are **never** stored, even if the server sends them.
  */
 
+import { apiUrl, requestJson } from "../io/api";
 import { safeStorage } from "../safeStorage";
 import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
 import { UPLOADS_KEY } from "../ui/dashboard/uploads";
@@ -112,12 +113,11 @@ registerConfigEntry(UPLOADS_KEY, c =>
  *  Devices nav link). */
 export async function seedServerConfig(): Promise<boolean> {
     try {
-        const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
-        const resp = await fetch(`${ingress}/api/config`);
-        if (!resp.ok) {
+        const got = await requestJson<Record<string, unknown> | null>(apiUrl("/api/config"));
+        if (!got.ok || !got.value) {
             return false;
         }
-        const cfg = (await resp.json()) as Record<string, unknown>;
+        const cfg = got.value;
         let haChanged = false;
         for (const [key, { extract, clearWhenAbsent }] of _entries) {
             const value = extract(cfg);

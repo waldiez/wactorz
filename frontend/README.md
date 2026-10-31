@@ -34,7 +34,8 @@ frontend/
 │   ├── chat/              # The chat's state, no DOM: ChatLog, the one writer of its messages
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
 │   │                      #   (topic→typed-event decoder), IOManager,
-│   │                      #   AmbientManager, logger
+│   │                      #   AmbientManager, logger; api.ts, the one caller of
+│   │                      #   fetch, and the *Api readers built on it
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard;
 │   │                      #   dom.ts builds elements and their ARIA, testIds.ts lists the test ids
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry

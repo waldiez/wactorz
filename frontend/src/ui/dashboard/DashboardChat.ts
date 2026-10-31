@@ -26,6 +26,7 @@ import { ChatAnswers } from "./chatAnswers";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "./mutate";
+import { apiUrl } from "../../io/api";
 import { MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
@@ -401,7 +402,7 @@ export class DashboardChat {
         // Before the request: the answer already read aloud stops now, whether
         // or not the server is there to cancel the rest of it.
         emit("tts-stop");
-        await postOrWarn(`${window.__WACTORZ_INGRESS_PATH ?? ""}/api/chat/stop`, { method: "POST" }, "stop");
+        await postOrWarn(apiUrl("/api/chat/stop"), { method: "POST" }, "stop");
     }
 
     private _populateSelect(select: HTMLSelectElement): void {

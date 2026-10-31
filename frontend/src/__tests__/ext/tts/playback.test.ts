@@ -94,6 +94,18 @@ async function speaking() {
 
 const settle = () => new Promise(r => setTimeout(r, 0));
 
+/** A /api/tts that never answers: a request ends only when it is aborted. */
+function silentServer(): ReturnType<typeof vi.fn> {
+    const fetched = vi.fn(
+        (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) =>
+                init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+            ),
+    );
+    vi.stubGlobal("fetch", fetched);
+    return fetched;
+}
+
 describe("one reply heard at a time", () => {
     const ducking: string[] = [];
     const onStart = () => ducking.push("start");
@@ -234,6 +246,25 @@ describe("one reply heard at a time", () => {
 
         expect(sources[0]!.stopped).toBe(true);
         expect(ducking).toEqual(["start", "end"]);
+    });
+
+    it("says a reply the server is too slow for in the browser's voice, once", async () => {
+        const fetched = silentServer();
+        const { m } = await speaking();
+        const synth = (globalThis as any).speechSynthesis;
+        vi.useFakeTimers();
+
+        m.notify("too slow");
+        await vi.advanceTimersByTimeAsync(59_000);
+        expect(synth.speak).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(synth.speak).toHaveBeenCalledTimes(1);
+        expect(ducking).toEqual(["start", "end"]);
+
+        // One slow reply does not change the voice for the rest of the session.
+        m.notify("the next one");
+        vi.useRealTimers();
+        expect(fetched).toHaveBeenCalledTimes(2);
     });
 
     it("a stopped turn stops its voice, through the bus", async () => {

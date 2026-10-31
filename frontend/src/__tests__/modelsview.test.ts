@@ -7,6 +7,7 @@
  * are buttons that ask first (with a reason), a refusal is said, and a pointer
  * moved anywhere shows here.
  */
+import { REQUEST_TIMEOUT_MS } from "../io/api";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import type { CardDashboard } from "../ui/CardDashboard";
@@ -234,6 +235,36 @@ describe("the Models view", () => {
                 expect.objectContaining({ message: "hvac:8 is already active" }),
             ),
         );
+    });
+
+    it("warns of a move that timed out instead of calling it not done", async () => {
+        const shown = vi.spyOn(toast, "show");
+        const reads = server();
+        const silentOnMoves = vi.fn((url: string, init?: RequestInit) =>
+            init?.method === "POST"
+                ? new Promise<Response>((_resolve, reject) =>
+                      init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+                  )
+                : reads(url, init),
+        );
+        await open("#/models/hvac", silentOnMoves as unknown as typeof reads);
+        await vi.waitFor(() => model());
+
+        vi.useFakeTimers();
+        try {
+            press("Try v6 as shadow");
+            byTestId(document, "confirm-ok").click();
+            await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+
+            expect(shown).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: "alert-warning",
+                    title: "Try v6 as shadow: unconfirmed",
+                }),
+            );
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("reads the model again when its pointer moves elsewhere, while on screen", async () => {

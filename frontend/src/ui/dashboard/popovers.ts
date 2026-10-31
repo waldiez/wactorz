@@ -10,10 +10,12 @@
  */
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { tts } from "../../ext/tts";
+import { requestReset } from "../../io/resetApi";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
 import { parseRoute, type Route } from "../../router";
 import { button, el, named, option } from "../dom";
+import { sayRefusal } from "./mutate";
 import { AGENT_SCOPES, buildScopeSwitch, nodesSay, openAgent } from "./resetScope";
 
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
@@ -182,33 +184,18 @@ async function postReset(
     agent: string | null,
 ): Promise<void> {
     pop.classList.remove("open");
-    try {
-        const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
-        const res = await fetch(`${ingress}/api/reset`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(agent ? { scope, agent } : { scope }),
+    const got = await requestReset(scope, agent);
+    if (got.ok) {
+        const whom = agent ? ` for @${agent}` : "";
+        const missed = nodesSay(got.value?.nodes);
+        // A warning when some node kept its copy: the reset is only partly done.
+        toast.show({
+            type: missed ? "alert-warning" : "system",
+            title: "Reset",
+            message: `${label} cleared${whom}.${missed}`,
         });
-        if (res.ok) {
-            const done = (await res.json().catch(() => ({}))) as { nodes?: Record<string, string> };
-            const whom = agent ? ` for @${agent}` : "";
-            const missed = nodesSay(done.nodes);
-            // A warning when some node kept its copy: the reset is only partly done.
-            toast.show({
-                type: missed ? "alert-warning" : "system",
-                title: "Reset",
-                message: `${label} cleared${whom}.${missed}`,
-            });
-        } else {
-            const err = (await res.json().catch(() => ({}))) as { error?: string };
-            toast.show({
-                type: "alert-error",
-                title: "Reset failed",
-                message: err.error ?? String(res.status),
-            });
-        }
-    } catch (e) {
-        toast.show({ type: "alert-error", title: "Reset failed", message: String(e) });
+    } else {
+        sayRefusal(got, "Reset failed", "Reset unconfirmed");
     }
 }
 

@@ -14,6 +14,7 @@
 import type { Attachment } from "../../types/agent";
 import { safeStorage } from "../../safeStorage";
 import { uid } from "../../ids";
+import { postUpload } from "../../io/uploadsApi";
 
 /** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
 export const UPLOADS_KEY = "wactorz-uploads-enabled";
@@ -104,13 +105,11 @@ export async function uploadFile(file: File, apiBase = ""): Promise<Attachment> 
             url: URL.createObjectURL(file),
         };
     }
-    const body = new FormData();
-    body.append("file", file, file.name);
-    const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body });
-    if (!res.ok) {
-        throw new Error(`Upload failed (${res.status})`);
+    const got = await postUpload(file, apiBase);
+    if (!got.ok) {
+        throw new Error(got.error);
     }
-    const data = (await res.json()) as { id: string; name?: string; mime?: string; size?: number };
+    const data = got.value;
     return {
         id: data.id,
         name: data.name ?? file.name,

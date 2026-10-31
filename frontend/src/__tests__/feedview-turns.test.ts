@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildFeedView, DEFAULT_FILTERS, type FeedFilters } from "../ui/dashboard/feedView";
-import { toEntry } from "../ui/dashboard/appLogs";
+import { toEntry } from "../io/appLogs";
 import { logFeedItem } from "../agents/mapping";
 import { ServerEventRouter } from "../io/ServerEventRouter";
 import type { AppLogItem, FeedItem } from "../types/feed";

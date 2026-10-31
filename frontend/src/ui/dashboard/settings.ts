@@ -7,17 +7,8 @@
  * the dashboard via callbacks so it can hit the backend and re-render.
  */
 
+import type { CostLimitInfo } from "../../io/costApi";
 import { button, el, named, option } from "../dom";
-
-export interface CostLimitInfo {
-    limit_usd?: number;
-    period?: string;
-    spend_usd?: number;
-    /** Server-computed progress fields (present once a limit is configured). */
-    pct_used?: number;
-    warning?: boolean;
-    limit_reached?: boolean;
-}
 
 export interface CostLimitCallbacks {
     onSaveLimit: (limitUsd: number, period: string) => Promise<void> | void;

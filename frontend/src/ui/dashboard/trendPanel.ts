@@ -13,7 +13,7 @@
  * sensor — is left out rather than drawn empty.
  */
 import { button, dialog, el, pressed, testId, trapTab } from "../dom";
-import { fetchHistory, type HistoryRow } from "./history";
+import { fetchHistory, type HistoryRow } from "../../io/historyApi";
 import {
     buildLineChart,
     downsample,

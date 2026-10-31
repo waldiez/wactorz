@@ -18,6 +18,7 @@
  * reasoning that puts the server's own key check in middleware instead of on
  * each route.
  */
+import { ingressBase } from "./api";
 import { log } from "./logger";
 import { showDeadSession } from "../ui/deadSession";
 
@@ -26,7 +27,7 @@ function loginUrl(target: Window): string {
     // `target`, not the global: the two are the same in the running app, and
     // reading one while redirecting the other is the kind of difference that
     // only shows up as a test that cannot be written.
-    const base = window.__WACTORZ_INGRESS_PATH ?? "";
+    const base = ingressBase();
     const here = target.location.pathname + target.location.search;
     return `${base}/login?next=${encodeURIComponent(here)}`;
 }

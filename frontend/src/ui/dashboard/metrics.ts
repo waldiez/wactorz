@@ -7,7 +7,9 @@
  * limit (fetch / save / reset against `/api/cost*`) and the host-resource bar
  * painting. Owns this telemetry state and routes re-renders back through the host.
  */
-import { buildSettingsView, type CostLimitInfo } from "./settings";
+import { apiUrl } from "../../io/api";
+import { readCostLimit, type CostLimitInfo } from "../../io/costApi";
+import { buildSettingsView } from "./settings";
 import { postOrWarn } from "./mutate";
 import { hostBarValues } from "./cards";
 import type { View } from "./types";
@@ -46,10 +48,6 @@ export class MetricsController {
     /** Latest spend-limit info from `/api/cost`, or null until fetched. */
     get costLimitInfo(): CostLimitInfo | null {
         return this._costLimitInfo;
-    }
-
-    private get _ingress(): string {
-        return window.__WACTORZ_INGRESS_PATH ?? "";
     }
 
     /** Set the aggregate cost and re-render the stat cards if on the overview. */
@@ -124,25 +122,22 @@ export class MetricsController {
     }
 
     private async _fetchCostInfo(): Promise<void> {
-        try {
-            const res = await fetch(`${this._ingress}/api/cost`);
-            if (res.ok) {
-                this._costLimitInfo = (await res.json()) as CostLimitInfo;
-                if (this.host.getView() === "overview") {
-                    this.host.renderStats();
-                } else if (this.host.getView() === "settings") {
-                    this.host.renderView();
-                }
-            }
-        } catch {
-            /* ignore — server may not be ready */
+        const info = await readCostLimit();
+        if (!info) {
+            return;
+        }
+        this._costLimitInfo = info;
+        if (this.host.getView() === "overview") {
+            this.host.renderStats();
+        } else if (this.host.getView() === "settings") {
+            this.host.renderView();
         }
     }
 
     /** POST a spend change, then refetch either way — on success to pick up the
      *  new value, on failure to show what the server still holds. */
     private async _mutateCost(what: string, path: string, init: RequestInit): Promise<void> {
-        await postOrWarn(`${this._ingress}${path}`, init, what);
+        await postOrWarn(apiUrl(path), init, what);
         await this._fetchCostInfo();
     }
 

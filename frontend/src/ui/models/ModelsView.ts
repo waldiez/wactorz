@@ -17,7 +17,7 @@ import type { ModelSummary } from "../../types/models";
 import { statusOf, summaryLine, type Offer } from "../../models/pointers";
 import { formatRoute } from "../../router";
 import { confirmWithReason } from "../dashboard/confirmDialog";
-import { toast } from "../ToastManager";
+import { sayRefusal } from "../dashboard/mutate";
 import { el, labelled, list, named } from "../dom";
 import { buildModelDetail } from "./modelDetail";
 
@@ -175,7 +175,7 @@ export class ModelsView {
         }
         const refused = await this.catalog.act(model, offer.action, reason);
         if (refused) {
-            toast.show({ type: "alert-error", title: `${offer.label}: not done`, message: refused });
+            sayRefusal(refused, `${offer.label}: not done`, `${offer.label}: unconfirmed`);
         }
     }
 }

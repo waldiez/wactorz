@@ -276,3 +276,6 @@ export interface HostStats {
     memUsedMb?: number;
     memTotalMb?: number;
 }
+
+/** A stored sample as the history endpoints serve it: seconds since the epoch, then a value. */
+export type Sample = [number, number | null];

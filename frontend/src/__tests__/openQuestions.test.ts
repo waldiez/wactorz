@@ -117,6 +117,7 @@ describe("QuestionsApi", () => {
         expect(await new QuestionsApi("").answer(asked, "Maintenance")).toEqual({
             ok: false,
             error: "was already answered",
+            status: 409,
         });
     });
 });

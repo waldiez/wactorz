@@ -45,13 +45,14 @@ describe("reading models", () => {
         expect(await new ModelsApi("").detail("ghost")).toEqual({
             ok: false,
             error: "no model 'ghost' is stored",
+            status: 404,
         });
 
         vi.stubGlobal(
             "fetch",
             vi.fn(async () => new Response("not json", { status: 502 })),
         );
-        expect(await new ModelsApi("").list()).toEqual({ ok: false, error: "HTTP 502" });
+        expect(await new ModelsApi("").list()).toEqual({ ok: false, error: "HTTP 502", status: 502 });
     });
 
     it("says so when the server does not answer in time", async () => {
@@ -69,7 +70,11 @@ describe("reading models", () => {
         const pending = new ModelsApi("").list();
         await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
 
-        expect(await pending).toEqual({ ok: false, error: "the server did not answer in time" });
+        expect(await pending).toEqual({
+            ok: false,
+            error: "the server did not answer in time",
+            timedOut: true,
+        });
     });
 });
 

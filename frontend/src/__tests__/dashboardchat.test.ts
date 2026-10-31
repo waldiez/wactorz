@@ -1207,9 +1207,10 @@ describe("DashboardChat — stop, attachments, external events", () => {
         const dc = mount(host);
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
         pressStop(host, dc);
-        expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/chat/stop"), {
-            method: "POST",
-        });
+        expect(fetchSpy).toHaveBeenCalledWith(
+            expect.stringContaining("/api/chat/stop"),
+            expect.objectContaining({ method: "POST" }),
+        );
         fetchSpy.mockRestore();
     });
 

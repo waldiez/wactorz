@@ -9,7 +9,7 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
-import type { CostLimitInfo } from "./settings";
+import type { CostLimitInfo } from "../../io/costApi";
 import { button, el, labelled, listItem, testId } from "../dom";
 import { buildSparkline, lastValue, type Point } from "./trend";
 

@@ -22,6 +22,7 @@
  *   4. Wiring — transport              8. Teardown
  */
 
+import { apiUrl, ingressBase, requestJson } from "./io/api";
 import "./app.css";
 import { safeStorage } from "./safeStorage";
 import { uid } from "./ids";
@@ -87,7 +88,7 @@ import { STALE_MS } from "./agents/liveness";
 // Clear any stale persisted theme from older builds.
 safeStorage.remove("wactorz-theme");
 
-const _ingressPath: string = window.__WACTORZ_INGRESS_PATH ?? "";
+const _ingressPath: string = ingressBase();
 
 // For fetch: ingress-prefixed under HA, plain-relative everywhere else.
 const _apiBase = _ingressPath;
@@ -197,18 +198,19 @@ function ingestChat(msg: ChatMessage): void {
     pushFeed(chatFeedItem(msg));
 }
 
+/** How long the live actor poll waits for an answer. */
+const ACTOR_POLL_TIMEOUT_MS = 10_000;
+
 function refreshLiveActors(): void {
     if (liveSyncInFlight) {
         return;
     }
     liveSyncInFlight = true;
     // Bound the request so a hung fetch can't pin liveSyncInFlight and wedge every
-    // future refresh (the browser's default timeout is ~90s).
-    const ctrl = new AbortController();
-    const timer = window.setTimeout(() => ctrl.abort(), 10_000);
-    fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
-        .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((actors: AgentInfo[]) => {
+    // future refresh, and shorter than most: the next poll asks again anyway.
+    requestJson<AgentInfo[]>(apiUrl("/api/actors"), {}, ACTOR_POLL_TIMEOUT_MS)
+        .then(got => (got.ok ? got.value : Promise.reject(new Error(got.error))))
+        .then(actors => {
             actorOutage.recordSuccess();
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
             log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
@@ -224,7 +226,6 @@ function refreshLiveActors(): void {
             }
         })
         .finally(() => {
-            window.clearTimeout(timer);
             liveSyncInFlight = false;
         });
 }
@@ -542,16 +543,16 @@ _liveActorsTimer = window.setInterval(() => {
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).
-fetch(`${_apiBase}/api/feed`)
+requestJson<{ type: string; label: string; agentName: string; timestamp?: number; role?: string }[]>(
+    apiUrl("/api/feed"),
+)
     // Reject rather than substitute []: a 500 became "no history" indistinguishable
     // from an empty log, silently and with nothing written anywhere.
-    .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then(
-        (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
-            log.info("[feed] /api/feed seed:", items.length, "items");
-            items.forEach(item => pushFeed(feedSeedItem(item)));
-        },
-    )
+    .then(got => (got.ok ? got.value : Promise.reject(new Error(got.error))))
+    .then(items => {
+        log.info("[feed] /api/feed seed:", items.length, "items");
+        items.forEach(item => pushFeed(feedSeedItem(item)));
+    })
     // warn, not debug: this runs once, so there is no run of failures to
     // escalate from, and the user-visible result is an empty feed with no
     // explanation. debug is dropped in a production build.

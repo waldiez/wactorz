@@ -63,6 +63,25 @@ const defaultConfig = defineConfig({
         // Guard the init-time circular-import invariant statically (the codebase
         // leans on function-local imports to avoid cycles at module load).
         "import/no-cycle": "error",
+        // Every request goes through src/io/api.ts, which gives it a timeout and
+        // the server's words for a refusal.
+        "no-restricted-globals": [
+            "error",
+            { name: "fetch", message: "Ask through src/io/api.ts (requestJson, requestBytes)." },
+        ],
+        "no-restricted-properties": [
+            "error",
+            {
+                object: "window",
+                property: "fetch",
+                message: "Ask through src/io/api.ts (requestJson, requestBytes).",
+            },
+            {
+                object: "globalThis",
+                property: "fetch",
+                message: "Ask through src/io/api.ts (requestJson, requestBytes).",
+            },
+        ],
         // The models never reach into the views: a view observes a model, and
         // a model that imported one could be tested only with a DOM. `io/` and
         // `config/` still import from `ui/` and join this list once they do not.
@@ -115,6 +134,14 @@ export default [
         ...config,
         files: ["**/*.{ts,tsx}"],
     })),
+    {
+        // The client itself, and tests, which stub what it calls.
+        files: ["src/io/api.ts", "**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
+        rules: {
+            "no-restricted-globals": "off",
+            "no-restricted-properties": "off",
+        },
+    },
     {
         // Test suites legitimately have long describe/it blocks with many
         // sequential assertions; size/statement caps don't model them well.

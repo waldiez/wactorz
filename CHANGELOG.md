@@ -252,6 +252,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The dashboard no longer waits forever on a server that has stopped answering.** Every request
+  has a timeout now: most give up after 15 seconds, a reset after two minutes and an upload after
+  five. A change that timed out is shown as unconfirmed, not failed, since the server may be
+  finishing it, and the Models page reads the model again to show what happened. Speech that takes
+  over a minute is said in the browser's voice for that reply only. Refusals show the
+  server's own words instead of a status code.
 - **One of two agents of a name can be reset.** A reset of `tally@pi` was refused while `tally`
   also ran elsewhere. Now it clears that agent alone, in every scope; a bare `tally` is still
   refused, with the addresses to choose from.

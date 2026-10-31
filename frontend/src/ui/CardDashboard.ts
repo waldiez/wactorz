@@ -18,6 +18,7 @@
  * their own.
  */
 
+import { ingressBase } from "../io/api";
 import type { AgentInfo } from "../types/agent";
 import type { AgentActivity, AgentChanges, AgentStore } from "../agents/AgentStore";
 import { safeStorage } from "../safeStorage";
@@ -76,9 +77,9 @@ export class CardDashboard {
     /** An agent's or a node's history, opened from its card. */
     private _trendPanel = new TrendPanel();
     /** The stored models and their pointers. */
-    private _models = new ModelsView(new ModelCatalog(new ModelsApi(window.__WACTORZ_INGRESS_PATH ?? "")));
+    private _models = new ModelsView(new ModelCatalog(new ModelsApi(ingressBase())));
     /** The questions agents wait on the person for, and the view of them. */
-    private _inbox = new QuestionInbox(new QuestionsApi(window.__WACTORZ_INGRESS_PATH ?? ""));
+    private _inbox = new QuestionInbox(new QuestionsApi(ingressBase()));
     private _inboxView: InboxView;
     /** Stops the inbox telling this dashboard its count. */
     private readonly _unsubscribeInbox: () => void;

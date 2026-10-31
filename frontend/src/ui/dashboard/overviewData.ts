@@ -11,7 +11,7 @@
  * Nothing is fetched while the page is hidden or another view is showing.
  */
 import type { NodeListing } from "../../types/agent";
-import { fetchAgentsField, fetchHistory, fetchNodes } from "./history";
+import { fetchAgentsField, fetchHistory, fetchNodes } from "../../io/historyApi";
 import type { NodeTrend } from "./nodeCard";
 import { levels, perMinute, samplesOf, type Point } from "./trend";
 

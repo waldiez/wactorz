@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { HistoryRow } from "../ui/dashboard/history";
+import type { HistoryRow } from "../io/historyApi";
 import {
     AGENT_CHARTS,
     buildCharts,

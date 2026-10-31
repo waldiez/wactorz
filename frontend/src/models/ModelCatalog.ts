@@ -19,7 +19,7 @@
  *
  * No DOM: the view reads `state` and is told when it changes.
  */
-import type { Answer } from "../io/api";
+import type { Answer, Refusal } from "../io/api";
 import type { ModelsApi } from "../io/modelsApi";
 import type { ModelAction, ModelDetail, ModelSummary, PointerMove } from "../types/models";
 
@@ -94,23 +94,23 @@ export class ModelCatalog {
     }
 
     /**
-     * Ask for `action` on the model `name`; the server's refusal, or "" once it
-     * took. Named by the caller rather than read from what is open: the person
+     * Ask for `action` on the model `name`; why not, or null once it took. Named
+     * by the caller rather than read from what is open: the person
      * confirmed a move of the model whose button they pressed, and another may
-     * have been opened while they were asked.
+     * have been opened while they were asked. Read again after a timeout too:
+     * the move may have been made, and only the server can say.
      */
-    async act(name: string, action: ModelAction, reason = ""): Promise<string> {
+    async act(name: string, action: ModelAction, reason = ""): Promise<Refusal | null> {
         if (!name || this._state.moving) {
-            return "";
+            return null;
         }
         this._set({ moving: true });
         const done = await this.api.move(name, action, reason);
         this._set({ moving: false });
-        if (!done.ok) {
-            return done.error;
+        if (done.ok || done.timedOut) {
+            await this.moved(name);
         }
-        await this.moved(name);
-        return "";
+        return done.ok ? null : done;
     }
 
     private async _readList(): Promise<void> {

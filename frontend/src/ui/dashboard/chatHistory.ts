@@ -12,11 +12,9 @@
 import type { Attachment, ChatMessage } from "../../types/agent";
 import { toMs } from "../../time";
 import { stripActionBlocks } from "../../agents/actionBlocks";
-import { type LedgerQuestion, questionMessage } from "../../io/openQuestions";
-
-function ingressBase(): string {
-    return window.__WACTORZ_INGRESS_PATH ?? "";
-}
+import { apiUrl } from "../../io/api";
+import { readActorHistory, readChatLog, type StoredAttachment } from "../../io/chatHistoryApi";
+import { questionMessage } from "../../io/openQuestions";
 
 /**
  * Drop internal bookkeeping turns the backend records into an agent's
@@ -57,9 +55,6 @@ function shownContent(row: { role: string; content: string }): string {
     return row.role === "user" ? row.content : stripActionBlocks(row.content);
 }
 
-/** What the server records on a turn — the file's identity, but no address. */
-type StoredAttachment = { id: string; name: string; mime: string; size: number };
-
 /**
  * Rebuild a turn's attachment chips from what was stored with it.
  *
@@ -74,26 +69,17 @@ function restoreAttachments(stored: StoredAttachment[] | undefined): Attachment[
     }
     return stored.map(a => ({
         ...a,
-        url: `${ingressBase()}/api/upload/${encodeURIComponent(a.id)}`,
+        url: apiUrl(`/api/upload/${encodeURIComponent(a.id)}`),
     }));
 }
 
 /** Primary source: chat_log table — carries real persisted timestamps.
  *  Returns null on a failed request so callers can retry later. */
 async function fromChatLog(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
-    const res = await fetch(`${ingressBase()}/api/chats?agent_id=${encodeURIComponent(agentId)}&limit=200`);
-    if (!res.ok) {
+    const rows = await readChatLog(agentId);
+    if (rows === null) {
         return null;
     }
-    const rows = (await res.json()) as {
-        id: number;
-        ts: number;
-        role: string;
-        content: string;
-        attachments?: StoredAttachment[];
-        /** The question the row is, when the server's ledger still knows it. */
-        question?: Omit<LedgerQuestion, "agent">;
-    }[];
     return stripInternalTurns(rows.reverse()).map(r => {
         if (r.question) {
             // By the question's own id: a live copy already shown is then the
@@ -118,11 +104,10 @@ async function fromChatLog(agentId: string, agentName: string): Promise<ChatMess
 /** Fallback: actor kv_store history — no timestamps, so synthesise them.
  *  Returns null on a failed request so callers can retry later. */
 async function fromKvStore(agentId: string, agentName: string): Promise<ChatMessage[] | null> {
-    const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentId)}/history`);
-    if (!res.ok) {
+    const rawAll = await readActorHistory(agentId);
+    if (rawAll === null) {
         return null;
     }
-    const rawAll = (await res.json()) as { role: string; content: string }[];
     const raw = stripInternalTurns(rawAll);
     const base = Date.now() - raw.length * 2000 - 5000;
     return raw.map((m, i) => ({

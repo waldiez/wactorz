@@ -191,11 +191,10 @@ export class CardDashboard {
         this._data.start();
     }
 
-    /** Hide the dashboard, unwire events, release the mic, and stop timers. */
+    /** Hide the dashboard, unwire events, and stop timers. */
     hide(): void {
         this.root.classList.remove("cd-visible");
         this._unwireEvents();
-        this._chat.cancelMic(); // release the mic if a recording was in progress
         this._activity.release();
         if (this.tickTimer) {
             clearInterval(this.tickTimer);

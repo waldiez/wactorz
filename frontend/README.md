@@ -33,7 +33,7 @@ frontend/
 │   ├── agents/            # Agent-state store + logic: AgentStore, mapping, naming, deletionGuard
 │   ├── chat/              # The chat's state, no DOM: ChatLog, the one writer of its messages
 │   ├── io/                # IO/transport: WSClient (the /ws connection), ServerEventRouter
-│   │                      #   (topic→typed-event decoder), IOManager, SpeechToText,
+│   │                      #   (topic→typed-event decoder), IOManager,
 │   │                      #   AmbientManager, logger
 │   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard;
 │   │                      #   dom.ts builds elements and their ARIA, testIds.ts lists the test ids
@@ -215,25 +215,8 @@ topic there without touching the router.
 
 ## Gated UI
 
-Two things are gated, for two different reasons — and the difference decides
-where the switch belongs.
-
-### Not built yet — build-time
-
-| Flag                    | Enables                           | Needs backend |
-| ----------------------- | --------------------------------- | ------------- |
-| `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt`    |
-
-`STT_ENABLED` (`src/io/SpeechToText.ts`) is off by default because **`/api/stt`
-does not exist**. The client half is written and waiting; turning the flag on
-without the endpoint gives a mic button whose every recording fails. It is a
-switch for developing the feature, not a per-deploy option — when the endpoint
-lands, this should become a server capability like the one below and the flag
-should go.
-
-### Optional per deployment — runtime, from the server
-
-Attachments (drag-drop + paste) are **not** a build-time flag. The server only
+Attachments (drag-drop + paste) are optional per deployment, so they are switched at
+runtime, from the server, and **not** by a build-time flag. The server only
 registers `/api/upload` when it has uploads on, so the browser asks rather than
 assumes: the `uploads.enabled` field of `/api/config` is seeded into
 `wactorz-uploads-enabled` and read by `uploadsEnabled()`.

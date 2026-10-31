@@ -7,7 +7,6 @@ import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
 import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
 import { byRole } from "./queries";
-import type { SpeechToText } from "../io/SpeechToText";
 import { emit } from "../events";
 
 function makeDeps(over: Partial<IobarDeps> = {}): IobarDeps {
@@ -18,7 +17,6 @@ function makeDeps(over: Partial<IobarDeps> = {}): IobarDeps {
             closePanel: vi.fn(),
             commands: new CommandCompletion(new CommandCatalog(async () => [])),
         } as unknown as ChatInput,
-        stt: {} as SpeechToText,
         target: () => "main",
         setTarget: vi.fn(),
         populateSelect: vi.fn((sel: HTMLSelectElement) => {

@@ -23,7 +23,6 @@ import { ChatInput } from "./chatInput";
 import { el } from "../dom";
 import { filedWithLastSent, planSend, senderOf, voiceThreadTarget, type SendPlan } from "./chatRouting";
 import { ChatAnswers } from "./chatAnswers";
-import { SpeechToText } from "../../io/SpeechToText";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "./mutate";
@@ -106,7 +105,6 @@ export class DashboardChat {
      */
     private _listVisible = false;
 
-    private _stt = new SpeechToText(window.__WACTORZ_INGRESS_PATH ?? "");
     private _chatInput = new ChatInput({
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
         agentNames: () => messageableNames(this.host.agents.values(), agent => this.host.label(agent)),
@@ -176,11 +174,6 @@ export class DashboardChat {
      *  last asked (see `ChatTarget.relabelled`); null when it is called as before. */
     relabelled(): string | null {
         return this._target.relabelled();
-    }
-
-    /** Release the mic if a recording was in progress (dashboard hidden). */
-    cancelMic(): void {
-        this._stt.cancel();
     }
 
     /** Drop all chat state (a full reset / wipe). */
@@ -389,11 +382,10 @@ export class DashboardChat {
         }
     }
 
-    /** Build the chat input bar (textarea, target select, mic/attach/send controls). */
+    /** Build the chat input bar (textarea, target select, attach/send controls). */
     buildIobar(): HTMLElement {
         return buildChatIobar({
             chatInput: this._chatInput,
-            stt: this._stt,
             target: () => this.chatTargetName,
             setTarget: id => this.setTarget(id),
             populateSelect: select => this._populateSelect(select),

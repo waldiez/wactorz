@@ -72,43 +72,6 @@
   color: #fff;
 }
 
-/* ── Voice (STT) mic button ───────────────────────────────────────────────── */
-.af-mic-btn {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 15px;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s,
-    box-shadow 0.15s;
-}
-.af-mic-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-.af-mic-btn.recording {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  animation: af-mic-pulse 1.4s infinite;
-}
-@keyframes af-mic-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5);
-  }
-  70% {
-    box-shadow: 0 0 0 8px rgba(248, 113, 113, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
-  }
-}
-
 /* ── Revoked ingress session ──────────────────────────────────────────────── */
 /* Above everything and swallowing clicks: the page behind it is inert, and a
    control that looks live but answers nothing is what this exists to stop. */

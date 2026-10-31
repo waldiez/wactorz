@@ -4,12 +4,10 @@
  */
 /**
  * The chat input bar (iobar): target <select>, auto-growing textarea wired to
- * the ChatInput controller, a voice (STT) mic button and a send button. Pure
- * DOM construction — all behaviour is routed back through the `IobarDeps`.
+ * the ChatInput controller, an attach button and a send button. Pure DOM
+ * construction — all behaviour is routed back through the `IobarDeps`.
  */
 import type { ChatInput } from "./chatInput";
-import type { SpeechToText } from "../../io/SpeechToText";
-import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
@@ -31,7 +29,6 @@ export function nameRecipient(root: ParentNode, target: string): void {
 
 export interface IobarDeps {
     chatInput: ChatInput;
-    stt: SpeechToText;
     /** Current chat target (for the placeholder). */
     target(): string;
     /** Set the active target when the <select> changes. */
@@ -124,62 +121,6 @@ function wireTurnState(stopBtn: HTMLButtonElement): void {
     listen("af-turn", d => {
         stopBtn.style.display = d.agent === null ? "none" : "flex";
     });
-}
-
-async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {
-    try {
-        await stt.start();
-        btn.classList.add("recording");
-        btn.title = "Stop & transcribe";
-        btn.setAttribute("aria-label", "Stop & transcribe");
-    } catch {
-        toast.show({ type: "alert-error", title: "Mic blocked", message: "Microphone permission denied." });
-    }
-}
-
-async function finishMic(
-    stt: SpeechToText,
-    input: HTMLTextAreaElement,
-    btn: HTMLButtonElement,
-): Promise<void> {
-    btn.classList.remove("recording");
-    btn.title = "Voice input";
-    btn.setAttribute("aria-label", "Voice input");
-    try {
-        const text = await stt.stopAndTranscribe();
-        if (text) {
-            input.value = input.value ? `${input.value} ${text}` : text;
-            input.dispatchEvent(new Event("input"));
-            input.focus();
-        }
-    } catch (err) {
-        toast.show({ type: "alert-error", title: "Transcription failed", message: String(err) });
-    }
-}
-
-async function toggleMic(
-    stt: SpeechToText,
-    input: HTMLTextAreaElement,
-    btn: HTMLButtonElement,
-): Promise<void> {
-    if (stt.recording) {
-        await finishMic(stt, input, btn);
-    } else {
-        await startMic(stt, btn);
-    }
-}
-
-/** Whether the voice mic button should be shown: backend enabled and the
- *  browser can actually capture audio. Otherwise it's simply not rendered. */
-function micAvailable(): boolean {
-    return STT_ENABLED && Stt.isSupported();
-}
-
-/** Mic button: click to record, click again to transcribe into the input. */
-function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
-    const btn = iconButton("af-mic-btn", "Voice input", iconMarkup("mic", 16));
-    btn.addEventListener("click", () => void toggleMic(stt, input, btn));
-    return btn;
 }
 
 /** The input wrapper (mention panel + ghost + textarea + hint) plus the handles
@@ -280,9 +221,6 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
         // The picker is a sibling rather than a child: interactive content
         // nested inside a button is invalid, hidden or not.
         bar.append(button, picker);
-    }
-    if (micAvailable()) {
-        bar.appendChild(buildMicBtn(deps.stt, input));
     }
     const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);

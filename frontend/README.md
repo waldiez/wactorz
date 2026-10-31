@@ -105,14 +105,14 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-agent-command`     | CardDashboard → main.ts (WSClient)                             | `{ command, agentId }`                                                 |
 | `af-send-message`      | DashboardChat → main.ts (IOManager)                            | `{ id, content, target, name, answerer, attachments }` (ids)           |
 | `af-addressed`         | DashboardChat → main.ts (WSClient)                             | `{ agent }` (whom the person now talks to, typed or by voice)          |
-| `af-feed-push`         | IOManager / main.ts → CardDashboard                            | `{ item: FeedItem }`                                                   |
-| `af-chat-message`      | main.ts (WSClient) → DashboardChat                             | `{ msg: ChatMessage }`                                                 |
+| `af-feed-push`         | IOManager / main.ts / ui/chatIngress → CardDashboard           | `{ item: FeedItem }`                                                   |
+| `af-chat-message`      | ui/chatIngress → DashboardChat                                 | `{ msg: ChatMessage }`                                                 |
 | `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text }`                                       |
 | `af-stream-end`        | IOManager → DashboardChat                                      | `{ text, from, agentId }`                                              |
-| `af-socket`            | main.ts → DashboardChat                                        | `{ open }`                                                             |
+| `af-socket`            | io/connection → DashboardChat                                  | `{ open }`                                                             |
 | `af-turn`              | DashboardChat → iobar                                          | `{ agent, queued }`                                                    |
 | `af-turn-reached`      | WSClient → DashboardChat                                       | `{ id, agentId, name }` (the agent the person's message `id` reached)  |
-| `af-connection-status` | main.ts (WSClient) → CardDashboard                             | `{ status: "live" \| "connecting" \| "disconnected" }`                 |
+| `af-connection-status` | io/connection → CardDashboard                                  | `{ status: "live" \| "connecting" \| "disconnected" }`                 |
 | `af-attachment-added`  | DropZone / chatIobar → DashboardChat                           | `{ attachment }`                                                       |
 | `af-send-failed`       | IOManager → DashboardChat                                      | `{ id, content, target }`                                              |
 | `af-reset-chat`        | WSClient → DashboardChat                                       | `{ agent: string \| null }`                                            |

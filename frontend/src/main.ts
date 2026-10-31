@@ -25,12 +25,11 @@
 import { apiUrl, ingressBase, requestJson } from "./io/api";
 import "./app.css";
 import { safeStorage } from "./safeStorage";
-import { uid } from "./ids";
 import { AgentStore } from "./agents/AgentStore";
 import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
-import { createOutageTracker } from "./io/outage";
+import { Connection } from "./io/connection";
 import { fetchQuestionLedger } from "./io/openQuestions";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
@@ -38,16 +37,16 @@ import { register as registerTTS } from "./ext/tts";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
-import { QuestionNotices, questionToast } from "./ui/questionToast";
+import { chatIngress } from "./ui/chatIngress";
+import { QuestionToasts } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { CardDashboard } from "./ui/CardDashboard";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
-import type { AgentInfo, ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import {
     toAgentInfo,
-    reconcileActorList,
+    socketMessage,
     buildNameIndex,
     selectLogFeedReplay,
     type LogFeedReplayState,
@@ -57,7 +56,6 @@ import {
     spawnTypeLabel,
     alertFeedItem,
     alertKind,
-    chatFeedItem,
     answerFeedItem,
     feedSeedItem,
     stoppedFeedItem,
@@ -67,7 +65,8 @@ import {
     nodeHeartbeatFeedItem,
     rawFeedItem,
 } from "./agents/mapping";
-import { createDeletionGuard } from "./agents/deletionGuard";
+import { ActorSync } from "./agents/actorSync";
+import { createDeletionGuard, tombstoneWiped } from "./agents/deletionGuard";
 import { NodePresence } from "./agents/nodePresence";
 import { startRouter } from "./router";
 import { STALE_MS } from "./agents/liveness";
@@ -165,16 +164,20 @@ let _dropZone: DropZone | null = null;
 const { markDeleted, isDeleted } = createDeletionGuard();
 
 const _logFeedState: LogFeedReplayState = { maxTs: 0, initialized: false };
-// "live" = the /ws is open AND the server↔broker link is up. Both are required:
-// an open /ws with a dead broker means no events are actually flowing.
-let _wsOpen = false;
-let _mqttUp = false;
-let _feedLive = false;
-let liveSyncInFlight = false;
-// Seed only once — reconnects must not re-add already-known agents.
-let seeded = false;
-const actorOutage = createOutageTracker();
-const questionNotices = new QuestionNotices();
+const actorSync = new ActorSync(agentStore, isDeleted);
+const questions = new QuestionToasts(() => dashboard.inboxOpen);
+const ingestChat = chatIngress({ speaker: ioManager, store: agentStore, questions });
+
+const connection = new Connection(() => {
+    agentStore.pruneSilentRemoteAgents();
+    void actorSync.seedOnce();
+    // A question asked while the page was closed, or the socket down, reached
+    // neither a toast nor its thread: the ledger has it.
+    void fetchQuestionLedger(_apiBase).then(ledger => {
+        emit("af-questions-listed", ledger);
+        questions.listed(ledger);
+    });
+});
 
 // ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
 
@@ -182,73 +185,10 @@ function pushFeed(item: FeedItem): void {
     emit("af-feed-push", { item });
 }
 
-/** A chat message arrived, as a reply on the socket or as an agent's own: its notice,
- *  read aloud, its agent's card, the chat and the feed, the same whichever way it came. */
-function ingestChat(msg: ChatMessage): void {
-    if (msg.from !== "user") {
-        const asking = questionToast(msg);
-        if (!asking) {
-            toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
-        } else if (questionNotices.firstTime(msg.id) && !dashboard.inboxOpen) {
-            toast.show(asking);
-        }
-    }
-    ioManager.receiveAgentMessage(msg);
-    agentStore.onChat(msg.from);
-    emit("af-chat-message", { msg });
-    pushFeed(chatFeedItem(msg));
-}
-
-/** How long the live actor poll waits for an answer. */
-const ACTOR_POLL_TIMEOUT_MS = 10_000;
-
-function refreshLiveActors(): void {
-    if (liveSyncInFlight) {
-        return;
-    }
-    liveSyncInFlight = true;
-    // Bound the request so a hung fetch can't pin liveSyncInFlight and wedge every
-    // future refresh, and shorter than most: the next poll asks again anyway.
-    requestJson<AgentInfo[]>(apiUrl("/api/actors"), {}, ACTOR_POLL_TIMEOUT_MS)
-        .then(got => (got.ok ? got.value : Promise.reject(new Error(got.error))))
-        .then(actors => {
-            actorOutage.recordSuccess();
-            agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
-            log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
-        })
-        .catch(err => {
-            // Dev mode without a running server is expected; log at debug so a
-            // genuine backend failure still leaves a trace. A run of them is not
-            // routine, so say that once, at a level that survives a production
-            // build.
-            log.debug("[Dashboard] live actor refresh failed:", err);
-            if (actorOutage.recordFailure()) {
-                log.warn("[Dashboard] backend unreachable — live actor list is stale");
-            }
-        })
-        .finally(() => {
-            liveSyncInFlight = false;
-        });
-}
-
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId, addressChoice) => {
-    ingestChat({
-        id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
-        from,
-        to,
-        threadId,
-        content,
-        timestampMs,
-        ...(source ? { source } : {}),
-        ...(surface ? { surface } : {}),
-        ...(surfaceLabel ? { surfaceLabel } : {}),
-        ...(brain ? { brain } : {}),
-        ...(addressChoice ? { addressChoice } : {}),
-    });
-});
+ws.onChat((...frame) => ingestChat(socketMessage(...frame)));
 
 // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
 ioManager.setWSClient(ws);
@@ -289,7 +229,7 @@ ws.onLogFeed(items => {
     const resolveName = (id: string): string | undefined => nameIndex.get(id) ?? agentStore.get(id)?.name;
     // Replay/dedup bookkeeping (first-batch backlog vs. high-water mark vs.
     // skip-while-ws-live) lives in selectLogFeedReplay so it stays tested.
-    selectLogFeedReplay(items, _logFeedState, _feedLive, resolveName).forEach(pushFeed);
+    selectLogFeedReplay(items, _logFeedState, connection.live, resolveName).forEach(pushFeed);
 });
 
 // ═══ 4 · Wiring — WS transport ═════════════════════════════════════════════
@@ -352,63 +292,16 @@ router.on("status", payload => {
         });
     }
     if (payload.state === "stopped") {
-        window.setTimeout(() => refreshLiveActors(), 200);
+        window.setTimeout(() => void actorSync.refresh(), 200);
         pushFeed(stoppedFeedItem(payload));
     }
 });
 
-// The /ws transport owns the connection; the router only decodes events. Feed it
-// the server_event frames, and derive "live" from the transport + broker state.
+// The /ws transport owns the connection; the router only decodes events.
 ws.onServerEvent((topic, payload, threadId) => router.route(topic, payload, threadId));
-ws.onConnected(() => {
-    _wsOpen = true;
-    emit("af-socket", { open: true });
-    recomputeLive();
-});
-ws.onDisconnected(() => {
-    _wsOpen = false;
-    emit("af-socket", { open: false });
-    recomputeLive();
-});
-ws.onMqttStatus(up => {
-    _mqttUp = up;
-    recomputeLive();
-});
-
-function recomputeLive(): void {
-    const live = _wsOpen && _mqttUp;
-    if (live === _feedLive) {
-        return;
-    }
-    _feedLive = live;
-    if (!live) {
-        emit("af-connection-status", { status: "disconnected" });
-        return;
-    }
-    emit("af-connection-status", { status: "live" });
-    agentStore.pruneSilentRemoteAgents();
-    if (!seeded) {
-        seeded = true;
-        // Startup spawn events are published before the browser connects;
-        // fetch the current actor list from REST so they appear immediately.
-        refreshLiveActors();
-    }
-    // A question asked while the page was closed, or the socket down, reached
-    // neither a toast nor its thread: the ledger has it.
-    void fetchQuestionLedger(_apiBase).then(ledger => {
-        emit("af-questions-listed", ledger);
-        // A failed read lists nothing, which says nothing about what is still open.
-        if (ledger.listed) {
-            questionNotices.keepOnly(ledger.open);
-        }
-        ledger.open.forEach(msg => {
-            const asking = questionToast(msg);
-            if (asking && questionNotices.firstTime(msg.id) && !dashboard.inboxOpen) {
-                toast.show(asking);
-            }
-        });
-    });
-}
+ws.onConnected(() => connection.socket(true));
+ws.onDisconnected(() => connection.socket(false));
+ws.onMqttStatus(up => connection.broker(up));
 
 router.on("qa-flag", payload => {
     pushFeed(qaFlagFeedItem(payload));
@@ -514,15 +407,7 @@ listen("af-send-message", detail => {
 
 // wipe all
 listen("af-wipe-all", ({ survivors }) => {
-    // A wipe deletes: every agent it took away is tombstoned as a deleted one
-    // is, so a heartbeat still on its way cannot put its card back. Cards are
-    // otherwise kept until a delete says so, and a wipe sends none per agent.
-    const kept = new Set(survivors);
-    for (const agent of agentStore.list()) {
-        if (!kept.has(agent.id)) {
-            markDeleted(agent.id);
-        }
-    }
+    tombstoneWiped(agentStore.list(), survivors, markDeleted);
     agentStore.clearAll();
     _logFeedState.maxTs = 0;
 });
@@ -537,12 +422,12 @@ listen("af-clear-feed", () => {
 // ═══ 7 · Startup — REST seed, TTS probe, connect ═════════════════════════════
 
 ws.connect(`${_wsBase}/ws`);
-refreshLiveActors();
+void actorSync.refresh();
 _liveActorsTimer = window.setInterval(() => {
     if (document.hidden) {
         return;
     }
-    refreshLiveActors();
+    void actorSync.refresh();
     agentStore.pruneSilentRemoteAgents();
 }, 15000);
 
@@ -572,7 +457,7 @@ requestJson<{ type: string; label: string; agentName: string; timestamp?: number
 seedServerConfig()
     .then(haChanged => {
         if (haChanged) {
-            emit("af-connection-status", { status: _feedLive ? "live" : "disconnected" });
+            emit("af-connection-status", { status: connection.live ? "live" : "disconnected" });
         }
         // Boot TTS after config is seeded — reads availability from safeStorage.
         const available = safeStorage.get("wactorz-tts-available") === "1";

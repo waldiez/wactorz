@@ -27,6 +27,8 @@ import type {
 } from "../types/agent";
 import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
+import type { ChatHandler } from "../io/WSClient";
+import { uid } from "../ids";
 import { nameFromWid, resolveAgentName } from "./naming";
 
 // --- untrusted-payload field coercers (raw MQTT JSON) -------------------------
@@ -460,4 +462,23 @@ export function rawFeedItem(
     const agentId = m[1]!;
     const agentName = resolveName?.(agentId) ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
     return mapper(agentName, asObj(payload), now);
+}
+
+/** A chat frame from the socket, as a message. */
+export function socketMessage(...frame: Parameters<ChatHandler>): ChatMessage {
+    const [content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId, addressChoice] =
+        frame;
+    return {
+        id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
+        from,
+        to,
+        threadId,
+        content,
+        timestampMs,
+        ...(source ? { source } : {}),
+        ...(surface ? { surface } : {}),
+        ...(surfaceLabel ? { surfaceLabel } : {}),
+        ...(brain ? { brain } : {}),
+        ...(addressChoice ? { addressChoice } : {}),
+    };
 }

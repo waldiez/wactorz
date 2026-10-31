@@ -46,7 +46,6 @@ import type { AgentAction } from "./dashboard/cards";
 import { el, testId } from "./dom";
 import { MetricsController } from "./dashboard/metrics";
 import { confirmDialog } from "./dashboard/confirmDialog";
-import { seedServerConfig } from "../config/serverConfig";
 import { emit, Listeners } from "../events";
 import { initialRoute } from "../router";
 import { ViewRoutes } from "./dashboard/viewRoutes";
@@ -176,7 +175,6 @@ export class CardDashboard {
         this.root.appendChild(this._chat.buildIobar());
         document.body.appendChild(this.root);
         this._unsubscribe = store.subscribe(changes => this._onAgentsChanged(changes));
-        void this._loadServerConfig();
     }
 
     /** Reveal the dashboard, wire events, and start the refresh timers. */
@@ -367,21 +365,18 @@ export class CardDashboard {
         this._routes.registered(key);
     }
 
-    /** Seed runtime config from /api/config and point the Devices nav link at it. */
-    private _loadServerConfig(): void {
-        seedServerConfig()
-            .then(() => {
-                setHaNavUrl(this.root, this.haUrl);
-                setSignOutVisible(this.root);
-                setAttachVisible(this.root);
-            })
-            .catch(() => {});
+    /** What only the server knows has arrived: show what it decides. */
+    private _configLoaded(): void {
+        setHaNavUrl(this.root, this.haUrl);
+        setSignOutVisible(this.root);
+        setAttachVisible(this.root);
     }
 
     private _wireEvents(): void {
         this._wireFeedEvents();
         this._chat.wire();
         this._activity.wire();
+        this._listeners.on("af-config-loaded", () => this._configLoaded());
         this._listeners.on("af-connection-status", detail => {
             this.connState = detail.status;
             renderConnBadge(this.root, this.connState);

@@ -11,11 +11,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { seedServerConfig } from "../config/serverConfig";
+import { loadServerConfig, seedServerConfig } from "../config/serverConfig";
 import { uploadsEnabled, UPLOADS_KEY } from "../ui/dashboard/uploads";
 import { safeStorage } from "../safeStorage";
 import { byRole } from "./queries";
-import { buildDashboard } from "./dashboard";
+import { openDashboard } from "./dashboard";
 
 function respondWith(cfg: Record<string, unknown>): void {
     vi.stubGlobal(
@@ -106,20 +106,34 @@ describe("the attach button", () => {
     it("appears on a first visit, once the server says it takes uploads", async () => {
         respondWith({ uploads: { enabled: true } });
 
-        buildDashboard();
+        openDashboard();
         expect(attach()?.hidden).toBe(true);
 
-        await vi.waitFor(() => expect(attach()?.hidden).toBe(false));
+        await loadServerConfig();
+
+        expect(attach()?.hidden).toBe(false);
         expect(byRole(document, "button", "Attach files")).toBeDefined();
+    });
+
+    it("makes the one request a page makes for its config", async () => {
+        respondWith({ uploads: { enabled: true } });
+
+        openDashboard();
+        await loadServerConfig();
+
+        const asked = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/api/config"));
+        expect(asked).toHaveLength(1);
     });
 
     it("goes away when a server has stopped taking what it took on the last visit", async () => {
         safeStorage.set(UPLOADS_KEY, "1");
         respondWith({ uploads: { enabled: false } });
 
-        buildDashboard();
+        openDashboard();
         expect(attach()?.hidden).toBe(false);
 
-        await vi.waitFor(() => expect(attach()?.hidden).toBe(true));
+        await loadServerConfig();
+
+        expect(attach()?.hidden).toBe(true);
     });
 });

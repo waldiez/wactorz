@@ -23,6 +23,8 @@ export interface AppEventMap {
     "af-feed-push": { item: FeedItem };
     "af-chat-message": { msg: ChatMessage };
     "af-connection-status": { status: ConnState };
+    /** `/api/config` was read, or could not be: what it seeds can be read now. */
+    "af-config-loaded": void;
     "af-attachment-added": { attachment: Attachment };
     "af-agent-command": { command: string; agentId: string };
     /** The chat puts a message on the wire: `id` is its bubble's, and comes back on

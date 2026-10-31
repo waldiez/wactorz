@@ -12,6 +12,7 @@
 
 import { registerConfigEntry } from "../../config/serverConfig";
 import { listen } from "../../events";
+import { safeStorage } from "../../safeStorage";
 import { tts } from "./TTSManager";
 
 export { tts, TTSManager } from "./TTSManager";
@@ -29,7 +30,9 @@ registerConfigEntry("wactorz-tts-available", c =>
 /** Extension config passed to register() once at startup (see main.ts). */
 export interface TTSConfig {
     apiBase: string;
-    available: boolean;
+    /** Whether `/api/config` answered. Without it the stored flag says nothing, or
+     *  what an earlier visit heard, so the server is asked for its voices instead. */
+    configRead: boolean;
 }
 
 /**
@@ -41,7 +44,7 @@ export function register(config: TTSConfig): void {
     // A stopped turn stops its voice too: the page saying it stopped while it
     // goes on reading the answer aloud disagrees with itself.
     listen("tts-stop", () => tts.stopSpeaking());
-    if (config.available) {
+    if (!config.configRead || safeStorage.get("wactorz-tts-available") === "1") {
         void tts.init();
     }
 }

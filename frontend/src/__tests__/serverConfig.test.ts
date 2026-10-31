@@ -2,9 +2,11 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright 2025 - 2026 Waldiez & contributors
  */
+import { listen } from "../events";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
     clearKeyFromServer,
+    loadServerConfig,
     seedServerConfig,
     seedKeyFromServer,
     registerConfigEntry,
@@ -111,7 +113,7 @@ describe("seedServerConfig", () => {
         expect(localStorage.getItem("wactorz-ha-token")).toBeNull(); // token is never stored
     });
 
-    it("returns false when the HA URL is unchanged (no rewrite)", async () => {
+    it("says the server answered even when nothing changed", async () => {
         localStorage.setItem("wactorz-ha-url", "http://ha.local");
         localStorage.setItem("wactorz-ha-url__server", "http://ha.local");
         globalThis.fetch = vi.fn(async () => ({
@@ -119,16 +121,16 @@ describe("seedServerConfig", () => {
             json: async () => ({ ha: { url: "http://ha.local" } }),
         })) as unknown as typeof fetch;
 
-        expect(await seedServerConfig()).toBe(false);
+        expect(await seedServerConfig()).toBe(true);
     });
 
-    it("returns false when the server sends no url", async () => {
+    it("stores nothing for a URL the server does not send", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: true,
             json: async () => ({}),
         })) as unknown as typeof fetch;
 
-        expect(await seedServerConfig()).toBe(false);
+        expect(await seedServerConfig()).toBe(true);
         expect(localStorage.getItem("wactorz-ha-url")).toBeNull();
     });
 
@@ -170,5 +172,35 @@ describe("seedServerConfig", () => {
             throw new Error("ECONNREFUSED");
         }) as unknown as typeof fetch;
         expect(await seedServerConfig()).toBe(false);
+    });
+});
+
+describe("loadServerConfig", () => {
+    const origFetch = globalThis.fetch;
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+    });
+
+    it("tells the page once the keys can be read", async () => {
+        localStorage.clear();
+        globalThis.fetch = vi.fn(async () => Response.json({ ha: { url: "http://ha.local" } }));
+        const seen: (string | null)[] = [];
+        const stop = listen("af-config-loaded", () => seen.push(localStorage.getItem("wactorz-ha-url")));
+
+        expect(await loadServerConfig()).toBe(true);
+
+        document.removeEventListener("af-config-loaded", stop);
+        expect(seen).toEqual(["http://ha.local"]);
+    });
+
+    it("tells the page when the server did not answer too: it must not wait for ever", async () => {
+        globalThis.fetch = vi.fn(async () => new Response("", { status: 503 }));
+        let told = 0;
+        const stop = listen("af-config-loaded", () => (told += 1));
+
+        expect(await loadServerConfig()).toBe(false);
+
+        document.removeEventListener("af-config-loaded", stop);
+        expect(told).toBe(1);
     });
 });

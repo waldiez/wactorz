@@ -19,6 +19,7 @@
  * Keys not registered are **never** stored, even if the server sends them.
  */
 
+import { emit } from "../events";
 import { apiUrl, requestJson } from "../io/api";
 import { safeStorage } from "../safeStorage";
 import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
@@ -108,27 +109,28 @@ registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
 );
 
-/** Fetch `/api/config` and seed every registered client-side key from it.
- *  Returns whether the HA URL changed (the caller uses this to refresh the
- *  Devices nav link). */
+/** Fetch `/api/config` and seed every registered client-side key from it. Whether
+ *  the server answered: what is stored is from an earlier visit, or unset, if not. */
 export async function seedServerConfig(): Promise<boolean> {
-    try {
-        const got = await requestJson<Record<string, unknown> | null>(apiUrl("/api/config"));
-        if (!got.ok || !got.value) {
-            return false;
-        }
-        const cfg = got.value;
-        let haChanged = false;
-        for (const [key, { extract, clearWhenAbsent }] of _entries) {
-            const value = extract(cfg);
-            const changed =
-                !value && clearWhenAbsent ? clearKeyFromServer(key) : seedKeyFromServer(key, value);
-            if (key === "wactorz-ha-url" && changed) {
-                haChanged = true;
-            }
-        }
-        return haChanged;
-    } catch {
+    const got = await requestJson<Record<string, unknown> | null>(apiUrl("/api/config"));
+    if (!got.ok || !got.value) {
         return false; // server may not be ready yet
     }
+    for (const [key, { extract, clearWhenAbsent }] of _entries) {
+        const value = extract(got.value);
+        if (!value && clearWhenAbsent) {
+            clearKeyFromServer(key);
+        } else {
+            seedKeyFromServer(key, value);
+        }
+    }
+    return true;
+}
+
+/** Seed the config once, for the whole page, and tell it the keys can be read.
+ *  Whether the server answered, as {@link seedServerConfig} says. */
+export async function loadServerConfig(): Promise<boolean> {
+    const read = await seedServerConfig();
+    emit("af-config-loaded");
+    return read;
 }

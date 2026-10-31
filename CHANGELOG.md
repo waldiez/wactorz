@@ -260,6 +260,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A page that could not read its settings still finds its voices.** It used what an earlier visit
+  stored, so a browser that had never loaded them stayed silent; now it asks the server. The page
+  also reads `/api/config` once, and no longer shows "disconnected" for a moment while connecting.
 - **The attach button follows the server from the first visit.** A browser that had never opened
   the dashboard got no attach button until it reloaded, which on a phone was the only way to attach
   a file; a server that turned uploads off kept showing one.

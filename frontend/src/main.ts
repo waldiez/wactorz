@@ -34,7 +34,7 @@ import { fetchQuestionLedger } from "./io/openQuestions";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
-import { seedServerConfig } from "./config/serverConfig";
+import { loadServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
 import { chatIngress } from "./ui/chatIngress";
@@ -454,24 +454,15 @@ requestJson<{ type: string; label: string; agentName: string; timestamp?: number
 // to MQTT; it gets everything over /ws.
 
 // Seed server config early so TTS availability is known before probing.
-seedServerConfig()
-    .then(haChanged => {
-        if (haChanged) {
-            emit("af-connection-status", { status: connection.live ? "live" : "disconnected" });
-        }
-        // Boot TTS after config is seeded — reads availability from safeStorage.
-        const available = safeStorage.get("wactorz-tts-available") === "1";
-        registerTTS({ apiBase: _apiBase, available });
-        // Same reason, same moment: the server has now said whether it takes
-        // uploads at all.
-        if (uploadsEnabled()) {
-            _dropZone = new DropZone(_apiBase);
-        }
-    })
-    .catch(() => {
-        // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.
-        registerTTS({ apiBase: _apiBase, available: true });
-    });
+void loadServerConfig().then(read => {
+    // Boot TTS after config is seeded: what it says decides whether to probe.
+    registerTTS({ apiBase: _apiBase, configRead: read });
+    // Same reason, same moment: the server has now said whether it takes
+    // uploads at all.
+    if (uploadsEnabled()) {
+        _dropZone = new DropZone(_apiBase);
+    }
+});
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 

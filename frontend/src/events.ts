@@ -43,7 +43,6 @@ export interface AppEventMap {
     "af-send-failed": { id: string; content: string; target: string };
     /** The person now talks to `agent`, by typing or by voice: a reply the server
      *  stamps with the gateway's id is that agent's. */
-    "af-addressed": { agent: string };
     /** A piece of `from`'s streamed reply, and the reply so far (`text`); `agentId` is
      *  the thread it is in. */
     "af-stream-chunk": { chunk: string; from: string; agentId: string; text: string };

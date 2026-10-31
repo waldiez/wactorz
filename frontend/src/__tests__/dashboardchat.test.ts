@@ -700,32 +700,6 @@ describe("DashboardChat — sending & live events", () => {
         );
     });
 
-    it("says whom the person addresses, typed or spoken, for the socket to attribute replies to", () => {
-        dc.unwire();
-        host = makeHost([agent("main"), agent("reachy-mini")]);
-        dc = mount(host);
-        dc.setTarget("main");
-        dc.wire();
-        const heard: string[] = [];
-        const hear = listen("af-addressed", d => heard.push(d.agent));
-
-        sendFromComposer(host, dc, "hello");
-        const msg: ChatMessage = {
-            id: "voice-3",
-            from: "user",
-            to: "reachy-mini",
-            threadId: "reachy-mini",
-            content: "lights on",
-            timestampMs: Date.now(),
-            source: "voice",
-            surface: "reachy-mini",
-        };
-        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
-
-        document.removeEventListener("af-view-changed", hear);
-        expect(heard).toEqual(["main", "reachy-mini"]);
-    });
-
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
             new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main", text: "Hel" } }),

@@ -92,7 +92,7 @@ export interface AppParts {
     /** The page. */
     dashboard: (store: AgentStore) => CardDashboard;
     /** Chat over the socket. */
-    ioManager: (router: ServerEventRouter) => IOManager;
+    ioManager: () => IOManager;
     /** Watches for an ended session; returns how to stop. */
     installSessionExpiry: (onRevoked: () => void) => () => void;
     /** Reads the open and answered questions. */
@@ -108,7 +108,7 @@ const REAL_PARTS: AppParts = {
     router: () => new ServerEventRouter(),
     store: () => new AgentStore(),
     dashboard: store => new CardDashboard(store),
-    ioManager: router => new IOManager(router),
+    ioManager: () => new IOManager(),
     installSessionExpiry: onRevoked => installSessionExpiry(window, onRevoked),
     readLedger: fetchQuestionLedger,
     registerTTS,
@@ -408,15 +408,12 @@ function wirePageResets(app: AppWiring): void {
         });
     });
 
-    // The chat says who is addressed; the socket attributes the gateway's replies to it.
-    app.listeners.on("af-addressed", ({ agent }) => app.ws.addressed(agent));
-
     // af-iobar sends: route through ioManager (same as regular io-bar)
     app.listeners.on("af-send-message", detail => {
         const { id, content, attachments } = detail;
         // The thread's agent, by its id: the send names it to the server by name and id.
         const agent = app.store.get(detail.target) ?? null;
-        void app.ioManager.send(content, agent, attachments, id, agent ? app.store.label(agent) : "");
+        app.ioManager.send(content, agent, attachments, id, agent ? app.store.label(agent) : "");
     });
 
     // wipe all
@@ -455,7 +452,7 @@ function buildServices(parts: AppParts, ws: WSClient, router: ServerEventRouter)
     const store = parts.store();
     const dashboard = parts.dashboard(store);
     dashboard.show();
-    const ioManager = parts.ioManager(router);
+    const ioManager = parts.ioManager();
     // Live-grid deletion guard (mirrors the backend's _deleted_agent_ids): blocks
     // stale stop-window events from blinking a deleted card back, and re-admits a
     // re-spawn via its newer timestamp. See createDeletionGuard for the rationale.

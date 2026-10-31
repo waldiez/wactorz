@@ -259,9 +259,11 @@ describe("TrendPanel", () => {
 
     it("loads nothing once closed", async () => {
         await panel.open("agents", "a");
+        const window = document.querySelector<HTMLButtonElement>(".af-trend-window")!;
         panel.close();
         read.mockClear();
-        await (panel as unknown as { _load(): Promise<void> })._load();
+        window.click();
+        await Promise.resolve();
         expect(read).not.toHaveBeenCalled();
     });
 });

@@ -36,8 +36,6 @@ const mockDashboards: {
     setHostStats: ReturnType<typeof vi.fn>;
     inboxOpen: boolean;
 }[] = [];
-// Who the socket was told the person addresses.
-const mockAddressed: string[] = [];
 
 // Fetch a registered handler (asserting it exists) so the call sites below stay
 // branch-free — keeps each test's cyclomatic complexity low.
@@ -60,7 +58,6 @@ class FakeWs {
     }
     connect = vi.fn();
     disconnect = vi.fn();
-    addressed = vi.fn((agent: string) => mockAddressed.push(agent));
     sendRaw = vi.fn((frame: unknown) => {
         mockSent.push(frame);
         return true;
@@ -369,11 +366,6 @@ describe("the app", () => {
         expect(dashboard.setTotalCostUsd).toHaveBeenLastCalledWith(7);
         expect(dashboard.setTotalMessages).toHaveBeenLastCalledWith(4);
         expect(dashboard.setHostStats).toHaveBeenLastCalledWith(1, 2, 3);
-    });
-
-    it("tells the socket whom the chat addresses", () => {
-        emit("af-addressed", { agent: "weather" });
-        expect(mockAddressed.at(-1)).toBe("weather");
     });
 
     it("sends a pressed option to the agent, and closes the question on an answer", () => {

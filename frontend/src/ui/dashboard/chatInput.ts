@@ -13,6 +13,9 @@
 import { button, el } from "../dom";
 import { CommandCompletion } from "./commandCompletion";
 
+/** The id of the `@mention` list, and the stem of its options'. */
+const MENTION_LIST_ID = "af-mention-list";
+
 /** A mention being typed at the end of the text: a name, and a node once the second `@` is typed. */
 const MENTION_TYPED = /@([\w-]*(?:@[\w.-]*)?)$/;
 
@@ -127,6 +130,12 @@ export class ChatInput {
     }
 
     private _closeMentions(panel: HTMLElement): void {
+        if (this.mentionOpen) {
+            // The box goes back to the command list, which shares its attributes.
+            const input = panel.parentElement?.querySelector("textarea");
+            input?.removeAttribute("aria-activedescendant");
+            input?.setAttribute("aria-controls", this.commands.element.id);
+        }
         this.mentionOpen = false;
         this.mentionIdx = -1;
         this.mentionMatches = [];
@@ -279,8 +288,20 @@ export class ChatInput {
         ghost: HTMLElement,
     ): void {
         panel.textContent = "";
+        panel.id = MENTION_LIST_ID;
+        panel.setAttribute("role", "listbox");
+        panel.setAttribute("aria-label", "Agents");
+        input.setAttribute("aria-controls", panel.id);
+        // Off the list when nothing is highlighted: ArrowLeft from the first option.
+        input.removeAttribute("aria-activedescendant");
         this.mentionMatches.forEach((name, i) => {
             const chip = button("af-mention-chip" + (i === this.mentionIdx ? " active" : ""), name);
+            chip.id = `${MENTION_LIST_ID}-${i}`;
+            chip.setAttribute("role", "option");
+            chip.setAttribute("aria-selected", String(i === this.mentionIdx));
+            if (i === this.mentionIdx) {
+                input.setAttribute("aria-activedescendant", chip.id);
+            }
             chip.addEventListener("mousedown", e => {
                 e.preventDefault();
                 this._acceptMention(name, input, select, panel, ghost);

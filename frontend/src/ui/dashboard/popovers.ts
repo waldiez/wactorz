@@ -132,7 +132,7 @@ function buildAmbientRows(): DocumentFragment {
 /** An audio popover carrying teardown for its `tts-voices-loaded` listener
  *  (invoked by `releaseHeaderPopovers` before the element is removed). */
 export interface AudioPopover extends HTMLElement {
-    _release: () => void;
+    release: () => void;
 }
 
 /** Audio controls: beep/TTS toggles, voice select, ambient track + volume. */
@@ -146,7 +146,7 @@ export function buildAudioPopover(): AudioPopover {
     pop.appendChild(el("div", "af-audio-divider"));
 
     pop.appendChild(buildAmbientRows());
-    return Object.assign(pop, { _release: release });
+    return Object.assign(pop, { release: release });
 }
 
 const RESET_ICONS: Record<string, string> = {
@@ -252,7 +252,7 @@ export interface ResetPopover extends HTMLElement {
     /** Disarm every armed button (called when the popover is dismissed). */
     _resetArmed(): void;
     /** Stop following the route, before the popover is removed. */
-    _release(): void;
+    release(): void;
 }
 
 /**
@@ -315,6 +315,6 @@ export function buildResetPopover(): ResetPopover {
     render();
     return Object.assign(pop, {
         _resetArmed: () => armResets.forEach(fn => fn()),
-        _release: () => following.forEach(stop => stop()),
+        release: () => following.forEach(stop => stop()),
     });
 }

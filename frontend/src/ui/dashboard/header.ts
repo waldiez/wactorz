@@ -120,7 +120,7 @@ const openPopovers: { el: HTMLElement; outsideClick: EventListener; keydown: Eve
  *  audio popover's `tts-voices-loaded` subscription). Same `_`-prefixed hook
  *  convention as `ResetPopover._resetArmed`. */
 export interface ReleasablePopover extends HTMLElement {
-    _release?: () => void;
+    release?: () => void;
 }
 
 /** Dispose of the popovers the current header installed. Call before rebuilding
@@ -129,7 +129,7 @@ export function releaseHeaderPopovers(): void {
     for (const { el, outsideClick, keydown } of openPopovers.splice(0)) {
         document.removeEventListener("click", outsideClick);
         document.removeEventListener("keydown", keydown);
-        (el as ReleasablePopover)._release?.();
+        (el as ReleasablePopover).release?.();
         el.remove();
     }
 }

@@ -103,7 +103,7 @@ export class DashboardChat {
             id: this._sending.lastSent.id || this._target.mainId(),
         }),
         isOpenThread: id => id === this.chatTarget,
-        thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
+        thread: () => this.root.querySelector<HTMLElement>("#af-chat-thread"),
         scrollThread: () => this._scrollThread(),
         commit: msg => {
             this._log.add(msg);

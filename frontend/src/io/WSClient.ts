@@ -137,10 +137,6 @@ export class WSClient {
     private _lastFrameAt = 0;
     private _url = "";
     private _closed = false;
-    /** The agent the person last addressed — used to attribute replies, which
-     *  the server stamps with the generic transport id "io-gateway". The chat
-     *  decides who that is (it also knows of a voice turn); see `addressed`. */
-    private _lastAgentName = MAIN_AGENT;
 
     /**
      * How often to ask the server to say something.
@@ -205,11 +201,6 @@ export class WSClient {
         this.ws?.close();
         this.ws = null;
         this._emit("disconnected");
-    }
-
-    /** The person now talks to `agentName`: a reply the gateway stamps is theirs. */
-    addressed(agentName: string): void {
-        this._lastAgentName = agentName;
     }
 
     /**
@@ -429,13 +420,10 @@ export class WSClient {
 
     /** Deliver chat / stream content carried by a frame. */
     private _dispatchContent(data: Record<string, unknown>): void {
-        // The server stamps every direct_ws reply with the transport id
-        // "io-gateway", even though it routed to (and got the answer from) the
-        // agent the user addressed. Re-attribute it to that agent so the thread,
-        // feed and toasts are consistent live and after a reload. The proper fix
-        // is server-side — the reply frame should carry the real agent name.
+        // Every turn's frames name the agent that owns them. The transport's own
+        // id is only on what comes before any turn, which is main's to answer.
         const rawFrom = asStr(data["from"]) || IO_GATEWAY;
-        const from = rawFrom === IO_GATEWAY ? this._lastAgentName : rawFrom;
+        const from = rawFrom === IO_GATEWAY ? MAIN_AGENT : rawFrom;
         const ts = toMs(data["timestamp"]);
         const agentId = asStr(data["agent_id"]);
 

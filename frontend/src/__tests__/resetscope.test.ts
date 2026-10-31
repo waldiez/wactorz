@@ -45,7 +45,7 @@ describe("whom a reset is for", () => {
     });
 
     afterEach(() => {
-        pop?._release();
+        pop?.release();
         pop = null;
         vi.unstubAllGlobals();
         location.hash = "";
@@ -128,7 +128,7 @@ describe("whom a reset is for", () => {
         expect(allByRole(pop, "radio")).toEqual([]);
         expect(rows(pop)).toHaveLength(6);
 
-        pop._release();
+        pop.release();
         emit("af-route", { view: "chat", path: ["lamp"] });
         expect(allByRole(pop, "radio")).toEqual([]);
     });

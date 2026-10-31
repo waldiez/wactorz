@@ -7,13 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { IOManager } from "../io/IOManager";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { WSClient } from "../io/WSClient";
-import type { ServerEventRouter } from "../io/ServerEventRouter";
 
 const agentInfo: AgentInfo = { id: "a1", name: "alpha", state: "running", protected: false };
-
-function makeRouter(connected = true) {
-    return { emit: vi.fn(() => connected) } as unknown as ServerEventRouter;
-}
 
 interface FakeWS {
     send: ReturnType<typeof vi.fn>;
@@ -51,7 +46,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("IOManager.send", () => {
     it("sends chat over the WebSocket", async () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         await io.send("hello", agentInfo, [], "m1");
@@ -60,7 +55,7 @@ describe("IOManager.send", () => {
     });
 
     it("mentions the agent as the page calls it: its address where the name is shared", async () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         await io.send("hello", agentInfo, [], "m1", "alpha@pi");
@@ -70,7 +65,7 @@ describe("IOManager.send", () => {
     });
 
     it("leaves a slash command unaddressed, whichever thread it was typed in", async () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         await io.send("/help", agentInfo, [], "m1");
@@ -79,7 +74,7 @@ describe("IOManager.send", () => {
     });
 
     it("shows a delivered message in the feed", async () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         io.setWSClient(makeWS() as unknown as WSClient);
         await io.send("hello", agentInfo);
         expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({
@@ -89,7 +84,7 @@ describe("IOManager.send", () => {
     });
 
     it("keeps an undelivered message out of the feed", async () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         io.setWSClient(makeWS(false) as unknown as WSClient);
         await io.send("hi", null);
         // An echo before the send attempt would leave a failed message in the
@@ -98,7 +93,7 @@ describe("IOManager.send", () => {
     });
 
     it("emits af-send-failed when the transport rejects the send", async () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         io.setWSClient(makeWS(false) as unknown as WSClient);
         await io.send("hi", null, [], "m1");
         // under the id of the bubble rendered before the attempt, which waits to go again
@@ -108,7 +103,7 @@ describe("IOManager.send", () => {
 
 describe("IOManager streaming", () => {
     it("accumulates chunks and emits af-stream-end with the full text + TTS + feed", () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
 
@@ -123,7 +118,7 @@ describe("IOManager streaming", () => {
     });
 
     it("emits an empty af-stream-end with no TTS/feed when nothing streamed", () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         ws.endCb!("main");
@@ -133,7 +128,7 @@ describe("IOManager streaming", () => {
     });
 
     it("keeps the replies of two agents of one name apart, by their ids", () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
 
@@ -151,7 +146,7 @@ describe("IOManager streaming", () => {
     });
 
     it("resets the buffer between turns", () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         ws.chunkCb!("one", "alpha");
@@ -162,7 +157,7 @@ describe("IOManager streaming", () => {
     });
 
     it("caps accumulation on a runaway stream instead of growing without bound", () => {
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         const chunk = "x".repeat(10_000);
@@ -188,19 +183,19 @@ describe("IOManager.receiveAgentMessage", () => {
     });
 
     it("reads a user-directed reply aloud", () => {
-        new IOManager(makeRouter()).receiveAgentMessage(reply());
+        new IOManager().receiveAgentMessage(reply());
         expect(lastEvent("tts-notify")?.detail).toEqual({ text: "hi", from: "alpha" });
     });
 
     it("ignores agent↔agent chatter", () => {
-        new IOManager(makeRouter()).receiveAgentMessage(reply({ to: "beta" }));
+        new IOManager().receiveAgentMessage(reply({ to: "beta" }));
         expect(lastEvent("tts-notify")).toBeUndefined();
     });
 
     it("reads a non-streamed reply aloud in direct_ws mode too", () => {
         // Regression: non-streamed direct_ws replies (slash commands, one-shot,
         // errors) arrive WS-only and must speak — streamed ones already do.
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         io.setWSClient(makeWS() as unknown as WSClient);
         io.receiveAgentMessage(reply());
         expect(lastEvent("tts-notify")?.detail).toEqual({ text: "hi", from: "alpha" });
@@ -211,7 +206,7 @@ describe("IOManager.send — attachments", () => {
     it("carries attachment ids onto the wire", async () => {
         // The composer resolves files to ids before sending; only ids travel,
         // because the server holds the record of what each one actually is.
-        const io = new IOManager(makeRouter());
+        const io = new IOManager();
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
 

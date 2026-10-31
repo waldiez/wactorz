@@ -76,6 +76,14 @@
   color: #fff;
 }
 
+/* A thumb's reach, as the composer's other buttons (responsive.css). */
+@media (max-width: 639px) {
+  .af-attach-btn {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 /* ── Revoked ingress session ──────────────────────────────────────────────── */
 /* Above everything and swallowing clicks: the page behind it is inert, and a
    control that looks live but answers nothing is what this exists to stop. */

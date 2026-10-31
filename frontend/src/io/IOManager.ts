@@ -14,7 +14,6 @@
  */
 
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { ServerEventRouter } from "./ServerEventRouter";
 import type { WSClient } from "./WSClient";
 import { emit } from "../events";
 import { uid } from "../ids";
@@ -38,8 +37,6 @@ export class IOManager {
     /** Per-agent stream accumulation (stream-end emits the full text per agent). */
     private _streams = new AgentStreams();
     private _ws: WSClient | null = null;
-
-    constructor(private readonly router: ServerEventRouter) {}
 
     /** Wire in a WSClient so send() can use direct WebSocket when available. */
     setWSClient(ws: WSClient): void {
@@ -74,16 +71,7 @@ export class IOManager {
     /** Send `text` to the appropriate agent over the WebSocket, mentioning it as
      *  `label` (its address where its name is shared). Nothing reaches the feed
      *  unless the transport accepted it. */
-    // Async for the caller-facing contract; the transport calls (WS send / MQTT
-    // publish) are fire-and-forget, so there's nothing to await.
-    // eslint-disable-next-line @typescript-eslint/require-await
-    async send(
-        text: string,
-        agent: AgentInfo | null,
-        attachments: string[] = [],
-        id = uid(),
-        label = "",
-    ): Promise<void> {
+    send(text: string, agent: AgentInfo | null, attachments: string[] = [], id = uid(), label = ""): void {
         const content = agent ? mentioning(text, label || agent.name) : text;
         const timestampMs = Date.now();
         const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT, attachments, agent?.id ?? "", id);
@@ -107,10 +95,7 @@ export class IOManager {
     /**
      * Handle an incoming agent→user chat message: read it aloud (TTS).
      *
-     * One caller per transport — `wsChat.onChat` (direct_ws) and `mqtt.on("chat")`
-     * (mqtt) — and the backend delivers chat over exactly one of them per mode
-     * (WS frames are gated on a live registry; MQTT chat only otherwise), so there
-     * is no cross-transport double to guard against here. Streamed replies notify
+     * Streamed replies notify
      * separately via `onStreamEnd`; this covers the non-streamed ones.
      */
     receiveAgentMessage(msg: ChatMessage): void {

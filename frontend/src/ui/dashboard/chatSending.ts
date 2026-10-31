@@ -122,12 +122,9 @@ export class ChatSending {
         emit("af-send-message", send);
     }
 
-    /** The person now talks to `name`, the agent `id`: replies the gateway stamps
-     *  are its, here and on the socket, which hears it from here rather than
-     *  keeping its own. */
+    /** The person now talks to `name`, the agent `id`: a reply that names nobody is filed with it. */
     address(name: string, id: string): void {
         this.lastSent = { name, id };
-        emit("af-addressed", { agent: name });
     }
 
     /**

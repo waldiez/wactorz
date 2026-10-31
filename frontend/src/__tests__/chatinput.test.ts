@@ -59,6 +59,45 @@ describe("ChatInput @mentions", () => {
         expect(h.host.agentNames).toHaveBeenCalled();
     });
 
+    it("reads as a listbox the box controls, its highlight followed by a screen reader", () => {
+        document.body.append(h.panel);
+        h.panel.parentElement!.append(h.input);
+        h.input.value = "@";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect(h.panel.getAttribute("role")).toBe("listbox");
+        expect(h.panel.getAttribute("aria-label")).toBe("Agents");
+        expect(h.input.getAttribute("aria-controls")).toBe(h.panel.id);
+        const options = h.panel.querySelectorAll('[role="option"]');
+        expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+        expect(options[1]?.getAttribute("aria-selected")).toBe("false");
+        expect(h.input.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
+        h.ci.closePanel(h.panel);
+
+        expect(h.input.getAttribute("aria-activedescendant")).toBeNull();
+        expect(h.input.getAttribute("aria-controls")).toBe(h.ci.commands.element.id);
+    });
+
+    it("points at no option once none is highlighted", () => {
+        document.body.append(h.panel);
+        h.panel.parentElement!.append(h.input);
+        h.input.value = "@";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        h.ci.onKeydown(
+            new KeyboardEvent("keydown", { key: "ArrowLeft" }),
+            h.input,
+            h.select,
+            h.ghost,
+            h.panel,
+        );
+
+        expect(h.input.getAttribute("aria-activedescendant")).toBeNull();
+        const selected = h.panel.querySelectorAll('[aria-selected="true"]');
+        expect(selected).toHaveLength(0);
+    });
+
     it("filters mention matches by prefix", () => {
         h.input.value = "@p";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);

@@ -202,41 +202,21 @@ describe("WSClient", () => {
         expect(chatSpy.mock.calls[0]![2]).toBe(ts);
     });
 
-    it("attributes an io-gateway / absent reply to the last addressed agent", () => {
+    it("gives main what comes before any turn, and an agent what names it", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
         c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
-        // Before any send, the gateway/absent sender falls back to the default agent.
+
         ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Hi" }) });
-        expect(chatSpy.mock.calls[0]![1]).toBe("main");
-        // Once the chat says the person addresses another agent, the gateway reply is its.
-        c.addressed("catalog");
         ws().emit("message", {
             data: JSON.stringify({ type: "chat", content: "Yo", from: "io-gateway" }),
         });
-        expect(chatSpy.mock.calls[1]![1]).toBe("catalog");
-    });
+        ws().emit("message", {
+            data: JSON.stringify({ type: "chat", content: "Sun", from: "weather" }),
+        });
 
-    it("attributes a stream end that names nobody to the addressed agent", () => {
-        const c = new WSClient();
-        const endSpy = vi.fn();
-        c.on("streamEnd", endSpy);
-        c.connect("ws://localhost/ws");
-        c.addressed("catalog");
-        ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "" }) });
-        expect(endSpy).toHaveBeenCalledWith("catalog", "");
-    });
-
-    it("leaves who is addressed to the chat: sending does not change it", () => {
-        const c = new WSClient();
-        const chatSpy = vi.fn();
-        c.on("chat", chatSpy);
-        c.connect("ws://localhost/ws");
-        c.addressed("weather");
-        c.send("hello", "catalog");
-        ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Yo", from: "io-gateway" }) });
-        expect(chatSpy.mock.calls[0]![1]).toBe("weather");
+        expect(chatSpy.mock.calls.map(call => call[1])).toEqual(["main", "main", "weather"]);
     });
 
     it("passes through a real agent sender unchanged", () => {

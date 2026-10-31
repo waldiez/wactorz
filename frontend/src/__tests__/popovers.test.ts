@@ -109,10 +109,10 @@ describe("buildAudioPopover", () => {
         expect(ambient.setVolume).toHaveBeenCalledWith(0.8);
     });
 
-    it("exposes a _release hook that removes its tts-voices-loaded listener", () => {
+    it("exposes a release hook that removes its tts-voices-loaded listener", () => {
         const removed = vi.spyOn(document, "removeEventListener");
         const pop = buildAudioPopover();
-        (pop as AudioPopover)._release();
+        (pop as AudioPopover).release();
         expect(removed.mock.calls.some(c => c[0] === "tts-voices-loaded")).toBe(true);
         removed.mockRestore();
     });

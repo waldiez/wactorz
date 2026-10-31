@@ -106,7 +106,6 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | ---------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `af-agent-command`     | CardDashboard → app.ts (WSClient)                              | `{ command, agentId }`                                                 |
 | `af-send-message`      | DashboardChat → app.ts (IOManager)                             | `{ id, content, target, name, answerer, attachments }` (ids)           |
-| `af-addressed`         | DashboardChat → app.ts (WSClient)                              | `{ agent }` (whom the person now talks to, typed or by voice)          |
 | `af-feed-push`         | IOManager / app.ts / ui/chatIngress → CardDashboard            | `{ item: FeedItem }`                                                   |
 | `af-chat-message`      | ui/chatIngress → DashboardChat                                 | `{ msg: ChatMessage }`                                                 |
 | `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text }`                                       |

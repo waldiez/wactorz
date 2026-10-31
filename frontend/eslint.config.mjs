@@ -185,7 +185,7 @@ export default [
     },
     {
         // Type-checked rules are too noisy for the test suite (heavy `any`, mock
-        // objects, private-member pokes) and add no shipping-code safety — disable
+        // objects) and add no shipping-code safety — disable
         // them so type-aware linting covers src/ only.
         files: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
         ...tseslint.configs.disableTypeChecked,

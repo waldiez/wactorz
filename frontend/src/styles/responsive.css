@@ -8,6 +8,13 @@
 
 /* ── Responsive: mobile (< 640px) ────────────────────────────────────── */
 @media (max-width: 639px) {
+  /* ── A thumb's reach: the composer's buttons ── */
+  .af-send-btn,
+  .af-stop-btn {
+    width: 44px;
+    height: 44px;
+  }
+
   /* ── CardDashboard header: logo + conn + 🔊 only ── */
   .af-header {
     padding: 6px 10px;

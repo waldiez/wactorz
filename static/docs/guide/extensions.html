@@ -160,8 +160,8 @@ or config — there is no <code>if extension == "tts"</code> anywhere.</p>
 
 frontend/src/
 ├── ext/                    # Frontend extensions (TypeScript) — mirror backend
-│   └── tts/index.ts        #     register({ apiBase, available })
-├── ui/dashboard/
+│   └── tts/index.ts        #     register({ apiBase, configRead })
+├── ui/shell/
 │   └── icons.ts            #     Icon registry — registerIcon(name, svg)
 ├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
 └── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
@@ -290,19 +290,21 @@ never by calling other components directly.</p>
 <span class="w">    </span><span class="nx">available</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
 <span class="p">}</span>
 
-<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{};</span>
 <span class="w">    </span><span class="c1">// Seed the singleton, then let it self-wire via the event bus.</span>
 <span class="w">    </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">setApiBase</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">apiBase</span><span class="p">);</span>
 <span class="w">    </span><span class="ow">void</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">init</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">listen</span><span class="p">(</span><span class="s2">"my-event"</span><span class="p">,</span><span class="w"> </span><span class="nx">detail</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">handle</span><span class="p">(</span><span class="nx">detail</span><span class="p">));</span>
 <span class="p">}</span>
 </code></pre></div>
 
-<h3 id="wiring-in-maints">Wiring in main.ts</h3>
-<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded:</p>
+<h3 id="wiring-in-appts">Wiring in app.ts</h3>
+<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded, by
+<code>bootFromConfig</code> in <code>app.ts</code>; what it returns is how <code>createApp</code>'s <code>stop</code> ends it:</p>
 <div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">register</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"./ext/myname"</span><span class="p">;</span>
 
-<span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">_apiBase</span><span class="p">,</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
+<span class="nx">running</span><span class="p">.</span><span class="nx">stopMyExt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">ingressBase</span><span class="p">(),</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
 
 <h3 id="config-seeding">Config seeding</h3>
@@ -323,7 +325,7 @@ keys; your barrel contributes the extension's at module load — before
 <h3 id="dashboard-views-and-icons">Dashboard views and icons</h3>
 <p>An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:</p>
-<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/dashboard/icons"</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/shell/icons"</span><span class="p">;</span>
 
 <span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// 1. Register the icon BEFORE registerView() uses its name.</span>
@@ -334,9 +336,8 @@ imports extension views or icon names:</p>
 <span class="p">}</span>
 </code></pre></div>
 
-<p><code>registerView(key, icon, label, builder)</code> is a <code>CardDashboard</code> method; <code>main.ts</code>
-passes it (plus an <code>onRender</code> re-render thunk) into <code>register()</code>. The builder is
-a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
+<p>A view is asked for on the bus: <code>emit("af-register-view", { key, icon, label, build })</code>
+reaches <code>CardDashboard.registerView</code>. <code>build</code> is a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
 a fresh element tree per call.</p>
 <table>
 <thead>
@@ -349,7 +350,7 @@ a fresh element tree per call.</p>
 <tbody>
 <tr>
 <td><code>registerIcon()</code></td>
-<td><code>ui/dashboard/icons.ts</code></td>
+<td><code>ui/shell/icons.ts</code></td>
 <td>Add SVG icons by name</td>
 </tr>
 <tr>

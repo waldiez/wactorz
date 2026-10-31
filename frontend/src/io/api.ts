@@ -42,6 +42,19 @@ export function apiUrl(path: string): string {
     return `${ingressBase()}${path}`;
 }
 
+/** Who is told of every response, for what no single caller can act on. */
+let responseWatcher: ((response: Response) => void) | null = null;
+
+/** Be told of every response; returns the way to stop. */
+export function watchResponses(watcher: (response: Response) => void): () => void {
+    responseWatcher = watcher;
+    return () => {
+        if (responseWatcher === watcher) {
+            responseWatcher = null;
+        }
+    };
+}
+
 /** A POST of `body` as JSON. */
 export function posting(body: object): RequestInit {
     return {
@@ -98,7 +111,9 @@ async function asking<T>(
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), timeoutMs);
     try {
-        return await read(await fetch(url, { ...init, signal: abort.signal }), abort.signal);
+        const response = await fetch(url, { ...init, signal: abort.signal });
+        responseWatcher?.(response);
+        return await read(response, abort.signal);
     } catch (err) {
         return abort.signal.aborted ? unanswered(init) : { ok: false, error: String(err) };
     } finally {

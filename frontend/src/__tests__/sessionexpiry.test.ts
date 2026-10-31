@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { requestJson, type Answer } from "../io/api";
 import { installSessionExpiry } from "../io/sessionExpiry";
 import { resetDeadSession } from "../ui/deadSession";
 
@@ -33,6 +34,12 @@ function fakeWindow(status: number, ingress = ""): FakeWindow {
 
 let restore: (() => void) | null = null;
 
+/** A request through the client, answered by `w`'s server. */
+function ask(w: FakeWindow, url: string): Promise<Answer<unknown>> {
+    globalThis.fetch = w.fetch as typeof fetch;
+    return requestJson(url);
+}
+
 beforeEach(() => {
     // `exactOptionalPropertyTypes` forbids assigning undefined to an optional
     // property, so the absent case is expressed by deleting it — which is also
@@ -52,7 +59,7 @@ describe("installSessionExpiry", () => {
         const w = fakeWindow(401);
         restore = installSessionExpiry(w as unknown as Window);
 
-        await w.fetch("/api/actors");
+        await ask(w, "/api/actors");
 
         expect(w.location.assign).toHaveBeenCalledOnce();
         expect(w.location.assign.mock.calls[0]![0]).toContain("/login");
@@ -64,7 +71,7 @@ describe("installSessionExpiry", () => {
         w.location.search = "?view=feed";
         restore = installSessionExpiry(w as unknown as Window);
 
-        await w.fetch("/api/logs");
+        await ask(w, "/api/logs");
 
         expect(w.location.assign.mock.calls[0]![0]).toContain(encodeURIComponent("/?view=feed"));
     });
@@ -76,7 +83,7 @@ describe("installSessionExpiry", () => {
         const w = fakeWindow(401);
         restore = installSessionExpiry(w as unknown as Window);
 
-        await Promise.all([w.fetch("/api/actors"), w.fetch("/api/feed"), w.fetch("/api/logs")]);
+        await Promise.all([ask(w, "/api/actors"), ask(w, "/api/feed"), ask(w, "/api/logs")]);
 
         expect(w.location.assign).toHaveBeenCalledOnce();
     });
@@ -85,9 +92,9 @@ describe("installSessionExpiry", () => {
         const w = fakeWindow(200);
         restore = installSessionExpiry(w as unknown as Window);
 
-        const res = await w.fetch("/api/actors");
+        const res = await ask(w, "/api/actors");
 
-        expect(res.status).toBe(200);
+        expect(res.ok ? 200 : res.status).toBe(200);
         expect(w.location.assign).not.toHaveBeenCalled();
     });
 
@@ -97,7 +104,7 @@ describe("installSessionExpiry", () => {
         const w = fakeWindow(403);
         restore = installSessionExpiry(w as unknown as Window);
 
-        await w.fetch("/api/reset");
+        await ask(w, "/api/reset");
 
         expect(w.location.assign).not.toHaveBeenCalled();
     });
@@ -108,9 +115,9 @@ describe("installSessionExpiry", () => {
         const w = fakeWindow(401);
         restore = installSessionExpiry(w as unknown as Window);
 
-        const res = await w.fetch("/api/actors");
+        const res = await ask(w, "/api/actors");
 
-        expect(res.status).toBe(401);
+        expect(res.ok ? 401 : res.status).toBe(401);
     });
 
     it("restores the original fetch when released", async () => {
@@ -127,7 +134,7 @@ describe("installSessionExpiry", () => {
         const w = fakeWindow(401);
         restore = installSessionExpiry(w as unknown as Window);
 
-        await w.fetch("/api/actors");
+        await ask(w, "/api/actors");
 
         expect(w.location.assign.mock.calls[0]![0]).toContain("/api/hassio_ingress/abc/login");
     });
@@ -140,10 +147,10 @@ describe("a page that can no longer reach Home Assistant", () => {
     /** Fail `n` times, with the clock advanced past the point of no recovery. */
     async function failFor(w: FakeWindow, n: number, ms: number): Promise<void> {
         for (let i = 0; i < n; i++) {
-            await w.fetch("/api/actors");
+            await ask(w, "/api/actors");
             vi.setSystemTime(Date.now() + ms / n);
         }
-        await w.fetch("/api/actors");
+        await ask(w, "/api/actors");
     }
 
     beforeEach(() => vi.useFakeTimers());
@@ -193,7 +200,7 @@ describe("a page that can no longer reach Home Assistant", () => {
 
         await failFor(w, 3, 40_000);
         status = 200;
-        await w.fetch("/api/actors");
+        await ask(w, "/api/actors");
         status = 503;
         await failFor(w, 3, 40_000);
 
@@ -231,7 +238,7 @@ describe("a page that can no longer reach Home Assistant", () => {
         const revoked = vi.fn();
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
-        await w.fetch("/api/actors");
+        await ask(w, "/api/actors");
 
         expect(overlay()).toBeNull();
         expect(revoked).not.toHaveBeenCalled();
@@ -244,7 +251,7 @@ describe("a page that can no longer reach Home Assistant", () => {
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
         await failFor(w, 3, 61_000);
-        await Promise.all([w.fetch("/api/feed"), w.fetch("/api/config")]);
+        await Promise.all([ask(w, "/api/feed"), ask(w, "/api/config")]);
 
         expect(document.querySelectorAll(".af-dead-session")).toHaveLength(1);
         expect(revoked).toHaveBeenCalledTimes(1);

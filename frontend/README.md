@@ -16,7 +16,8 @@ Renders a live dashboard as HTML/CSS card components driven by real-time server-
 ```text
 frontend/
 ├── src/
-│   ├── main.ts            # Bootstrap — wires transports → store + UI
+│   ├── main.ts            # Entry point: builds the app and starts it
+│   ├── app.ts             # createApp — wires transports → store + UI
 │   ├── events.ts          # Typed app event bus over document CustomEvents (emit/listen + AppEventMap)
 │   ├── router.ts          # The open view in the address hash (#/feed, #/chat/weather); Back between views
 │   ├── ids.ts             # uid() for element and message ids
@@ -102,10 +103,10 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 
 | Event                  | Direction                                                      | Payload                                                                |
 | ---------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `af-agent-command`     | CardDashboard → main.ts (WSClient)                             | `{ command, agentId }`                                                 |
-| `af-send-message`      | DashboardChat → main.ts (IOManager)                            | `{ id, content, target, name, answerer, attachments }` (ids)           |
-| `af-addressed`         | DashboardChat → main.ts (WSClient)                             | `{ agent }` (whom the person now talks to, typed or by voice)          |
-| `af-feed-push`         | IOManager / main.ts / ui/chatIngress → CardDashboard           | `{ item: FeedItem }`                                                   |
+| `af-agent-command`     | CardDashboard → app.ts  (WSClient)                             | `{ command, agentId }`                                                 |
+| `af-send-message`      | DashboardChat → app.ts  (IOManager)                            | `{ id, content, target, name, answerer, attachments }` (ids)           |
+| `af-addressed`         | DashboardChat → app.ts  (WSClient)                             | `{ agent }` (whom the person now talks to, typed or by voice)          |
+| `af-feed-push`         | IOManager / app.ts  / ui/chatIngress → CardDashboard           | `{ item: FeedItem }`                                                   |
 | `af-chat-message`      | ui/chatIngress → DashboardChat                                 | `{ msg: ChatMessage }`                                                 |
 | `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text }`                                       |
 | `af-stream-end`        | IOManager → DashboardChat                                      | `{ text, from, agentId }`                                              |
@@ -118,14 +119,14 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-send-failed`       | IOManager → DashboardChat                                      | `{ id, content, target }`                                              |
 | `af-reset-chat`        | WSClient → DashboardChat                                       | `{ agent: string \| null }`                                            |
 | `af-agents-settled`    | WSClient → CardDashboard                                       | `{ reason: "reset" \| "deleted" }`                                     |
-| `af-clear-feed`        | WSClient / main.ts → CardDashboard                             | _(none)_                                                               |
-| `af-wipe-all`          | WSClient / main.ts → CardDashboard                             | `{ survivors }` (ids of the agents still running)                      |
-| `af-answer-option`     | chatThread / questionToast → main.ts (WSClient), DashboardChat | `{ id, agentId, option, index }`                                       |
+| `af-clear-feed`        | WSClient / app.ts  → CardDashboard                             | _(none)_                                                               |
+| `af-wipe-all`          | WSClient / app.ts  → CardDashboard                             | `{ survivors }` (ids of the agents still running)                      |
+| `af-answer-option`     | chatThread / questionToast → app.ts  (WSClient), DashboardChat | `{ id, agentId, option, index }`                                       |
 | `af-pick-address`      | chatThread → DashboardChat                                     | `{ id, address }` (one of the addresses the reply `id` offered)        |
-| `af-answered`          | main.ts → DashboardChat                                        | `{ id, option }`                                                       |
-| `af-model-pointer`     | main.ts (ServerEventRouter) → CardDashboard (Models view)      | `{ name, pointer }` (a stored model's pointer moved, from anywhere)    |
-| `af-questions-listed`  | main.ts → DashboardChat, CardDashboard (Inbox)                 | `{ open, answered, listed? }` (`listed` absent when the read failed)   |
-| `af-question-book`     | main.ts (ServerEventRouter) → CardDashboard (Inbox)            | `{ agentId, questions }` (an agent's book changed)                     |
+| `af-answered`          | app.ts  → DashboardChat                                        | `{ id, option }`                                                       |
+| `af-model-pointer`     | app.ts  (ServerEventRouter) → CardDashboard (Models view)      | `{ name, pointer }` (a stored model's pointer moved, from anywhere)    |
+| `af-questions-listed`  | app.ts  → DashboardChat, CardDashboard (Inbox)                 | `{ open, answered, listed? }` (`listed` absent when the read failed)   |
+| `af-question-book`     | app.ts  (ServerEventRouter) → CardDashboard (Inbox)            | `{ agentId, questions }` (an agent's book changed)                     |
 | `af-app-log`           | WSClient → appLogFeed                                          | `{ entries }`                                                          |
 | `af-route`             | router → CardDashboard                                         | `{ view, path }` (the address changed)                                 |
 | `af-view-changed`      | CardDashboard / viewRoutes → router                            | `{ view, path }` (the dashboard moved)                                 |
@@ -150,7 +151,7 @@ nodes/{node}/heartbeat  system/health         system/host    system/qa-flag
 ## Adding a new UI component
 
 1. Create `src/ui/MyComponent.ts`
-2. Instantiate in `main.ts`, in the matching numbered section (see its header map)
+2. Instantiate in `createApp` in `app.ts`
 3. Subscribe to relevant events via `listen(type, handler)` from `src/events.ts`
 4. Fire events via `emit(type, detail)` rather than calling methods on other components directly
    (add the event to `AppEventMap` first)
@@ -163,7 +164,7 @@ Extensions live in `src/ext/<name>/` and mirror the backend's `wactorz/ext/<name
 TTS (`src/ext/tts/`) is the reference implementation. An extension:
 
 1. **Owns its folder** — `index.ts` is the barrel, exporting types + a `register(config)` function
-2. **Self-bootstraps** — `register(config)` is called once from `main.ts`; it wires hooks,
+2. **Self-bootstraps** — `register(config)` is called once from `app.ts`; it wires hooks,
    probes the backend, and registers event listeners
 3. **Talks via the event bus** — never imports other extensions directly; emits/receives
    typed events on `AppEventMap` (`src/events.ts`)
@@ -200,7 +201,7 @@ The same bundle serves two targets, distinguished at runtime:
 | Home Assistant add-on | The Python add-on injects `window.__WACTORZ_INGRESS_PATH`; all API/WS URLs are rebased onto that ingress prefix |
 
 `__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
-same-origin URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`).
+same-origin URL is built (e.g. `app.ts`, `chatHistory.ts`, `popovers.ts`).
 It defaults to `""`, so standalone builds need no configuration.
 
 The dashboard does **not** talk to Home Assistant directly: the "Devices" nav button

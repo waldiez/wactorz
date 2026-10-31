@@ -3,30 +3,31 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Bootstrap (composition-root) test for src/main.ts.
+ * The composition root, src/app.ts.
  *
- * main.ts is pure wiring: it instantiates the WS transport, the event router and
- * the store, derives the deployment URLs, and registers handlers. We mock those
- * so importing the module records every handler it registers, then drive each
- * handler (and each app-event) to exercise the wiring — including the guard
- * branches — the way the real transport would at runtime. Decision/transform
- * logic itself is covered by the agents/mapping + serverConfig + haFeed unit tests.
+ * It is pure wiring: it builds the WS transport, the event router and the store,
+ * and registers handlers. Each test builds an app of its own over fakes that
+ * record every handler, then drives each handler (and each app-event) the way
+ * the real transport would at runtime. Decision/transform logic itself is
+ * covered by the agents/mapping + serverConfig + haFeed unit tests.
  */
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createApp, type App, type AppParts } from "../app";
+import { UPLOADS_KEY } from "../ui/dashboard/uploads";
 import { emit, listen } from "../events";
 import { toast } from "../ui/ToastManager";
 import type { FeedItem } from "../types/feed";
 
-// Registries the mocked transport + router populate as main.ts wires them up.
+// Registries the fake transport + router populate as the app wires them up.
 const mockRouter: Record<string, (...a: any[]) => void> = {};
 const mockWs: Record<string, (...a: any[]) => void> = {};
-// Every frame main.ts sent over the mocked transport with sendRaw.
+// Every frame the app sent over the fake transport with sendRaw.
 const mockSent: unknown[] = [];
 // A single known agent so `get(...)` resolves in the metrics path.
 const mockStoreAgents = [{ id: "a", name: "A", state: "running", protected: false }];
-// The store main.ts builds, so a test can see what reached it.
+// The store the app builds, so a test can see what reached it.
 const mockStores: { onHeartbeat: ReturnType<typeof vi.fn> }[] = [];
-// The dashboard main.ts builds over it.
+// The dashboard the app builds over it.
 const mockDashboards: {
     setTotalCostUsd: ReturnType<typeof vi.fn>;
     setTotalMessages: ReturnType<typeof vi.fn>;
@@ -41,132 +42,137 @@ const mockAddressed: string[] = [];
 const routerHandler = (ev: string): ((...a: any[]) => void) => mockRouter[ev] as (...a: any[]) => void;
 const wsHandler = (ev: string): ((...a: any[]) => void) => mockWs[ev] as (...a: any[]) => void;
 
-vi.mock("../io/ServerEventRouter", () => ({
-    ServerEventRouter: class {
-        on(ev: string, cb: (...a: any[]) => void) {
-            mockRouter[ev] = cb;
-            return this;
-        }
-        off = vi.fn();
-        route = vi.fn();
-    },
-}));
+class FakeRouter {
+    on(ev: string, cb: (...a: any[]) => void) {
+        mockRouter[ev] = cb;
+        return this;
+    }
+    off = vi.fn();
+    route = vi.fn();
+}
 
-vi.mock("../io/WSClient", () => ({
-    WSClient: class {
-        onServerEvent(cb: (...a: any[]) => void) {
-            mockWs["serverEvent"] = cb;
-        }
-        onConnected(cb: (...a: any[]) => void) {
-            mockWs["connected"] = cb;
-        }
-        onDisconnected(cb: (...a: any[]) => void) {
-            mockWs["disconnected"] = cb;
-        }
-        onMqttStatus(cb: (...a: any[]) => void) {
-            mockWs["mqttStatus"] = cb;
-        }
-        onChat(cb: (...a: any[]) => void) {
-            mockWs["chat"] = cb;
-        }
-        onStatePatch(cb: (...a: any[]) => void) {
-            mockWs["statePatch"] = cb;
-        }
-        onLogFeed(cb: (...a: any[]) => void) {
-            mockWs["logFeed"] = cb;
-        }
-        onStreamChunk = vi.fn();
-        onStreamEnd = vi.fn();
-        connect = vi.fn();
-        disconnect = vi.fn();
-        addressed = vi.fn((agent: string) => mockAddressed.push(agent));
-        sendRaw = vi.fn((frame: unknown) => {
-            mockSent.push(frame);
-            return true;
-        });
-    },
-}));
+class FakeWs {
+    onServerEvent(cb: (...a: any[]) => void) {
+        mockWs["serverEvent"] = cb;
+    }
+    onConnected(cb: (...a: any[]) => void) {
+        mockWs["connected"] = cb;
+    }
+    onDisconnected(cb: (...a: any[]) => void) {
+        mockWs["disconnected"] = cb;
+    }
+    onMqttStatus(cb: (...a: any[]) => void) {
+        mockWs["mqttStatus"] = cb;
+    }
+    onChat(cb: (...a: any[]) => void) {
+        mockWs["chat"] = cb;
+    }
+    onStatePatch(cb: (...a: any[]) => void) {
+        mockWs["statePatch"] = cb;
+    }
+    onLogFeed(cb: (...a: any[]) => void) {
+        mockWs["logFeed"] = cb;
+    }
+    onStreamChunk = vi.fn();
+    onStreamEnd = vi.fn();
+    connect = vi.fn();
+    disconnect = vi.fn();
+    addressed = vi.fn((agent: string) => mockAddressed.push(agent));
+    sendRaw = vi.fn((frame: unknown) => {
+        mockSent.push(frame);
+        return true;
+    });
+}
 
-vi.mock("../io/IOManager", () => ({
-    IOManager: class {
-        constructor(_router: unknown) {}
-        setWSClient = vi.fn();
-        receiveAgentMessage = vi.fn();
-        send = vi.fn(async () => {});
-    },
-}));
+class FakeIo {
+    setWSClient = vi.fn();
+    receiveAgentMessage = vi.fn();
+    send = vi.fn(async () => {});
+}
 
-vi.mock("../agents/AgentStore", () => ({
-    AgentStore: class {
-        constructor() {
-            mockStores.push(this);
-        }
-        reconcileAgents = vi.fn();
-        onChat = vi.fn();
-        removeAgent = vi.fn();
-        addOrUpdateAgent = vi.fn();
-        list = () => mockStoreAgents;
-        get = (id: string) => mockStoreAgents.find(a => a.id === id);
-        byName = (name: string) => mockStoreAgents.filter(a => a.name === name);
-        label = (agent: { name: string }) => agent.name;
-        onHeartbeat = vi.fn();
-        onSpawn = vi.fn();
-        onAlert = vi.fn();
-        pruneSilentRemoteAgents = vi.fn();
-        updateRemoteNode = vi.fn();
-        clearAll = vi.fn();
-    },
-}));
+class FakeStore {
+    constructor() {
+        mockStores.push(this);
+    }
+    reconcileAgents = vi.fn();
+    onChat = vi.fn();
+    removeAgent = vi.fn();
+    addOrUpdateAgent = vi.fn();
+    list = () => mockStoreAgents;
+    get = (id: string) => mockStoreAgents.find(a => a.id === id);
+    byName = (name: string) => mockStoreAgents.filter(a => a.name === name);
+    label = (agent: { name: string }) => agent.name;
+    onHeartbeat = vi.fn();
+    onSpawn = vi.fn();
+    onAlert = vi.fn();
+    pruneSilentRemoteAgents = vi.fn();
+    updateRemoteNode = vi.fn();
+    clearAll = vi.fn();
+}
 
-vi.mock("../ui/CardDashboard", () => ({
-    CardDashboard: class {
-        constructor() {
-            mockDashboards.push(this);
-        }
-        show = vi.fn();
-        destroy = vi.fn();
-        setTotalCostUsd = vi.fn();
-        setTotalMessages = vi.fn();
-        setHostStats = vi.fn();
-        inboxOpen = false;
-    },
-}));
+class FakeDashboard {
+    constructor() {
+        mockDashboards.push(this);
+    }
+    show = vi.fn();
+    destroy = vi.fn();
+    setTotalCostUsd = vi.fn();
+    setTotalMessages = vi.fn();
+    setHostStats = vi.fn();
+    inboxOpen = false;
+}
 
-// What had happened by the time main.ts installed the session-expiry hook.
+// What had happened by the time the app installed the session-expiry hook.
 const mockAtExpiryInstall: { requests: number; stores: number; dashboards: number }[] = [];
-vi.mock("../io/sessionExpiry", () => ({
-    installSessionExpiry: () => {
-        const requests = vi.isMockFunction(globalThis.fetch)
-            ? vi.mocked(globalThis.fetch).mock.calls.length
-            : 0;
-        mockAtExpiryInstall.push({ requests, stores: mockStores.length, dashboards: mockDashboards.length });
-    },
-}));
+function fakeExpiry(): () => void {
+    const requests = vi.isMockFunction(globalThis.fetch) ? vi.mocked(globalThis.fetch).mock.calls.length : 0;
+    mockAtExpiryInstall.push({ requests, stores: mockStores.length, dashboards: mockDashboards.length });
+    return () => {};
+}
 
-// The ledger's open questions, as main.ts asks for them each time it goes live.
+// The ledger's open questions, as the app asks for them each time it goes live.
 const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
 const mockLedgerRead = { fails: false };
-vi.mock("../io/openQuestions", () => ({
-    // As the real one answers: a failed read has empty lists and no `listed`.
-    fetchQuestionLedger: async (apiBase: string) =>
-        mockLedgerRead.fails
-            ? { open: [], answered: [] }
-            : {
-                  open: await mockOpenQuestions(apiBase),
-                  answered: [],
-                  listed: { questions: [], askedAt: 0 },
-              },
-}));
+// As the real one answers: a failed read has empty lists and no `listed`.
+const fakeLedger = async (apiBase: string) =>
+    (mockLedgerRead.fails
+        ? { open: [], answered: [] }
+        : {
+              open: await mockOpenQuestions(apiBase),
+              answered: [],
+              listed: { questions: [], askedAt: 0 },
+          }) as Awaited<ReturnType<AppParts["readLedger"]>>;
 
-vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
-vi.mock("../ui/DropZone", () => ({ DropZone: class {} }));
 
-describe("main.ts bootstrap", () => {
+const fakeParts = (): Partial<AppParts> =>
+    ({
+        ws: () => new FakeWs(),
+        router: () => new FakeRouter(),
+        store: () => new FakeStore(),
+        dashboard: () => new FakeDashboard(),
+        ioManager: () => new FakeIo(),
+        installSessionExpiry: fakeExpiry,
+        readLedger: fakeLedger,
+        registerTTS: vi.fn(),
+        dropZone: () => ({ destroy: vi.fn() }),
+    }) as unknown as Partial<AppParts>;
+
+describe("the app", () => {
     const origFetch = globalThis.fetch;
+    let app: App;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
         (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "";
+        mockStores.length = 0;
+        mockDashboards.length = 0;
+        mockAtExpiryInstall.length = 0;
+        mockSent.length = 0;
+        mockLedgerRead.fails = false;
+        mockOpenQuestions.mockReset();
+        mockOpenQuestions.mockResolvedValue([]);
+        vi.mocked(toast.show).mockClear();
+        vi.mocked(toast.close).mockClear();
         globalThis.fetch = vi.fn(async (url: string) => ({
             ok: true,
             json: async () =>
@@ -174,13 +180,15 @@ describe("main.ts bootstrap", () => {
                     ? [{ type: "chat", label: "hello", agentName: "A", timestamp: 1700000000, role: "user" }]
                     : [{ id: "a", name: "A", state: "running", protected: false }],
         })) as unknown as typeof fetch;
-        await import("../main");
+        app = createApp(fakeParts());
+        app.start();
         // let the /api/actors + /api/feed fetch chains settle
         await Promise.resolve();
         await Promise.resolve();
     });
 
-    afterAll(() => {
+    afterEach(() => {
+        app.stop();
         globalThis.fetch = origFetch;
     });
 
@@ -470,6 +478,7 @@ describe("main.ts bootstrap", () => {
         const handed: unknown[] = [];
         const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
 
+        wsHandler("connected")();
         wsHandler("mqttStatus")(false);
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(handed).toHaveLength(1));
@@ -497,6 +506,7 @@ describe("main.ts bootstrap", () => {
         });
 
         mockLedgerRead.fails = true;
+        wsHandler("connected")();
         wsHandler("mqttStatus")(false);
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(reads).toBe(1));
@@ -636,5 +646,148 @@ describe("main.ts bootstrap", () => {
             }),
         );
         expect(toast.show).toHaveBeenCalledTimes(1);
+    });
+
+    it("polls the actor list while the page is looked at, and not while it is hidden", async () => {
+        vi.useFakeTimers();
+        const second = createApp(fakeParts());
+        try {
+            second.start();
+            // The first read is done, so the poll is not skipped for being under way.
+            await vi.advanceTimersByTimeAsync(0);
+            const asked = () =>
+                vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/api/actors")).length;
+            const before = asked();
+
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(asked()).toBe(before + 1);
+
+            const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+            await vi.advanceTimersByTimeAsync(15_000);
+            hidden.mockRestore();
+
+            expect(asked()).toBe(before + 1);
+        } finally {
+            second.stop();
+            vi.useRealTimers();
+        }
+    });
+
+    it("hears nothing more once stopped", () => {
+        app.stop();
+        mockSent.length = 0;
+
+        emit("af-agent-command", { command: "stop", agentId: "a" });
+
+        expect(mockSent).toEqual([]);
+    });
+
+    it("stops once, however many times it is told", () => {
+        const dashboard = mockDashboards[0] as unknown as { destroy: ReturnType<typeof vi.fn> };
+
+        app.stop();
+        app.stop();
+
+        expect(dashboard.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops when the page goes, not when it is frozen for later", () => {
+        const dashboard = mockDashboards[0] as unknown as { destroy: ReturnType<typeof vi.fn> };
+
+        window.dispatchEvent(Object.assign(new Event("pagehide"), { persisted: true }));
+        expect(dashboard.destroy).not.toHaveBeenCalled();
+
+        window.dispatchEvent(Object.assign(new Event("pagehide"), { persisted: false }));
+        expect(dashboard.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops on beforeunload too, where pagehide does not come", () => {
+        const dashboard = mockDashboards[0] as unknown as { destroy: ReturnType<typeof vi.fn> };
+
+        window.dispatchEvent(new Event("beforeunload"));
+
+        expect(dashboard.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the socket and the poll when the session is revoked", () => {
+        let revoked = () => {};
+        const parts = fakeParts();
+        const ws = new FakeWs();
+        const second = createApp({
+            ...parts,
+            ws: () => ws as never,
+            installSessionExpiry: onRevoked => {
+                revoked = onRevoked;
+                return () => {};
+            },
+        });
+        second.start();
+
+        revoked();
+
+        expect(ws.disconnect).toHaveBeenCalled();
+        second.stop();
+    });
+
+    it("raises the drop zone once the server says it takes uploads, and takes it down", async () => {
+        localStorage.setItem(UPLOADS_KEY, "1");
+        const destroy = vi.fn();
+        const dropZone = vi.fn(() => ({ destroy }));
+        const second = createApp({ ...fakeParts(), dropZone });
+        second.start();
+
+        await vi.waitFor(() => expect(dropZone).toHaveBeenCalledTimes(1));
+        second.stop();
+        localStorage.removeItem(UPLOADS_KEY);
+
+        expect(destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("boots nothing from a config that answers after the page stopped", async () => {
+        let answer: (res: Response) => void = () => {};
+        const answering = globalThis.fetch;
+        globalThis.fetch = vi.fn((url: string) =>
+            String(url).endsWith("/api/config")
+                ? new Promise<Response>(resolve => (answer = resolve))
+                : answering(url),
+        ) as unknown as typeof fetch;
+        const registerTTS = vi.fn();
+        const second = createApp({ ...fakeParts(), registerTTS });
+        const told = new Promise<void>(resolve => {
+            const stop = listen("af-config-loaded", () => {
+                document.removeEventListener("af-config-loaded", stop);
+                resolve();
+            });
+        });
+
+        second.start();
+        second.stop();
+        answer(Response.json({}));
+        await told;
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(registerTTS).not.toHaveBeenCalled();
+    });
+
+    it("stops watching for an ended session when it stops", () => {
+        const stopWatching = vi.fn();
+        const second = createApp({ ...fakeParts(), installSessionExpiry: () => stopWatching });
+
+        second.stop();
+
+        expect(stopWatching).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells the voice whether the config was read", async () => {
+        const registerTTS = vi.fn();
+        const second = createApp({ ...fakeParts(), registerTTS });
+
+        second.start();
+
+        await vi.waitFor(() =>
+            expect(registerTTS).toHaveBeenCalledWith(expect.objectContaining({ configRead: true })),
+        );
+        second.stop();
     });
 });

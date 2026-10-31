@@ -29,7 +29,7 @@ Extensions live in `src/ext/<name>/` and mirror `wactorz/ext/<name>/` on the bac
 TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 
 - [ ] Create `src/ext/<name>/index.ts` — barrel exporting types + a `register(config)` function
-- [ ] `register(config)` is called once from `main.ts` during startup; it self-wires hooks,
+- [ ] `register(config)` is called once from `app.ts` during startup; it self-wires hooks,
       probes the backend endpoint, and registers event listeners — no other file imports
       the extension directly
 - [ ] Extension talks to other modules **only** via the typed event bus (`AppEventMap` in
@@ -47,7 +47,7 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 - [ ] Component is a plain class — no framework, no global state
 - [ ] Wires events via the typed `emit` / `listen` helpers in `src/events.ts`
 - [ ] Cleaned up in a `destroy()` method (remove event listeners)
-- [ ] Instantiated in the matching numbered section of `main.ts` (see its header map)
+- [ ] Instantiated in `createApp` in `app.ts`
 - [ ] Unit test added in `src/__tests__/` (coverage is gated in CI)
 - [ ] What a person acts on or reads has a role and a name (see [Finding elements](#finding-elements))
 - [ ] A new view needs nothing for its address: `src/router.ts` gives every view `#/<key>`, an
@@ -64,18 +64,17 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 - [ ] Sender dispatches the event; receiver only listens — no circular calls
 - [ ] Backend counterpart event/command documented in the PR description
 
-### Touching `main.ts` (the composition root)
+### Touching `app.ts` (the composition root)
 
-`main.ts` is wiring only — it instantiates services, derives URLs, and registers
-handlers in its eight numbered sections. It is **covered** by `src/__tests__/main-bootstrap.test.ts`
-(no longer a coverage exclusion), so keep it thin:
+`app.ts` is wiring only — `createApp` builds the services, derives URLs, and registers
+handlers in its `wire*` functions. `src/__tests__/app.test.ts` builds an app of its own for each
+test, over fakes, so keep it thin:
 
 - [ ] Handlers stay thin delegators — store call + `pushFeed`/`toast`, nothing more
 - [ ] Any decision/transform goes in a tested module (`agents/mapping`,
       `agents/deletionGuard`, `ui/haFeed`, `config/serverConfig`), not inline
-- [ ] New transport/app-event handlers go in the right numbered section, before the
-      `connect()` calls in section 7
-- [ ] `main-bootstrap.test.ts` drives the new handler (mock the transport, invoke the
+- [ ] New transport/app-event handlers go in the right `wire*` function; `start` is what connects
+- [ ] `app.test.ts` drives the new handler (fake the transport, invoke the
       registered callback) so coverage stays green
 
 ### Touching the feed / CardDashboard

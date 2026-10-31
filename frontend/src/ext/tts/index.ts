@@ -27,7 +27,7 @@ registerConfigEntry("wactorz-tts-available", c =>
     (c.tts as Record<string, unknown> | undefined)?.available ? "1" : "0",
 );
 
-/** Extension config passed to register() once at startup (see main.ts). */
+/** Extension config passed to register() once at startup (see app.ts). */
 export interface TTSConfig {
     apiBase: string;
     /** Whether `/api/config` answered. Without it the stored flag says nothing, or
@@ -36,7 +36,7 @@ export interface TTSConfig {
 }
 
 /**
- * Bootstrap the TTS extension. Called once from main.ts during startup.
+ * Bootstrap the TTS extension. Called once from app.ts during startup.
  * The extension self-wires — no other file needs to know about TTSManager.
  */
 export function register(config: TTSConfig): void {

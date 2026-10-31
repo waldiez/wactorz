@@ -24,8 +24,8 @@ export default defineConfig({
             provider: "v8",
             reporter: ["text", "lcov", "html"],
             include: ["src/**/*.ts"],
-            // Nothing is excluded. The composition root (main.ts) is covered by
-            // main-bootstrap.test.ts, which mocks the transports and drives each
+            // Nothing is excluded. The composition root (app.ts) is covered by
+            // app.test.ts, which fakes the transports and drives each
             // registered handler; its decision/transform logic lives in tested
             // modules (agents/mapping, agents/deletionGuard, ui/haFeed).
             exclude: [],

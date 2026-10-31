@@ -6,7 +6,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
-import { apiUrl, ingressBase, posting, requestBytes, requestJson, REQUEST_TIMEOUT_MS } from "../io/api";
+import {
+    apiUrl,
+    ingressBase,
+    posting,
+    requestBytes,
+    requestJson,
+    REQUEST_TIMEOUT_MS,
+    watchResponses,
+} from "../io/api";
 import { fetchCommandForms } from "../io/commandsApi";
 import { readActorHistory, readChatLog } from "../io/chatHistoryApi";
 import { readCostLimit } from "../io/costApi";
@@ -168,6 +176,39 @@ describe("requestJson", () => {
 
         expect(assign).toHaveBeenCalledWith("/login?next=%2F");
         restore();
+    });
+});
+
+describe("watchResponses", () => {
+    const answered = () =>
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => new Response(null, { status: 204 })),
+        );
+
+    it("tells the watcher of every response, until it stops", async () => {
+        answered();
+        const heard = vi.fn();
+        const stop = watchResponses(heard);
+
+        await requestJson("/api/cost");
+        stop();
+        await requestJson("/api/cost");
+
+        expect(heard).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a later watcher in place when an earlier one stops", async () => {
+        answered();
+        const stopFirst = watchResponses(vi.fn());
+        const later = vi.fn();
+        const stopLater = watchResponses(later);
+
+        stopFirst();
+        await requestJson("/api/cost");
+        stopLater();
+
+        expect(later).toHaveBeenCalledTimes(1);
     });
 });
 

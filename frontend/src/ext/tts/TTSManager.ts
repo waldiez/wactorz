@@ -47,7 +47,7 @@ export class TTSManager {
     /** Whether the ambient sound has been told to duck and not yet told to stop. */
     private _ducked = false;
     /** API base — empty for plain web, ingress prefix behind HA.
-     *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
+     *  Must be set (app.ts) before init(); bare "/api/…" escapes the ingress prefix. */
     private _apiBase = "";
 
     constructor() {

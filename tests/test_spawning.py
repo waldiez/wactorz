@@ -19,6 +19,7 @@ from typing import cast
 
 import pytest
 
+from tests.waiting import until
 from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
 from wactorz.agents.dependency_install import outcome_from_result
 from wactorz.agents.llm_agent import LLMProvider
@@ -476,7 +477,9 @@ def test_background_install_returns_placeholder(main_host):
             blocking_install=False,
         )
         assert isinstance(actor, SpawnPlaceholder)
-        await asyncio.sleep(0.1)  # let the background task finish
+        # The install runs in the background; wait for it rather than for a
+        # fixed time, which a busy runner outlasts.
+        await until(lambda: main_host.spawn_calls, "the background install spawning the agent")
 
     run(scenario())
     assert main_host.spawn_calls

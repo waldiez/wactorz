@@ -16,8 +16,8 @@ wactorz/
 
 frontend/src/
 ├── ext/                    # Frontend extensions (TypeScript) — mirror backend
-│   └── tts/index.ts        #     register({ apiBase, available })
-├── ui/dashboard/
+│   └── tts/index.ts        #     register({ apiBase, configRead })
+├── ui/shell/
 │   └── icons.ts            #     Icon registry — registerIcon(name, svg)
 ├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
 └── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
@@ -148,22 +148,24 @@ export interface MyConfig {
     available: boolean;
 }
 
-export function register(config: MyConfig): void {
-    if (!config.available) return;
+export function register(config: MyConfig): () => void {
+    if (!config.available) return () => {};
     // Seed the singleton, then let it self-wire via the event bus.
     myManager.setApiBase(config.apiBase);
     void myManager.init();
+    return listen("my-event", detail => myManager.handle(detail));
 }
 ```
 
-### Wiring in main.ts
+### Wiring in app.ts
 
-`register()` is called once during startup, after `/api/config` is seeded:
+`register()` is called once during startup, after `/api/config` is seeded, by
+`bootFromConfig` in `app.ts`; what it returns is how `createApp`'s `stop` ends it:
 
 ```ts
 import { register as registerMyExt } from "./ext/myname";
 
-registerMyExt({ apiBase: _apiBase, available });
+running.stopMyExt = registerMyExt({ apiBase: ingressBase(), available });
 ```
 
 ### Config seeding
@@ -191,7 +193,7 @@ An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:
 
 ```ts
-import { registerIcon } from "../../ui/dashboard/icons";
+import { registerIcon } from "../../ui/shell/icons";
 
 export function register(config: MyConfig): void {
     // 1. Register the icon BEFORE registerView() uses its name.
@@ -202,14 +204,13 @@ export function register(config: MyConfig): void {
 }
 ```
 
-`registerView(key, icon, label, builder)` is a `CardDashboard` method; `main.ts`
-passes it (plus an `onRender` re-render thunk) into `register()`. The builder is
-a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
+A view is asked for on the bus: `emit("af-register-view", { key, icon, label, build })`
+reaches `CardDashboard.registerView`. `build` is a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
 a fresh element tree per call.
 
 | Registry                | Module                   | Purpose                      |
 |-------------------------|--------------------------|------------------------------|
-| `registerIcon()`        | `ui/dashboard/icons.ts`  | Add SVG icons by name        |
+| `registerIcon()`        | `ui/shell/icons.ts`      | Add SVG icons by name        |
 | `registerView()`        | `CardDashboard` (method) | Add a nav tab + view builder |
 | `registerConfigEntry()` | `config/serverConfig.ts` | Seed `/api/config` fields    |
 

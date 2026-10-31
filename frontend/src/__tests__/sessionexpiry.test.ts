@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { requestJson, type Answer } from "../io/api";
 import { installSessionExpiry } from "../io/sessionExpiry";
-import { resetDeadSession } from "../ui/deadSession";
+import { resetDeadSession, showDeadSession } from "../ui/deadSession";
 
 type FakeWindow = {
     fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -158,7 +158,7 @@ describe("a page that can no longer reach Home Assistant", () => {
 
     it("says so once a run of 503s has gone on too long to be anything else", async () => {
         const w = fakeWindow(503, INGRESS);
-        const revoked = vi.fn();
+        const revoked = vi.fn(() => void showDeadSession());
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
         await failFor(w, 3, 61_000);
@@ -177,7 +177,7 @@ describe("a page that can no longer reach Home Assistant", () => {
         // window of "registry not available". Burying a healthy install under a
         // no-way-back overlay each time would be worse than the bug being fixed.
         const w = fakeWindow(503, INGRESS);
-        const revoked = vi.fn();
+        const revoked = vi.fn(() => void showDeadSession());
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
         await failFor(w, 8, 28_000);
@@ -213,7 +213,7 @@ describe("a page that can no longer reach Home Assistant", () => {
         // the prefix is defined and falsy. Telling that install to reopen from a
         // sidebar it does not have would be nonsense.
         const w = fakeWindow(503, "");
-        const revoked = vi.fn();
+        const revoked = vi.fn(() => void showDeadSession());
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
         await failFor(w, 5, 120_000);
@@ -235,7 +235,7 @@ describe("a page that can no longer reach Home Assistant", () => {
         // The token is alive; the session is not. `/login` under this prefix
         // answers, so sending someone there is the fix and the overlay is not.
         const w = fakeWindow(401, INGRESS);
-        const revoked = vi.fn();
+        const revoked = vi.fn(() => void showDeadSession());
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
         await ask(w, "/api/actors");
@@ -247,7 +247,7 @@ describe("a page that can no longer reach Home Assistant", () => {
 
     it("shows one overlay however many polls fail", async () => {
         const w = fakeWindow(503, INGRESS);
-        const revoked = vi.fn();
+        const revoked = vi.fn(() => void showDeadSession());
         restore = installSessionExpiry(w as unknown as Window, revoked);
 
         await failFor(w, 3, 61_000);

@@ -27,12 +27,14 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/dashboard/popovers";
 import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
 import { tts } from "../ext/tts";
+import { provideVoiceControls } from "../io/voiceControls";
 import { ambient } from "../io/AmbientManager";
 import { RESET_TIMEOUT_MS } from "../io/resetApi";
 import { toast } from "../ui/ToastManager";
 
 describe("buildAudioPopover", () => {
     beforeEach(() => {
+        provideVoiceControls(tts as never);
         document.body.innerHTML = "";
         vi.clearAllMocks();
     });

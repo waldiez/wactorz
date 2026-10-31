@@ -7,7 +7,8 @@
  * audio + reset popovers) and the mobile bottom nav. View switching is routed
  * back via `onSetView`; the active-view highlight is maintained by the caller.
  */
-import type { View, ConnState } from "./types";
+import type { ConnState } from "../../types/ws";
+import type { View } from "./types";
 import { BUILTIN_VIEWS, SETTINGS_VIEW } from "./types";
 import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";

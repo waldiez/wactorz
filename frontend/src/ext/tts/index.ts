@@ -12,11 +12,14 @@
 
 import { registerConfigEntry } from "../../config/serverConfig";
 import { listen } from "../../events";
+import { provideVoiceControls } from "../../io/voiceControls";
 import { safeStorage } from "../../safeStorage";
 import { tts } from "./TTSManager";
 
 export { tts, TTSManager } from "./TTSManager";
 export type { TTSVoice } from "./types";
+
+provideVoiceControls(tts);
 
 // This extension's /api/config fields (namespaced under "tts" by the backend
 // seam) — registered at module load so seedServerConfig() picks them up.
@@ -45,9 +48,12 @@ export function register(config: TTSConfig): () => void {
     tts.setApiBase(config.apiBase);
     // A stopped turn stops its voice too: the page saying it stopped while it
     // goes on reading the answer aloud disagrees with itself.
-    const stop = listen("tts-stop", () => tts.stopSpeaking());
+    const stops = [
+        listen("tts-stop", () => tts.stopSpeaking()),
+        listen("tts-notify", ({ text, from }) => tts.notify(text, from)),
+    ];
     if (!config.configRead || safeStorage.get("wactorz-tts-available") === "1") {
         void tts.init();
     }
-    return stop;
+    return () => stops.forEach(stop => stop());
 }

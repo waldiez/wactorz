@@ -9,7 +9,7 @@
  * and the reset REST endpoint), so they live outside the CardDashboard class.
  */
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
-import { tts } from "../../ext/tts";
+import { voiceControls } from "../../io/voiceControls";
 import { requestReset } from "../../io/resetApi";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
@@ -22,16 +22,16 @@ import { AGENT_SCOPES, buildScopeSwitch, nodesSay, openAgent } from "./resetScop
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
     const toggleRow = el("div", "af-audio-row");
 
-    const beepBtn = button(`af-audio-toggle${tts.beepEnabled ? " on" : ""}`, "🔔 Beep");
+    const beepBtn = button(`af-audio-toggle${voiceControls().beepEnabled ? " on" : ""}`, "🔔 Beep");
     beepBtn.title = "Notification beep";
     beepBtn.addEventListener("click", () => {
-        beepBtn.classList.toggle("on", tts.toggleBeep());
+        beepBtn.classList.toggle("on", voiceControls().toggleBeep());
     });
 
-    const ttsBtn = button(`af-audio-toggle${tts.ttsEnabled ? " on" : ""}`, "🗣 TTS");
+    const ttsBtn = button(`af-audio-toggle${voiceControls().ttsEnabled ? " on" : ""}`, "🗣 TTS");
     ttsBtn.title = "Read replies aloud";
     ttsBtn.addEventListener("click", () => {
-        const on = tts.toggleTTS();
+        const on = voiceControls().toggleTTS();
         ttsBtn.classList.toggle("on", on);
         voiceRow.style.display = on ? "" : "none";
     });
@@ -46,14 +46,14 @@ function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
  *  this each rebuild would stack another listener mutating a detached select. */
 function buildVoiceRow(): { row: HTMLElement; release: () => void } {
     const voiceRow = el("div", "af-audio-row");
-    voiceRow.style.display = tts.ttsEnabled ? "" : "none";
+    voiceRow.style.display = voiceControls().ttsEnabled ? "" : "none";
 
     const voiceSel = named(el("select", "af-audio-select"), "tts-voice", "TTS voice", "af-tts-voice");
     voiceSel.title = "TTS voice";
     voiceSel.appendChild(option("", "— loading voices… —"));
 
     const populateVoices = (): void => {
-        const voices = tts.voices;
+        const voices = voiceControls().voices;
         if (!voices.length) {
             return;
         }
@@ -65,7 +65,7 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
                 option(v.name, v.name.replace(/^Microsoft\s+/, "").replace(/\s+Online.*$/i, "")),
             );
         });
-        const saved = tts.selectedVoice;
+        const saved = voiceControls().selectedVoice;
         if (saved) {
             voiceSel.value = saved;
         }
@@ -73,7 +73,7 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
 
     populateVoices();
     const stopFollowing = listen("tts-voices-loaded", () => populateVoices());
-    voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
+    voiceSel.addEventListener("change", () => voiceControls().setVoice(voiceSel.value));
 
     voiceRow.appendChild(voiceSel);
     return { row: voiceRow, release: stopFollowing };

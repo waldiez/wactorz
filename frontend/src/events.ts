@@ -14,8 +14,8 @@
 import type { QuestionLedger } from "./io/openQuestions";
 import type { Attachment, ChatMessage, QuestionBook } from "./types/agent";
 import type { FeedItem } from "./types/feed";
-import type { ConnState } from "./ui/dashboard/types";
-import type { TTSVoice } from "./ext/tts/types";
+import type { TTSVoice } from "./types/tts";
+import type { ConnState } from "./types/ws";
 import type { Route } from "./router";
 
 /** Detail payload for each application event, keyed by event name. `void` = no detail. */
@@ -23,6 +23,8 @@ export interface AppEventMap {
     "af-feed-push": { item: FeedItem };
     "af-chat-message": { msg: ChatMessage };
     "af-connection-status": { status: ConnState };
+    /** A reply to read aloud, with who said it when that is known. */
+    "tts-notify": { text: string; from?: string };
     /** `/api/config` was read, or could not be: what it seeds can be read now. */
     "af-config-loaded": void;
     "af-attachment-added": { attachment: Attachment };

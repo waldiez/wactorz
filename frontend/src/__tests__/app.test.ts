@@ -13,9 +13,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createApp, type App, type AppParts } from "../app";
-import { UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { UPLOADS_KEY } from "../config/keys";
 import { emit, listen } from "../events";
 import { ambient } from "../io/AmbientManager";
+import { resetDeadSession } from "../ui/deadSession";
 import { toast } from "../ui/ToastManager";
 import type { FeedItem } from "../types/feed";
 
@@ -788,5 +789,34 @@ describe("the app", () => {
         expect(stopVoice).toHaveBeenCalledTimes(1);
         expect(duck).not.toHaveBeenCalled();
         duck.mockRestore();
+    });
+
+    it("warns of a send that did not go, and keeps quiet once stopped", () => {
+        emit("af-send-failed", { id: "m1", content: "hi", target: "" });
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Disconnected" }));
+
+        vi.mocked(toast.show).mockClear();
+        app.stop();
+        emit("af-send-failed", { id: "m2", content: "hi", target: "" });
+
+        expect(toast.show).not.toHaveBeenCalled();
+    });
+
+    it("shows the overlay when the session is revoked", () => {
+        let revoked = () => {};
+        resetDeadSession();
+        const second = createApp({
+            ...fakeParts(),
+            installSessionExpiry: onRevoked => {
+                revoked = onRevoked;
+                return () => {};
+            },
+        });
+
+        revoked();
+        second.stop();
+
+        expect(document.querySelector(".af-dead-session")).not.toBeNull();
+        resetDeadSession();
     });
 });

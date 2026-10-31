@@ -34,7 +34,8 @@ import {
 import { setSignOutVisible } from "./dashboard/signOut";
 import { setAttachVisible } from "./dashboard/chatIobar";
 import { stateLabel, sortAgents } from "./dashboard/agentState";
-import type { View, ConnState } from "./dashboard/types";
+import type { ConnState } from "../types/ws";
+import type { View } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
 import { ActivityFeed } from "./dashboard/activityFeed";
 import { Heartbeats } from "./dashboard/heartbeats";

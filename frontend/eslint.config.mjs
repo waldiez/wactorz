@@ -83,8 +83,8 @@ const defaultConfig = defineConfig({
             },
         ],
         // The models never reach into the views: a view observes a model, and
-        // a model that imported one could be tested only with a DOM. `io/` and
-        // `config/` still import from `ui/` and join this list once they do not.
+        // a model that imported one could be tested only with a DOM. Nor does
+        // transport or config import a view, or core an extension.
         "import/no-restricted-paths": [
             "error",
             {
@@ -93,6 +93,17 @@ const defaultConfig = defineConfig({
                         target: ["./src/agents", "./src/chat", "./src/models", "./src/types"],
                         from: "./src/ui",
                         message: "Models do not import views; let the view observe the model.",
+                    },
+                    {
+                        target: ["./src/io", "./src/config", "./src/events.ts"],
+                        from: "./src/ui",
+                        message: "Transport does not import views: emit an event, or take a callback.",
+                    },
+                    {
+                        target: ["./src/io", "./src/config", "./src/events.ts", "./src/agents", "./src/ui"],
+                        from: "./src/ext",
+                        message:
+                            "Core does not import extensions: they register themselves (see CONTRIBUTING).",
                     },
                 ],
             },

@@ -22,8 +22,7 @@
 import { emit } from "../events";
 import { apiUrl, requestJson } from "../io/api";
 import { safeStorage } from "../safeStorage";
-import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
-import { UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { SIGN_OUT_KEY, UPLOADS_KEY } from "./keys";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {

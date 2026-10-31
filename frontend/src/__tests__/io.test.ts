@@ -4,12 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
-vi.mock("../ext/tts", () => ({ tts: { notify: vi.fn() } }));
-
 import { IOManager } from "../io/IOManager";
-import { toast } from "../ui/ToastManager";
-import { tts } from "../ext/tts";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { WSClient } from "../io/WSClient";
 import type { ServerEventRouter } from "../io/ServerEventRouter";
@@ -83,13 +78,6 @@ describe("IOManager.send", () => {
         expect(ws.send).toHaveBeenCalledWith("/help", "alpha", [], "a1", "m1");
     });
 
-    it("toasts when the WebSocket send fails", async () => {
-        const io = new IOManager(makeRouter());
-        io.setWSClient(makeWS(false) as unknown as WSClient);
-        await io.send("hi", null);
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
-    });
-
     it("shows a delivered message in the feed", async () => {
         const io = new IOManager(makeRouter());
         io.setWSClient(makeWS() as unknown as WSClient);
@@ -130,7 +118,7 @@ describe("IOManager streaming", () => {
 
         ws.endCb!("alpha");
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "Hello", from: "alpha" });
-        expect(tts.notify).toHaveBeenCalledWith("Hello");
+        expect(lastEvent("tts-notify")?.detail).toEqual({ text: "Hello" });
         expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({ agentName: "alpha", label: "Hello" });
     });
 
@@ -140,7 +128,7 @@ describe("IOManager streaming", () => {
         io.setWSClient(ws as unknown as WSClient);
         ws.endCb!("main");
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main" });
-        expect(tts.notify).not.toHaveBeenCalled();
+        expect(lastEvent("tts-notify")).toBeUndefined();
         expect(lastEvent("af-feed-push")).toBeUndefined();
     });
 
@@ -201,12 +189,12 @@ describe("IOManager.receiveAgentMessage", () => {
 
     it("reads a user-directed reply aloud", () => {
         new IOManager(makeRouter()).receiveAgentMessage(reply());
-        expect(tts.notify).toHaveBeenCalledWith("hi", "alpha");
+        expect(lastEvent("tts-notify")?.detail).toEqual({ text: "hi", from: "alpha" });
     });
 
     it("ignores agent↔agent chatter", () => {
         new IOManager(makeRouter()).receiveAgentMessage(reply({ to: "beta" }));
-        expect(tts.notify).not.toHaveBeenCalled();
+        expect(lastEvent("tts-notify")).toBeUndefined();
     });
 
     it("reads a non-streamed reply aloud in direct_ws mode too", () => {
@@ -215,7 +203,7 @@ describe("IOManager.receiveAgentMessage", () => {
         const io = new IOManager(makeRouter());
         io.setWSClient(makeWS() as unknown as WSClient);
         io.receiveAgentMessage(reply());
-        expect(tts.notify).toHaveBeenCalledWith("hi", "alpha");
+        expect(lastEvent("tts-notify")?.detail).toEqual({ text: "hi", from: "alpha" });
     });
 });
 

@@ -11,13 +11,11 @@
  * cookie travels because the browser attaches it, and it is `HttpOnly`, so
  * script could not read it even to try.
  */
+import { SIGN_OUT_KEY } from "../../config/keys";
 import { ingressBase } from "../../io/api";
 import { iconMarkup } from "./icons";
 import { safeStorage } from "../../safeStorage";
 import { iconButton } from "../dom";
-
-/** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
-export const SIGN_OUT_KEY = "wactorz-can-sign-out";
 
 /**
  * Whether this browser holds a session it could end.

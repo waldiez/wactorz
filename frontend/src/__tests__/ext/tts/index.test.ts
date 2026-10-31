@@ -101,3 +101,28 @@ describe("register, when /api/config did not answer", () => {
         expect(init).toHaveBeenCalledTimes(1);
     });
 });
+
+describe("what the extension does for the page", () => {
+    it("reads aloud what the bus says, until it is stopped", async () => {
+        vi.resetModules();
+        const mod = await import("../../../ext/tts");
+        const { emit } = await import("../../../events");
+        const notify = vi.spyOn(mod.tts, "notify").mockImplementation(() => {});
+
+        const stop = mod.register({ apiBase: "", configRead: true });
+        emit("tts-notify", { text: "hello", from: "main" });
+        stop();
+        emit("tts-notify", { text: "again" });
+
+        expect(notify).toHaveBeenCalledTimes(1);
+        expect(notify).toHaveBeenCalledWith("hello", "main");
+    });
+
+    it("offers itself to the audio settings", async () => {
+        vi.resetModules();
+        const mod = await import("../../../ext/tts");
+        const { voiceControls } = await import("../../../io/voiceControls");
+
+        expect(voiceControls()).toBe(mod.tts);
+    });
+});

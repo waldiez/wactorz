@@ -12,7 +12,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { loadServerConfig, seedServerConfig } from "../config/serverConfig";
-import { uploadsEnabled, UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { UPLOADS_KEY } from "../config/keys";
+import { uploadsEnabled } from "../ui/dashboard/uploads";
 import { safeStorage } from "../safeStorage";
 import { byRole } from "./queries";
 import { openDashboard } from "./dashboard";

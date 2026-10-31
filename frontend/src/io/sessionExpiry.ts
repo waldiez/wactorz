@@ -20,7 +20,6 @@
  */
 import { ingressBase, watchResponses } from "./api";
 import { log } from "./logger";
-import { showDeadSession } from "../ui/deadSession";
 
 /** Where the server's sign-in page lives, under any ingress prefix. */
 function loginUrl(target: Window): string {
@@ -115,9 +114,9 @@ function sessionRevokedTracker(target: Window): (response: Response) => boolean 
  * Watch every response, redirecting to sign-in on a 401 and saying so when an
  * ingress session has been revoked.
  *
- * `onRevoked` is called once, for a caller that holds things this module does
- * not -- the socket, chiefly, which would otherwise go on reconnecting to a
- * prefix that cannot answer.
+ * `onRevoked` is called once, for a caller that holds what this module does not:
+ * the overlay that says so, and the socket, which would otherwise go on
+ * reconnecting to a prefix that cannot answer.
  *
  * Returns the way to stop watching.
  */
@@ -127,13 +126,15 @@ export function installSessionExpiry(target: Window = window, onRevoked: () => v
     // end up somewhere between the two.
     let redirecting = false;
     const revoked = sessionRevokedTracker(target);
+    let told = false;
 
     return watchResponses(response => {
         if (isSessionGone(response) && !redirecting) {
             redirecting = true;
             log.warn("[auth] session expired — returning to sign-in");
             target.location.assign(loginUrl(target));
-        } else if (revoked(response) && showDeadSession()) {
+        } else if (!told && revoked(response)) {
+            told = true;
             log.warn("[auth] ingress session revoked — this page cannot recover");
             onRevoked();
         }

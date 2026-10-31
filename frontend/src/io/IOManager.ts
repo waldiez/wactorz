@@ -16,8 +16,6 @@
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { ServerEventRouter } from "./ServerEventRouter";
 import type { WSClient } from "./WSClient";
-import { tts } from "../ext/tts";
-import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
 import { uid } from "../ids";
 
@@ -64,7 +62,7 @@ export class IOManager {
             // single non-streamed `chat` frame) must NOT create a feed row —
             // that produced a phantom empty bubble attributed to the default name.
             if (text) {
-                tts.notify(text);
+                emit("tts-notify", { text });
                 emit("af-feed-push", {
                     item: { type: "chat", label: text, agentName: from, timestamp: Date.now() },
                 });
@@ -90,11 +88,6 @@ export class IOManager {
         const timestampMs = Date.now();
         const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT, attachments, agent?.id ?? "", id);
         if (!sent) {
-            toast.show({
-                type: "alert-error",
-                title: "Disconnected",
-                message: "Reconnecting — the message goes once the connection is back.",
-            });
             // The dashboard rendered the bubble before this attempt, under `id`:
             // it keeps it waiting to go once the connection is back.
             emit("af-send-failed", { id, content: text, target: agent?.id ?? "" });
@@ -125,6 +118,6 @@ export class IOManager {
         if (msg.to && msg.to !== "user") {
             return;
         }
-        tts.notify(msg.content, msg.from);
+        emit("tts-notify", { text: msg.content, from: msg.from });
     }
 }

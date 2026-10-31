@@ -11,13 +11,11 @@
  * attachment instead of being POSTed — so the compose/preview UX can be built
  * and demoed without the backend `/api/upload` endpoint. It ships off.
  */
+import { UPLOADS_KEY } from "../../config/keys";
 import type { Attachment } from "../../types/agent";
 import { safeStorage } from "../../safeStorage";
 import { uid } from "../../ids";
 import { postUpload } from "../../io/uploadsApi";
-
-/** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
-export const UPLOADS_KEY = "wactorz-uploads-enabled";
 
 /**
  * Whether the attachment UI (drag-drop + paste) is available.

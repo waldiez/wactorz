@@ -32,6 +32,7 @@ import { register as registerTTS } from "./ext/tts";
 import { loadServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
+import { showDeadSession } from "./ui/deadSession";
 import { chatIngress } from "./ui/chatIngress";
 import { QuestionToasts } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
@@ -398,6 +399,15 @@ function wirePageActions(app: AppWiring): void {
 
 /** Sends, and what a wipe or a reset clears. */
 function wirePageResets(app: AppWiring): void {
+    // The socket refused a send: the chat keeps the message waiting.
+    app.listeners.on("af-send-failed", () => {
+        toast.show({
+            type: "alert-error",
+            title: "Disconnected",
+            message: "Reconnecting — the message goes once the connection is back.",
+        });
+    });
+
     // The chat says who is addressed; the socket attributes the gateway's replies to it.
     app.listeners.on("af-addressed", ({ agent }) => app.ws.addressed(agent));
 
@@ -573,6 +583,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
     // too, and installing after it would leave the very first 401 unhandled and the
     // page waiting on a poll half a minute away.
     const stopWatching = parts.installSessionExpiry(() => {
+        showDeadSession();
         // The socket is the one thing that would keep trying: it reconnects on a
         // timer, and every attempt goes to the same revoked prefix.
         ws.disconnect();

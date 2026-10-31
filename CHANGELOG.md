@@ -16,7 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   thread; `#/inbox/answered` lists the newest answered, with the pick, where it was made and the
   note. A question is answered from its card, with an optional note, and a refusal is said on the
   card. The tab counts what waits, in the header and in the phone's bar, and follows the agents'
-  books live. A question sent with `notify_user` alone, as the installer's are, keeps no book, so it
+  books live. The installer's question about a package and main's about running
+  model-written code are there too, kept across a reload, and still take their answer only from the
+  dashboard. A question an agent sends with `notify_user` alone keeps no book, so it
   stays a toast and a thread message. On a phone the bar is now Overview, Chat, Inbox, Devices and
   More, with Feed and Models under More.
 - **An agent can say why it asks.** `ask_operator(..., context="...")`, and `context` on a rule's

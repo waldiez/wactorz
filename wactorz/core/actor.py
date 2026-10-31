@@ -35,6 +35,7 @@ from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
 from .persistence.stores import get_db
 from .questions import (
+    CUT_SHORT,
     QUESTIONS_KEY,
     Question,
     answered,
@@ -619,8 +620,13 @@ class Actor(ABC):
         await self.on_start()
         # A question asked before a restart is still open: listen for its
         # answer, which goes to `on_operator_answer` since nothing awaits it,
-        # and say again what the book holds, for a reader that missed it.
-        if self.open_questions():
+        # and say again what the book holds, for a reader that missed it. A
+        # permission is closed instead: what waited for it did not survive.
+        still_open = self.open_questions()
+        for question in still_open:
+            if question.permission:
+                await self.close_permission(question.id, CUT_SHORT)
+        if any(not question.permission for question in still_open):
             self._hear_answers()
         if self.questions():
             await self._publish_questions()
@@ -2111,6 +2117,52 @@ class Actor(ABC):
         """The questions still waiting for an answer, oldest first."""
         return sorted((q for q in self.questions().values() if q.open), key=lambda q: q.asked_at)
 
+    async def ask_permission(self, text: str, options: Sequence[str]) -> str:
+        """Ask the person on the dashboard for leave to do something, and return the question's id.
+
+        The question is in the book, so it stays in the Inbox and survives a
+        reload, but unlike :meth:`ask_operator` nothing here listens for the
+        answer: the topic it would arrive on is open to anything on the broker,
+        which could then grant itself the permission. The caller waits for its
+        own ``dashboard_answer`` (see
+        :class:`~wactorz.core.outbound.TakesDashboardAnswers`), records the
+        pick with :meth:`permission_answered`, and ends a wait with no pick by
+        :meth:`close_permission`.
+        """
+        question_id = await self.notify_user(text, options=options)
+        await self._write_question(
+            Question(
+                id=question_id,
+                text=str(text),
+                options=check_options(options),
+                channel=DASHBOARD,
+                asked_at=time.time(),
+                permission=True,
+            )
+        )
+        return question_id
+
+    async def permission_answered(self, answer: Answer) -> None:
+        """Record ``answer`` in the book, for a question still open."""
+        question = self.questions().get(answer.id)
+        if question is not None and question.open:
+            await self._write_question(
+                answered(question, answer.option, answer.index, answer.channel, answer.note)
+            )
+
+    async def close_permission(self, question_id: str, option: str) -> None:
+        """End the question ``question_id`` with ``option``, in the book and on every dashboard."""
+        closing = Answer(
+            id=question_id,
+            agent_id=self.actor_id,
+            option=option,
+            index=-1,
+            channel=self.name,
+            timestamp=time.time(),
+        )
+        await self.permission_answered(closing)
+        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
+
     async def on_operator_answer(self, question: Question, option: str) -> None:
         """Called with the person's pick when nothing awaits it.
 
@@ -2161,6 +2213,9 @@ class Actor(ABC):
         question = self.questions().get(answer.id)
         if question is None:
             logger.debug("[%s] an answer to a question not asked here: %s", self.name, answer.id)
+            return
+        if question.permission:
+            logger.debug("[%s] a broker answer to a permission, ignored: %s", self.name, answer.id)
             return
         if question.answer is not None:
             logger.debug(

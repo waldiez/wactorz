@@ -564,12 +564,12 @@ class InstallerAgent(Actor):
             )
             return waiting
         names = ", ".join(waiting)
-        question_id = await self.notify_user(
+        question_id = await self.ask_permission(
             f"{wanted_by} needs {names} installed, and "
             f"{'it is' if len(waiting) == 1 else 'they are'} not on the list of packages "
             "installed without asking. Install, and allow from now on? "
             f"Typing /packages allow {' '.join(waiting)} does the same.",
-            options=(INSTALL, REFUSE),
+            (INSTALL, REFUSE),
         )
         settled: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._asking[question_id] = _Asking(tuple(waiting), settled)
@@ -586,22 +586,10 @@ class InstallerAgent(Actor):
             # spawn already refused. A request for them soon after is refused
             # without asking; after that, it asks afresh.
             if self._asking.pop(question_id, None) is not None:
-                await self._close_question(question_id, NO_ANSWER)
+                await self.close_permission(question_id, NO_ANSWER)
                 for package in waiting:
                     self._refusals.remember(normalized(package), UNANSWERED)
         return unlisted(waiting, self._allowed())
-
-    async def _close_question(self, question_id: str, option: str) -> None:
-        """Mark ``question_id`` answered with ``option`` wherever it is shown."""
-        closing = Answer(
-            id=question_id,
-            agent_id=self.actor_id,
-            option=option,
-            index=-1,
-            channel=self.name,
-            timestamp=time.time(),
-        )
-        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
 
     async def _settle_allowed(self) -> None:
         """Let through every question whose packages are all allowed now, and close it."""
@@ -611,7 +599,7 @@ class InstallerAgent(Actor):
                 self._asking.pop(question_id)
                 if not asking.settled.done():
                     asking.settled.set_result(True)
-                await self._close_question(question_id, ALLOWED)
+                await self.close_permission(question_id, ALLOWED)
 
     @staticmethod
     def _not_allowed(refused: list[str]) -> dict:
@@ -638,6 +626,7 @@ class InstallerAgent(Actor):
             return
         if not asking.settled.done():
             asking.settled.set_result(answer.option == INSTALL)
+        await self.permission_answered(answer)
         if answer.option != INSTALL:
             for package in asking.packages:
                 self._refusals.remember(normalized(package), REFUSED)

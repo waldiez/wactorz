@@ -40,6 +40,10 @@ QUESTIONS_LEAF = "questions"
 #: before answering, not a report.
 MAX_CONTEXT_CHARS = 1000
 
+#: How a permission question still open at a start reads: what waited for the
+#: answer is gone, so a press now would let nothing happen.
+CUT_SHORT = "The server restarted first"
+
 
 def context_text(raw: str) -> str:
     """``raw`` as a question's context: redacted, trimmed and cut to `MAX_CONTEXT_CHARS`.
@@ -81,6 +85,9 @@ class Question:
     question whose answer is not one. ``context`` says why the question is
     being asked, for the person weighing the answer; it stays in the book, so
     the dashboard's Inbox shows it and the chat channels send the question alone.
+    ``permission`` marks a question whose answer lets something happen: it is
+    settled only through the agent's ``dashboard_answer``, never from the answer
+    topic, which anything on the broker can write to.
     """
 
     id: str
@@ -97,6 +104,7 @@ class Question:
     answer_note: str = ""
     label: dict[str, Any] | None = None
     context: str = ""
+    permission: bool = False
 
     @property
     def open(self) -> bool:
@@ -133,6 +141,7 @@ class Question:
                 fallen_back=bool(record.get("fallen_back", False)),
                 label=dict(record["label"]) if isinstance(record.get("label"), dict) else None,
                 context=str(record.get("context") or ""),
+                permission=bool(record.get("permission", False)),
             )
         except (KeyError, TypeError, ValueError):
             return None

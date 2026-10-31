@@ -482,6 +482,8 @@ A `200` says the pick was sent, not that it was first: the `409` is checked agai
 
 The dashboard's button is checked the same way when the question is listed. A message sent with `notify_user` alone keeps no book, so its pick goes to the agent unchecked, for the agent to judge.
 
+The installer's question about a package and main's about running model-written code are listed like any other, with `"permission": true`. They are settled only by a pick made here or on the dashboard, in the server's own process: one published on `agents/{agent_id}/answer` changes nothing. They close with `answer` set to what ended them when no pick came: `No answer in time`, `Allowed` or `The server restarted first`.
+
 ---
 
 ### `GET /api/labels`

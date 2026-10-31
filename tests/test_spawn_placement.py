@@ -36,7 +36,7 @@ from wactorz.agents.main.turn_actions import TurnActions
 from wactorz.config import DeployTarget
 from wactorz.core import refusals
 from wactorz.core.actor import ActorMetrics
-from wactorz.core.outbound import Answer, answer_topic
+from wactorz.core.outbound import Answer
 from wactorz.web import answers, runtime
 
 NODE = "sandbox"
@@ -57,6 +57,8 @@ class _Host:
         self.actor_id = "main-id"
         self.questions: list[dict[str, Any]] = []
         self.published: list[tuple[str, Any]] = []
+        self.recorded: list[Answer] = []
+        self.closed: list[tuple[str, str]] = []
         self.asked = asyncio.Event()
         #: The nodes main has heard from, by name.
         self.heard: dict[str, dict[str, Any]] = {}
@@ -85,10 +87,16 @@ class _Host:
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         return None
 
-    async def notify_user(self, text: str, *, options: Any = ()) -> str:
+    async def ask_permission(self, text: str, options: Any) -> str:
         self.questions.append({"text": text, "options": list(options)})
         self.asked.set()
         return f"q{len(self.questions)}"
+
+    async def permission_answered(self, answer: Answer) -> None:
+        self.recorded.append(answer)
+
+    async def close_permission(self, question_id: str, option: str) -> None:
+        self.closed.append((question_id, option))
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
@@ -334,10 +342,7 @@ class TestAskingForMain:
         placed = await deciding.place(dynamic(node="main"))
 
         assert isinstance(placed, NotSpawned)
-        assert host.published == [
-            (answer_topic("main-id"), host.published[0][1]),
-        ]
-        assert host.published[0][1]["option"] == placement.NO_ANSWER
+        assert host.closed == [("q1", placement.NO_ANSWER)]
         # A press that comes afterwards lets nothing through.
         await deciding.dashboard_answer(_press(RUN_ON_MAIN))
         again = await deciding.place(dynamic(node="main"))
@@ -385,14 +390,20 @@ class TestOnlyTheDashboardMaySayYes:
         main = _main()
         asked = asyncio.Event()
 
-        async def _notify(text: str, *, options: Any = ()) -> str:
+        async def _ask(_text: str, _options: Any) -> str:
             asked.set()
             return "q1"
+
+        recorded: list[Answer] = []
+
+        async def _record(answer: Answer) -> None:
+            recorded.append(answer)
 
         async def _publish(*_args: Any, **_kwargs: Any) -> None:
             return None
 
-        monkeypatch.setattr(main, "notify_user", _notify)
+        monkeypatch.setattr(main, "ask_permission", _ask)
+        monkeypatch.setattr(main, "permission_answered", _record)
         monkeypatch.setattr(runtime, "registry", type("R", (), {"get": lambda _s, _id: main})())
         monkeypatch.setattr(runtime, "mqtt_client_ref", None)
         monkeypatch.setattr(main, "_mqtt_publish", _publish)
@@ -405,6 +416,7 @@ class TestOnlyTheDashboardMaySayYes:
 
         placed = await pending
         assert isinstance(placed, dict)
+        assert [answer.option for answer in recorded] == [RUN_ON_MAIN]
 
 
 class _Registry:

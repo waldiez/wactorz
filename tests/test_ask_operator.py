@@ -29,6 +29,7 @@ from wactorz.core.actor import Actor, NoAnswerError
 from wactorz.core.outbound import Answer, answer_topic
 from wactorz.core.questions import (
     ANSWERED_KEPT,
+    CUT_SHORT,
     MAX_CONTEXT_CHARS,
     QUESTIONS_KEY,
     Question,
@@ -434,6 +435,114 @@ class TestThePublishedBook:
             await wired.actor.stop()
 
         assert questions_topic(wired.actor.actor_id) not in wired.retained
+
+
+class TestPermissions:
+    """A question whose answer lets something happen: never settled from the broker."""
+
+    async def test_it_is_in_the_book_and_nothing_listens_for_its_answer(self, wired: Wired) -> None:
+        question_id = await wired.actor.ask_permission("Install it?", ["Install", "Refuse"])
+
+        (kept,) = wired.book
+        assert (kept.id, kept.permission, kept.open) == (question_id, True, True)
+        assert kept.options == ("Install", "Refuse")
+        assert wired.subscribed == []
+
+    async def test_a_broker_answer_changes_nothing_for_an_agent_that_listens_there(
+        self, wired: Wired
+    ) -> None:
+        # Main listens on its answer topic for its ordinary questions, so the
+        # same topic reaches it for a permission, from anything on the broker.
+        ordinary = asyncio.create_task(wired.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await wired.settle()
+        ordinary_id = wired.chat_frames[-1]["id"]
+        permission_id = await wired.actor.ask_permission("Install it?", ["Install", "Refuse"])
+
+        await wired.answer("Install", id=permission_id)
+
+        assert wired.actor.questions()[permission_id].open
+        await wired.answer("yes", id=ordinary_id)
+        assert await ordinary == "yes"
+
+    async def test_a_pick_handed_over_is_recorded_once_with_its_note(self, wired: Wired) -> None:
+        question_id = await wired.actor.ask_permission("Install it?", ["Install", "Refuse"])
+        pick = Answer(
+            id=question_id,
+            agent_id=wired.actor.actor_id,
+            option="Install",
+            index=0,
+            channel="dashboard",
+            note="checked the name",
+        )
+
+        await wired.actor.permission_answered(pick)
+        await wired.actor.permission_answered(
+            Answer(
+                id=question_id,
+                agent_id=pick.agent_id,
+                option="Refuse",
+                index=1,
+                channel="dashboard",
+            )
+        )
+
+        (kept,) = wired.book
+        assert (kept.answer, kept.answer_channel, kept.answer_note) == (
+            "Install",
+            "dashboard",
+            "checked the name",
+        )
+
+    async def test_closing_marks_the_book_and_every_dashboard(self, wired: Wired) -> None:
+        question_id = await wired.actor.ask_permission("Install it?", ["Install", "Refuse"])
+
+        await wired.actor.close_permission(question_id, "No answer in time")
+
+        (kept,) = wired.book
+        assert (kept.answer, kept.open) == ("No answer in time", False)
+        ((_topic, frame),) = [f for f in wired.frames if f[0] == answer_topic(wired.actor.actor_id)]
+        assert (frame["id"], frame["option"]) == (question_id, "No answer in time")
+
+    async def test_a_restart_closes_it_and_does_not_start_listening(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = spec_of(hvac_watch)
+        assert spec is not None
+        before = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        question_id = await before.actor.ask_permission("Install it?", ["Install", "Refuse"])
+
+        after = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        try:
+            await after.actor.start()
+        finally:
+            await after.actor.stop()
+
+        (kept,) = after.book
+        assert (kept.id, kept.answer) == (question_id, CUT_SHORT)
+        assert after.subscribed == []
+
+    async def test_a_restart_still_listens_for_the_ordinary_question_beside_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = spec_of(hvac_watch)
+        assert spec is not None
+        before = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        asking = asyncio.create_task(before.actor.ask_operator("Changed?", options=["yes", "no"]))
+        await before.settle()
+        ordinary_id = before.chat_frames[-1]["id"]
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+        await before.actor.ask_permission("Install it?", ["Install", "Refuse"])
+
+        after = Wired(spec.build(persistence_dir=str(tmp_path)), monkeypatch)
+        try:
+            await after.actor.start()
+        finally:
+            await after.actor.stop()
+
+        assert [q.id for q in after.actor.open_questions()] == [ordinary_id]
+        assert after.subscribed == [answer_topic(after.actor.actor_id)]
 
 
 class TestTheBook:

@@ -20,6 +20,7 @@ from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.placement import Placement, stays_on_main
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import DeployTarget
+from wactorz.core.outbound import Answer
 
 NODE = "sandbox"
 
@@ -83,8 +84,14 @@ class _Host:
     def migration(self) -> Migration:
         return cast("Migration", self.mover)  # a fake standing in for main's
 
-    async def notify_user(self, text: str, *, options: Any = ()) -> str:
-        return "q1"
+    async def ask_permission(self, text: str, options: Any) -> str:
+        return ""
+
+    async def permission_answered(self, answer: Answer) -> None:
+        return None
+
+    async def close_permission(self, question_id: str, option: str) -> None:
+        return None
 
     async def _mqtt_publish(self, *_args: Any, **_kwargs: Any) -> None:
         return None

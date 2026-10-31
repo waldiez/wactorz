@@ -5,6 +5,7 @@
     wactorz-data profile sensors/imu/left-wrist           # the last day's dataset card
     wactorz-data profile sensors/imu/left-wrist --since 1760000000 --until 1760086400 --json
     wactorz-data export sensors/imu/left-wrist out.parquet --since ... --until ...
+    wactorz-data sweep --days 30 --dry-run                 # what a retention of a month would remove
 
 Reads the data directory under the state directory (``--state-dir``, else
 ``WACTORZ_STATE_DIR``, else ``./state``), beside the server or on a node. Needs
@@ -22,8 +23,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..config import DATA_RETENTION_DAYS
+from ..core.artifacts import ArtifactStore
 from ..core.paths import resolve_state_dir
-from .files import DataError, check_source, data_root, sources
+from .files import DataError, check_source, data_root, summaries
+from .retention import protected_windows, sweep
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +81,30 @@ def _run(args: argparse.Namespace) -> str | None:
     """Carry out one command; why it could not, or None."""
     root = data_root(resolve_state_dir(args.state_dir))
     if args.command == "sources":
-        for source in sources(root):
-            logger.info(source)
+        for found in summaries(root):
+            logger.info(
+                "%s: %s hour(s), %s bytes, %s to %s",
+                found["source"],
+                found["hours"],
+                found["bytes"],
+                _moment(found["from"]) if found["from"] else "-",
+                _moment(found["to"]) if found["to"] else "-",
+            )
+        return None
+    if args.command == "sweep":
+        keep_days = DATA_RETENTION_DAYS if args.days is None else float(args.days)
+        if keep_days <= 0:
+            return "no retention: set --days, or WACTORZ_DATA_RETENTION_DAYS"
+        protected = protected_windows(ArtifactStore.in_state_dir(resolve_state_dir(args.state_dir)))
+        report = sweep(root, keep_days=keep_days, protected=protected, dry_run=args.dry_run)
+        logger.info(
+            "%s %s hour(s), %s bytes, older than %g day(s); %s kept for a model",
+            "would remove" if args.dry_run else "removed",
+            len(report.removed),
+            report.bytes,
+            keep_days,
+            report.protected,
+        )
         return None
     try:
         check_source(args.source)
@@ -115,7 +141,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     window.add_argument("--until", type=float, metavar="SECONDS", help="Unix seconds; default: now")
 
-    commands.add_parser("sources", parents=[common], help="list every source with files")
+    commands.add_parser("sources", parents=[common], help="list every source, with what it holds")
+    sweeping = commands.add_parser(
+        "sweep", parents=[common], help="remove hours older than the retention, except a model's"
+    )
+    sweeping.add_argument(
+        "--days", type=float, metavar="DAYS", help="default: WACTORZ_DATA_RETENTION_DAYS"
+    )
+    sweeping.add_argument(
+        "--dry-run", action="store_true", help="say what would go, remove nothing"
+    )
     profile = commands.add_parser(
         "profile", parents=[common, window], help="describe a window of a source"
     )

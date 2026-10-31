@@ -11,6 +11,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Recorded readings can be let go after a while, except what a model learned from.**
+  `WACTORZ_DATA_RETENTION_DAYS` makes main remove hours of readings older than that from its
+  data directory, a few times a day, keeping any hour a stored model says it was trained on
+  (`data` windows in the version's metadata, which the train step writes); unset, everything
+  is kept, as before. `wactorz-data sweep --days N --dry-run` says what a retention would
+  remove, and without `--dry-run` removes it. `GET /api/data` and `wactorz-data sources` now
+  say what each source holds, its hours, files and bytes and its first and last hour, and
+  the retention in force; `GET /api/data/{source}/series` gives one column over a window in
+  buckets, for a chart.
 - **Readings are recorded as Parquet, where they are seen, and read back as frames.** A new
   `recorder` library agent in the catalogue (`@catalog spawn recorder {"topics": [...]}`, or a
   `module` spawn with `target: wactorz.agents.recorder_agent:RecorderAgent` on a node) keeps

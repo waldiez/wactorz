@@ -513,6 +513,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>How much of the artifacts it has fetched a node keeps. Past it, those no agent on the node names are deleted, the least recently used first; one an agent names is kept whatever the total. Read on each node; <code>0</code> keeps everything</td>
 </tr>
 <tr>
+<td><code>WACTORZ_DATA_RETENTION_DAYS</code></td>
+<td><code>0</code></td>
+<td>How many days of recorded readings main keeps under <code>&lt;state&gt;/data/</code> (<code>docs/design/data-storage.md</code>). Past it, an hour of a source is removed a few times a day, unless a stored model says it was trained on it. <code>0</code> keeps everything. <code>wactorz-data sweep --dry-run</code> says what a retention would remove</td>
+</tr>
+<tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>

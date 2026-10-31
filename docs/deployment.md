@@ -191,6 +191,7 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_MIGRATION_MAX_BLOB_BYTES` | `67108864` | Largest total of an agent's blobs (models, arrays, bytes) a `/migrate` carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; `0` sets no limit |
 | `WACTORZ_ARTIFACT_MAX_BYTES` | `268435456` | Largest artifact (a model kept with `wactorz-artifacts`) main sends a node and a node accepts. A spawn naming a larger one is refused before it is sent. Read on main and on each node; `0` sets no limit |
 | `WACTORZ_NODE_ARTIFACT_CACHE_BYTES` | `1073741824` | How much of the artifacts it has fetched a node keeps. Past it, those no agent on the node names are deleted, the least recently used first; one an agent names is kept whatever the total. Read on each node; `0` keeps everything |
+| `WACTORZ_DATA_RETENTION_DAYS` | `0` | How many days of recorded readings main keeps under `<state>/data/` (`docs/design/data-storage.md`). Past it, an hour of a source is removed a few times a day, unless a stored model says it was trained on it. `0` keeps everything. `wactorz-data sweep --dry-run` says what a retention would remove |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `ALERTMANAGER_EXTERNAL_PORT` | `9093` | Alertmanager host port |
 | `ALERT_WEBHOOK_URL` | _(none)_ | Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See `prometheus.md` |

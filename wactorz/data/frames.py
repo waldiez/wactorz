@@ -79,6 +79,10 @@ class SplitError(DataError):
     def needs(cls, by: str, what: str) -> SplitError:
         return cls(f"cutting by {by!r} needs {what}")
 
+    @classmethod
+    def no_column(cls, column: str) -> SplitError:
+        return cls(f"the frame has no column {column!r}")
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -402,6 +406,67 @@ def _describe(values: Sequence[Any]) -> dict[str, Any]:
         "missing": missing,
         "distinct": len(counts),
         "top": [{"value": value, "count": count} for value, count in top],
+    }
+
+
+# ── A column over time ────────────────────────────────────────────────────────
+
+#: How many buckets a series has when not told.
+DEFAULT_POINTS = 200
+
+
+def series(
+    frame: pa.Table,
+    column: str,
+    *,
+    since: float,
+    until: float,
+    points: int = DEFAULT_POINTS,
+) -> dict[str, Any]:
+    """``column`` over ``[since, until)`` in ``points`` buckets of equal width, for a chart.
+
+    Each bucket says how many rows fell in it and, of the numbers among them,
+    their mean, least and most; an empty bucket is a gap, with nulls. Rows
+    whose value is not a number count and give nothing else. Raises
+    `SplitError` for a column the frame lacks.
+    """
+    if column not in frame.column_names:
+        raise SplitError.no_column(column)
+    points = max(1, points)
+    width = (until - since) / points
+    counts = [0] * points
+    sums = [0.0] * points
+    least: list[float | None] = [None] * points
+    most: list[float | None] = [None] * points
+    numbers = [0] * points
+    for ts, value in zip(_timestamps(frame), frame.column(column).to_pylist(), strict=True):
+        if not since <= ts < until or width <= 0:
+            continue
+        index = min(points - 1, int((ts - since) / width))
+        counts[index] += 1
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            number = float(value)
+            numbers[index] += 1
+            sums[index] += number
+            low, high = least[index], most[index]
+            least[index] = number if low is None or number < low else low
+            most[index] = number if high is None or number > high else high
+    return {
+        "column": column,
+        "since": since,
+        "until": until,
+        "points": points,
+        "buckets": [
+            {
+                "from": since + i * width,
+                "to": since + (i + 1) * width,
+                "count": counts[i],
+                "mean": (sums[i] / numbers[i]) if numbers[i] else None,
+                "min": least[i],
+                "max": most[i],
+            }
+            for i in range(points)
+        ],
     }
 
 

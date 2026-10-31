@@ -123,6 +123,24 @@ only if a recorder records that stream; the loader's fallback to the window,
 below, is for the minutes before the current hour's file closes, not for
 history.
 
+### Old hours go, except a model's
+
+Main keeps every hour until a retention says otherwise. `WACTORZ_DATA_RETENTION_DAYS`
+is that retention, off unless set: letting readings go is a choice an install makes,
+not something a default does to history it has. With it set, main sweeps a few times
+a day and removes the hours older than it, source by source, except an hour a stored
+model says it was trained on. A version's metadata carries `data`, one window or a
+list of them, each `{"source", "since", "until"}` in event time; the train step
+writes it, and the sweep reads it back, so a model's training data outlives the
+retention and the trial that chose it can be read again. `wactorz-data sweep` does
+the same by hand, with `--dry-run` to say what would go. A node keeps its own copy of
+a shipped file only until main has answered for it and a week has passed, so main's
+data directory is the one place a reading is finally let go.
+
+What each source holds, its hours, files and bytes and its first and last hour, is
+`GET /api/data` and `wactorz-data sources`; a column over time in buckets is
+`GET /api/data/{source}/series`, which is what a chart reads rather than the rows.
+
 ### One loader, `wactorz.data`
 
 Every consumer reads through one module, so the layout is known in one place
@@ -192,6 +210,11 @@ there is no third.
   must not queue behind it.
 - **Storing pairs in SQLite because they are fewer.** Rejected: they are fewer
   today, and the writer would be built twice.
+- **A retention on by default.** Rejected: an install that has not thought about it
+  keeps everything, which costs disk and loses nothing; one that has sets a number.
+- **Downsampling old hours instead of removing them.** Not now: worth doing when a
+  design partner's rates make a year of raw data too large to keep, and the layout
+  does not change for it.
 - **Random splits.** Rejected, above: a time-series model scored on its own
   neighbours scores well and means nothing.
 - **A dataframe library in the API.** Rejected: it would be a required
@@ -214,6 +237,11 @@ there is no third.
   payload's `source` or `device` field, else the filter without its wildcards.
   The collector's retention is left to its `retention_days` setting: shortening
   the default would prune history an existing install still has.
+- **The retention and the sizes** are built (`wactorz/data/retention.py`,
+  `wactorz/agents/main/data_retention.py`, `summary` in `wactorz/data/files.py`,
+  `series` in `wactorz/data/frames.py`, the routes and `wactorz-data sweep`), as
+  "Old hours go, except a model's" says. The train step writes the `data` windows
+  the sweep keeps.
 - **1.5, shadow serving**, writes pairs under `shadow/<model>` through the same
   writer, and reads them back through `frame` for the comparison. Built, with
   the writer and `frame` as its first piece (`wactorz/data/`): a batch that

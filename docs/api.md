@@ -457,9 +457,28 @@ The outcomes of the model's trials that ended, newest first: how each ended (`pr
 
 ### `GET /api/data`
 
-The sources with recorded readings under the state directory's `data/`: every source a recorder filed at least one hour of, and `shadow/<model>` and `serving/<model>` for pairs and serving logs (`docs/design/data-storage.md`).
+The sources with recorded readings under the state directory's `data/`: every source a recorder filed at least one hour of, and `shadow/<model>` and `serving/<model>` for pairs and serving logs (`docs/design/data-storage.md`). Each says what it holds, and the answer says the retention in force (`WACTORZ_DATA_RETENTION_DAYS`; `null` when everything is kept).
 
-**Response** `200 OK`: `{"sources": ["sensors/imu/left-wrist", "shadow/imu-detector"]}`
+**Response** `200 OK`
+```json
+{"sources": [{"source": "sensors/imu/left-wrist", "hours": 312, "files": 320, "bytes": 48213990,
+              "from": 1759000000.0, "to": 1760123600.0}],
+ "retention_days": 30}
+```
+
+---
+
+### `GET /api/data/{source}/series`
+
+One `column` of `source` over a window, in `points` buckets of equal width (default 200, at most 2000), for a chart: each bucket's row count and, of the numbers in it, their mean, least and most; an empty bucket is a gap with nulls. `since` and `until` as for the profile.
+
+**Response** `200 OK`
+```json
+{"source": "sensors/imu/left-wrist", "column": "ax", "since": 1760000000.0, "until": 1760086400.0, "points": 200,
+ "buckets": [{"from": 1760000000.0, "to": 1760000432.0, "count": 43, "mean": 0.02, "min": -1.1, "max": 1.3}, "..."]}
+```
+
+`400` for a missing `column`, a bad source, window or `points`; `404` for a column the window's files lack; `503` without the `data` extra.
 
 ---
 

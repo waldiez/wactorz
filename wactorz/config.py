@@ -261,6 +261,12 @@ ARTIFACT_MAX_BYTES = _env_int("WACTORZ_ARTIFACT_MAX_BYTES", 256 * 1024 * 1024)
 #: names is kept whatever the total. 0 keeps everything.
 NODE_ARTIFACT_CACHE_BYTES = _env_int("WACTORZ_NODE_ARTIFACT_CACHE_BYTES", 1024 * 1024 * 1024)
 
+#: How many days of recorded readings main keeps under its data directory
+#: (docs/design/data-storage.md). Past it, an hour of a source is removed, unless
+#: a stored model says it was trained on it. 0 keeps everything, which is the
+#: default: letting data go is a choice an install makes.
+DATA_RETENTION_DAYS = _env_float("WACTORZ_DATA_RETENTION_DAYS", 0.0)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:

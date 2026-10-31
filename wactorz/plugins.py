@@ -40,6 +40,11 @@ MODULE_TYPE = "module"
 #: The environment variable naming targets to load, comma or space separated.
 ENV_VAR = "WACTORZ_AGENTS"
 
+#: The library agents the package itself brings, found on main and on every
+#: node alike, so a spawn naming one by target is built wherever it lands.
+#: None starts with the system: each waits in the catalogue to be asked for.
+BUILT_IN_TARGETS = ("wactorz.agents.recorder_agent:RecorderAgent",)
+
 
 @dataclass
 class AgentPlugin:
@@ -171,7 +176,8 @@ def targets() -> list[str]:
     it may place there. A plugin registered in code under no path is left out:
     nothing elsewhere could name it.
     """
-    return sorted({plugin.target for plugin in discover().values() if plugin.target})
+    found = [*discover().values(), *built_in().values()]
+    return sorted({plugin.target for plugin in found if plugin.target})
 
 
 def _accepted_parameters(cls: type) -> set[str] | None:
@@ -343,7 +349,7 @@ def clear() -> None:
 
 
 def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, AgentPlugin]:
-    """Every plugin, by name: entry points, then ``WACTORZ_AGENTS``, then registered.
+    """Every plugin a deployment brings, by name: entry points, then ``WACTORZ_AGENTS``, then registered.
 
     Found once and kept; ``refresh`` looks again. A target that cannot be
     imported or is not an agent is logged and left out, so one bad entry does
@@ -393,17 +399,43 @@ def _entry_points() -> list[Any]:
         return []
 
 
+_built_in: dict[str, AgentPlugin] | None = None
+
+
+def built_in() -> dict[str, AgentPlugin]:
+    """The library agents the package itself brings, by name.
+
+    Apart from `discover`, which is what a deployment brings and is shown as
+    its own: these are in the catalogue like the packaged recipes, are built on
+    any node, and start only when asked for.
+    """
+    global _built_in
+    if _built_in is not None:
+        return dict(_built_in)
+    found: dict[str, AgentPlugin] = {}
+    for target in BUILT_IN_TARGETS:
+        try:
+            plugin = plugin_from(resolve_target(target), target)
+        except Exception:  # pragma: no cover - the package's own module
+            logger.exception("[plugins] %s, the package's own, could not be loaded", target)
+            continue
+        plugin.autostart = False
+        found[plugin.name] = plugin
+    _built_in = found
+    return dict(found)
+
+
 def for_name(name: str) -> AgentPlugin | None:
-    """The plugin called ``name``, or None."""
-    return discover().get(name)
+    """The plugin called ``name``, the deployment's or the package's own, or None."""
+    return discover().get(name) or built_in().get(name)
 
 
 def for_target(target: str) -> AgentPlugin | None:
-    """The plugin registered for ``target``, or None: only these may be spawned by path."""
+    """The plugin for ``target``, or None: only these may be spawned by path."""
     wanted = target.strip()
     if not wanted:
         return None
-    for plugin in discover().values():
+    for plugin in [*discover().values(), *built_in().values()]:
         if plugin.target == wanted:
             return plugin
     return None

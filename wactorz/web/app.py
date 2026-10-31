@@ -22,6 +22,7 @@ from . import (
     answers,
     api_actors,
     api_commands,
+    api_data,
     api_labels,
     api_log_capture,
     api_logs,
@@ -220,6 +221,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/models/{name}/rollback", api_models.rollback_handler)
     app.router.add_get("/api/labels", api_labels.labels_handler)
     app.router.add_get("/api/labels/effective", api_labels.effective_handler)
+    api_data.setup(app)
     app.router.add_get("/api/questions", questions.questions_handler)
     app.router.add_post("/api/questions/{agent_id}/{question_id}/answer", answers.answer_handler)
 

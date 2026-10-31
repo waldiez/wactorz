@@ -71,6 +71,7 @@ CONTROL_LEAVES = frozenset(
         "code_request",
         "reset",
         "swap_model",
+        "data_ack",
     }
 )
 

@@ -93,6 +93,8 @@ def pair_row(
     active_ms: float,
     shadow_ms: float,
     shadow_error: str | None = None,
+    agent: str = "",
+    agent_id: str = "",
 ) -> dict[str, Any]:
     """One pair, as the file holds it; the columns ``docs/design/data-storage.md`` names."""
     ts, time_source = event_time_of(payload, arrived=arrived)
@@ -102,6 +104,8 @@ def pair_row(
         "time_source": time_source,
         "input_sha256": input_sha256(payload),
         "source": source_of(payload, topic),
+        "agent": agent,
+        "agent_id": agent_id,
         "active_version": active_version,
         "shadow_version": shadow_version,
         "active_output": output_text(active_output),

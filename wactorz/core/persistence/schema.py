@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     value_str TEXT DEFAULT '',         -- string value for non-numeric fields (on/off, etc.)
     unit      TEXT DEFAULT '',         -- C, %, lux, W, etc.
     agent     TEXT DEFAULT '',         -- which agent published this
-    node      TEXT DEFAULT ''          -- which node the agent runs on
+    node      TEXT DEFAULT '',         -- which node the agent runs on
+    arrived   REAL,                    -- when the collector received it (wall clock); ts is the event time
+    time_source TEXT DEFAULT ''        -- 'payload' when ts came from the reading, 'arrival' when it is arrived
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_ts       ON sensor_readings (ts);

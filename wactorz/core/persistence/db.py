@@ -389,23 +389,42 @@ class WactorzDB:
         unit: str = "",
         agent: str = "",
         node: str = "",
+        arrived: float | None = None,
+        time_source: str = "",
     ) -> None:
+        """One reading: ``ts`` is its event time, ``arrived`` when it was received, ``time_source`` which ``ts`` is."""
         with self.transaction() as conn:
             conn.execute(
                 "INSERT INTO sensor_readings "
-                "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (ts, topic, entity_id, field, value, value_str, unit, agent, node),
+                "(ts, topic, entity_id, field, value, value_str, unit, agent, node, arrived, time_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ts,
+                    topic,
+                    entity_id,
+                    field,
+                    value,
+                    value_str,
+                    unit,
+                    agent,
+                    node,
+                    arrived,
+                    time_source,
+                ),
             )
 
     def write_sensor_batch(self, rows: list[tuple]) -> None:
-        """Batch insert sensor readings. Each tuple matches write_sensor args."""
+        """Batch insert sensor readings. Each tuple matches write_sensor args.
+
+        A tuple of nine, as rows were before readings kept their arrival apart
+        from their event time, is written with the two time columns empty.
+        """
         with self.transaction() as conn:
             conn.executemany(
                 "INSERT INTO sensor_readings "
-                "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rows,
+                "(ts, topic, entity_id, field, value, value_str, unit, agent, node, arrived, time_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [tuple(row) if len(row) == 11 else (*row, None, "") for row in rows],
             )
 
     def write_detection(

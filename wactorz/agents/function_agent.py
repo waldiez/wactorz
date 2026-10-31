@@ -462,6 +462,8 @@ class FunctionAgent(Actor):
                     active_ms=active_ms,
                     shadow_ms=shadow_ms,
                     shadow_error=error,
+                    agent=self.name,
+                    agent_id=str(self.actor_id),
                 )
                 try:
                     unavailable = await recorder.record(row)

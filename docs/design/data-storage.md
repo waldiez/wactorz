@@ -204,7 +204,16 @@ there is no third.
   shipping of closed files, the loader with its segments, splits, labels join,
   profile and export, the profile route and CLI, the `data` extra, the
   collector's event-time columns and shortened retention, and the
-  `StreamWindow` event-time option.
+  `StreamWindow` event-time option. Built (`wactorz/agents/recorder_agent.py`,
+  `wactorz/node/data_shipping.py`, `wactorz/agents/main/data_files.py`,
+  `wactorz/data/frames.py`, `wactorz/data/cli.py`, `wactorz/web/api_data.py`),
+  with three things to know. The recorder is a library agent the package brings
+  rather than a catalogue program, so it runs the same on main and on a node and
+  the node's runner, not the agent, ships its files. A subscription is handed
+  the payload and not the topic it matched, so a reading's source is the
+  payload's `source` or `device` field, else the filter without its wildcards.
+  The collector's retention is left to its `retention_days` setting: shortening
+  the default would prune history an existing install still has.
 - **1.5, shadow serving**, writes pairs under `shadow/<model>` through the same
   writer, and reads them back through `frame` for the comparison. Built, with
   the writer and `frame` as its first piece (`wactorz/data/`): a batch that

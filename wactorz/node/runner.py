@@ -83,6 +83,7 @@ from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
 from .agent import NodeAgent
 from .artifact_cache import CACHE_DIRNAME, ArtifactCache
+from .data_shipping import DataShipper
 from .hosted import NodeHosted
 from .publishing import NodePublisher
 from .signing import (
@@ -168,6 +169,8 @@ class NodeRunner:
         #: name -> the plugin built from the bundle its spawn carried, and the
         #: directory that bundle is in, from the moment it is written.
         self._bundled: dict[str, tuple[plugins.AgentPlugin, Path]] = {}
+        #: Sends main the readings a recorder here files, one closed file at a time.
+        self.shipper = DataShipper(self.node_name, self.state_dir, self.publish)
         #: One bundle written and imported at a time: each changes `sys.path`
         #: and `sys.modules`, and clears away the bundles no agent here uses.
         self._bundle_lock = asyncio.Lock()
@@ -900,6 +903,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/code_request": self._on_code_request,
             f"nodes/{self.node_name}/reset": self._on_reset,
             f"nodes/{self.node_name}/swap_model": self._on_swap_model,
+            f"nodes/{self.node_name}/data_ack": self._on_data_ack,
         }
         handler = exact.get(topic_str)
         if handler is not None:
@@ -1194,6 +1198,19 @@ class NodeRunner:
     async def _answer_swap(self, answer: dict[str, Any]) -> None:
         await self.publish(f"nodes/{self.node_name}/swap_ack", answer)
 
+    async def _on_data_ack(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Main says whether it kept a recorded file this node sent; see `DataShipper`."""
+        if not isinstance(data, dict) or not isinstance(data.get("sha256"), str):
+            return
+        key = await asyncio.to_thread(
+            self.shipper.acknowledge,
+            str(data["sha256"]),
+            data.get("ok") is True,
+            str(data.get("reason") or ""),
+        )
+        if key is not None and data.get("ok") is not True:
+            logger.warning("[runner] main did not keep %s: %s", key, data.get("reason"))
+
     async def _on_code_request(self, topic_str: str, data: Any, msg: Any) -> None:
         """Answer with the program an agent here is actually running.
 
@@ -1343,6 +1360,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/code_request",
             f"nodes/{self.node_name}/reset",
             f"nodes/{self.node_name}/swap_model",  # serve another version of a model
+            f"nodes/{self.node_name}/data_ack",  # main took a recorded file
             f"nodes/{self.node_name}/reply/#",
             f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
             # Tasks for the agents here: on this node's own topic, and by name
@@ -1434,6 +1452,8 @@ class NodeRunner:
         tasks = self._loops = [
             asyncio.create_task(self.publisher.run(publisher_ready)),
             asyncio.create_task(self._node_heartbeat_loop()),
+            # Readings a recorder files here go to main, where the record is.
+            asyncio.create_task(self.shipper.run()),
             # Returns at once unless this node's service has a watchdog set.
             asyncio.create_task(watchdog_loop()),
         ]

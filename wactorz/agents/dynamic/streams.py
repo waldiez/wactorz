@@ -239,7 +239,9 @@ class StreamsMixin(_Host):
             logger.debug("[%s] mqtt_get(%s) timed out after %ss", self.name, topic, timeout)
         return result[0] if result else None
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> Any:
+    def window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> Any:
         """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
@@ -277,9 +279,11 @@ class StreamsMixin(_Host):
         try:
             bus = get_topic_bus()
             if bus:
-                w = bus.make_window(topic, seconds=seconds, max_size=max_size)
+                w = bus.make_window(
+                    topic, seconds=seconds, max_size=max_size, event_time=event_time
+                )
             else:
-                w = StreamWindow(topic, seconds=seconds, max_size=max_size)
+                w = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
                 w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
         except Exception:
             logger.exception("[%s] agent.window() failed - using a local window", self.name)

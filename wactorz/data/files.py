@@ -129,6 +129,30 @@ def files_for(root: Path, source: str, start: float, end: float) -> list[Path]:
     return [path for _, _, path in sorted(found)]
 
 
+def sources(root: Path) -> list[str]:
+    """Every source with at least one hour filed under ``root``, in order.
+
+    A source is a directory whose own subdirectories are years, so a level
+    above one -- ``sensors`` above ``sensors/imu`` -- is not a source.
+    """
+    if not root.is_dir():
+        return []
+    found: list[str] = []
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        children = [p for p in directory.iterdir() if p.is_dir()]
+        if directory != root and children and all(_is_year(p) for p in children):
+            found.append(directory.relative_to(root).as_posix())
+            continue
+        stack.extend(p for p in children if not _is_year(p))
+    return sorted(found)
+
+
+def _is_year(directory: Path) -> bool:
+    return directory.name.isdigit() and len(directory.name) == 4
+
+
 def _numbered(directory: Path) -> list[Path]:
     """The subdirectories of ``directory`` whose names are numbers, in order."""
     if not directory.is_dir():

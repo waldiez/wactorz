@@ -167,6 +167,7 @@ class HotSwap:
         token = secrets.token_hex(8)
         self.pending[token] = {
             "agent": agent,
+            "agent_id": str(config.get("actor_id") or ""),
             "node": node,
             "key": key,
             "from": entry.get("version"),
@@ -222,7 +223,15 @@ class HotSwap:
             host._save_to_spawn_registry(
                 {**config, "artifacts": {**pinned_in(config), key: repinned}}
             )
-        await self._landed(secrets.token_hex(8), actor.name, MAIN, key, entry.get("version"), now)
+        await self._landed(
+            secrets.token_hex(8),
+            actor.name,
+            MAIN,
+            key,
+            entry.get("version"),
+            now,
+            agent_id=str(getattr(actor, "actor_id", "") or ""),
+        )
 
     # ── Hearing from a node ───────────────────────────────────────────────
 
@@ -252,7 +261,15 @@ class HotSwap:
         agent, key = sent["agent"], sent["key"]
         pointer: Pointer = sent["pointer"]
         if data.get("ok") is True:
-            await self._landed(token, agent, node, key, sent.get("from"), pointer)
+            await self._landed(
+                token,
+                agent,
+                node,
+                key,
+                sent.get("from"),
+                pointer,
+                agent_id=str(sent.get("agent_id") or ""),
+            )
             return
         kept = f"{pointer.name}:{sent.get('from')}"
         await self._say(
@@ -273,7 +290,15 @@ class HotSwap:
     # ── Saying and recording ──────────────────────────────────────────────
 
     async def _landed(
-        self, token: str, agent: str, where: str, key: str, from_version: int | None, now: Pointer
+        self,
+        token: str,
+        agent: str,
+        where: str,
+        key: str,
+        from_version: int | None,
+        now: Pointer,
+        *,
+        agent_id: str = "",
     ) -> None:
         was = f" (was {now.name}:{from_version})" if from_version is not None else ""
         await self._say(f"{agent} on {where} now serves {now.reference} as {key}{was}")
@@ -288,6 +313,7 @@ class HotSwap:
                 agent=agent,
                 host=where,
                 key=key,
+                agent_id=agent_id,
                 name=now.name,
                 pointer=now.pointer,
                 from_version=from_version,

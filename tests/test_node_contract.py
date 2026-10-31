@@ -54,6 +54,8 @@ CONTROL_TOPICS = frozenset(
         # Have an agent here serve another version of a model it names, with
         # the new pin: a pointer the agent's pin follows has moved.
         "swap_model",
+        # Main kept, or could not keep, a recorded file the node sent.
+        "data_ack",
         # An agent's blob, in chunks, as main places it here, and an artifact an
         # agent here names, as main answers `artifact_request`. Not signed: the
         # signed spawn names its hash, and only a match is used.
@@ -85,6 +87,8 @@ REPORT_TOPICS = frozenset(
         "reset_done",
         # How a swap went, quoting main's token: the version served now, or why not.
         "swap_ack",
+        # A recorded file is on its way on `blob_return`: its source, path, hash and size.
+        "data_file",
     }
 )
 

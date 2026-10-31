@@ -11,6 +11,22 @@ writes and reads the files and needs pyarrow, the ``data`` extra, so it is
 imported where it is used rather than here.
 """
 
-from .files import DATA_DIRNAME, DataError, data_root, event_time_of, files_for, hour_dir
+from .files import (
+    DATA_DIRNAME,
+    DataError,
+    data_root,
+    event_time_of,
+    files_for,
+    hour_dir,
+    sources,
+)
 
-__all__ = ["DATA_DIRNAME", "DataError", "data_root", "event_time_of", "files_for", "hour_dir"]
+__all__ = [
+    "DATA_DIRNAME",
+    "DataError",
+    "data_root",
+    "event_time_of",
+    "files_for",
+    "hour_dir",
+    "sources",
+]

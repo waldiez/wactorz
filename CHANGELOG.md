@@ -11,6 +11,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Readings are recorded as Parquet, where they are seen, and read back as frames.** A new
+  `recorder` library agent in the catalogue (`@catalog spawn recorder {"topics": [...]}`, or a
+  `module` spawn with `target: wactorz.agents.recorder_agent:RecorderAgent` on a node) keeps
+  every reading of its topics as a row of its source, the payload's `device` or `source` or the
+  topic, under the state directory's `data/<source>/<yyyy>/<mm>/<dd>/<hh>.parquet`, in event
+  time with the arrival beside it. A node ships each closed file to main over the blob path and
+  keeps its copy until main has answered and a week has passed. `wactorz.data` reads a window
+  back as an Arrow frame and cuts it into segments (by gap, label, column or length), splits it
+  without shuffling (`time_split`, `rolling_origin`, `leave_k_out`, each with a manifest a
+  trainer stores), joins the effective labels, profiles it and exports it. `wactorz-data
+  sources|profile|export` and `GET /api/data` and `/api/data/{source}/profile` show what was
+  recorded. All of it needs the `data` extra (pyarrow). See `docs/design/data-storage.md`.
+- **A reading keeps when it happened apart from when it arrived.** The collector files each
+  row under the payload's event time (`ts`, then `timestamp`), and the readings table gains
+  `arrived` and `time_source` by a migration; rows written before read as before. A stream
+  window asked with `event_time=True` orders and trims by what the payloads say, ending at
+  the newest entry, for a replay or a source on its own clock.
+- **Swaps and shadow pairs name the agent's id**, beside its name, so a record outlives a rename
+  and two agents of one name are told apart.
 - **A model's shadow trial on its page.** While a shadow is set, the Models tab shows what the trial
   shows so far: how often the two versions agreed, what each flagged, the tried version's errors,
   each side's latency and, when outputs carry one, their scores, as figures and as charts over the

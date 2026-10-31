@@ -164,6 +164,7 @@ wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 wactorz-state   = "wactorz.state_archive:main"
 wactorz-artifacts = "wactorz.artifacts_cli:main"
+wactorz-data    = "wactorz.data.cli:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]

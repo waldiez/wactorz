@@ -44,6 +44,7 @@ def record_swap(
     agent: str,
     host: str,
     key: str,
+    agent_id: str = "",
     name: str,
     pointer: str,
     from_version: int | None,
@@ -70,6 +71,7 @@ def record_swap(
         payload={
             "what": SWAP,
             "agent": agent,
+            "agent_id": agent_id,
             "key": key,
             "model": name,
             "pointer": pointer,

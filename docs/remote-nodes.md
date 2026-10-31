@@ -683,6 +683,8 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/reset_done` | ← runner | The reset done, quoting `request` and naming the agents it cleared (`"cleared": [...]`); a scope the node does not reach into is answered with none. |
 | `nodes/{name}/swap_model` | → runner | Have an agent here serve another version of a model it names, because the pointer its pin follows moved. Payload: `{"agent": "...", "key": "...", "entry": {pinned artifact}, "token": "..."}`. The node fetches the version as it fetched the first, swaps it in place, and keeps the old one if the new one will not load. Signed. |
 | `nodes/{name}/swap_ack` | ← runner | How the swap went, quoting the token: `{"ok": true}` with `from` and `to`, or `{"ok": false, "reason": "..."}`. |
+| `nodes/{name}/data_file` | ← runner | A recorded file is on its way on `blob_return`: `{"source": "...", "path": "<source>/<yyyy>/<mm>/<dd>/<hh>.parquet", "sha256": "...", "size": n}`. Sent for each file a recorder here closes; sent again if main does not answer. |
+| `nodes/{name}/data_ack` | → runner | Main kept the file under its own data directory, or could not: `{"sha256": "...", "ok": true}` or `{"ok": false, "reason": "..."}`. Signed. |
 | `nodes/{name}/reply/{id}` | ← runner | Replies to what this node asks main, such as an LLM call. |
 | `agents/at/{name}/{agent}/reply/{id}` | ← runner | The reply to an `agent.send_to()` sent by an agent on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |

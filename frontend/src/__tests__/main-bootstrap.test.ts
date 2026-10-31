@@ -145,11 +145,17 @@ vi.mock("../io/sessionExpiry", () => ({
 
 // The ledger's open questions, as main.ts asks for them each time it goes live.
 const mockOpenQuestions = vi.fn(async (_apiBase: string): Promise<unknown[]> => []);
+const mockLedgerRead = { fails: false };
 vi.mock("../io/openQuestions", () => ({
-    fetchQuestionLedger: async (apiBase: string) => ({
-        open: await mockOpenQuestions(apiBase),
-        answered: [],
-    }),
+    // As the real one answers: a failed read has empty lists and no `listed`.
+    fetchQuestionLedger: async (apiBase: string) =>
+        mockLedgerRead.fails
+            ? { open: [], answered: [] }
+            : {
+                  open: await mockOpenQuestions(apiBase),
+                  answered: [],
+                  listed: { questions: [], askedAt: 0 },
+              },
 }));
 
 vi.mock("../ext/tts", () => ({ tts: { setApiBase: vi.fn(), init: vi.fn() }, register: vi.fn() }));
@@ -448,6 +454,64 @@ describe("main.ts bootstrap", () => {
         mockOpenQuestions.mockResolvedValue([]);
     });
 
+    it("does not raise again a question that came live, once the page reconnects", async () => {
+        const question = {
+            id: "q20",
+            from: "triage",
+            to: "user",
+            content: "Restart it?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Yes", "No"],
+        };
+        routerHandler("chat")(question);
+        vi.mocked(toast.show).mockClear();
+        mockOpenQuestions.mockResolvedValue([question]);
+        const handed: unknown[] = [];
+        const stop = listen("af-questions-listed", detail => handed.push(...detail.open));
+
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(handed).toHaveLength(1));
+
+        document.removeEventListener("af-questions-listed", stop);
+        expect(toast.show).not.toHaveBeenCalled();
+        mockOpenQuestions.mockResolvedValue([]);
+    });
+
+    it("keeps what it has shown through a failed ledger read, which says nothing of what is open", async () => {
+        const question = {
+            id: "q30",
+            from: "triage",
+            to: "user",
+            content: "Restart it?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Yes", "No"],
+        };
+        routerHandler("chat")(question);
+        vi.mocked(toast.show).mockClear();
+        let reads = 0;
+        const stop = listen("af-questions-listed", () => {
+            reads += 1;
+        });
+
+        mockLedgerRead.fails = true;
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(reads).toBe(1));
+
+        mockLedgerRead.fails = false;
+        mockOpenQuestions.mockResolvedValue([question]);
+        wsHandler("mqttStatus")(false);
+        wsHandler("mqttStatus")(true);
+        await vi.waitFor(() => expect(reads).toBe(2));
+
+        document.removeEventListener("af-questions-listed", stop);
+        expect(toast.show).not.toHaveBeenCalled();
+        mockOpenQuestions.mockResolvedValue([]);
+    });
+
     it("empties a deleted agent's question book, which the server dropped with it", () => {
         const books: unknown[] = [];
         const stop = listen("af-question-book", d => books.push(d));
@@ -458,19 +522,20 @@ describe("main.ts bootstrap", () => {
         expect(books).toEqual([{ agentId: "gone-agent", questions: [] }]);
     });
 
-    it("going live shows each question still open as its toast, every time", async () => {
+    it("going live shows a question still open as its toast, once", async () => {
         wsHandler("mqttStatus")(false);
         vi.mocked(toast.show).mockClear();
+        const question3 = () => ({
+            id: "q3",
+            from: "triage",
+            to: "user",
+            content: "Maintenance?",
+            timestampMs: 1,
+            agentId: "t",
+            options: ["Maintenance", "Real problem"],
+        });
         mockOpenQuestions.mockResolvedValue([
-            {
-                id: "q3",
-                from: "triage",
-                to: "user",
-                content: "Maintenance?",
-                timestampMs: 1,
-                agentId: "t",
-                options: ["Maintenance", "Real problem"],
-            },
+            question3(),
             // Not a question: no options, so no toast to answer it with.
             { id: "m1", from: "triage", to: "user", content: "hello", timestampMs: 1 },
         ]);
@@ -487,9 +552,13 @@ describe("main.ts bootstrap", () => {
         expect(handed.map(m => m.id)).toEqual(["q3", "m1"]);
         expect(shown.actions!.map(a => a.label)).toEqual(["Maintenance", "Real problem"]);
 
+        // A question arrives while the socket is down; the one already shown is not raised again.
+        const later = { ...question3(), id: "q4", content: "And this?" };
+        mockOpenQuestions.mockResolvedValue([question3(), later]);
         wsHandler("mqttStatus")(false);
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(2));
+        expect(vi.mocked(toast.show).mock.calls[1]![0].key).toBe("q4");
         expect(mockOpenQuestions).toHaveBeenLastCalledWith("");
         mockOpenQuestions.mockResolvedValue([]);
     });

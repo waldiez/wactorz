@@ -352,9 +352,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   others (it listed `/cost` and `/clear`, which no chat answers). The agents and interfaces
   pages point at it instead of keeping shorter lists of their own.
 
-- **A question asked before the dashboard was open is no longer lost.** Each time the
-  dashboard connects it shows every question still waiting as its toast, with the
-  buttons to answer it, and an agent's thread shows a question it asked earlier with its
+- **A question asked before the dashboard was open is no longer lost.** When the
+  dashboard connects it shows each question still waiting as its toast, with the buttons
+  to answer it, once per page: one closed unanswered stays closed through a reconnect, and
+  stays open in the Inbox and its thread. An agent's thread shows a question it asked earlier with its
   buttons, or with the pick once answered. The thread no longer says "Reply with the
   number." under a question: on the dashboard an answer is a button, and a typed reply
   goes to the agent as a message. Discord and WhatsApp keep the hint.

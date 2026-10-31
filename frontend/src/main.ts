@@ -38,7 +38,7 @@ import { register as registerTTS } from "./ext/tts";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
-import { questionToast } from "./ui/questionToast";
+import { QuestionNotices, questionToast } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { CardDashboard } from "./ui/CardDashboard";
@@ -174,6 +174,7 @@ let liveSyncInFlight = false;
 // Seed only once — reconnects must not re-add already-known agents.
 let seeded = false;
 const actorOutage = createOutageTracker();
+const questionNotices = new QuestionNotices();
 
 // ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
 
@@ -188,7 +189,7 @@ function ingestChat(msg: ChatMessage): void {
         const asking = questionToast(msg);
         if (!asking) {
             toast.show({ type: "chat", title: msg.from, message: msg.content.slice(0, 120) });
-        } else if (!dashboard.inboxOpen) {
+        } else if (questionNotices.firstTime(msg.id) && !dashboard.inboxOpen) {
             toast.show(asking);
         }
     }
@@ -396,9 +397,13 @@ function recomputeLive(): void {
     // neither a toast nor its thread: the ledger has it.
     void fetchQuestionLedger(_apiBase).then(ledger => {
         emit("af-questions-listed", ledger);
+        // A failed read lists nothing, which says nothing about what is still open.
+        if (ledger.listed) {
+            questionNotices.keepOnly(ledger.open);
+        }
         ledger.open.forEach(msg => {
             const asking = questionToast(msg);
-            if (asking && !dashboard.inboxOpen) {
+            if (asking && questionNotices.firstTime(msg.id) && !dashboard.inboxOpen) {
                 toast.show(asking);
             }
         });

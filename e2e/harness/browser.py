@@ -384,6 +384,11 @@ class Dashboard:
         self._model().get_by_role("button", name=name, exact=True).click()
         return self
 
+    def model_trial(self) -> str:
+        """What the open model's trial card says, or "" with no trial under way."""
+        card = self._model().get_by_role("region", name="Shadow trial", exact=True)
+        return card.inner_text() if card.count() else ""
+
     def model_offers(self) -> list[str]:
         """The moves the open model offers that can be made now."""
         buttons = self._model().get_by_role("group", name="Moves", exact=True).get_by_role("button")

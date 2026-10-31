@@ -159,6 +159,13 @@ export class ModelsView {
                 buildModelDetail(state.detail, state.moves, {
                     moving: state.moving,
                     choose: offer => void this._choose(offer),
+                    pastTrials: state.pastTrials,
+                    trial: {
+                        trial: state.trial,
+                        error: state.trialError,
+                        reading: state.trialReading,
+                        refresh: () => void this.catalog.refreshTrial(),
+                    },
                 }),
             );
         }

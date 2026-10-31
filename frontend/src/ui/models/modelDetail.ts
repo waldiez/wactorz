@@ -5,17 +5,19 @@
 /**
  * One model on screen: a card with its name, its moves as buttons and its
  * versions along a line, the served, the tried and the previous one marked;
- * below it, the table of versions beside the history of its pointers.
+ * its trial, while there is one; below them, the table of versions beside the
+ * history of its pointers, and how earlier trials ended.
  *
  * Every word set here is text: a model's name, its metadata and a move's
  * reason were written by whoever stored or moved it.
  */
-import type { ModelAction, ModelDetail, ModelVersion, PointerMove } from "../../types/models";
+import type { ModelAction, ModelDetail, ModelVersion, PastTrial, PointerMove } from "../../types/models";
 import { POINTER_NAMES } from "../../types/models";
 import { modelOffers, roleOf, versionOffer, type Offer, type VersionRole } from "../../models/pointers";
 import { button, el, labelled, list, listItem } from "../dom";
 import { humanSize } from "../dashboard/uploads";
 import { timeLabel } from "../../time";
+import { pastTrials, trialCard, type TrialHost } from "./modelTrial";
 
 /** What the detail needs from the view: to ask for a move. */
 export interface DetailHost {
@@ -23,6 +25,10 @@ export interface DetailHost {
     choose(offer: Offer): void;
     /** Whether a move is on its way, so no other is asked for meanwhile. */
     moving: boolean;
+    /** The trial under way, for its card. */
+    trial: TrialHost;
+    /** How earlier trials ended, newest first. */
+    pastTrials: PastTrial[];
 }
 
 /** When something was, in Unix seconds, as the page says times. */
@@ -201,6 +207,14 @@ export function buildModelDetail(detail: ModelDetail, moves: PointerMove[], host
     root.setAttribute("aria-label", detail.name);
     const below = el("div", "af-model-below");
     below.append(versionsTable(detail, host), history(moves));
-    root.append(header(detail, host), below);
+    root.appendChild(header(detail, host));
+    const { active, shadow } = detail.pointers;
+    if (shadow) {
+        root.appendChild(trialCard(shadow.version, active?.version ?? null, host.trial));
+    }
+    root.appendChild(below);
+    if (host.pastTrials.length) {
+        root.appendChild(pastTrials(host.pastTrials));
+    }
     return root;
 }

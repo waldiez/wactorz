@@ -9,7 +9,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ModelCatalog } from "../models/ModelCatalog";
 import type { Answer } from "../io/api";
-import type { ModelDetail, ModelSummary, PointerMove } from "../types/models";
+import type { ModelDetail, ModelSummary, PastTrial, PointerMove, ShadowTrial } from "../types/models";
 
 const ok = <T>(value: T): Answer<T> => ({ ok: true, value });
 
@@ -21,6 +21,16 @@ function detail(name: string): ModelDetail {
     return { name, versions: [], pointers: {} };
 }
 
+function trial(name: string, pairs = 3): ShadowTrial {
+    return { name, pairs, since: 1, until: 2 } as ShadowTrial;
+}
+
+/** A model with a version on trial. */
+function onTrial(name: string): ModelDetail {
+    const shadow = { version: 2 } as NonNullable<ModelDetail["pointers"]["shadow"]>;
+    return { ...detail(name), pointers: { shadow } };
+}
+
 /** A server that answers what a test says, and records the moves asked of it. */
 function server() {
     return {
@@ -28,6 +38,8 @@ function server() {
         detail: vi.fn(async (name: string) => ok(detail(name))),
         moves: vi.fn(async (): Promise<Answer<PointerMove[]>> => ok([])),
         move: vi.fn(async (): Promise<Answer<null>> => ok(null)),
+        trial: vi.fn(async (name: string): Promise<Answer<ShadowTrial>> => ok(trial(name))),
+        trials: vi.fn(async (): Promise<Answer<PastTrial[]>> => ok([])),
     };
 }
 
@@ -122,6 +134,147 @@ describe("the catalogue", () => {
         expect(api.move).toHaveBeenCalledWith("hvac", { kind: "promote" }, "F1 up");
         expect(api.detail).toHaveBeenCalled();
         expect(catalog.state.moving).toBe(false);
+    });
+
+    it("reads no trial for a model with no shadow set", async () => {
+        const api = server();
+        const catalog = new ModelCatalog(api);
+
+        await catalog.open("hvac");
+
+        expect(api.trial).not.toHaveBeenCalled();
+        expect(catalog.state).toMatchObject({ trial: null, trialReading: false });
+    });
+
+    it("shows the model first, and its trial once that is read", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        let answer: (got: Answer<ShadowTrial>) => void = () => {};
+        api.trial.mockReturnValueOnce(new Promise(resolve => (answer = resolve)));
+        const catalog = new ModelCatalog(api);
+
+        const opening = catalog.open("hvac");
+        await vi.waitFor(() => expect(catalog.state.detail).not.toBeNull());
+        expect(catalog.state).toMatchObject({ trial: null, trialReading: true });
+
+        answer(ok(trial("hvac", 8)));
+        await opening;
+
+        expect(catalog.state.trial?.pairs).toBe(8);
+        expect(catalog.state.trialReading).toBe(false);
+    });
+
+    it("says why a trial could not be read, and the model stays", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        api.trial.mockResolvedValueOnce({ ok: false, error: "install wactorz[data]", status: 503 });
+        const catalog = new ModelCatalog(api);
+
+        await catalog.open("hvac");
+
+        expect(catalog.state).toMatchObject({ trialError: "install wactorz[data]", trial: null });
+        expect(catalog.state.detail?.name).toBe("hvac");
+    });
+
+    it("takes only the newest read of a trial", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        const catalog = new ModelCatalog(api);
+        await catalog.open("hvac");
+        let older: (got: Answer<ShadowTrial>) => void = () => {};
+        api.trial.mockReturnValueOnce(new Promise(resolve => (older = resolve)));
+        api.trial.mockResolvedValueOnce(ok(trial("hvac", 9)));
+
+        const first = catalog.refreshTrial();
+        await catalog.refreshTrial();
+        older(ok(trial("hvac", 1)));
+        await first;
+
+        expect(catalog.state.trial?.pairs).toBe(9);
+    });
+
+    it("drops a slow trial of the model left, while the next model is still being read", async () => {
+        const api = server();
+        api.detail.mockResolvedValueOnce(ok(onTrial("a")));
+        let trialOfA: (got: Answer<ShadowTrial>) => void = () => {};
+        api.trial.mockReturnValueOnce(new Promise(resolve => (trialOfA = resolve)));
+        let detailOfB: (got: Answer<ModelDetail>) => void = () => {};
+        const catalog = new ModelCatalog(api);
+        const openingA = catalog.open("a");
+        await vi.waitFor(() => expect(catalog.state.trialReading).toBe(true));
+
+        api.detail.mockReturnValueOnce(new Promise(resolve => (detailOfB = resolve)));
+        let trialOfB: (got: Answer<ShadowTrial>) => void = () => {};
+        api.trial.mockReturnValueOnce(new Promise(resolve => (trialOfB = resolve)));
+        const openingB = catalog.open("b");
+        trialOfA(ok(trial("a", 1)));
+        await openingA;
+
+        expect(catalog.state.trial).toBeNull();
+        expect(catalog.state.trialReading).toBe(false);
+
+        detailOfB(ok(onTrial("b")));
+        await vi.waitFor(() => expect(catalog.state.detail?.name).toBe("b"));
+        await vi.waitFor(() => expect(catalog.state.trialReading).toBe(true));
+        expect(catalog.state.trial).toBeNull();
+
+        trialOfB(ok(trial("b", 2)));
+        await openingB;
+        expect(catalog.state.trial?.name).toBe("b");
+    });
+
+    it("keeps the figures through a refresh, but not under a new shadow version", async () => {
+        const api = server();
+        const standing = (version: number) =>
+            ok({
+                ...detail("hvac"),
+                pointers: { shadow: { version } as NonNullable<ModelDetail["pointers"]["shadow"]> },
+            });
+        const figures = (version: number) =>
+            ok({ ...trial("hvac", version), shadow: { version } } as ShadowTrial);
+        api.detail.mockResolvedValue(standing(8));
+        api.trial.mockResolvedValueOnce(figures(8));
+        const catalog = new ModelCatalog(api);
+        await catalog.open("hvac");
+
+        let answer: (got: Answer<ShadowTrial>) => void = () => {};
+        api.trial.mockReturnValueOnce(new Promise(resolve => (answer = resolve)));
+        const refreshing = catalog.refreshTrial();
+        expect(catalog.state.trial?.pairs).toBe(8);
+        answer(figures(8));
+        await refreshing;
+
+        api.detail.mockResolvedValue(standing(9));
+        api.trial.mockReturnValueOnce(new Promise(resolve => (answer = resolve)));
+        const moving = catalog.moved("hvac");
+        await vi.waitFor(() => expect(catalog.state.detail?.pointers.shadow?.version).toBe(9));
+        expect(catalog.state.trial).toBeNull();
+        answer(figures(9));
+        await moving;
+        expect(catalog.state.trial?.pairs).toBe(9);
+    });
+
+    it("forgets the trial of the model it leaves, and one whose shadow was cleared", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        const catalog = new ModelCatalog(api);
+        await catalog.open("hvac");
+        expect(catalog.state.trial).not.toBeNull();
+
+        api.detail.mockResolvedValue(ok(detail("hvac")));
+        await catalog.moved("hvac");
+        expect(catalog.state.trial).toBeNull();
+    });
+
+    it("keeps showing a model whose past trials could not be read", async () => {
+        const api = server();
+        api.trials.mockResolvedValueOnce({ ok: false, error: "no database", status: 503 });
+        const catalog = new ModelCatalog(api);
+
+        await catalog.open("hvac");
+
+        expect(catalog.state.detail?.name).toBe("hvac");
+        expect(catalog.state.pastTrials).toEqual([]);
     });
 
     it("reads the model again after a timeout, which may have made the move, not after a refusal", async () => {

@@ -237,6 +237,192 @@ describe("the Models view", () => {
         );
     });
 
+    /** A server whose hvac has v8 on trial, its figures from `trial`, its ended trials from `past`. */
+    function onTrial(trial: () => Response, past: () => Response = () => Response.json({ trials: [] })) {
+        const reads = server();
+        return vi.fn(async (url: string, init?: RequestInit) => {
+            if (url.endsWith("/trial")) {
+                return trial();
+            }
+            if (url.endsWith("/trials")) {
+                return past();
+            }
+            return reads(url, init);
+        });
+    }
+
+    const FIGURES = {
+        name: "hvac",
+        since: 1_760_000_000,
+        until: 1_760_003_600,
+        pairs: 41230,
+        agreement: 0.914,
+        flagged: { active: 41, shadow: 38 },
+        shadow_errors: 2,
+        latency: { active: { mean_ms: 1, p95_ms: 4.1 }, shadow: { mean_ms: 1, p95_ms: 4.6 } },
+        score: { active_mean: 0, shadow_mean: 0, difference_mean: 0, scored: 0 },
+    };
+
+    const trialCard = () => byRole(document, "region", "Shadow trial");
+
+    it("shows what the trial under way shows so far", async () => {
+        await open("#/models/hvac", onTrial(() => Response.json(FIGURES)) as never);
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("91.4%"));
+
+        const text = trialCard().textContent;
+        expect(text).toContain("Shadow trial: v8 beside v7");
+        expect(text).toContain("41 → 38");
+        expect(text).toContain("4.1 → 4.6");
+        // No output carried a score, so no line says the scores were equal.
+        expect(text).not.toContain("Mean score");
+    });
+
+    it("says when a trial has no pairs yet", async () => {
+        await open(
+            "#/models/hvac",
+            onTrial(() => Response.json({ ...FIGURES, pairs: 0, agreement: null })) as never,
+        );
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("No pairs yet"));
+    });
+
+    it("says why the figures could not be read, and the model stays", async () => {
+        await open(
+            "#/models/hvac",
+            onTrial(() => Response.json({ error: "install wactorz[data]" }, { status: 503 })) as never,
+        );
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("install wactorz[data]"));
+        expect(model().textContent).toContain("hvac");
+    });
+
+    it("reads the figures again on Refresh, and on nothing else", async () => {
+        let pairs = 10;
+        const answering = onTrial(() => Response.json({ ...FIGURES, pairs }));
+        await open("#/models/hvac", answering as never);
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("on 10 inputs"));
+        const reads = () => answering.mock.calls.filter(([url]) => url.endsWith("/trial")).length;
+        const before = reads();
+
+        pairs = 20;
+        byRole(trialCard(), "button", "Refresh").click();
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("on 20 inputs"));
+        expect(reads()).toBe(before + 1);
+    });
+
+    it("shows no trial card for a model with no shadow set", async () => {
+        const reads = server();
+        const answering = vi.fn(async (url: string, init?: RequestInit) =>
+            url.endsWith("/api/models/hvac")
+                ? Response.json({ ...HVAC, pointers: { active: HVAC.pointers.active } })
+                : reads(url, init),
+        );
+        await open("#/models/hvac", answering as never);
+        await vi.waitFor(() => model());
+
+        expect(document.querySelector(".af-model-trial")).toBeNull();
+        expect(answering.mock.calls.some(([url]) => url.endsWith("/trial"))).toBe(false);
+    });
+
+    it("lists how earlier trials ended, and no card when there are none", async () => {
+        const past = {
+            ...FIGURES,
+            id: "t1",
+            by: "dashboard",
+            shadow_version: 5,
+            active_version: 4,
+            ended: "promoted",
+        };
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                () => Response.json({ trials: [past] }),
+            ) as never,
+        );
+
+        await vi.waitFor(() =>
+            expect(byRole(document, "region", "Past trials").textContent).toContain("v5 beside v4, promoted"),
+        );
+        expect(byRole(document, "region", "Past trials").textContent).toContain(
+            "91.4% agreed on 41,230 inputs",
+        );
+    });
+
+    it("reads a dash for a figure the server has no value for, not a zero", async () => {
+        const unmeasured = {
+            ...FIGURES,
+            agreement: null,
+            latency: { active: { mean_ms: null, p95_ms: null }, shadow: { mean_ms: 1, p95_ms: 4.6 } },
+        };
+        await open("#/models/hvac", onTrial(() => Response.json(unmeasured)) as never);
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("– → 4.6"));
+    });
+
+    it("shows the score when the outputs carried one", async () => {
+        const scored = {
+            ...FIGURES,
+            score: { active_mean: 2.1, shadow_mean: 2, difference_mean: -0.1, scored: 8 },
+        };
+        await open("#/models/hvac", onTrial(() => Response.json(scored)) as never);
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("2.10 → 2.00"));
+    });
+
+    it("says why a past trial's pairs could not be read, rather than that it had none", async () => {
+        const past = {
+            ...FIGURES,
+            id: "t3",
+            by: "chat",
+            shadow_version: 3,
+            active_version: 2,
+            ended: "cleared",
+            pairs: 0,
+            pairs_unavailable: "install wactorz[data]",
+        };
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                () => Response.json({ trials: [past] }),
+            ) as never,
+        );
+
+        await vi.waitFor(() =>
+            expect(byRole(document, "region", "Past trials").textContent).toContain(
+                "its pairs could not be read: install wactorz[data]",
+            ),
+        );
+    });
+
+    it("says a trial ended with no pairs, and one with no version served", async () => {
+        const past = {
+            ...FIGURES,
+            id: "t2",
+            by: "chat",
+            shadow_version: 3,
+            active_version: null,
+            ended: "cleared",
+            pairs: 0,
+        };
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                () => Response.json({ trials: [past] }),
+            ) as never,
+        );
+
+        await vi.waitFor(() => {
+            const text = byRole(document, "region", "Past trials").textContent;
+            expect(text).toContain("v3, cleared");
+            expect(text).toContain("no pairs");
+        });
+    });
+
     it("warns of a move that timed out instead of calling it not done", async () => {
         const shown = vi.spyOn(toast, "show");
         const reads = server();

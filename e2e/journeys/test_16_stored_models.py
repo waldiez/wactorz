@@ -109,11 +109,27 @@ def test_a_trial_cleared_here_keeps_its_reason(dashboard: browser.Dashboard) -> 
     dashboard.press_on_model("Try v1 as shadow")
     dashboard.confirm_with_reason("one more night")
     _steps_become(dashboard, ["v1, shadow", "v2, active"], "v1 tried again")
+    # No agent serves this model, so the trial has nothing to compare yet.
+    waiting.until(
+        lambda: (
+            "Shadow trial: v1 beside v2" in dashboard.model_trial()
+            and "Reading the trial" not in dashboard.model_trial()
+        ),
+        what="the trial's card, read",
+        timeout=SEEN_WITHIN_S,
+        interval=0.5,
+    )
 
     dashboard.press_on_model("Clear shadow")
     dashboard.confirm_with_reason("v2 holds up")
 
     _steps_become(dashboard, ["v1, previous", "v2, active"], "the trial of v1 ended")
+    waiting.until(
+        lambda: dashboard.model_trial() == "",
+        what="the trial's card to go with the trial",
+        timeout=SEEN_WITHIN_S,
+        interval=0.5,
+    )
     # The pointers show the clear at once; the history has it once main records it.
     waiting.until(
         lambda: any(

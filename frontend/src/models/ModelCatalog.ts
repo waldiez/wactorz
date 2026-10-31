@@ -17,11 +17,22 @@
  * the answer to the newest is taken, so an older one never puts back what a
  * newer one replaced.
  *
+ * A trial's figures are read after the model, on their own: the server reads
+ * them from files, and the model need not wait to be shown. A model with no
+ * shadow set has none to read.
+ *
  * No DOM: the view reads `state` and is told when it changes.
  */
 import type { Answer, Refusal } from "../io/api";
 import type { ModelsApi } from "../io/modelsApi";
-import type { ModelAction, ModelDetail, ModelSummary, PointerMove } from "../types/models";
+import type {
+    ModelAction,
+    ModelDetail,
+    ModelSummary,
+    PastTrial,
+    PointerMove,
+    ShadowTrial,
+} from "../types/models";
 
 /** What there is to show. */
 export interface CatalogState {
@@ -37,6 +48,14 @@ export interface CatalogState {
     moves: PointerMove[];
     /** Why the open model could not be read, or "". */
     detailError: string;
+    /** What its trial under way shows, or null until read (or with none to read). */
+    trial: ShadowTrial | null;
+    /** Why that could not be read, or "". */
+    trialError: string;
+    /** Whether it is being read. */
+    trialReading: boolean;
+    /** How its earlier trials ended, newest first. */
+    pastTrials: PastTrial[];
     /** Whether a move asked for here is on its way. */
     moving: boolean;
 }
@@ -51,17 +70,24 @@ const EMPTY: CatalogState = {
     detail: null,
     moves: [],
     detailError: "",
+    trial: null,
+    trialError: "",
+    trialReading: false,
+    pastTrials: [],
     moving: false,
 };
 
 export class ModelCatalog {
     private _state: CatalogState = EMPTY;
     private readonly _listeners = new Set<CatalogListener>();
-    /** The number of the newest read of the list, and of the open model. */
+    /** The number of the newest read of the list, of the open model, and of its trial. */
     private _listReads = 0;
     private _openReads = 0;
+    private _trialReads = 0;
 
-    constructor(private readonly api: Pick<ModelsApi, "list" | "detail" | "moves" | "move">) {}
+    constructor(
+        private readonly api: Pick<ModelsApi, "list" | "detail" | "moves" | "move" | "trial" | "trials">,
+    ) {}
 
     /** The state as it stands. Replaced, never changed in place. */
     get state(): CatalogState {
@@ -84,8 +110,24 @@ export class ModelCatalog {
         if (name === this._state.open) {
             return;
         }
-        this._set({ open: name, detail: null, moves: [], detailError: "" });
+        // A read of the last model's trial still on its way is no answer for this one.
+        this._trialReads += 1;
+        this._set({
+            open: name,
+            detail: null,
+            moves: [],
+            detailError: "",
+            trial: null,
+            trialError: "",
+            trialReading: false,
+            pastTrials: [],
+        });
         await this._readOpen();
+    }
+
+    /** Read the open model's trial again. */
+    async refreshTrial(): Promise<void> {
+        await this._readTrial();
     }
 
     /** A pointer of `name` moved somewhere: read what changed. */
@@ -129,13 +171,40 @@ export class ModelCatalog {
             return;
         }
         const read = ++this._openReads;
-        const [detail, moves] = await Promise.all([this.api.detail(name), this.api.moves(name)]);
+        const [detail, moves, trials] = await Promise.all([
+            this.api.detail(name),
+            this.api.moves(name),
+            this.api.trials(name),
+        ]);
         // A newer read was asked for meanwhile, of this model or of another opened
         // since: these are older than what it gives.
         if (read !== this._openReads) {
             return;
         }
-        this._set(opened(detail, moves));
+        this._set(opened(detail, moves, trials));
+        await this._readTrial();
+    }
+
+    private async _readTrial(): Promise<void> {
+        const { open: name, detail } = this._state;
+        const read = ++this._trialReads;
+        const shadow = detail?.pointers.shadow;
+        if (!shadow) {
+            this._set({ trial: null, trialError: "", trialReading: false });
+            return;
+        }
+        // The figures stay up through a refresh, but not under another version's heading.
+        const same = this._state.trial?.shadow?.version === shadow.version;
+        this._set({ trial: same ? this._state.trial : null, trialReading: true });
+        const got = await this.api.trial(name);
+        if (read !== this._trialReads) {
+            return;
+        }
+        this._set({
+            trial: got.ok ? got.value : null,
+            trialError: got.ok ? "" : got.error,
+            trialReading: false,
+        });
     }
 
     private _set(change: Partial<CatalogState>): void {
@@ -145,10 +214,19 @@ export class ModelCatalog {
 }
 
 /** What reading a model gave: it and its moves, or why it could not be read. */
-function opened(detail: Answer<ModelDetail>, moves: Answer<PointerMove[]>): Partial<CatalogState> {
+function opened(
+    detail: Answer<ModelDetail>,
+    moves: Answer<PointerMove[]>,
+    trials: Answer<PastTrial[]>,
+): Partial<CatalogState> {
     if (!detail.ok) {
-        return { detail: null, moves: [], detailError: detail.error };
+        return { detail: null, moves: [], pastTrials: [], detailError: detail.error };
     }
-    // The history is a part the model can be shown without.
-    return { detail: detail.value, moves: moves.ok ? moves.value : [], detailError: "" };
+    // The histories are parts the model can be shown without.
+    return {
+        detail: detail.value,
+        moves: moves.ok ? moves.value : [],
+        pastTrials: trials.ok ? trials.value : [],
+        detailError: "",
+    };
 }

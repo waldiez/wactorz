@@ -81,6 +81,66 @@ export interface PointerMove {
     reason: string | null;
 }
 
+/** A figure for each side of a trial. */
+export interface TrialSide<T> {
+    /** The served version's. */
+    active: T;
+    /** The tried version's. */
+    shadow: T;
+}
+
+/** How long one side took, in milliseconds; null with nothing to measure. */
+export interface TrialLatency {
+    mean_ms: number | null;
+    p95_ms: number | null;
+}
+
+/** What a trial's pairs show, under way or ended. */
+export interface TrialFigures {
+    /** The inputs both sides answered. */
+    pairs: number;
+    /** The share of pairs where both answered alike; null with no pairs. */
+    agreement: number | null;
+    /** How many inputs each side published something for. */
+    flagged: TrialSide<number>;
+    /** How many inputs the tried version failed on. */
+    shadow_errors: number;
+    latency: TrialSide<TrialLatency>;
+    /** Read from a `score` field in the outputs, over the pairs where both gave one. */
+    score: {
+        active_mean: number | null;
+        shadow_mean: number | null;
+        difference_mean: number | null;
+        scored: number;
+    };
+}
+
+/** The trial under way, as `GET /api/models/{name}/trial` gives it. */
+export interface ShadowTrial extends TrialFigures {
+    name: string;
+    /** The pointer on trial; null for a window read after it was cleared. */
+    shadow: PointerState | null;
+    /** Seconds since the epoch. */
+    since: number;
+    until: number;
+}
+
+/** A trial that ended, as `GET /api/models/{name}/trials` gives it. */
+export interface PastTrial extends TrialFigures {
+    id: string;
+    /** Seconds since the epoch. */
+    since: number;
+    until: number;
+    /** Who ended it. */
+    by: string;
+    shadow_version: number;
+    active_version: number | null;
+    /** Whether the tried version was made active, or the trial let go. */
+    ended: "promoted" | "cleared";
+    /** Why its pairs could not be read when it ended, so its figures are empty. */
+    pairs_unavailable?: string;
+}
+
 /** A move the dashboard can ask for. */
 export type ModelAction =
     | { kind: "shadow"; version: number }

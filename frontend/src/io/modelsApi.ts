@@ -7,8 +7,18 @@
  * refusal says why a move cannot be made: already there, nothing to promote, a
  * version that is not stored.
  */
-import type { ModelAction, ModelDetail, ModelSummary, PointerMove } from "../types/models";
+import type {
+    ModelAction,
+    ModelDetail,
+    ModelSummary,
+    PastTrial,
+    PointerMove,
+    ShadowTrial,
+} from "../types/models";
 import { posting, requestJson, type Answer } from "./api";
+
+/** How long a trial's figures may take: the server reads every pair of the trial from files. */
+export const TRIAL_TIMEOUT_MS = 60_000;
 
 /** `body`, with `reason` beside it when there is one. */
 function withReason(body: object, reason: string): object {
@@ -61,6 +71,23 @@ export class ModelsApi {
             `${this.apiBase}/api/models/${encodeURIComponent(name)}/moves`,
         );
         return got.ok ? { ok: true, value: got.value.moves ?? [] } : got;
+    }
+
+    /** What `name`'s trial under way shows so far. */
+    trial(name: string): Promise<Answer<ShadowTrial>> {
+        return requestJson<ShadowTrial>(
+            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trial`,
+            {},
+            TRIAL_TIMEOUT_MS,
+        );
+    }
+
+    /** How `name`'s earlier trials ended, newest first. */
+    async trials(name: string): Promise<Answer<PastTrial[]>> {
+        const got = await requestJson<{ trials?: PastTrial[] }>(
+            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trials`,
+        );
+        return got.ok ? { ok: true, value: got.value.trials ?? [] } : got;
     }
 
     /** Make `action` on `name`'s pointers, saying `reason` when there is one. */

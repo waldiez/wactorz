@@ -11,6 +11,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A model's shadow trial on its page.** While a shadow is set, the Models tab shows what the trial
+  shows so far: how often the two versions agreed, what each flagged, the tried version's errors,
+  each side's latency and, when outputs carry one, their scores. It says so when there are no pairs
+  yet, or why they cannot be read, and a Refresh button reads them again. Below, Past trials lists
+  how earlier trials ended and what they showed.
 - **An Inbox for what the agents wait on you for.** A new tab, `#/inbox`, lists every question still
   open, from main and from nodes, whatever channel it went to, with who asked and a link to their
   thread; `#/inbox/answered` lists the newest answered, with the pick, where it was made and the

@@ -39,6 +39,7 @@ from .commands import CommandContext
 from .commands import registry as command_registry
 from .commands.info import terminal_command, terminal_command_reply
 from .data_files import DataFiles
+from .data_retention import DataRetention
 from .delegation import DelegationManager
 from .hot_swap import HotSwap
 from .labels import LabelRecorder
@@ -219,6 +220,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.code_refresh = CodeRefresh(self)
         self.hot_swap = HotSwap(self)
         self.data_files = DataFiles(self)
+        self.data_retention = DataRetention(self)
         self.shadow_serving = ShadowServing(self)
         self.artifact_service = ArtifactService(self, follow=self._follow_pointers)
         self.llm_bridge = LLMBridge(self)
@@ -365,6 +367,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self.hot_swap.listener()))
         # Take the readings a node's recorder files, into main's data directory
         self._tasks.append(asyncio.create_task(self.data_files.listener()))
+        # Let old hours of readings go, when a retention is set
+        self._tasks.append(asyncio.create_task(self.data_retention.run()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

@@ -32,6 +32,9 @@ from ..core.labels import event_time
 #: The data directory's name under the state directory.
 DATA_DIRNAME = "data"
 
+#: The length of one file's hour, in seconds.
+HOUR_S = 3600.0
+
 #: What `event_time_of` reports when the time came from the payload, and when
 #: it is the arrival time, so a reader can tell the two apart.
 FROM_PAYLOAD = "payload"
@@ -127,6 +130,49 @@ def files_for(root: Path, source: str, start: float, end: float) -> list[Path]:
                     if first <= hour <= last:
                         found.append((hour, int(match.group("part") or 0), path))
     return [path for _, _, path in sorted(found)]
+
+
+def hours_of(root: Path, source: str) -> list[tuple[float, list[Path]]]:
+    """Every hour ``source`` has files for, oldest first: when it started, and its files."""
+    base = source_dir(root, source)
+    if not base.is_dir():
+        return []
+    found: dict[float, list[Path]] = {}
+    for year_dir in _numbered(base):
+        for month_dir in _numbered(year_dir):
+            for day_dir in _numbered(month_dir):
+                for path in day_dir.iterdir():
+                    match = _PART.match(path.name)
+                    if match is None or not path.is_file():
+                        continue
+                    moment = datetime(
+                        int(year_dir.name),
+                        int(month_dir.name),
+                        int(day_dir.name),
+                        int(match.group("hour")),
+                        tzinfo=timezone.utc,
+                    ).timestamp()
+                    found.setdefault(moment, []).append(path)
+    return [(hour, sorted(paths)) for hour, paths in sorted(found.items())]
+
+
+def summary(root: Path, source: str) -> dict[str, Any]:
+    """What ``source`` holds: its files and bytes, and the first and last hour, as the data tab shows."""
+    hours = hours_of(root, source)
+    paths = [path for _, found in hours for path in found]
+    return {
+        "source": source,
+        "hours": len(hours),
+        "files": len(paths),
+        "bytes": sum(path.stat().st_size for path in paths),
+        "from": hours[0][0] if hours else None,
+        "to": hours[-1][0] + HOUR_S if hours else None,
+    }
+
+
+def summaries(root: Path) -> list[dict[str, Any]]:
+    """`summary` of every source under ``root``, in order."""
+    return [summary(root, source) for source in sources(root)]
 
 
 def sources(root: Path) -> list[str]:

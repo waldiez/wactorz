@@ -48,7 +48,11 @@ class TestTheRoutes:
     async def test_the_sources_are_listed(self, client: TestClient, recorded: Path) -> None:
         body = await (await client.get("/api/data")).json()
 
-        assert body == {"sources": ["sensors/imu/left"]}
+        (found,) = body["sources"]
+        assert (found["source"], found["hours"], found["files"]) == ("sensors/imu/left", 1, 1)
+        assert found["bytes"] > 0
+        assert (found["from"], found["to"]) == (T0 - T0 % 3600, T0 - T0 % 3600 + 3600)
+        assert body["retention_days"] is None
 
     async def test_a_window_is_profiled(self, client: TestClient, recorded: Path) -> None:
         body = await (

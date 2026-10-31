@@ -6,7 +6,7 @@
 
 - [ ] `bun run typecheck` passes on `dev`
 - [ ] `bun run fmt` has been run (Prettier, no manual style arguments)
-- [ ] You understand the [event bus](README.md#event-bus) — components talk via `CustomEvent`, not direct calls
+- [ ] You understand the [event bus](README.md#event-bus): the bus across component trees, a host callback inside one
 
 ## PR checklist
 
@@ -149,11 +149,16 @@ text that keeps 4.5:1 on the dashboard's backgrounds, so nothing dimmer is used 
   own, generous one; `io/resetApi.ts` and `io/uploadsApi.ts` are the examples
 - A timed-out change may still have happened: check `timedOut` and do not tell the user it failed
 - Readers live in `src/io/`, not `src/ui/`: a view is handed data, it does not go and get it
+- `io/`, `config/` and `events.ts` import no view, and core imports no extension; lint enforces both.
+  Transport emits an event or takes a callback, and an extension registers what it offers
 
 **Events**
 
-- Always clean up `addEventListener` on component destroy
-- Never store references to other component instances — fire events instead
+- Inside a component tree a parent hands its child a host interface: that is allowed, and preferred
+- The bus is what is required across trees, from transport to UI, and to and from extensions
+- Models (`AgentStore`, `ChatLog`) never touch the DOM; a view reads one and subscribes
+- Every subscription has an owner that ends it: `Listeners` for a component's, or what `listen()` and
+  `WSClient.on()` return. Nothing listens at import: a module offers a method that starts it
 
 ## Running the full dev stack
 

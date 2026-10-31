@@ -50,8 +50,10 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - Bun for JS/TS. Tests run on Vitest + happy-dom and coverage is **gated** — `bun run coverage`
   fails below the floor. Raise the floor as you add tests; never lower it. New components and bug
   fixes ship with a test in `src/__tests__/`.
-- No framework: components are plain DOM classes that communicate through the typed event bus in
-  `src/events.ts` (`emit`/`listen` + `AppEventMap`) — fire events, don't call other components directly.
+- No framework: components are plain DOM classes. Across component trees, from transport to UI and to and
+  from extensions, they use the typed event bus in `src/events.ts` (`emit`/`listen` + `AppEventMap`); inside
+  a tree a parent hands its child a host interface. Every subscription has an owner that ends it.
+- Layering is linted: `io/`, `config/` and `events.ts` import no view, and core imports no extension.
 - Build elements in code; never `innerHTML` with untrusted/remote strings (escape or use `textContent`).
 - Every request goes through `src/io/api.ts`, which gives it a timeout; lint refuses `fetch` anywhere else.
 

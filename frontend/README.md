@@ -94,7 +94,8 @@ never lower it. New components and bug fixes should ship with a test in `src/__t
 
 ## Event bus
 
-Components communicate through **DOM `CustomEvent`s**. The state they share lives in models that hold no DOM —
+Across component trees, components communicate through **DOM `CustomEvent`s**; inside one, a parent
+hands its child a host interface. The state they share lives in models that hold no DOM —
 `AgentStore` for the agents and nodes, `ChatLog` for the messages — and a view reads a model and is told of its
 changes (`AgentStore.subscribe`); it never keeps a copy of its own.
 Use the typed helpers in `src/events.ts`: `emit(type, detail)` to dispatch and `listen(type, handler)` to
@@ -103,10 +104,10 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 
 | Event                  | Direction                                                      | Payload                                                                |
 | ---------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `af-agent-command`     | CardDashboard → app.ts  (WSClient)                             | `{ command, agentId }`                                                 |
-| `af-send-message`      | DashboardChat → app.ts  (IOManager)                            | `{ id, content, target, name, answerer, attachments }` (ids)           |
-| `af-addressed`         | DashboardChat → app.ts  (WSClient)                             | `{ agent }` (whom the person now talks to, typed or by voice)          |
-| `af-feed-push`         | IOManager / app.ts  / ui/chatIngress → CardDashboard           | `{ item: FeedItem }`                                                   |
+| `af-agent-command`     | CardDashboard → app.ts (WSClient)                              | `{ command, agentId }`                                                 |
+| `af-send-message`      | DashboardChat → app.ts (IOManager)                             | `{ id, content, target, name, answerer, attachments }` (ids)           |
+| `af-addressed`         | DashboardChat → app.ts (WSClient)                              | `{ agent }` (whom the person now talks to, typed or by voice)          |
+| `af-feed-push`         | IOManager / app.ts / ui/chatIngress → CardDashboard            | `{ item: FeedItem }`                                                   |
 | `af-chat-message`      | ui/chatIngress → DashboardChat                                 | `{ msg: ChatMessage }`                                                 |
 | `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text }`                                       |
 | `af-stream-end`        | IOManager → DashboardChat                                      | `{ text, from, agentId }`                                              |
@@ -119,14 +120,14 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-send-failed`       | IOManager → DashboardChat                                      | `{ id, content, target }`                                              |
 | `af-reset-chat`        | WSClient → DashboardChat                                       | `{ agent: string \| null }`                                            |
 | `af-agents-settled`    | WSClient → CardDashboard                                       | `{ reason: "reset" \| "deleted" }`                                     |
-| `af-clear-feed`        | WSClient / app.ts  → CardDashboard                             | _(none)_                                                               |
-| `af-wipe-all`          | WSClient / app.ts  → CardDashboard                             | `{ survivors }` (ids of the agents still running)                      |
-| `af-answer-option`     | chatThread / questionToast → app.ts  (WSClient), DashboardChat | `{ id, agentId, option, index }`                                       |
+| `af-clear-feed`        | WSClient / app.ts → CardDashboard                              | _(none)_                                                               |
+| `af-wipe-all`          | WSClient / app.ts → CardDashboard                              | `{ survivors }` (ids of the agents still running)                      |
+| `af-answer-option`     | chatThread / questionToast → app.ts (WSClient), DashboardChat  | `{ id, agentId, option, index }`                                       |
 | `af-pick-address`      | chatThread → DashboardChat                                     | `{ id, address }` (one of the addresses the reply `id` offered)        |
-| `af-answered`          | app.ts  → DashboardChat                                        | `{ id, option }`                                                       |
-| `af-model-pointer`     | app.ts  (ServerEventRouter) → CardDashboard (Models view)      | `{ name, pointer }` (a stored model's pointer moved, from anywhere)    |
-| `af-questions-listed`  | app.ts  → DashboardChat, CardDashboard (Inbox)                 | `{ open, answered, listed? }` (`listed` absent when the read failed)   |
-| `af-question-book`     | app.ts  (ServerEventRouter) → CardDashboard (Inbox)            | `{ agentId, questions }` (an agent's book changed)                     |
+| `af-answered`          | app.ts → DashboardChat                                         | `{ id, option }`                                                       |
+| `af-model-pointer`     | app.ts (ServerEventRouter) → CardDashboard (Models view)       | `{ name, pointer }` (a stored model's pointer moved, from anywhere)    |
+| `af-questions-listed`  | app.ts → DashboardChat, CardDashboard (Inbox)                  | `{ open, answered, listed? }` (`listed` absent when the read failed)   |
+| `af-question-book`     | app.ts (ServerEventRouter) → CardDashboard (Inbox)             | `{ agentId, questions }` (an agent's book changed)                     |
 | `af-app-log`           | WSClient → appLogFeed                                          | `{ entries }`                                                          |
 | `af-route`             | router → CardDashboard                                         | `{ view, path }` (the address changed)                                 |
 | `af-view-changed`      | CardDashboard / viewRoutes → router                            | `{ view, path }` (the dashboard moved)                                 |
@@ -135,6 +136,7 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `tts-audio-start`      | TTSManager → AmbientManager                                    | _(none)_                                                               |
 | `tts-audio-end`        | TTSManager → AmbientManager                                    | _(none)_                                                               |
 | `tts-stop`             | DashboardChat → TTSManager                                     | _(none)_ (the turn was stopped)                                        |
+| `tts-notify`           | IOManager → TTSManager                                         | `{ text, from? }`                                                      |
 
 ## Server events consumed
 

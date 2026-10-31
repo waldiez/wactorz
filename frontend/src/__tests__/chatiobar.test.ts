@@ -3,6 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Listeners } from "../events";
 import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
 import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
@@ -11,6 +12,7 @@ import { emit } from "../events";
 
 function makeDeps(over: Partial<IobarDeps> = {}): IobarDeps {
     return {
+        listeners: new Listeners(),
         chatInput: {
             onChange: vi.fn(),
             onKeydown: vi.fn(),
@@ -127,5 +129,16 @@ describe("buildIobar", () => {
         vi.advanceTimersByTime(150);
         expect(deps.chatInput.closePanel).toHaveBeenCalled();
         vi.useRealTimers();
+    });
+
+    it("stops following the turn once its listeners are let go", () => {
+        const listeners = new Listeners();
+        const bar = buildIobar(makeDeps({ listeners }));
+        const stop = bar.querySelector<HTMLElement>(".af-stop-btn")!;
+
+        listeners.off();
+        emit("af-turn", { agent: "main", queued: 0 });
+
+        expect(stop.style.display).toBe("none");
     });
 });

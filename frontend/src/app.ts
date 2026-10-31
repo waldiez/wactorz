@@ -21,6 +21,7 @@ import { apiUrl, ingressBase, requestJson } from "./io/api";
 import { safeStorage } from "./safeStorage";
 import { AgentStore } from "./agents/AgentStore";
 import { ServerEventRouter } from "./io/ServerEventRouter";
+import { ambient } from "./io/AmbientManager";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
 import { Connection } from "./io/connection";
@@ -96,7 +97,7 @@ export interface AppParts {
     /** Reads the open and answered questions. */
     readLedger: (apiBase: string) => Promise<QuestionLedger>;
     /** Boots the voice. */
-    registerTTS: (config: TTSConfig) => void;
+    registerTTS: (config: TTSConfig) => () => void;
     /** The window-wide drop target for uploads, with how to remove it. */
     dropZone: (apiBase: string) => { destroy(): void };
 }
@@ -174,14 +175,14 @@ function wireGlobalErrors(signal: AbortSignal): void {
 /** Chat replies, state patches and the log feed, from the socket. */
 function wireSocket(app: AppWiring): void {
     // Non-streaming replies (slash commands, errors, one-shot agent replies)
-    app.ws.onChat((...frame) => app.ingestChat(socketMessage(...frame)));
+    app.ws.on("chat", (...frame) => app.ingestChat(socketMessage(...frame)));
 
     // Streaming replies — onStreamChunk / onStreamEnd are wired inside setWSClient
     app.ioManager.setWSClient(app.ws);
 
     // State patches broadcast by the server over the same /ws connection.
     // This is how start/stop state changes reach the UI without polling.
-    app.ws.onStatePatch((agents, deletedId, stats) => {
+    app.ws.on("statePatch", (agents, deletedId, stats) => {
         if (deletedId) {
             app.markDeleted(deletedId);
             app.store.removeAgent(deletedId);
@@ -207,7 +208,7 @@ function wireSocket(app: AppWiring): void {
     // The server embeds its in-memory log_feed (spawned/status/logs/alerts) in
     // every state-patch.  We use this as a reliable secondary path so MQTT events
     // appear in the feed even when the direct Mosquitto WebSocket is unavailable.
-    app.ws.onLogFeed(items => {
+    app.ws.on("logFeed", items => {
         // Nameless entries (e.g. `log`) borrow their friendly name from the
         // `spawned` entry in the same batch, then from the live agent store — so
         // reloads attribute them by name instead of a raw id.
@@ -292,10 +293,10 @@ function wireAgentChanges(app: AppWiring): void {
 /** The socket's own state, and the frames it hands the router. */
 function wireConnection(app: AppWiring): void {
     // The /ws transport owns the connection; the router only decodes events.
-    app.ws.onServerEvent((topic, payload, threadId) => app.router.route(topic, payload, threadId));
-    app.ws.onConnected(() => app.connection.socket(true));
-    app.ws.onDisconnected(() => app.connection.socket(false));
-    app.ws.onMqttStatus(up => app.connection.broker(up));
+    app.ws.on("serverEvent", (topic, payload, threadId) => app.router.route(topic, payload, threadId));
+    app.ws.on("connected", () => app.connection.socket(true));
+    app.ws.on("disconnected", () => app.connection.socket(false));
+    app.ws.on("mqttStatus", up => app.connection.broker(up));
 }
 
 /** Readings: metrics, logs, nodes and the host. */
@@ -494,6 +495,8 @@ function wireAll(app: AppWiring): void {
 
 /** What `start` sets going, and `stop` has to end. */
 interface Running {
+    /** Ends what the voice listens to, once it has booted. */
+    stopVoice: (() => void) | null;
     /** The poll of the actor list; clearing 0 does nothing. */
     actorPoll: number;
     /** Global drag-and-drop upload overlay. Built after /api/config answers, since
@@ -528,7 +531,7 @@ function bootFromConfig(parts: AppParts, running: Running): void {
             return;
         }
         // Boot TTS after config is seeded: what it says decides whether to probe.
-        parts.registerTTS({ apiBase: ingressBase(), configRead: read });
+        running.stopVoice = parts.registerTTS({ apiBase: ingressBase(), configRead: read });
         // Same reason, same moment: the server has now said whether it takes
         // uploads at all.
         if (uploadsEnabled()) {
@@ -563,7 +566,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
     wireGlobalErrors(aborting.signal);
     const router = parts.router();
     const ws = parts.ws();
-    const running: Running = { actorPoll: 0, dropZone: null, stopped: false };
+    const running: Running = { stopVoice: null, actorPoll: 0, dropZone: null, stopped: false };
 
     // Ahead of the first request this makes: mounting the dashboard starts its
     // polling. A session that ended while the tab was closed refuses that one
@@ -580,6 +583,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
     const stopRouter = startRouter();
     const app = buildServices(parts, ws, router);
     wireAll(app);
+    const stopDucking = ambient.followSpeech();
 
     function start(): void {
         ws.connect(socketUrl());
@@ -602,6 +606,8 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
         running.dropZone?.destroy();
         running.dropZone = null;
         app.listeners.off();
+        running.stopVoice?.();
+        stopDucking();
         stopWatching();
         aborting.abort();
     }

@@ -22,8 +22,7 @@ function makeRouter(connected = true) {
 
 interface FakeWS {
     send: ReturnType<typeof vi.fn>;
-    onStreamChunk: ReturnType<typeof vi.fn>;
-    onStreamEnd: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
     chunkCb?: (chunk: string, from: string, timestampMs?: number, agentId?: string) => void;
     endCb?: (from: string, agentId?: string) => void;
 }
@@ -31,11 +30,12 @@ interface FakeWS {
 function makeWS(sendResult = true): FakeWS {
     const ws: FakeWS = {
         send: vi.fn(() => sendResult),
-        onStreamChunk: vi.fn((cb: (chunk: string, from: string) => void) => {
-            ws.chunkCb = cb;
-        }),
-        onStreamEnd: vi.fn((cb: (from: string) => void) => {
-            ws.endCb = cb;
+        on: vi.fn((event: string, cb: never) => {
+            if (event === "streamChunk") {
+                ws.chunkCb = cb;
+            } else {
+                ws.endCb = cb;
+            }
         }),
     };
     return ws;

@@ -722,7 +722,7 @@ describe("DashboardChat — sending & live events", () => {
         };
         document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
 
-        document.removeEventListener("af-addressed", hear);
+        document.removeEventListener("af-view-changed", hear);
         expect(heard).toEqual(["main", "reachy-mini"]);
     });
 
@@ -1684,7 +1684,7 @@ describe("two agents of one name", () => {
         expect(turns.at(-1)).toBe("on-pi");
 
         arrive({ id: "b", from: "counter", to: "user", threadId: "on-pi", content: "2", timestampMs: 2 });
-        document.removeEventListener("af-turn", stop);
+        stop();
         expect(turns.at(-1)).toBeNull();
         dc.unwire();
     });

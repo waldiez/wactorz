@@ -108,18 +108,17 @@ export function emit<K extends keyof AppEventMap>(
 
 /**
  * Subscribe to an application event on `document`. The handler receives the
- * typed detail. Returns the underlying listener so callers can later pass it to
- * `document.removeEventListener(type, listener)`.
+ * typed detail. Returns the way to stop.
  */
 export function listen<K extends keyof AppEventMap>(
     type: K,
     handler: (detail: AppEventMap[K]) => void,
-): EventListener {
+): () => void {
     const fn: EventListener = e => {
         handler((e as CustomEvent<AppEventMap[K]>).detail);
     };
     document.addEventListener(type, fn);
-    return fn;
+    return () => document.removeEventListener(type, fn);
 }
 
 /**
@@ -128,18 +127,16 @@ export function listen<K extends keyof AppEventMap>(
  * every one kept, so a component never has to name each again to let it go.
  */
 export class Listeners {
-    private held: [keyof AppEventMap, EventListener][] = [];
+    private held: (() => void)[] = [];
 
     /** Subscribe `handler` to `type`, as `listen` does, until `off`. */
     on<K extends keyof AppEventMap>(type: K, handler: (detail: AppEventMap[K]) => void): void {
-        this.held.push([type, listen(type, handler)]);
+        this.held.push(listen(type, handler));
     }
 
     /** Remove every listener `on` added. */
     off(): void {
-        for (const [type, fn] of this.held) {
-            document.removeEventListener(type, fn);
-        }
+        this.held.forEach(stop => stop());
         this.held = [];
     }
 }

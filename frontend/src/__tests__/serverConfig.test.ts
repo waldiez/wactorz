@@ -189,7 +189,7 @@ describe("loadServerConfig", () => {
 
         expect(await loadServerConfig()).toBe(true);
 
-        document.removeEventListener("af-config-loaded", stop);
+        stop();
         expect(seen).toEqual(["http://ha.local"]);
     });
 
@@ -200,7 +200,7 @@ describe("loadServerConfig", () => {
 
         expect(await loadServerConfig()).toBe(false);
 
-        document.removeEventListener("af-config-loaded", stop);
+        stop();
         expect(told).toBe(1);
     });
 });

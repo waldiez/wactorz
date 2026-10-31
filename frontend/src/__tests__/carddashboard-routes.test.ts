@@ -27,7 +27,7 @@ function pick(name: string): void {
 describe("CardDashboard and the address", () => {
     let cd: CardDashboard;
     let changes: Route[];
-    let heard: EventListener;
+    let heard: () => void;
 
     function open(): void {
         ({ dashboard: cd } = openDashboard(AGENTS));
@@ -42,7 +42,7 @@ describe("CardDashboard and the address", () => {
     });
 
     afterEach(() => {
-        document.removeEventListener("af-view-changed", heard);
+        heard();
         cd.destroy();
     });
 

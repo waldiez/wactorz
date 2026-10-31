@@ -40,6 +40,28 @@ export type ConnectionHandler = () => void;
 /** Server↔broker connection state — combined with the /ws state to drive "live". */
 export type MqttStatusHandler = (connected: boolean) => void;
 
+/** What a client can be told of, with what each handler takes. */
+export interface WSEvents {
+    /** Complete (non-streaming) message — slash command replies, errors, etc. */
+    chat: ChatHandler;
+    /** One streaming chunk from the LLM. */
+    streamChunk: StreamChunkHandler;
+    /** Stream finished — render the final markdown for the accumulated reply. */
+    streamEnd: StreamEndHandler;
+    /** Server broadcast a state patch (agent list updated, or agent deleted). */
+    statePatch: StatePatchHandler;
+    /** Server broadcast new log_feed entries inside a state patch. */
+    logFeed: LogFeedHandler;
+    /** A live `server_event` frame — hand `(topic, payload)` to the ServerEventRouter. */
+    serverEvent: ServerEventHandler;
+    /** The /ws connection opened (or reopened after a drop). */
+    connected: ConnectionHandler;
+    /** The /ws connection dropped (fired ~6 s after close, cancelled by a reconnect). */
+    disconnected: ConnectionHandler;
+    /** Server↔broker connection state changed (or its value on connect). */
+    mqttStatus: MqttStatusHandler;
+}
+
 /** Coerce an untrusted JSON field to a string; non-strings fall back (so a
  *  hostile object can't stringify to "[object Object]"). */
 const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
@@ -103,16 +125,8 @@ function told(type: unknown, data: Record<string, unknown>): boolean {
 }
 
 export class WSClient {
+    private readonly _handlers: { [K in keyof WSEvents]?: Set<WSEvents[K]> } = {};
     private ws: WebSocket | null = null;
-    private _onChat: ChatHandler | null = null;
-    private _onStreamChunk: StreamChunkHandler | null = null;
-    private _onStreamEnd: StreamEndHandler | null = null;
-    private _onStatePatch: StatePatchHandler | null = null;
-    private _onLogFeed: LogFeedHandler | null = null;
-    private _onServerEvent: ServerEventHandler | null = null;
-    private _onConnected: ConnectionHandler | null = null;
-    private _onDisconnected: ConnectionHandler | null = null;
-    private _onMqttStatus: MqttStatusHandler | null = null;
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to disconnected. */
     private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -155,49 +169,17 @@ export class WSClient {
         return this.ws?.readyState === WebSocket.OPEN;
     }
 
-    /** Complete (non-streaming) message — slash command replies, errors, etc. */
-    onChat(fn: ChatHandler): void {
-        this._onChat = fn;
+    /** Be told of `event`, each handler in the order it subscribed; returns the way to stop. */
+    on<K extends keyof WSEvents>(event: K, handler: WSEvents[K]): () => void {
+        const handlers = this._handlers[event] ?? new Set();
+        (this._handlers as Record<K, Set<WSEvents[K]>>)[event] = handlers;
+        handlers.add(handler);
+        return () => handlers.delete(handler);
     }
 
-    /** One streaming chunk from the LLM. */
-    onStreamChunk(fn: StreamChunkHandler): void {
-        this._onStreamChunk = fn;
-    }
-
-    /** Stream finished — render the final markdown for the accumulated reply. */
-    onStreamEnd(fn: StreamEndHandler): void {
-        this._onStreamEnd = fn;
-    }
-
-    /** Server broadcast a state patch (agent list updated, or agent deleted). */
-    onStatePatch(fn: StatePatchHandler): void {
-        this._onStatePatch = fn;
-    }
-
-    /** Server broadcast new log_feed entries inside a state patch. */
-    onLogFeed(fn: LogFeedHandler): void {
-        this._onLogFeed = fn;
-    }
-
-    /** A live `server_event` frame — hand `(topic, payload)` to the ServerEventRouter. */
-    onServerEvent(fn: ServerEventHandler): void {
-        this._onServerEvent = fn;
-    }
-
-    /** The /ws connection opened (or reopened after a drop). */
-    onConnected(fn: ConnectionHandler): void {
-        this._onConnected = fn;
-    }
-
-    /** The /ws connection dropped (fired ~6 s after close, cancelled by a reconnect). */
-    onDisconnected(fn: ConnectionHandler): void {
-        this._onDisconnected = fn;
-    }
-
-    /** Server↔broker connection state changed (or its value on connect). */
-    onMqttStatus(fn: MqttStatusHandler): void {
-        this._onMqttStatus = fn;
+    private _emit<K extends keyof WSEvents>(event: K, ...args: Parameters<WSEvents[K]>): void {
+        const handlers = this._handlers[event] as Set<(...a: Parameters<WSEvents[K]>) => void> | undefined;
+        handlers?.forEach(handler => handler(...args));
     }
 
     /** Open the WebSocket to `url` and auto-reconnect on drops until disconnected. */
@@ -222,7 +204,7 @@ export class WSClient {
         this._stopWatching();
         this.ws?.close();
         this.ws = null;
-        this._onDisconnected?.();
+        this._emit("disconnected");
     }
 
     /** The person now talks to `agentName`: a reply the gateway stamps is theirs. */
@@ -290,7 +272,7 @@ export class WSClient {
                 this._disconnectTimer = null;
             }
             this._startWatching();
-            this._onConnected?.();
+            this._emit("connected");
         });
 
         this.ws.addEventListener("message", (ev: MessageEvent) => {
@@ -318,7 +300,7 @@ export class WSClient {
             if (this._disconnectTimer === null) {
                 this._disconnectTimer = setTimeout(() => {
                     this._disconnectTimer = null;
-                    this._onDisconnected?.();
+                    this._emit("disconnected");
                 }, 6_000);
             }
         });
@@ -364,14 +346,14 @@ export class WSClient {
     private _handleFrame(data: Record<string, unknown>): void {
         const type = data["type"];
         if (type === "server_event") {
-            this._onServerEvent?.(asStr(data["topic"]), data["payload"], asStr(data["thread_id"]));
+            this._emit("serverEvent", asStr(data["topic"]), data["payload"], asStr(data["thread_id"]));
             return;
         }
         if (told(type, data)) {
             return;
         }
         if (type === "mqtt_status") {
-            this._onMqttStatus?.(Boolean(data["connected"]));
+            this._emit("mqttStatus", Boolean(data["connected"]));
             return;
         }
         if (type === "reset") {
@@ -439,9 +421,9 @@ export class WSClient {
         if (patch?.total_messages !== undefined) {
             stats.totalMessages = patch.total_messages;
         }
-        this._onStatePatch?.(patch?.agents ?? [], removedId, stats);
+        this._emit("statePatch", patch?.agents ?? [], removedId, stats);
         if (patch?.log_feed?.length) {
-            this._onLogFeed?.(patch.log_feed);
+            this._emit("logFeed", patch.log_feed);
         }
     }
 
@@ -458,7 +440,8 @@ export class WSClient {
         const agentId = asStr(data["agent_id"]);
 
         if (data["type"] === "chat") {
-            this._onChat?.(
+            this._emit(
+                "chat",
                 asStr(data["content"]),
                 from,
                 ts,
@@ -471,9 +454,9 @@ export class WSClient {
                 addressChoiceOf(data),
             );
         } else if (data["type"] === "stream_chunk") {
-            this._onStreamChunk?.(asStr(data["content"]), from, ts, agentId);
+            this._emit("streamChunk", asStr(data["content"]), from, ts, agentId);
         } else if (data["type"] === "stream_end") {
-            this._onStreamEnd?.(from, agentId);
+            this._emit("streamEnd", from, agentId);
         }
     }
 

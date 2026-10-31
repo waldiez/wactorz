@@ -208,6 +208,7 @@ export class CardDashboard {
     /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
+        this._chat.destroy();
         this._unsubscribe();
         this._trendPanel.destroy();
         this._models.destroy();

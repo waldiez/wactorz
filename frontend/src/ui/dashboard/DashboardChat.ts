@@ -127,6 +127,8 @@ export class DashboardChat {
 
     /** What `wire` subscribed to, dropped together by `unwire`. */
     private _listeners = new Listeners();
+    /** The input bar's, which outlive `unwire`: the bar is built once. */
+    private _barListeners = new Listeners();
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
     private _pendingAttachments: Attachment[] = [];
@@ -175,6 +177,12 @@ export class DashboardChat {
      *  last asked (see `ChatTarget.relabelled`); null when it is called as before. */
     relabelled(): string | null {
         return this._target.relabelled();
+    }
+
+    /** Let everything go (the dashboard goes). */
+    destroy(): void {
+        this.unwire();
+        this._barListeners.off();
     }
 
     /** Drop all chat state (a full reset / wipe). */
@@ -387,6 +395,7 @@ export class DashboardChat {
     buildIobar(): HTMLElement {
         return buildChatIobar({
             chatInput: this._chatInput,
+            listeners: this._barListeners,
             target: () => this.chatTargetName,
             setTarget: id => this.setTarget(id),
             populateSelect: select => this._populateSelect(select),

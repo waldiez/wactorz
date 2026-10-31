@@ -38,13 +38,16 @@ export interface TTSConfig {
 /**
  * Bootstrap the TTS extension. Called once from app.ts during startup.
  * The extension self-wires — no other file needs to know about TTSManager.
+ *
+ * @returns the way to stop it listening.
  */
-export function register(config: TTSConfig): void {
+export function register(config: TTSConfig): () => void {
     tts.setApiBase(config.apiBase);
     // A stopped turn stops its voice too: the page saying it stopped while it
     // goes on reading the answer aloud disagrees with itself.
-    listen("tts-stop", () => tts.stopSpeaking());
+    const stop = listen("tts-stop", () => tts.stopSpeaking());
     if (!config.configRead || safeStorage.get("wactorz-tts-available") === "1") {
         void tts.init();
     }
+    return stop;
 }

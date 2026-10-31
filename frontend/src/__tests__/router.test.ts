@@ -146,7 +146,7 @@ describe("startRouter", () => {
         window.dispatchEvent(new HashChangeEvent("hashchange"));
         history.replaceState(null, "", "#/");
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(routes).toEqual([{ view: "chat", path: ["main"] }]);
     });
@@ -158,7 +158,7 @@ describe("startRouter", () => {
         history.replaceState(null, "", "#/settings");
         window.dispatchEvent(new PopStateEvent("popstate"));
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(routes).toEqual([{ view: "settings", path: [] }]);
     });
@@ -169,7 +169,7 @@ describe("startRouter", () => {
 
         emit("af-view-changed", { view: "feed", path: [] });
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(routes).toEqual([]);
     });
@@ -181,7 +181,7 @@ describe("startRouter", () => {
 
         emit("af-view-changed", { view: "feed", path: [] });
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(location.hash).not.toBe("#/feed");
         expect(routes).toEqual([]);

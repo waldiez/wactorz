@@ -72,14 +72,11 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
     };
 
     populateVoices();
-    const voicesListener = listen("tts-voices-loaded", () => populateVoices());
+    const stopFollowing = listen("tts-voices-loaded", () => populateVoices());
     voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
 
     voiceRow.appendChild(voiceSel);
-    return {
-        row: voiceRow,
-        release: () => document.removeEventListener("tts-voices-loaded", voicesListener),
-    };
+    return { row: voiceRow, release: stopFollowing };
 }
 
 /** Ambient volume slider row (visibility toggled by the track buttons). */
@@ -314,13 +311,10 @@ export function buildResetPopover(): ResetPopover {
             render();
         }
     };
-    const following = [
-        ["af-route", listen("af-route", follow)],
-        ["af-view-changed", listen("af-view-changed", follow)],
-    ] as const;
+    const following = [listen("af-route", follow), listen("af-view-changed", follow)];
     render();
     return Object.assign(pop, {
         _resetArmed: () => armResets.forEach(fn => fn()),
-        _release: () => following.forEach(([type, fn]) => document.removeEventListener(type, fn)),
+        _release: () => following.forEach(stop => stop()),
     });
 }

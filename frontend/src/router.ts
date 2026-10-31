@@ -102,7 +102,7 @@ export function startRouter(): () => void {
             emit("af-route", route);
         }
     };
-    const onView = listen("af-view-changed", route => {
+    const stopFollowing = listen("af-view-changed", route => {
         safeStorage.set(VIEW_KEY, route.view);
         const hash = formatRoute(route);
         // Unchanged when the view followed the address (Back, a typed link).
@@ -121,6 +121,6 @@ export function startRouter(): () => void {
     return () => {
         window.removeEventListener("hashchange", onAddress);
         window.removeEventListener("popstate", onAddress);
-        document.removeEventListener("af-view-changed", onView);
+        stopFollowing();
     };
 }

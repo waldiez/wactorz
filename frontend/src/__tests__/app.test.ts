@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createApp, type App, type AppParts } from "../app";
 import { UPLOADS_KEY } from "../ui/dashboard/uploads";
 import { emit, listen } from "../events";
+import { ambient } from "../io/AmbientManager";
 import { toast } from "../ui/ToastManager";
 import type { FeedItem } from "../types/feed";
 
@@ -52,29 +53,10 @@ class FakeRouter {
 }
 
 class FakeWs {
-    onServerEvent(cb: (...a: any[]) => void) {
-        mockWs["serverEvent"] = cb;
+    on(ev: string, cb: (...a: any[]) => void) {
+        mockWs[ev] = cb;
+        return () => {};
     }
-    onConnected(cb: (...a: any[]) => void) {
-        mockWs["connected"] = cb;
-    }
-    onDisconnected(cb: (...a: any[]) => void) {
-        mockWs["disconnected"] = cb;
-    }
-    onMqttStatus(cb: (...a: any[]) => void) {
-        mockWs["mqttStatus"] = cb;
-    }
-    onChat(cb: (...a: any[]) => void) {
-        mockWs["chat"] = cb;
-    }
-    onStatePatch(cb: (...a: any[]) => void) {
-        mockWs["statePatch"] = cb;
-    }
-    onLogFeed(cb: (...a: any[]) => void) {
-        mockWs["logFeed"] = cb;
-    }
-    onStreamChunk = vi.fn();
-    onStreamEnd = vi.fn();
     connect = vi.fn();
     disconnect = vi.fn();
     addressed = vi.fn((agent: string) => mockAddressed.push(agent));
@@ -281,7 +263,7 @@ describe("the app", () => {
         wsHandler("mqttStatus")(false);
         wsHandler("connected")();
         wsHandler("disconnected")();
-        document.removeEventListener("af-socket", stop);
+        stop();
 
         expect(said).toEqual([true, false]);
     });
@@ -308,8 +290,8 @@ describe("the app", () => {
             timestampMs: 3_000,
         });
 
-        document.removeEventListener("af-feed-push", onFeed);
-        document.removeEventListener("af-chat-message", onChat);
+        onFeed();
+        onChat();
         expect(feed.map(i => i.label)).toEqual(["on the socket", "on its own", "→ catalog: do it"]);
         expect(arrived).toHaveLength(3);
     });
@@ -451,7 +433,7 @@ describe("the app", () => {
         wsHandler("connected")();
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(handed).toHaveLength(1));
-        document.removeEventListener("af-questions-listed", stop);
+        stop();
         await Promise.resolve();
         routerHandler("chat")({ ...question, id: "q10" });
 
@@ -483,7 +465,7 @@ describe("the app", () => {
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(handed).toHaveLength(1));
 
-        document.removeEventListener("af-questions-listed", stop);
+        stop();
         expect(toast.show).not.toHaveBeenCalled();
         mockOpenQuestions.mockResolvedValue([]);
     });
@@ -517,7 +499,7 @@ describe("the app", () => {
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(reads).toBe(2));
 
-        document.removeEventListener("af-questions-listed", stop);
+        stop();
         expect(toast.show).not.toHaveBeenCalled();
         mockOpenQuestions.mockResolvedValue([]);
     });
@@ -528,7 +510,7 @@ describe("the app", () => {
 
         wsHandler("statePatch")([], "gone-agent", undefined);
 
-        document.removeEventListener("af-question-book", stop);
+        stop();
         expect(books).toEqual([{ agentId: "gone-agent", questions: [] }]);
     });
 
@@ -555,7 +537,7 @@ describe("the app", () => {
         wsHandler("connected")();
         wsHandler("mqttStatus")(true);
         await vi.waitFor(() => expect(toast.show).toHaveBeenCalledTimes(1));
-        document.removeEventListener("af-questions-listed", stop);
+        stop();
 
         const shown = vi.mocked(toast.show).mock.calls[0]![0];
         expect(shown.key).toBe("q3");
@@ -578,13 +560,13 @@ describe("the app", () => {
         const books: unknown[] = [];
         const stopBooks = listen("af-question-book", d => books.push(d));
         routerHandler("question-book")({ agentId: "a1", questions: [] });
-        document.removeEventListener("af-question-book", stopBooks);
+        stopBooks();
         expect(books).toEqual([{ agentId: "a1", questions: [] }]);
 
         const stop = listen("af-model-pointer", d => heard.push(d));
 
         routerHandler("model-pointer")({ name: "hvac", pointer: "shadow" });
-        document.removeEventListener("af-model-pointer", stop);
+        stop();
 
         expect(heard).toEqual([{ name: "hvac", pointer: "shadow" }]);
     });
@@ -755,7 +737,7 @@ describe("the app", () => {
         const second = createApp({ ...fakeParts(), registerTTS });
         const told = new Promise<void>(resolve => {
             const stop = listen("af-config-loaded", () => {
-                document.removeEventListener("af-config-loaded", stop);
+                stop();
                 resolve();
             });
         });
@@ -789,5 +771,22 @@ describe("the app", () => {
             expect(registerTTS).toHaveBeenCalledWith(expect.objectContaining({ configRead: true })),
         );
         second.stop();
+    });
+
+    it("lets go of the voice and the ambient sound when it stops", async () => {
+        const stopVoice = vi.fn();
+        const second = createApp({ ...fakeParts(), registerTTS: () => stopVoice });
+        second.start();
+        await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const duck = vi.spyOn(ambient, "duck");
+
+        second.stop();
+        app.stop();
+        emit("tts-audio-start");
+
+        expect(stopVoice).toHaveBeenCalledTimes(1);
+        expect(duck).not.toHaveBeenCalled();
+        duck.mockRestore();
     });
 });

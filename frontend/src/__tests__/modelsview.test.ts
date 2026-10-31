@@ -83,7 +83,7 @@ describe("the Models view", () => {
     let cd: CardDashboard;
     let fetched: ReturnType<typeof server>;
     let changes: Route[];
-    let heard: EventListener;
+    let heard: () => void;
 
     async function open(hash: string, answering = server()): Promise<void> {
         fetched = answering;
@@ -107,7 +107,7 @@ describe("the Models view", () => {
     });
 
     afterEach(() => {
-        document.removeEventListener("af-view-changed", heard);
+        heard();
         cd.destroy();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();

@@ -52,7 +52,7 @@ describe("a name two agents share", () => {
         const listener = listen("af-view-changed", route => paths.push(route.path));
 
         t.move("counter-on-pi", "claim");
-        document.removeEventListener("af-view-changed", listener);
+        listener();
 
         expect(t.address).toBe("counter@pi");
         expect(paths).toEqual([["counter@pi"]]);
@@ -116,7 +116,7 @@ describe("a choice", () => {
         const listener = listen("af-view-changed", route => paths.push(route.path));
 
         t.move("on-pi", "claim");
-        document.removeEventListener("af-view-changed", listener);
+        listener();
 
         expect([t.id, t.name, t.settled]).toEqual(["on-pi", "counter", true]);
         expect(localStorage.getItem("wactorz-chat-agent-id")).toBe("on-pi");

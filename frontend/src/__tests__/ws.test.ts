@@ -57,6 +57,33 @@ beforeEach(() => {
 });
 
 describe("WSClient", () => {
+    it("keeps a first handler when a second subscribes", () => {
+        const c = new WSClient();
+        const first = vi.fn();
+        const second = vi.fn();
+        c.on("mqttStatus", first);
+        c.on("mqttStatus", second);
+
+        (c as unknown as { _emit(e: string, up: boolean): void })._emit("mqttStatus", true);
+
+        expect(first).toHaveBeenCalledWith(true);
+        expect(second).toHaveBeenCalledWith(true);
+    });
+
+    it("tells every handler of an event, and stops telling one that stopped", () => {
+        const c = new WSClient();
+        const first = vi.fn();
+        const second = vi.fn();
+        const stopFirst = c.on("mqttStatus", first);
+        c.on("mqttStatus", second);
+
+        stopFirst();
+        (c as unknown as { _emit(e: string, up: boolean): void })._emit("mqttStatus", true);
+
+        expect(first).not.toHaveBeenCalled();
+        expect(second).toHaveBeenCalledWith(true);
+    });
+
     it("connected is false before connect()", () => {
         const c = new WSClient();
         expect(c.connected).toBe(false);
@@ -88,7 +115,7 @@ describe("WSClient", () => {
     it("dispatches server_event frames to onServerEvent(topic, payload)", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onServerEvent(spy);
+        c.on("serverEvent", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -103,7 +130,7 @@ describe("WSClient", () => {
     it("server_event with a non-string topic falls back to ''", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onServerEvent(spy);
+        c.on("serverEvent", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "server_event", payload: { x: 1 } }) });
         expect(spy).toHaveBeenCalledWith("", { x: 1 }, "");
@@ -112,7 +139,7 @@ describe("WSClient", () => {
     it("dispatches mqtt_status frames to onMqttStatus(connected)", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onMqttStatus(spy);
+        c.on("mqttStatus", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "mqtt_status", connected: true }) });
         ws().emit("message", { data: JSON.stringify({ type: "mqtt_status", connected: false }) });
@@ -122,7 +149,7 @@ describe("WSClient", () => {
     it("calls onChat handler for type='chat'", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
-        c.onChat(chatSpy);
+        c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -150,7 +177,7 @@ describe("WSClient", () => {
     it("hands on the addresses a reply offers to pick from, and the message a pick re-sends", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
-        c.onChat(chatSpy);
+        c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
         const frame = { type: "chat", content: "Which?", from: "main", agent_id: "main-id" };
         ws().emit("message", {
@@ -168,7 +195,7 @@ describe("WSClient", () => {
     it("converts ms timestamp correctly in chat", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
-        c.onChat(chatSpy);
+        c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
         const ts = 1_700_000_000_000;
         ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Hi", timestamp: ts }) });
@@ -178,7 +205,7 @@ describe("WSClient", () => {
     it("attributes an io-gateway / absent reply to the last addressed agent", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
-        c.onChat(chatSpy);
+        c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
         // Before any send, the gateway/absent sender falls back to the default agent.
         ws().emit("message", { data: JSON.stringify({ type: "chat", content: "Hi" }) });
@@ -194,7 +221,7 @@ describe("WSClient", () => {
     it("attributes a stream end that names nobody to the addressed agent", () => {
         const c = new WSClient();
         const endSpy = vi.fn();
-        c.onStreamEnd(endSpy);
+        c.on("streamEnd", endSpy);
         c.connect("ws://localhost/ws");
         c.addressed("catalog");
         ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "" }) });
@@ -204,7 +231,7 @@ describe("WSClient", () => {
     it("leaves who is addressed to the chat: sending does not change it", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
-        c.onChat(chatSpy);
+        c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
         c.addressed("weather");
         c.send("hello", "catalog");
@@ -215,7 +242,7 @@ describe("WSClient", () => {
     it("passes through a real agent sender unchanged", () => {
         const c = new WSClient();
         const chatSpy = vi.fn();
-        c.onChat(chatSpy);
+        c.on("chat", chatSpy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ type: "chat", content: "Hi", from: "home-assistant-agent" }),
@@ -226,7 +253,7 @@ describe("WSClient", () => {
     it("calls onStreamChunk for type='stream_chunk'", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStreamChunk(spy);
+        c.on("streamChunk", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ type: "stream_chunk", content: "part", from: "main" }),
@@ -237,7 +264,7 @@ describe("WSClient", () => {
     it("calls onStreamEnd for type='stream_end'", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStreamEnd(spy);
+        c.on("streamEnd", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "main" }) });
         expect(spy).toHaveBeenCalledWith("main", "");
@@ -249,10 +276,10 @@ describe("WSClient", () => {
         const chunk = vi.fn();
         const end = vi.fn();
         const relayed = vi.fn();
-        c.onChat(chat);
-        c.onStreamChunk(chunk);
-        c.onStreamEnd(end);
-        c.onServerEvent(relayed);
+        c.on("chat", chat);
+        c.on("streamChunk", chunk);
+        c.on("streamEnd", end);
+        c.on("serverEvent", relayed);
         c.connect("ws://localhost/ws");
 
         const frames = [
@@ -274,7 +301,7 @@ describe("WSClient", () => {
         // member (`hasOwnProperty`, `constructor`) must not call it.
         const c = new WSClient();
         const chat = vi.fn();
-        c.onChat(chat);
+        c.on("chat", chat);
         c.connect("ws://localhost/ws");
 
         for (const type of ["hasOwnProperty", "constructor", "toString", "__proto__"]) {
@@ -296,7 +323,7 @@ describe("WSClient", () => {
         ws().emit("message", {
             data: JSON.stringify({ type: "turn", id: "m1", agent_id: "catalog-id", name: "catalog" }),
         });
-        document.removeEventListener("af-turn-reached", listener);
+        listener();
 
         expect(reached).toEqual([{ id: "m1", agentId: "catalog-id", name: "catalog" }]);
     });
@@ -304,7 +331,7 @@ describe("WSClient", () => {
     it("calls onStatePatch when state field is present", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         const agents = [{ agent_id: "a1", name: "alpha" }];
         ws().emit("message", { data: JSON.stringify({ state: { agents } }) });
@@ -314,7 +341,7 @@ describe("WSClient", () => {
     it("passes total_cost_usd and total_messages from state patch", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         const agents = [{ agent_id: "a1", name: "alpha" }];
         ws().emit("message", {
@@ -326,7 +353,7 @@ describe("WSClient", () => {
     it("calls onStatePatch with deletedId for type='delete_agent'", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ type: "delete_agent", agent_id: "gone-id", state: { agents: [] } }),
@@ -337,7 +364,7 @@ describe("WSClient", () => {
     it("passes stats on delete_agent patch", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -352,7 +379,7 @@ describe("WSClient", () => {
     it("state patch without agents array passes empty array", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ state: {} }) });
         expect(spy).toHaveBeenCalledWith([], undefined, {});
@@ -491,7 +518,7 @@ describe("WSClient", () => {
     it("ignores malformed JSON messages", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onChat(spy);
+        c.on("chat", spy);
         c.connect("ws://localhost/ws");
         expect(() => ws().emit("message", { data: "not json" })).not.toThrow();
         expect(spy).not.toHaveBeenCalled();
@@ -514,7 +541,7 @@ describe("WSClient", () => {
     it("onLogFeed() registers callback", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        expect(() => c.onLogFeed(spy)).not.toThrow();
+        expect(() => c.on("logFeed", spy)).not.toThrow();
     });
 
     it("reset message calls onStatePatch and clears log_feed via onLogFeed", () => {
@@ -523,8 +550,8 @@ describe("WSClient", () => {
         const c = new WSClient();
         const patchSpy = vi.fn();
         const feedSpy = vi.fn();
-        c.onStatePatch(patchSpy);
-        c.onLogFeed(feedSpy);
+        c.on("statePatch", patchSpy);
+        c.on("logFeed", feedSpy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -574,7 +601,7 @@ describe("WSClient", () => {
     it("reset message with scope='all' wipes, then applies the survivors the frame carries", () => {
         const c = new WSClient();
         const patchSpy = vi.fn();
-        c.onStatePatch(patchSpy);
+        c.on("statePatch", patchSpy);
         c.connect("ws://localhost/ws");
         const eventSpy = vi.fn();
         document.addEventListener("af-wipe-all", eventSpy, { once: true });
@@ -623,7 +650,7 @@ describe("WSClient", () => {
     it("reset message with total_cost_usd and total_messages passes stats", () => {
         const c = new WSClient();
         const patchSpy = vi.fn();
-        c.onStatePatch(patchSpy);
+        c.on("statePatch", patchSpy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -638,7 +665,7 @@ describe("WSClient", () => {
     it("reset message with no log_feed does not call onLogFeed", () => {
         const c = new WSClient();
         const feedSpy = vi.fn();
-        c.onLogFeed(feedSpy);
+        c.on("logFeed", feedSpy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ type: "reset", scope: "state", state: { agents: [] } }),
@@ -688,7 +715,7 @@ describe("WSClient", () => {
     it("reset message without agents in state uses empty array (covers ?? [])", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ type: "reset", scope: "state", state: {} }), // no agents field
@@ -699,7 +726,7 @@ describe("WSClient", () => {
     it("delete_agent with log_feed in state calls onLogFeed (covers line 228 truthy branch)", () => {
         const c = new WSClient();
         const feedSpy = vi.fn();
-        c.onLogFeed(feedSpy);
+        c.on("logFeed", feedSpy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -714,7 +741,7 @@ describe("WSClient", () => {
     it("delete_agent without agent_id uses empty string (covers ?? '')", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStatePatch(spy);
+        c.on("statePatch", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ type: "delete_agent", state: { agents: [] } }), // no agent_id
@@ -734,7 +761,7 @@ describe("WSClient", () => {
     it("chat message with no content uses empty string", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onChat(spy);
+        c.on("chat", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "chat", from: "agent" }) });
         expect(spy.mock.calls[0]![0]).toBe("");
@@ -743,7 +770,7 @@ describe("WSClient", () => {
     it("forwards a voice user's chat target", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onChat(spy);
+        c.on("chat", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({
@@ -759,7 +786,7 @@ describe("WSClient", () => {
     it("stream_chunk with no content uses empty string", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onStreamChunk(spy);
+        c.on("streamChunk", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "stream_chunk", from: "agent" }) });
         expect(spy.mock.calls[0]![0]).toBe("");
@@ -768,7 +795,7 @@ describe("WSClient", () => {
     it("state patch with empty log_feed array does not call onLogFeed", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onLogFeed(spy);
+        c.on("logFeed", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", {
             data: JSON.stringify({ state: { agents: [], log_feed: [] } }),
@@ -781,7 +808,7 @@ describe("WSClient", () => {
     it("fires onConnected when the socket opens", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onConnected(spy);
+        c.on("connected", spy);
         c.connect("ws://localhost/ws");
         ws().emit("open", {});
         expect(spy).toHaveBeenCalledTimes(1);
@@ -790,7 +817,7 @@ describe("WSClient", () => {
     it("fires onDisconnected ~6s after a drop (debounced)", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onDisconnected(spy);
+        c.on("disconnected", spy);
         c.connect("ws://localhost/ws");
         ws().emit("close", {});
         expect(spy).not.toHaveBeenCalled();
@@ -802,7 +829,7 @@ describe("WSClient", () => {
     it("a reconnect within the debounce window cancels the pending onDisconnected", () => {
         const c = new WSClient();
         const disc = vi.fn();
-        c.onDisconnected(disc);
+        c.on("disconnected", disc);
         c.connect("ws://localhost/ws");
         ws().emit("close", {});
         vi.advanceTimersByTime(1001); // reconnect fires
@@ -815,7 +842,7 @@ describe("WSClient", () => {
     it("disconnect() fires onDisconnected immediately", () => {
         const c = new WSClient();
         const spy = vi.fn();
-        c.onDisconnected(spy);
+        c.on("disconnected", spy);
         c.connect("ws://localhost/ws");
         c.disconnect();
         expect(spy).toHaveBeenCalledTimes(1);

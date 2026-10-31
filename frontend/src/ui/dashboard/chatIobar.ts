@@ -11,7 +11,7 @@ import type { ChatInput } from "./chatInput";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
-import { emit, listen } from "../../events";
+import { emit, type Listeners } from "../../events";
 import { ingressBase } from "../../io/api";
 import { el, iconButton, labelled, named } from "../dom";
 
@@ -30,6 +30,8 @@ export function nameRecipient(root: ParentNode, target: string): void {
 
 export interface IobarDeps {
     chatInput: ChatInput;
+    /** Holds the bar's listeners for as long as the bar lives: it is built once. */
+    listeners: Listeners;
     /** Current chat target (for the placeholder). */
     target(): string;
     /** Set the active target when the <select> changes. */
@@ -116,10 +118,8 @@ function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
  * (`af-turn`). Send stays usable: a message sent during a turn is queued and
  * goes when it ends (`src/chat/turnTracker.ts`), so there is nothing to block.
  */
-function wireTurnState(stopBtn: HTMLButtonElement): void {
-    // Page-lifetime listener: buildIobar runs once (CardDashboard is a single
-    // instance never remounted), so it is intentionally not removed.
-    listen("af-turn", d => {
+function wireTurnState(stopBtn: HTMLButtonElement, listeners: Listeners): void {
+    listeners.on("af-turn", d => {
         stopBtn.style.display = d.agent === null ? "none" : "flex";
     });
 }
@@ -235,7 +235,7 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     bar.append(button, picker);
     const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);
-    wireTurnState(stopBtn);
+    wireTurnState(stopBtn, deps.listeners);
     bar.append(sendBtn, stopBtn);
     return bar;
 }

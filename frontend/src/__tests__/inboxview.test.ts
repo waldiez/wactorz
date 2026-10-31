@@ -76,7 +76,7 @@ describe("the Inbox", () => {
 
         open(["no-such-list"]);
         expect(changes.at(-1)).toEqual({ view: "inbox", path: [] });
-        document.removeEventListener("af-view-changed", stop);
+        stop();
     });
 
     it("says what an empty list means: reading, nothing, or could not read", () => {

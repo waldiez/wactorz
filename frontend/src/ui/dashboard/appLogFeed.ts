@@ -42,7 +42,7 @@ export class AppLogFeed {
     private _entries: AppLogItem[] = [];
     private _timer: ReturnType<typeof setInterval> | null = null;
     private _following = false;
-    private _unlisten: ((e: Event) => void) | null = null;
+    private _unlisten: (() => void) | null = null;
 
     constructor(private host: AppLogHost) {}
 
@@ -62,7 +62,7 @@ export class AppLogFeed {
      * happened meanwhile.
      */
     wire(): void {
-        this._unlisten ??= listen("af-app-log", d => this.receive(d?.entries ?? []));
+        this._unlisten ??= listen("af-app-log", d => this.receive(d.entries));
     }
 
     /** The records to render alongside agent activity on the next build. */
@@ -135,10 +135,8 @@ export class AppLogFeed {
 
     /** Drop the push subscription. Safe to call when there is none. */
     unwire(): void {
-        if (this._unlisten) {
-            document.removeEventListener("af-app-log", this._unlisten);
-            this._unlisten = null;
-        }
+        this._unlisten?.();
+        this._unlisten = null;
     }
 
     /** Drop the timer, keeping the preference so returning resumes it. */

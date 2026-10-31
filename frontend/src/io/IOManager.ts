@@ -47,7 +47,7 @@ export class IOManager {
     setWSClient(ws: WSClient): void {
         this._ws = ws;
 
-        ws.onStreamChunk((chunk, from, _ts, agentId) => {
+        ws.on("streamChunk", (chunk, from, _ts, agentId) => {
             const key = streamKey(agentId, from);
             this._streams.append(key, chunk);
             // The reply so far travels with the piece, so this is the one place a
@@ -55,7 +55,7 @@ export class IOManager {
             emit("af-stream-chunk", { chunk, from, agentId, text: this._streams.text(key) });
         });
 
-        ws.onStreamEnd((from, agentId) => {
+        ws.on("streamEnd", (from, agentId) => {
             // The socket names a sender for every frame, the addressed agent for
             // one without, so only that agent's buffer is taken and concurrent
             // streams never merge.

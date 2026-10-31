@@ -15,6 +15,7 @@ vi.mock("../ui/dashboard/uploads", () => ({
 }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
+import { Listeners } from "../events";
 import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
 import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
@@ -22,6 +23,7 @@ import { uploadFile } from "../ui/dashboard/uploads";
 
 function makeDeps(): IobarDeps {
     return {
+        listeners: new Listeners(),
         chatInput: {
             onChange: vi.fn(),
             onKeydown: vi.fn(),

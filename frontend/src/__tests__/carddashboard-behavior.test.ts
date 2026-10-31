@@ -558,3 +558,15 @@ describe("entering the chat view opens a conversation", () => {
         expect(paneOpen()).toBe(false);
     });
 });
+
+describe("destroying the dashboard", () => {
+    it("lets go of the input bar, which outlives a hide", () => {
+        const { dashboard } = openDashboard([]);
+        const stop = document.querySelector<HTMLElement>(".af-stop-btn")!;
+
+        dashboard.destroy();
+        emit("af-turn", { agent: "main", queued: 0 });
+
+        expect(stop.style.display).toBe("none");
+    });
+});

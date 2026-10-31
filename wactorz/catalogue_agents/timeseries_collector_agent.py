@@ -79,6 +79,7 @@ from pathlib import Path
 
 from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import get_db
+from wactorz.data.files import event_time_of
 
 logger = logging.getLogger("timeseries-collector")
 
@@ -103,6 +104,24 @@ DEFAULT_PRUNE_INTERVAL_H = 6.0  # hours between prune passes
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+class _Readings:
+    """The sensor buffer as the routing fills it: each row filed under its event time.
+
+    A row is built with the arrival as its first element, as rows always were;
+    kept, it has the payload's event time there instead, with the arrival and
+    where the time came from appended, as ``docs/design/event-time.md`` asks.
+    """
+
+    def __init__(self, buffer: list, arrived: float, ts: float, time_source: str) -> None:
+        self._buffer = buffer
+        self._arrived = arrived
+        self._ts = ts
+        self._time_source = time_source
+
+    def append(self, row: tuple) -> None:
+        self._buffer.append((self._ts, *row[1:], self._arrived, self._time_source))
+
+
 def _route_message(agent, topic, payload):
     """Route an MQTT message to the correct buffer based on topic."""
     now = time.time()
@@ -110,7 +129,8 @@ def _route_message(agent, topic, payload):
     if not isinstance(payload, dict):
         return
 
-    sensor_buf = agent.state["sensor_buffer"]
+    ts, time_source = event_time_of(payload, arrived=now)
+    sensor_buf = _Readings(agent.state["sensor_buffer"], now, ts, time_source)
     detection_buf = agent.state["detection_buffer"]
     ha_buf = agent.state["ha_buffer"]
 

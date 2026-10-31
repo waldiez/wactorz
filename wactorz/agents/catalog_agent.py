@@ -319,7 +319,7 @@ def _build_native_catalog() -> dict:
     # The agents this deployment brings, beside the packaged ones: listed,
     # described and spawned the same way, and restored from the registry by
     # name through `get_native_factory`.
-    for plugin in plugins.discover().values():
+    for plugin in [*plugins.built_in().values(), *plugins.discover().values()]:
         if plugin.name in native:
             logger.warning(
                 "[catalog] Plugin %r is shadowed by a packaged recipe of the same name",

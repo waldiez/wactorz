@@ -858,6 +858,16 @@ sent all the same and starts when the node does; the chat says so.</p>
 <td>How the swap went, quoting the token: <code>{"ok": true}</code> with <code>from</code> and <code>to</code>, or <code>{"ok": false, "reason": "..."}</code>.</td>
 </tr>
 <tr>
+<td><code>nodes/{name}/data_file</code></td>
+<td>← runner</td>
+<td>A recorded file is on its way on <code>blob_return</code>: <code>{"source": "...", "path": "&lt;source&gt;/&lt;yyyy&gt;/&lt;mm&gt;/&lt;dd&gt;/&lt;hh&gt;.parquet", "sha256": "...", "size": n}</code>. Sent for each file a recorder here closes; sent again if main does not answer.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/data_ack</code></td>
+<td>→ runner</td>
+<td>Main kept the file under its own data directory, or could not: <code>{"sha256": "...", "ok": true}</code> or <code>{"ok": false, "reason": "..."}</code>. Signed.</td>
+</tr>
+<tr>
 <td><code>nodes/{name}/reply/{id}</code></td>
 <td>← runner</td>
 <td>Replies to what this node asks main, such as an LLM call.</td>

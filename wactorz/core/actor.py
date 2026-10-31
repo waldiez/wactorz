@@ -1822,22 +1822,27 @@ class Actor(ABC):
         if task is not None:
             self._tasks.append(task)
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+    def window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> StreamWindow:
         """A rolling window over the last ``seconds`` of messages on ``topic``.
 
         Returns a :class:`~wactorz.core.topic_bus.StreamWindow`, with ``mean``,
         ``min``, ``max``, ``rising``, ``falling``, ``absent_for`` and the rest,
         fed from the broker from the moment it is made. One window per topic:
         asking again for the same topic returns the one that has been filling.
+        ``event_time`` times entries by what each payload says happened and
+        ends the window at the newest entry, for a replay or a source on its
+        own clock; off, the wall clock, as before.
         """
         existing = self._windows.get(topic)
         if existing is not None:
             return existing
         bus = get_topic_bus()
         if bus is not None:
-            made = bus.make_window(topic, seconds=seconds, max_size=max_size)
+            made = bus.make_window(topic, seconds=seconds, max_size=max_size, event_time=event_time)
         else:
-            made = StreamWindow(topic, seconds=seconds, max_size=max_size)
+            made = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
             made.start(self._mqtt_broker, self._mqtt_port)
         self._windows[topic] = made
         return made

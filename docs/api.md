@@ -455,6 +455,33 @@ The outcomes of the model's trials that ended, newest first: how each ended (`pr
 
 ---
 
+### `GET /api/data`
+
+The sources with recorded readings under the state directory's `data/`: every source a recorder filed at least one hour of, and `shadow/<model>` and `serving/<model>` for pairs and serving logs (`docs/design/data-storage.md`).
+
+**Response** `200 OK`: `{"sources": ["sensors/imu/left-wrist", "shadow/imu-detector"]}`
+
+---
+
+### `GET /api/data/{source}/profile`
+
+The dataset card of a window of `source`: rows, span, rate, gaps, and each column described. `since` and `until` are Unix seconds; the last day ending now when unsaid. A number column reports count, missing, min, max, mean and the 5th, 50th and 95th percentiles; a text or bool column its distinct values and the most common.
+
+**Response** `200 OK`
+```json
+{"source": "sensors/imu/left-wrist", "rows": 8640, "since": 1760000000.0, "until": 1760086400.0,
+ "from": 1760000003.1, "to": 1760086398.7, "span_s": 86395.6, "rate_per_s": 0.1, "median_step_s": 10.0,
+ "gaps": {"count": 2, "longest_s": 1800.0},
+ "columns": {"ax": {"type": "number", "count": 8640, "missing": 0, "min": -3.1, "max": 12.4, "mean": 0.02,
+                    "quantiles": {"0.05": -1.9, "0.5": 0.0, "0.95": 1.9}},
+             "device": {"type": "text", "count": 8640, "missing": 0, "distinct": 1,
+                        "top": [{"value": "left-wrist", "count": 8640}]}}}
+```
+
+`400` for a source that cannot name one or a bad window, `503` when the `data` extra is not installed. The same card from a terminal: `wactorz-data profile <source>`.
+
+---
+
 Every pointer move answers `200 OK` with `{"pointer": {...}}`, the pointer it moved as it stands now; for `DELETE .../shadow`, the shadow pointer as it was before it was cleared. Each answers `409` for a move the pointers do not allow now (already there, no shadow to promote, nothing to roll back to, a shadow on the active version), `404` for a name or version that is not stored, and `400` for a request that is not one; `{"error": "..."}` says which in the store's words.
 
 ---

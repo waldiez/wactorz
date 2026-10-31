@@ -38,6 +38,7 @@ from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .commands.info import terminal_command, terminal_command_reply
+from .data_files import DataFiles
 from .delegation import DelegationManager
 from .hot_swap import HotSwap
 from .labels import LabelRecorder
@@ -217,6 +218,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.migration = Migration(self, self.nodes)
         self.code_refresh = CodeRefresh(self)
         self.hot_swap = HotSwap(self)
+        self.data_files = DataFiles(self)
         self.shadow_serving = ShadowServing(self)
         self.artifact_service = ArtifactService(self, follow=self._follow_pointers)
         self.llm_bridge = LLMBridge(self)
@@ -361,6 +363,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self.artifact_service.pointer_watcher()))
         # Hear how the agents on nodes took a moved pointer's version
         self._tasks.append(asyncio.create_task(self.hot_swap.listener()))
+        # Take the readings a node's recorder files, into main's data directory
+        self._tasks.append(asyncio.create_task(self.data_files.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

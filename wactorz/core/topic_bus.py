@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .addresses import MAIN_NODE, Address, node_of
+from .labels import event_time
 
 logger = logging.getLogger(__name__)
 
@@ -585,22 +586,37 @@ class StreamWindow:
             avg = w.mean('value')
     """
 
-    def __init__(self, topic: str, seconds: float = 300, max_size: int = 1000):
+    def __init__(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ):
         self.topic = topic
         self.seconds = seconds
         self.max_size = max_size
+        #: Whether entries are timed by what the payload says (``ts``, then
+        #: ``timestamp``) rather than by when they arrived, and the window's
+        #: end is the newest entry rather than the wall clock: for a replay,
+        #: or a source whose clock is not this machine's. Off, as every agent
+        #: written before it expects (docs/design/event-time.md).
+        self.event_time = event_time
         self._buffer: deque = deque(maxlen=max_size)
         self._task: asyncio.Task | None = None
 
+    def _now(self) -> float:
+        """Where the window ends: now, or the newest entry's time in event time."""
+        if self.event_time and self._buffer:
+            return self._buffer[-1]["_ts"]
+        return time.time()
+
     def _trim(self):
         """Remove entries older than the window duration."""
-        cutoff = time.time() - self.seconds
+        cutoff = self._now() - self.seconds
         while self._buffer and self._buffer[0]["_ts"] < cutoff:
             self._buffer.popleft()
 
     def push(self, payload: Any):
         """Add a new data point to the window."""
-        entry = {"_ts": time.time()}
+        arrived = time.time()
+        entry = {"_ts": event_time(payload, default=arrived) if self.event_time else arrived}
         if isinstance(payload, dict):
             entry.update(payload)
         else:
@@ -673,14 +689,14 @@ class StreamWindow:
         latest = self.latest()
         if latest is None:
             return True
-        return (time.time() - latest["_ts"]) >= seconds
+        return (self._now() - latest["_ts"]) >= seconds
 
     def event_count(
         self, key: str | None = None, value: Any = None, seconds: float | None = None
     ) -> int:
         """Count events matching optional key=value in the last N seconds."""
         self._trim()
-        cutoff = time.time() - (seconds or self.seconds)
+        cutoff = self._now() - (seconds or self.seconds)
         count = 0
         for e in self._buffer:
             if e["_ts"] < cutoff:
@@ -768,9 +784,11 @@ class TopicBus:
         """Remove an agent's contract when it stops."""
         self.registry.unregister(agent_name, actor_id, node)
 
-    def make_window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+    def make_window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> StreamWindow:
         """Create and start a StreamWindow for an agent."""
-        window = StreamWindow(topic, seconds=seconds, max_size=max_size)
+        window = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
         window.start(self._mqtt_broker, self._mqtt_port)
         return window
 

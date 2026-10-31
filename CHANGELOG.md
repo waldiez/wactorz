@@ -252,6 +252,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Replies that overlap on one dashboard stay with the agent that gave them.** While one agent was
+  still answering, a message to another took over the first one's reply: the rest of it showed
+  under the second agent, and it was stored in that agent's history, mixed into its answer. A turn
+  the dashboard gave up on after a minute of silence was enough to cause it. Each turn now keeps its
+  own reply. History stored before this is not repaired.
 - **The dashboard no longer waits forever on a server that has stopped answering.** Every request
   has a timeout now: most give up after 15 seconds, a reset after two minutes and an upload after
   five. A change that timed out is shown as unconfirmed, not failed, since the server may be

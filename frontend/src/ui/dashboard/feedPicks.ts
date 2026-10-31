@@ -11,7 +11,7 @@
  * message a person sends, and it follows the work done to answer it.
  */
 import { button } from "../dom";
-import type { FeedFilters } from "./feedView";
+import type { FeedFilters } from "./feedEntries";
 
 /** An agent's name as a button that narrows the feed to that agent. */
 export function agentPicker(name: string, cls: string): HTMLButtonElement {

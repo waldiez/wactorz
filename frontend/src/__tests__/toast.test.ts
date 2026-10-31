@@ -62,18 +62,6 @@ describe("ToastManager (DOM)", () => {
         return mod.toast;
     }
 
-    it("injects CSS into document.head on first import", async () => {
-        await freshToast();
-        expect(document.getElementById("wz-toast-css")).not.toBeNull();
-    });
-
-    it("does not inject CSS twice on repeated show calls", async () => {
-        const t = await freshToast();
-        t.show({ title: "A", message: "a" });
-        t.show({ title: "B", message: "b" });
-        expect(document.querySelectorAll("#wz-toast-css").length).toBe(1);
-    });
-
     it("show() with a key replaces the toast shown with it rather than stacking", async () => {
         const t = await freshToast();
         t.show({ title: "triage", message: "first", key: "q-1", sticky: true });

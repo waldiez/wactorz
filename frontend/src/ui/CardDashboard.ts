@@ -18,9 +18,10 @@
  * their own.
  */
 
+import { CardMoments, patchedCards } from "./dashboard/cardMoments";
 import { ingressBase } from "../io/api";
 import type { AgentInfo } from "../types/agent";
-import type { AgentActivity, AgentChanges, AgentStore } from "../agents/AgentStore";
+import type { AgentChanges, AgentStore } from "../agents/AgentStore";
 import { safeStorage } from "../safeStorage";
 import {
     buildHeader,
@@ -84,7 +85,8 @@ export class CardDashboard {
     private _inboxView: InboxView;
     /** Stops the inbox telling this dashboard its count. */
     private readonly _unsubscribeInbox: () => void;
-    private _removingIds = new Set<string>();
+    /** Cards leaving, and the flash of what happens to them. */
+    private _moments: CardMoments;
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
     private _metrics: MetricsController;
@@ -107,6 +109,7 @@ export class CardDashboard {
     constructor(private readonly store: AgentStore) {
         this.root = this.buildRoot();
         this._heartbeats = new Heartbeats(this.root);
+        this._moments = new CardMoments(this.root, this._heartbeats);
         this._inboxView = new InboxView(this._inbox, question => {
             const agent = store.get(question.agent_id);
             return agent ? store.label(agent) : question.agent;
@@ -145,7 +148,7 @@ export class CardDashboard {
             agents: store.agents,
             lastHb: this._heartbeats.lastSeen,
             remoteNodes: store.nodes,
-            removingIds: this._removingIds,
+            removingIds: this._moments.removing,
             label: agent => store.label(agent),
             hostStats: () => this._metrics.hostStats(),
             statData: () => ({
@@ -247,7 +250,7 @@ export class CardDashboard {
         if (visible) {
             this._drawChanges(changes);
         }
-        changes.activity.forEach(moment => this._showActivity(moment, visible));
+        changes.activity.forEach(moment => this._moments.show(moment, visible));
     }
 
     /** Let go of what is kept for an agent that left, shown or not. */
@@ -257,12 +260,12 @@ export class CardDashboard {
     }
 
     private _drawChanges(changes: AgentChanges): void {
-        changes.removed.forEach((_agent, id) => this._animateOut(id));
+        changes.removed.forEach((_agent, id) => this._moments.animateOut(id));
         const membership = changes.added.size > 0 || changes.removed.size > 0;
         if (this.view === "overview" && changes.added.size > 0) {
             this._overview.renderCards();
         }
-        this._patched(changes).forEach(agent => this._overview.patchCard(agent));
+        patchedCards(changes, this.store).forEach(agent => this._overview.patchCard(agent));
         if (this.view === "overview") {
             if (membership || changes.updated.size > 0) {
                 this._overview.renderStats();
@@ -285,57 +288,6 @@ export class CardDashboard {
                 this._chat.renderChatPaneHeader();
                 emit("af-view-changed", { ...this._routes.current(), replace: true });
             }
-        }
-    }
-
-    /**
-     * The cards to repaint: each that changed, and each that shares a name with
-     * one that came or went, whose label gains or loses its node with it.
-     */
-    private _patched(changes: AgentChanges): AgentInfo[] {
-        const names = new Set<string>();
-        changes.added.forEach(id => names.add(this.store.get(id)?.name ?? ""));
-        changes.removed.forEach(agent => names.add(agent.name));
-        const ids = new Set(changes.updated);
-        names.forEach(name => this.store.byName(name).forEach(agent => ids.add(agent.id)));
-        return [...ids].flatMap(id => this.store.get(id) ?? []);
-    }
-
-    /** Take a card off with its exit animation. */
-    private _animateOut(id: string): void {
-        const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
-        if (!card) {
-            return;
-        }
-        this._removingIds.add(id);
-        card.style.animation = "cd-exit 0.25s ease forwards";
-        setTimeout(() => {
-            card.remove();
-            this._removingIds.delete(id);
-        }, 250);
-    }
-
-    /** Show a moment on its agent's card. */
-    private _showActivity(moment: AgentActivity, visible: boolean): void {
-        if (moment.kind === "heartbeat") {
-            // Recorded either way; painted only when there is something to paint on.
-            // A card mid-removal is animating out, and repainting it fights that.
-            this._heartbeats.record(moment.id, moment.timestampMs, {
-                skip: !visible || this._removingIds.has(moment.id),
-            });
-            return;
-        }
-        const card = visible
-            ? this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(moment.id)}"]`)
-            : null;
-        if (!card) {
-            return;
-        }
-        if (moment.kind === "alert") {
-            const severe = moment.severity === "error" || moment.severity === "critical";
-            flash(card, severe ? "af-card-alert-error" : "af-card-alert-warn", 900);
-        } else {
-            flash(card, "af-card-chat-flash", 600);
         }
     }
 
@@ -627,10 +579,4 @@ export class CardDashboard {
     private _buildSettingsView(): HTMLElement {
         return this._metrics.buildSettingsView();
     }
-}
-
-/** Put `cls` on `card` for `ms`. */
-function flash(card: HTMLElement, cls: string, ms: number): void {
-    card.classList.add(cls);
-    setTimeout(() => card.classList.remove(cls), ms);
 }

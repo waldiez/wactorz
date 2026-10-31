@@ -16,7 +16,8 @@
  */
 import type { FeedItem } from "../../types/feed";
 import { AppLogFeed } from "./appLogFeed";
-import { appendFeedItemToView, buildFeedView, DEFAULT_FILTERS, feedKey, type FeedFilters } from "./feedView";
+import { DEFAULT_FILTERS, feedKey, type FeedFilters } from "./feedEntries";
+import { appendFeedItemToView, buildFeedView } from "./feedView";
 
 /**
  * Most agent events held, heartbeats aside.

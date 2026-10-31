@@ -8,7 +8,6 @@
  * host only for the shared root element, the agents (read-only), and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
-import { uid } from "../../ids";
 import type { View } from "./types";
 import { canOpenThread, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
@@ -18,19 +17,18 @@ import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "
 import { buildIobar as buildChatIobar, nameRecipient } from "./chatIobar";
 import { fetchChatHistory } from "./chatHistory";
 import { ChatLog, threadOf } from "../../chat/chatLog";
-import { TurnTracker, type PendingSend, type TurnState } from "../../chat/turnTracker";
 import { ChatInput } from "./chatInput";
 import { el } from "../dom";
-import { filedWithLastSent, planSend, senderOf, voiceThreadTarget, type SendPlan } from "./chatRouting";
+import { filedWithLastSent, senderOf, voiceThreadTarget } from "./chatRouting";
 import { ChatAnswers } from "./chatAnswers";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
 import { postOrWarn } from "./mutate";
 import { apiUrl } from "../../io/api";
-import { MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, Listeners } from "../../events";
+import { ChatSending } from "./chatSending";
 import { ChatTarget } from "./chatTarget";
 
 /** What the chat controller needs from its host (CardDashboard). */
@@ -75,19 +73,34 @@ export class DashboardChat {
     }
     /** Every message the chat holds; nothing else writes them. */
     private _log = new ChatLog();
-    /** Whether a turn is under way, and the person's messages waiting for it. */
-    private _turns = new TurnTracker({
-        deliver: send => this._wire(send),
-        changed: state => this._turnChanged(state),
+    /** Getting what the person says to the agent they address. */
+    private _sending = new ChatSending({
+        log: this._log,
+        target: () => ({ id: this.chatTarget, name: this.chatTargetName }),
+        mainId: () => this._target.mainId(),
+        agents: () => [...this.host.agents.values()],
+        focus: thread => this._focusConversation(thread),
+        showSent: (msg, switched) => this._showSentMessage(msg, switched),
+        setTarget: id => this.setTarget(id),
+        redrawThread: () => {
+            if (this.host.getView() === "chat") {
+                this.renderChatThread();
+            }
+        },
+        work: {
+            awaiting: (name, answerer, thread) => this._streamUI.awaiting(name, answerer, thread),
+            isAwaiting: () => this._streamUI.isAwaiting,
+            endWait: () => this._streamUI.endWait(),
+        },
     });
     private sidebarFilter = "";
 
     /** Stream accumulation, live bubble and commit — extracted (size + per-agent keying). */
-    private _streamUI = new ChatStreamUI({
+    private _streamUI: ChatStreamUI = new ChatStreamUI({
         isChatView: () => this.host.getView() === "chat",
         lastSentTarget: () => ({
-            ...this._lastSentTarget,
-            id: this._lastSentTarget.id || this._target.mainId(),
+            ...this._sending.lastSent,
+            id: this._sending.lastSent.id || this._target.mainId(),
         }),
         isOpenThread: id => id === this.chatTarget,
         thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
@@ -96,8 +109,6 @@ export class DashboardChat {
             this._log.add(msg);
         },
     });
-    /** Whom the person last sent to: replies the gateway stamps are filed with it. */
-    private _lastSentTarget = { name: MAIN_AGENT, id: "" };
     /**
      * Mobile master–detail: the pane is open unless the user asked for the list.
      * Derived in `_syncPaneVisibility` rather than toggled at each call site —
@@ -122,7 +133,7 @@ export class DashboardChat {
             }
         },
         redrawSidebar: () => this.renderSidebar(),
-        send: (content, attachments) => void this._send(content, attachments),
+        send: (content, attachments) => void this._sending.send(content, attachments),
     });
 
     /** What `wire` subscribed to, dropped together by `unwire`. */
@@ -188,7 +199,7 @@ export class DashboardChat {
     /** Drop all chat state (a full reset / wipe). */
     clearAll(): void {
         this._log.clear();
-        this._turns.clear();
+        this._sending.turns.clear();
         this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
@@ -507,7 +518,7 @@ export class DashboardChat {
     private _sendMessage(input: HTMLTextAreaElement): void {
         const content = input.value.trim();
         const attachments = this._pendingAttachments;
-        if ((!content && !attachments.length) || !this._send(content, attachments)) {
+        if ((!content && !attachments.length) || !this._sending.send(content, attachments)) {
             return;
         }
         if (content) {
@@ -517,115 +528,6 @@ export class DashboardChat {
         this._renderAttachTray();
         input.value = "";
         input.style.height = "auto";
-    }
-
-    /** Send `content`, with `attachments`, from the conversation open now; false when it
-     *  cannot go, which the person is told. */
-    private _send(content: string, attachments: Attachment[]): boolean {
-        // The choice, not the control. `select.value` is set programmatically on
-        // every redraw and shows a fallback when the choice is not among the
-        // options, so reading it here let drawing a dropdown decide where the
-        // message went.
-        const plan = planSend(
-            content,
-            { id: this.chatTarget, name: this.chatTargetName },
-            [...this.host.agents.values()],
-            this._target.mainId(),
-        );
-        if (plan.blocked) {
-            toast.show({ type: "alert-error", title: "Agent unavailable", message: plan.blocked });
-            return false;
-        }
-        this._deliver(plan, this.chatTarget, attachments);
-        return true;
-    }
-
-    /** Show the message; the turn tracker puts it on the wire now, or once the
-     *  turn under way or the connection lets it. */
-    private _deliver(plan: SendPlan, prevTarget: string, attachments: Attachment[]): void {
-        this._focusConversation(plan.thread);
-        const msg: ChatMessage = {
-            id: uid("user"),
-            from: "user",
-            to: plan.name,
-            threadId: plan.thread,
-            content: plan.shown,
-            timestampMs: Date.now(),
-            ...(attachments.length ? { attachments: [...attachments] } : {}),
-            ...(this._turns.sendsNow() ? {} : { queued: true }),
-        };
-        // In the thread before the request: a send that fails at once looks
-        // for its bubble to take it back.
-        this._log.add(msg);
-        this._showSentMessage(msg, prevTarget !== plan.thread);
-        this._turns.request({
-            id: msg.id,
-            content: plan.routed,
-            target: plan.thread,
-            name: plan.name,
-            answerer: plan.answerer,
-            attachments: msg.attachments?.map(a => a.id) ?? [],
-        });
-    }
-
-    /** Put `send` on the wire, now the turn tracker says so: its bubble no longer
-     *  waits, and the thread shows its agent working. */
-    private _wire(send: PendingSend): void {
-        this._address(send.name, send.target);
-        const waited = this._log.get(send.id)?.queued === true;
-        if (waited) {
-            this._log.update(send.id, ({ queued: _sent, ...rest }) => rest);
-            if (this.host.getView() === "chat") {
-                this.renderChatThread();
-            }
-        }
-        // Not for a command: it is handled before any agent sees it and answered
-        // by main, so claiming the target is working would name the wrong agent
-        // and wait for a reply that is never attributed to it.
-        if (!send.content.startsWith("/")) {
-            this._streamUI.awaiting(send.name, send.answerer, send.target);
-        }
-        emit("af-send-message", send);
-    }
-
-    /** The person now talks to `name`, the agent `id`: replies the gateway stamps
-     *  are its, here and on the socket, which hears it from here rather than
-     *  keeping its own. */
-    private _address(name: string, id: string): void {
-        this._lastSentTarget = { name, id };
-        emit("af-addressed", { agent: name });
-    }
-
-    /**
-     * The server says which agent the person's message `id` reached. A mention can
-     * reach an agent other than the thread it was typed in: the message moves to
-     * that agent's thread, and the view with it, as sending to an agent opens its
-     * conversation.
-     */
-    private _turnReached(id: string, agentId: string, name: string): void {
-        this._turns.reached(id, agentId);
-        const was = this._log.get(id);
-        if (!agentId || !was || was.threadId === agentId) {
-            return;
-        }
-        this._log.move(id, agentId, name);
-        this._address(name, agentId);
-        if (this._streamUI.isAwaiting) {
-            this._streamUI.awaiting(name, agentId, agentId);
-        }
-        if (was.threadId === this.chatTarget) {
-            this.setTarget(agentId);
-        } else if (this.host.getView() === "chat") {
-            this.renderChatThread();
-        }
-    }
-
-    /** Say what the turn is now, and stop showing an agent working once it ends. */
-    private _turnChanged(state: TurnState): void {
-        emit("af-turn", state);
-        if (state.agent === null) {
-            this._streamUI.endWait();
-        }
     }
 
     /** Put a just-sent user message on screen. Not in chat view → switch to it
@@ -681,7 +583,7 @@ export class DashboardChat {
         this._answers.wire(this._listeners);
         this._listeners.on("af-chat-message", detail => {
             const msg = detail.msg;
-            const stored = filedWithLastSent(msg, this._lastSentTarget, this._target.mainId());
+            const stored = filedWithLastSent(msg, this._sending.lastSent, this._target.mainId());
             // A frame delivered twice is one message.
             if (!this._log.add(stored)) {
                 return;
@@ -693,7 +595,7 @@ export class DashboardChat {
             const sender = senderOf(msg);
             if (sender) {
                 this._streamUI.endWait(sender);
-                this._turns.ended(sender);
+                this._sending.turns.ended(sender);
             }
             const voiceTarget = voiceThreadTarget(stored, this.chatTargetName, [
                 ...this.host.agents.values(),
@@ -701,7 +603,7 @@ export class DashboardChat {
             if (voiceTarget) {
                 // Speaking to an agent is choosing it, as typing to one is.
                 this._target.move(voiceTarget.id, "claim");
-                this._address(voiceTarget.name, voiceTarget.id);
+                this._sending.address(voiceTarget.name, voiceTarget.id);
             }
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
                 this._showSentMessage(stored, Boolean(voiceTarget));
@@ -711,7 +613,7 @@ export class DashboardChat {
         });
 
         this._listeners.on("af-turn-reached", detail =>
-            this._turnReached(detail.id, detail.agentId, detail.name),
+            this._sending.reached(detail.id, detail.agentId, detail.name),
         );
 
         this._listeners.on("af-reset-chat", detail => {
@@ -727,7 +629,7 @@ export class DashboardChat {
         this._listeners.on("af-send-failed", detail => {
             // Nothing went on the wire, so no reply is coming. The send goes back to
             // wait for the socket, and its bubble with it, not looking delivered.
-            this._turns.failed();
+            this._sending.turns.failed();
             if (
                 this._log.update(detail.id, m => ({ ...m, queued: true })) &&
                 this.host.getView() === "chat"
@@ -740,14 +642,14 @@ export class DashboardChat {
     private _wireStreamEvents(): void {
         // The socket closing means no reply is arriving for anything outstanding,
         // whichever agent it was sent to; its opening lets what waits go.
-        this._listeners.on("af-socket", detail => this._turns.connection(detail.open));
+        this._listeners.on("af-socket", detail => this._sending.turns.connection(detail.open));
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
-            this._turns.chunk(streamKey(detail.agentId, detail.from));
+            this._sending.turns.chunk(streamKey(detail.agentId, detail.from));
         });
         this._listeners.on("af-stream-end", detail => {
             this._streamUI.onEnd(detail);
-            this._turns.ended(streamKey(detail.agentId, detail.from));
+            this._sending.turns.ended(streamKey(detail.agentId, detail.from));
         });
     }
 }

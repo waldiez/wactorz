@@ -12,7 +12,8 @@
  * page has moved on.
  */
 import type { AppLogItem, FeedItem } from "../../types/feed";
-import { appendFeedItemToView, feedKey, type FeedFilters } from "./feedView";
+import { feedKey, type FeedFilters } from "./feedEntries";
+import { appendFeedItemToView } from "./feedView";
 import { fetchAppLogs, toEntry } from "../../io/appLogs";
 import { listen } from "../../events";
 

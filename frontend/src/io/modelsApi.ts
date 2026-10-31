@@ -14,6 +14,7 @@ import type {
     PastTrial,
     PointerMove,
     ShadowTrial,
+    TrialBucket,
 } from "../types/models";
 import { posting, requestJson, type Answer } from "./api";
 
@@ -80,6 +81,16 @@ export class ModelsApi {
             {},
             TRIAL_TIMEOUT_MS,
         );
+    }
+
+    /** `name`'s trial under way over time, oldest first. */
+    async trialSeries(name: string): Promise<Answer<TrialBucket[]>> {
+        const got = await requestJson<{ buckets?: TrialBucket[] }>(
+            `${this.apiBase}/api/models/${encodeURIComponent(name)}/trial/series`,
+            {},
+            TRIAL_TIMEOUT_MS,
+        );
+        return got.ok ? { ok: true, value: got.value.buckets ?? [] } : got;
     }
 
     /** How `name`'s earlier trials ended, newest first. */

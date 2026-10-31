@@ -10,14 +10,17 @@
  * Read when the model is, and when Refresh is pressed: the pairs are files on
  * the server, and reading them on a timer would be work nobody asked for.
  */
-import type { PastTrial, ShadowTrial, TrialSide } from "../../types/models";
+import type { PastTrial, ShadowTrial, TrialBucket, TrialSide } from "../../types/models";
 import { timeLabel } from "../../time";
 import { button, el, labelled, list, listItem } from "../dom";
+import { buildLineChart, SERIES_COLORS, type Point, type Series } from "../dashboard/trend";
 
 /** What the trial card shows, and what it can ask for. */
 export interface TrialHost {
     /** The trial's figures, or null until they are read (or when they could not be). */
     trial: ShadowTrial | null;
+    /** The same trial over time, for its charts. */
+    series: TrialBucket[];
     /** Why they could not be read, or "". */
     error: string;
     /** Whether a read is on its way. */
@@ -90,6 +93,52 @@ function figures(trial: ShadowTrial): HTMLElement {
     return grid;
 }
 
+/** One side's `field` over time, a stretch with no value being a gap. */
+function points(buckets: TrialBucket[], field: "score" | "ms", side: keyof TrialSide<unknown>): Point[] {
+    return buckets.map(bucket => ({ t: bucket.ts * 1000, v: bucket[`${side}_${field}`] }));
+}
+
+/** The chart of `field` for both sides, or null when neither has a value to draw. */
+function chart(
+    buckets: TrialBucket[],
+    field: "score" | "ms",
+    title: string,
+    format: (v: number) => string,
+    fromZero: boolean,
+): HTMLElement | null {
+    const lines: Series[] = [
+        { name: "active", color: SERIES_COLORS[0], points: points(buckets, field, "active") },
+        { name: "shadow", color: SERIES_COLORS[1], points: points(buckets, field, "shadow") },
+    ];
+    if (!lines.some(line => line.points.some(point => point.v !== null))) {
+        return null;
+    }
+    return buildLineChart(lines, { title, format, fromZero });
+}
+
+/** The trial over time: its scores, when outputs carry one, and its latencies. */
+function charts(buckets: TrialBucket[]): HTMLElement[] {
+    const drawn = [
+        // Scores are read for where they sit, not how far from nothing.
+        chart(buckets, "score", "Score", value => value.toFixed(2), false),
+        chart(buckets, "ms", "Latency", value => `${value.toFixed(1)} ms`, true),
+    ];
+    return drawn.filter(figure => figure !== null);
+}
+
+/** The figures and, when there is a series to draw, the charts under them. */
+function results(trial: ShadowTrial, buckets: TrialBucket[]): HTMLElement {
+    const shown = el("div");
+    shown.appendChild(figures(trial));
+    const drawn = charts(buckets);
+    if (drawn.length) {
+        const row = el("div", "af-trial-charts");
+        row.append(...drawn);
+        shown.appendChild(row);
+    }
+    return shown;
+}
+
 /** What goes under the heading: the figures, or why there are none. */
 function body(host: TrialHost): HTMLElement {
     if (host.error) {
@@ -105,7 +154,7 @@ function body(host: TrialHost): HTMLElement {
             "No pairs yet: a serving agent keeps one for each input it answers during the trial.",
         );
     }
-    return figures(host.trial);
+    return results(host.trial, host.series);
 }
 
 /** The trial under way, of `shadow` beside `active` (null when no version is served). */

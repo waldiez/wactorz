@@ -180,6 +180,43 @@ def compare(
     return summary
 
 
+def _mean(values: Sequence[float]) -> float | None:
+    return (sum(values) / len(values)) if values else None
+
+
+def _bucket(ts: float, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """What the pairs of one stretch of time show: each side's mean score and latency."""
+    bucket: dict[str, Any] = {"ts": ts, "pairs": len(rows)}
+    for side in ("active", "shadow"):
+        scores = [_score(_parsed(row.get(f"{side}_output"))) for row in rows]
+        latencies = [row.get(f"{side}_ms") for row in rows]
+        bucket[f"{side}_score"] = _mean([s for s in scores if s is not None])
+        bucket[f"{side}_ms"] = _mean(
+            [float(ms) for ms in latencies if isinstance(ms, (int, float)) and ms is not True]
+        )
+    return bucket
+
+
+def series(
+    rows: Iterable[Mapping[str, Any]], *, since: float, until: float, points: int
+) -> list[dict[str, Any]]:
+    """The pairs ``rows`` over ``[since, until)``, in ``points`` stretches of equal length.
+
+    Every stretch is there, with ``pairs`` 0 and no values where no input came,
+    so that a chart shows a gap rather than a line across it. ``ts`` is the
+    middle of its stretch.
+    """
+    if until <= since or points < 1:
+        return []
+    width = (until - since) / points
+    stretches: list[list[Mapping[str, Any]]] = [[] for _ in range(points)]
+    for row in rows:
+        at = int((float(row["ts"]) - since) / width)
+        if 0 <= at < points:
+            stretches[at].append(row)
+    return [_bucket(since + (at + 0.5) * width, kept) for at, kept in enumerate(stretches)]
+
+
 def outcome_id(name: str, shadow_version: int, since: float) -> str:
     """The id of the outcome of the trial that put ``shadow_version`` on trial at ``since``."""
     return stable_id("shadow-trial", name, shadow_version, since)

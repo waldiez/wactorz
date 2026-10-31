@@ -238,7 +238,11 @@ describe("the Models view", () => {
     });
 
     /** A server whose hvac has v8 on trial, its figures from `trial`, its ended trials from `past`. */
-    function onTrial(trial: () => Response, past: () => Response = () => Response.json({ trials: [] })) {
+    function onTrial(
+        trial: () => Response,
+        past: () => Response = () => Response.json({ trials: [] }),
+        overTime: () => Response = () => Response.json({ buckets: [] }),
+    ) {
         const reads = server();
         return vi.fn(async (url: string, init?: RequestInit) => {
             if (url.endsWith("/trial")) {
@@ -246,6 +250,9 @@ describe("the Models view", () => {
             }
             if (url.endsWith("/trials")) {
                 return past();
+            }
+            if (url.endsWith("/trial/series")) {
+                return overTime();
             }
             return reads(url, init);
         });
@@ -276,6 +283,62 @@ describe("the Models view", () => {
         expect(text).toContain("4.1 → 4.6");
         // No output carried a score, so no line says the scores were equal.
         expect(text).not.toContain("Mean score");
+    });
+
+    const bucket = (ts: number, score: number | null, ms: number | null) => ({
+        ts,
+        pairs: ms === null ? 0 : 5,
+        active_score: score,
+        shadow_score: score,
+        active_ms: ms,
+        shadow_ms: ms,
+    });
+    const noPast = () => Response.json({ trials: [] });
+
+    it("charts the score and the latency over the trial", async () => {
+        const buckets = [bucket(1_760_000_000, 2, 3), bucket(1_760_000_600, 2.5, 4)];
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                noPast,
+                () => Response.json({ buckets }),
+            ) as never,
+        );
+
+        await vi.waitFor(() => expect(trialCard().querySelectorAll("figure")).toHaveLength(2));
+        const titles = [...trialCard().querySelectorAll("figcaption")].map(t => t.textContent);
+        expect(titles).toEqual(["Score", "Latency"]);
+        expect(trialCard().textContent).toContain("shadow");
+    });
+
+    it("leaves out the score chart when no output carried one", async () => {
+        const buckets = [bucket(1_760_000_000, null, 3), bucket(1_760_000_600, null, 4)];
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                noPast,
+                () => Response.json({ buckets }),
+            ) as never,
+        );
+
+        await vi.waitFor(() => expect(trialCard().querySelectorAll("figure")).toHaveLength(1));
+        expect(trialCard().querySelector("figcaption")?.textContent).toBe("Latency");
+    });
+
+    it("shows the figures alone when the series could not be read", async () => {
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                noPast,
+                () => Response.json({ error: "nope" }, { status: 500 }),
+            ) as never,
+        );
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("91.4%"));
+        expect(trialCard().querySelector("figure")).toBeNull();
     });
 
     it("says when a trial has no pairs yet", async () => {

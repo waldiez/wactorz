@@ -162,6 +162,7 @@ export class ModelsView {
                     pastTrials: state.pastTrials,
                     trial: {
                         trial: state.trial,
+                        series: state.trialSeries,
                         error: state.trialError,
                         reading: state.trialReading,
                         refresh: () => void this.catalog.refreshTrial(),

@@ -32,6 +32,7 @@ import type {
     PastTrial,
     PointerMove,
     ShadowTrial,
+    TrialBucket,
 } from "../types/models";
 
 /** What there is to show. */
@@ -52,6 +53,8 @@ export interface CatalogState {
     trial: ShadowTrial | null;
     /** Why that could not be read, or "". */
     trialError: string;
+    /** The same trial over time, for its charts; empty when it could not be read. */
+    trialSeries: TrialBucket[];
     /** Whether it is being read. */
     trialReading: boolean;
     /** How its earlier trials ended, newest first. */
@@ -72,6 +75,7 @@ const EMPTY: CatalogState = {
     detailError: "",
     trial: null,
     trialError: "",
+    trialSeries: [],
     trialReading: false,
     pastTrials: [],
     moving: false,
@@ -86,7 +90,10 @@ export class ModelCatalog {
     private _trialReads = 0;
 
     constructor(
-        private readonly api: Pick<ModelsApi, "list" | "detail" | "moves" | "move" | "trial" | "trials">,
+        private readonly api: Pick<
+            ModelsApi,
+            "list" | "detail" | "moves" | "move" | "trial" | "trialSeries" | "trials"
+        >,
     ) {}
 
     /** The state as it stands. Replaced, never changed in place. */
@@ -119,6 +126,7 @@ export class ModelCatalog {
             detailError: "",
             trial: null,
             trialError: "",
+            trialSeries: [],
             trialReading: false,
             pastTrials: [],
         });
@@ -190,19 +198,25 @@ export class ModelCatalog {
         const read = ++this._trialReads;
         const shadow = detail?.pointers.shadow;
         if (!shadow) {
-            this._set({ trial: null, trialError: "", trialReading: false });
+            this._set({ trial: null, trialError: "", trialSeries: [], trialReading: false });
             return;
         }
         // The figures stay up through a refresh, but not under another version's heading.
         const same = this._state.trial?.shadow?.version === shadow.version;
-        this._set({ trial: same ? this._state.trial : null, trialReading: true });
-        const got = await this.api.trial(name);
+        this._set({
+            trial: same ? this._state.trial : null,
+            trialSeries: same ? this._state.trialSeries : [],
+            trialReading: true,
+        });
+        const [got, overTime] = await Promise.all([this.api.trial(name), this.api.trialSeries(name)]);
         if (read !== this._trialReads) {
             return;
         }
         this._set({
             trial: got.ok ? got.value : null,
             trialError: got.ok ? "" : got.error,
+            // The charts are a part the figures can be shown without.
+            trialSeries: overTime.ok ? overTime.value : [],
             trialReading: false,
         });
     }

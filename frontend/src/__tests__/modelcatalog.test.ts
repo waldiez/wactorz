@@ -9,7 +9,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { ModelCatalog } from "../models/ModelCatalog";
 import type { Answer } from "../io/api";
-import type { ModelDetail, ModelSummary, PastTrial, PointerMove, ShadowTrial } from "../types/models";
+import type {
+    ModelDetail,
+    ModelSummary,
+    PastTrial,
+    PointerMove,
+    ShadowTrial,
+    TrialBucket,
+} from "../types/models";
 
 const ok = <T>(value: T): Answer<T> => ({ ok: true, value });
 
@@ -40,6 +47,7 @@ function server() {
         move: vi.fn(async (): Promise<Answer<null>> => ok(null)),
         trial: vi.fn(async (name: string): Promise<Answer<ShadowTrial>> => ok(trial(name))),
         trials: vi.fn(async (): Promise<Answer<PastTrial[]>> => ok([])),
+        trialSeries: vi.fn(async (): Promise<Answer<TrialBucket[]>> => ok([])),
     };
 }
 
@@ -162,6 +170,33 @@ describe("the catalogue", () => {
 
         expect(catalog.state.trial?.pairs).toBe(8);
         expect(catalog.state.trialReading).toBe(false);
+    });
+
+    it("keeps the figures when the series could not be read", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        api.trialSeries.mockResolvedValueOnce({ ok: false, error: "slow", timedOut: true });
+        const catalog = new ModelCatalog(api);
+
+        await catalog.open("hvac");
+
+        expect(catalog.state.trial?.pairs).toBe(3);
+        expect(catalog.state.trialSeries).toEqual([]);
+        expect(catalog.state.trialError).toBe("");
+    });
+
+    it("forgets the series of a shadow cleared", async () => {
+        const api = server();
+        api.detail.mockResolvedValue(ok(onTrial("hvac")));
+        api.trialSeries.mockResolvedValue(ok([{ ts: 1 } as TrialBucket]));
+        const catalog = new ModelCatalog(api);
+        await catalog.open("hvac");
+        expect(catalog.state.trialSeries).toHaveLength(1);
+
+        api.detail.mockResolvedValue(ok(detail("hvac")));
+        await catalog.moved("hvac");
+
+        expect(catalog.state.trialSeries).toEqual([]);
     });
 
     it("says why a trial could not be read, and the model stays", async () => {

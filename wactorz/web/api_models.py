@@ -13,7 +13,8 @@ made ``by`` the dashboard:
 ``GET /api/models/{name}/trial`` is what the shadow trial shows so far, or showed
 over a window: its pairs compared, and against the labels of a source when
 ``source`` and ``positive`` say which values count; ``/trials`` the outcomes of
-the trials that ended. ``GET /api/models/{name}/moves`` is the history of those moves, newest first,
+the trials that ended; ``/trial/series`` the same pairs over time, for a chart.
+``GET /api/models/{name}/moves`` is the history of those moves, newest first,
 from the provenance graph in main's database (`wactorz.core.pointer_moves`).
 
 Each move takes an optional ``reason``. The answer is where the pointer stands
@@ -29,7 +30,7 @@ thread rather than holding the event loop.
 import asyncio
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from aiohttp import web
@@ -49,7 +50,7 @@ from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.pointer_moves import DEFAULT_LIMIT, history
 from ..core.provenance import Provenance
-from ..core.shadow_trial import compare, outcomes_of
+from ..core.shadow_trial import compare, outcomes_of, series
 from ..data.files import DataError, data_root
 from . import runtime
 
@@ -61,6 +62,10 @@ MAX_REASON_CHARS = 500
 
 #: Most moves one request for the history may ask for.
 MAX_MOVES = 1000
+
+#: How many stretches a trial's series is cut into, unless asked otherwise, and at most.
+SERIES_POINTS = 120
+MAX_SERIES_POINTS = 1000
 
 
 def _store() -> ArtifactStore:
@@ -196,14 +201,20 @@ async def moves_handler(request: web.Request) -> web.Response:
     return web.json_response({"name": name, "moves": moves})
 
 
-async def trial_handler(request: web.Request) -> web.Response:
-    """What the shadow trial of a model shows: its pairs compared over a window.
+@dataclass(frozen=True)
+class _Window:
+    """The stretch of a trial a request asks about."""
 
-    The window is the trial's, from when ``shadow`` was set to now, unless
-    ``since`` and ``until`` (Unix seconds) say otherwise; with no shadow set
-    and no window given there is no trial to show. ``source`` and ``positive``
-    (label values, comma separated) add each side's precision and recall over
-    the pairs a label of that source covers.
+    name: str
+    shadow: Pointer | None
+    since: float
+    until: float
+
+
+async def _trial_window(request: web.Request) -> _Window | web.Response:
+    """The window asked for: the trial's own, from when ``shadow`` was set to now,
+    unless ``since`` and ``until`` (Unix seconds) say otherwise; with no shadow set
+    and no window given there is no trial to show.
     """
     name = _name(request)
     if isinstance(name, web.Response):
@@ -223,8 +234,11 @@ async def trial_handler(request: web.Request) -> web.Response:
                 {"error": f"{name} has no shadow version on trial"}, status=404
             )
         since = shadow.moved_at
-    if until is None:
-        until = time.time()
+    return _Window(name, shadow, since, time.time() if until is None else until)
+
+
+async def _pairs(window: _Window) -> list[dict[str, Any]] | web.Response:
+    """The pairs kept over ``window``, or why they cannot be read."""
     try:
         from ..data import parquet  # optional dependency: the `data` extra
     except ModuleNotFoundError:
@@ -234,12 +248,27 @@ async def trial_handler(request: web.Request) -> web.Response:
     root = data_root(resolve_state_dir())
 
     def read() -> list[dict[str, Any]]:
-        return parquet.frame(root, f"shadow/{name}", since, until).to_pylist()
+        table = parquet.frame(root, f"shadow/{window.name}", window.since, window.until)
+        return table.to_pylist()
 
     try:
-        rows = await asyncio.to_thread(read)
+        return await asyncio.to_thread(read)
     except DataError as exc:
         return web.json_response({"error": str(exc)}, status=400)
+
+
+async def trial_handler(request: web.Request) -> web.Response:
+    """What the shadow trial of a model shows: its pairs compared over a window.
+
+    ``source`` and ``positive`` (label values, comma separated) add each side's
+    precision and recall over the pairs a label of that source covers.
+    """
+    window = await _trial_window(request)
+    if isinstance(window, web.Response):
+        return window
+    rows = await _pairs(window)
+    if isinstance(rows, web.Response):
+        return rows
     source = (request.query.get("source") or "").strip()
     positive = [v.strip() for v in (request.query.get("positive") or "").split(",") if v.strip()]
     intervals = None
@@ -249,17 +278,38 @@ async def trial_handler(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "persistence is not running, so no labels can be read"}, status=503
             )
-        intervals = await asyncio.to_thread(Labels(db).effective, source, since=since, until=until)
+        intervals = await asyncio.to_thread(
+            Labels(db).effective, source, since=window.since, until=window.until
+        )
     summary = compare(rows, intervals=intervals, positive=positive)
     return web.json_response(
         {
-            "name": name,
-            "shadow": None if shadow is None else asdict(shadow),
-            "since": since,
-            "until": until,
+            "name": window.name,
+            "shadow": None if window.shadow is None else asdict(window.shadow),
+            "since": window.since,
+            "until": window.until,
             "source": source or None,
             **summary,
         }
+    )
+
+
+async def trial_series_handler(request: web.Request) -> web.Response:
+    """The trial's pairs over time, in ``points`` stretches, for a chart."""
+    points = _points(request.query.get("points"))
+    if points is None:
+        return web.json_response(
+            {"error": f"'points' is a count from 1 to {MAX_SERIES_POINTS}"}, status=400
+        )
+    window = await _trial_window(request)
+    if isinstance(window, web.Response):
+        return window
+    rows = await _pairs(window)
+    if isinstance(rows, web.Response):
+        return rows
+    buckets = series(rows, since=window.since, until=window.until, points=points)
+    return web.json_response(
+        {"name": window.name, "since": window.since, "until": window.until, "buckets": buckets}
     )
 
 
@@ -285,6 +335,17 @@ def _moment(raw: str | None) -> float | bool | None:
         return float(raw)
     except ValueError:
         return False
+
+
+def _points(raw: str | None) -> int | None:
+    """``points`` as a count of stretches, the default when unsaid; None when it is not one."""
+    if raw is None or raw == "":
+        return SERIES_POINTS
+    try:
+        points = int(raw)
+    except ValueError:
+        return None
+    return points if 1 <= points <= MAX_SERIES_POINTS else None
 
 
 def _count(raw: str | None) -> int | None:

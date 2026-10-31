@@ -432,6 +432,23 @@ What the shadow trial shows: the pairs the serving agents kept, compared. By def
 
 ---
 
+### `GET /api/models/{name}/trial/series`
+
+The same pairs over time, for a chart: the window as above, cut into `points` stretches of equal length (120 unless said, at most 1000).
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector", "since": 1760000000.0, "until": 1760086400.0,
+ "buckets": [{"ts": 1760000360.0, "pairs": 72, "active_score": 2.1, "shadow_score": 2.0,
+              "active_ms": 1.2, "shadow_ms": 1.4},
+             {"ts": 1760001080.0, "pairs": 0, "active_score": null, "shadow_score": null,
+              "active_ms": null, "shadow_ms": null}]}
+```
+
+Every stretch is there, with `pairs` 0 and nulls where no input came, so a chart can show the gap. `ts` is the middle of the stretch; each value is that side's mean over it. `400` for a bad `points`, and otherwise the same answers as `.../trial`.
+
+---
+
 ### `GET /api/models/{name}/trials`
 
 The outcomes of the model's trials that ended, newest first: how each ended (`promoted` or `cleared`), the versions on either side, the window, and the comparison above as it stood then. `503` when persistence is not running.

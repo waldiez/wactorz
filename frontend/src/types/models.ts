@@ -125,6 +125,18 @@ export interface ShadowTrial extends TrialFigures {
     until: number;
 }
 
+/** One stretch of a trial, as `GET /api/models/{name}/trial/series` gives it. */
+export interface TrialBucket {
+    /** The middle of the stretch, in seconds since the epoch. */
+    ts: number;
+    /** How many inputs came in it; values are null when none did. */
+    pairs: number;
+    active_score: number | null;
+    shadow_score: number | null;
+    active_ms: number | null;
+    shadow_ms: number | null;
+}
+
 /** A trial that ended, as `GET /api/models/{name}/trials` gives it. */
 export interface PastTrial extends TrialFigures {
     id: string;

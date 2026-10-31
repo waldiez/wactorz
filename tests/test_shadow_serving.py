@@ -33,7 +33,14 @@ from wactorz.core.labels import Labels
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import WactorzDB
 from wactorz.core.provenance import OUTCOME, Provenance
-from wactorz.core.shadow_trial import CLEARED, PROMOTED, compare, outcomes_of, record_outcome
+from wactorz.core.shadow_trial import (
+    CLEARED,
+    PROMOTED,
+    compare,
+    outcomes_of,
+    record_outcome,
+    series,
+)
 from wactorz.data import data_root
 from wactorz.data.parquet import Writer, frame
 from wactorz.web import api_models, runtime
@@ -542,6 +549,27 @@ def _row(ts: float, active: Any, shadow: Any, **extra: Any) -> dict[str, Any]:
     }
 
 
+class TestTheSeries:
+    def test_a_row_at_the_end_of_the_window_is_outside_it(self) -> None:
+        kept = series([_row(10.0, 1, 1)], since=0.0, until=10.0, points=2)
+
+        assert [bucket["pairs"] for bucket in kept] == [0, 0]
+
+    def test_each_stretch_says_its_middle(self) -> None:
+        kept = series([], since=0.0, until=10.0, points=2)
+
+        assert [bucket["ts"] for bucket in kept] == [2.5, 7.5]
+
+    @pytest.mark.parametrize(("until", "points"), [(0.0, 2), (-1.0, 2), (10.0, 0)])
+    def test_an_empty_window_has_no_stretches(self, until: float, points: int) -> None:
+        assert series([], since=0.0, until=until, points=points) == []
+
+    def test_a_flag_is_not_a_latency(self) -> None:
+        (bucket,) = series([_row(1.0, 1, 1, active_ms=True)], since=0.0, until=10.0, points=1)
+
+        assert bucket["active_ms"] is None
+
+
 class TestTheComparison:
     def test_agreement_scores_and_latency(self) -> None:
         rows = [
@@ -647,6 +675,42 @@ class TestTheTrialRoutes:
         assert body["labels"]["positives"] == 3
         assert body["labels"]["active"]["recall"] == 1.0
 
+    async def test_the_series_cuts_the_trial_into_stretches_of_time(
+        self, client: Any, state: Path
+    ) -> None:
+        writer = Writer(data_root(state), "shadow/imu")
+        for offset, active, shadow, ms in (
+            (1, {"score": 1.0}, {"score": 3.0}, 2.0),
+            (2, {"score": 2.0}, {"score": 4.0}, 4.0),
+            (31, {"score": 5.0}, None, 1.0),
+        ):
+            writer.append(
+                {
+                    **_row(T0 + offset, active, shadow, active_ms=ms, shadow_ms=ms + 2),
+                    "arrived": T0 + offset,
+                    "time_source": "payload",
+                }
+            )
+        writer.flush()
+
+        answer = await client.get(
+            "/api/models/imu/trial/series",
+            params={"since": T0, "until": T0 + 40, "points": 4},
+        )
+
+        assert answer.status == 200
+        first, empty, _third, last = (await answer.json())["buckets"]
+        assert (first["pairs"], first["active_score"], first["shadow_score"]) == (2, 1.5, 3.5)
+        assert (first["active_ms"], first["shadow_ms"]) == (3.0, 5.0)
+        assert (empty["pairs"], empty["active_score"], empty["shadow_ms"]) == (0, None, None)
+        assert (last["active_score"], last["shadow_score"]) == (5.0, None)
+
+    @pytest.mark.parametrize("points", ["0", "-1", "many", "1001"])
+    async def test_the_series_refuses_a_bad_count(self, client: Any, points: str) -> None:
+        answer = await client.get("/api/models/imu/trial/series", params={"points": points})
+
+        assert answer.status == 400
+
     async def test_without_a_shadow_there_is_no_trial_unless_a_window_is_given(
         self, client: TestClient, later: float, store: ArtifactStore, state: Path
     ) -> None:
@@ -656,6 +720,7 @@ class TestTheTrialRoutes:
         store.clear("shadow", "imu", by="test")
 
         assert (await client.get("/api/models/imu/trial")).status == 404
+        assert (await client.get("/api/models/imu/trial/series")).status == 404
         body = await (
             await client.get("/api/models/imu/trial", params={"since": shadow.moved_at})
         ).json()

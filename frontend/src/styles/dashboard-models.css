@@ -312,6 +312,12 @@ tr.shadow .af-model-role,
   gap: 10px;
   margin-top: 12px;
 }
+.af-trial-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
 .af-trial-stat {
   min-width: 0;
   padding: 8px 10px;

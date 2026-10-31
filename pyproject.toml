@@ -80,7 +80,7 @@ reachy    = [
     "edge-tts; python_version >= '3.11'",
     "pillow>=13; python_version >= '3.11'",
     "webrtcvad-wheels; python_version >= '3.11'",
-    "deepgram-sdk>=3,<4; python_version >= '3.11'",
+    "deepgram-sdk>=3,<8; python_version >= '3.11'",
 ]
 
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported

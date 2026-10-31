@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { emit } from "../events";
 import type { CardDashboard } from "../ui/CardDashboard";
-import { buildAudioPopover, buildResetPopover } from "../ui/dashboard/popovers";
+import { buildAudioPopover, buildResetPopover } from "../ui/shell/popovers";
 import { agent, buildDashboard, cardOf, goTo, openDashboard, pressView, shownView } from "./dashboard";
 import { allByRole, byRole, byTestId } from "./queries";
 

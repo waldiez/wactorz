@@ -9,7 +9,7 @@ import {
     REFRESH_MS,
     type OverviewDataHost,
     type OverviewReaders,
-} from "../ui/dashboard/overviewData";
+} from "../ui/overview/overviewData";
 
 const T0 = 1_700_000_000;
 

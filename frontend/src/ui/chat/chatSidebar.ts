@@ -10,7 +10,7 @@
  * `label` names them. Selecting a row is delegated to the caller via `onSelect`.
  */
 import type { AgentInfo } from "../../types/agent";
-import { canDirectMessage, canOpenThread, stateColor } from "./agentState";
+import { canDirectMessage, canOpenThread, stateColor } from "../overview/agentState";
 import { button, el } from "../dom";
 
 /** Create a sidebar row button that selects the agent `id` on click. */

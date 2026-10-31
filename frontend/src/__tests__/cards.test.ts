@@ -10,7 +10,7 @@ import {
     buildWactorCard,
     paintCardTrend,
     type WactorCardCallbacks,
-} from "../ui/dashboard/cards";
+} from "../ui/overview/cards";
 import type { AgentInfo } from "../types/agent";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {

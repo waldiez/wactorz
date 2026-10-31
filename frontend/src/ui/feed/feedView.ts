@@ -21,9 +21,9 @@
 import type { ActivityItem, AppLogItem, FeedItem, LogLevel } from "../../types/feed";
 import { dedupeAndSortFeed, type FeedFilters } from "./feedEntries";
 import { isAppLog } from "../../types/feed";
-import { SYSTEM_AGENT_NAMES } from "./agentState";
+import { SYSTEM_AGENT_NAMES } from "../overview/agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
-import { iconMarkup, type IconName } from "./icons";
+import { iconMarkup, type IconName } from "../shell/icons";
 import { timeLabel } from "../../time";
 import { uid } from "../../ids";
 import { button, el, expanded, labelled, live, option } from "../dom";

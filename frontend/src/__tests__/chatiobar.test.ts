@@ -4,9 +4,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Listeners } from "../events";
-import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
-import type { ChatInput } from "../ui/dashboard/chatInput";
-import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
+import { buildIobar, type IobarDeps } from "../ui/chat/chatIobar";
+import type { ChatInput } from "../ui/chat/chatInput";
+import { CommandCatalog, CommandCompletion } from "../ui/chat/commandCompletion";
 import { byRole } from "./queries";
 import { emit } from "../events";
 

@@ -7,10 +7,10 @@
  * names here, so nothing passes because the two happen to be spelled alike.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ChatTarget } from "../ui/dashboard/chatTarget";
+import { ChatTarget } from "../ui/chat/chatTarget";
 import { listen } from "../events";
 import type { AgentInfo } from "../types/agent";
-import type { View } from "../ui/dashboard/types";
+import type { View } from "../ui/shell/types";
 
 function agent(name: string, id: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id, name, state: "running", protected: false, ...over };

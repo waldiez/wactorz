@@ -7,10 +7,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
-import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
+import { DashboardChat, type ChatHost } from "../ui/chat/DashboardChat";
 import { TURN_IDLE_TIMEOUT_MS } from "../chat/turnTracker";
 import { allByRole, byRole, byTestId } from "./queries";
-import { rememberedConversation } from "../ui/dashboard/viewRoutes";
+import { rememberedConversation } from "../ui/shell/viewRoutes";
 import { listen } from "../events";
 import {
     defaultChatTarget,
@@ -18,9 +18,9 @@ import {
     preferredChatTarget,
     sendBlockedReason,
     stripLeadingMention,
-} from "../ui/dashboard/chatRouting";
+} from "../ui/chat/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { View } from "../ui/dashboard/types";
+import type { View } from "../ui/shell/types";
 
 // Every chat a test wires is unwired once the test ends, whether or not the
 // test does it: one left listening hears every later test's events, holds

@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { Heartbeats } from "../ui/dashboard/heartbeats";
+import { Heartbeats } from "../ui/overview/heartbeats";
 import { QUIET_MS, STALE_MS } from "../agents/liveness";
 
 let root: HTMLElement;

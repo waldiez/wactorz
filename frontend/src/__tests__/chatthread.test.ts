@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "../ui/dashboard/chatThread";
+import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "../ui/chat/chatThread";
 import { allByRole, byRole } from "./queries";
 import type { ChatMessage, Attachment } from "../types/agent";
 

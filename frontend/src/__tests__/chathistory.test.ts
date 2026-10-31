@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchChatHistory } from "../ui/dashboard/chatHistory";
+import { fetchChatHistory } from "../ui/chat/chatHistory";
 
 describe("fetchChatHistory", () => {
     const origFetch = globalThis.fetch;

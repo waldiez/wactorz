@@ -4,7 +4,7 @@
  */
 /**
  * Reading an agent's stored chat from the server, in the shape it is stored in.
- * Turning that into a thread is `ui/dashboard/chatHistory.ts`. Each reader answers
+ * Turning that into a thread is `ui/chat/chatHistory.ts`. Each reader answers
  * null when the request failed, so "no history" and "could not ask" stay apart.
  */
 import { apiUrl, requestJson } from "./api";

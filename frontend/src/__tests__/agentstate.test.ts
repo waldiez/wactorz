@@ -11,7 +11,7 @@ import {
     sortAgents,
     relTime,
     MESSAGEABLE_PRIORITY,
-} from "../ui/dashboard/agentState";
+} from "../ui/overview/agentState";
 import type { AgentState } from "../types/agent";
 
 describe("MESSAGEABLE_PRIORITY", () => {

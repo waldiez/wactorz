@@ -8,13 +8,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { ChatInput } from "../ui/dashboard/chatInput";
-import {
-    CommandCatalog,
-    CommandCompletion,
-    MAX_SHOWN,
-    matchingForms,
-} from "../ui/dashboard/commandCompletion";
+import { ChatInput } from "../ui/chat/chatInput";
+import { CommandCatalog, CommandCompletion, MAX_SHOWN, matchingForms } from "../ui/chat/commandCompletion";
 import type { CommandForm } from "../io/commandsApi";
 import { allByRole, byRole } from "./queries";
 

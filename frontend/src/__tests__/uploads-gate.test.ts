@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { loadServerConfig, seedServerConfig } from "../config/serverConfig";
 import { UPLOADS_KEY } from "../config/keys";
-import { uploadsEnabled } from "../ui/dashboard/uploads";
+import { uploadsEnabled } from "../ui/chat/uploads";
 import { safeStorage } from "../safeStorage";
 import { byRole } from "./queries";
 import { openDashboard } from "./dashboard";

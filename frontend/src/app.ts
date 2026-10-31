@@ -38,7 +38,7 @@ import { QuestionToasts } from "./ui/questionToast";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { CardDashboard } from "./ui/CardDashboard";
-import { uploadsEnabled } from "./ui/dashboard/uploads";
+import { uploadsEnabled } from "./ui/chat/uploads";
 import type { ChatMessage } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import type { TTSConfig } from "./ext/tts";

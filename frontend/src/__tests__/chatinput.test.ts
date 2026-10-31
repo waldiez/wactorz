@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ChatInput, type ChatInputHost } from "../ui/dashboard/chatInput";
+import { ChatInput, type ChatInputHost } from "../ui/chat/chatInput";
 
 interface Harness {
     ci: ChatInput;

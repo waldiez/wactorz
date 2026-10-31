@@ -9,7 +9,7 @@
  */
 import type { ChatInput } from "./chatInput";
 import { toast } from "../ToastManager";
-import { iconMarkup } from "./icons";
+import { iconMarkup } from "../shell/icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, type Listeners } from "../../events";
 import { ingressBase } from "../../io/api";

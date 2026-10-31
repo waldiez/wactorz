@@ -10,9 +10,9 @@
 import type { ChatMessage, Attachment } from "../../types/agent";
 import { renderMarkdown } from "../markdown";
 import { isImage, humanSize } from "./uploads";
-import { iconMarkup } from "./icons";
+import { iconMarkup } from "../shell/icons";
 import { MAIN_AGENT } from "../../agents/naming";
-import { openLightbox } from "./lightbox";
+import { openLightbox } from "../shell/lightbox";
 import { timeLabel } from "../../time";
 import { button, clickable, el, externalLink, pressed, testId } from "../dom";
 import { emit } from "../../events";

@@ -13,7 +13,7 @@
 import type { PastTrial, ShadowTrial, TrialBucket, TrialSide } from "../../types/models";
 import { timeLabel } from "../../time";
 import { button, el, labelled, list, listItem } from "../dom";
-import { buildLineChart, SERIES_COLORS, type Point, type Series } from "../dashboard/trend";
+import { buildLineChart, SERIES_COLORS, type Point, type Series } from "../overview/trend";
 
 /** What the trial card shows, and what it can ask for. */
 export interface TrialHost {

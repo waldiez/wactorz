@@ -7,7 +7,7 @@
  * id. Ids differ from names here, so nothing passes because the two coincide.
  */
 import { describe, it, expect } from "vitest";
-import { filedWithLastSent, planSend, readdressed, senderOf } from "../ui/dashboard/chatRouting";
+import { filedWithLastSent, planSend, readdressed, senderOf } from "../ui/chat/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 
 function agent(name: string, id: string, over: Partial<AgentInfo> = {}): AgentInfo {

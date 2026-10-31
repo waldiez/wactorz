@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
-import { ChatStreamUI, type StreamHost } from "../ui/dashboard/chatStreaming";
+import { ChatStreamUI, type StreamHost } from "../ui/chat/chatStreaming";
 import { chunk, end } from "./streamFeed";
 
 interface Host extends StreamHost {

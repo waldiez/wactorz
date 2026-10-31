@@ -9,7 +9,7 @@
  * about who the conversation is with belongs to `DashboardChat`.
  */
 import type { AgentInfo } from "../../types/agent";
-import { stateColor, stateLabel } from "./agentState";
+import { stateColor, stateLabel } from "../overview/agentState";
 import { button, el, live, named, testId } from "../dom";
 
 /** The sidebar shell: a filter box above the (separately rendered) agent list. */

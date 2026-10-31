@@ -37,7 +37,8 @@ frontend/
 │   │                      #   (topic→typed-event decoder), IOManager,
 │   │                      #   AmbientManager, logger; api.ts, the one caller of
 │   │                      #   fetch, and the *Api readers built on it
-│   ├── ui/                # HTML/CSS card components (no framework); ui/dashboard/ is the dashboard;
+│   ├── ui/                # HTML/CSS card components (no framework); ui/chat/, overview/, feed/,
+│   │                      #   models/, inbox/ are its views and ui/shell/ what surrounds them;
 │   │                      #   dom.ts builds elements and their ARIA, testIds.ts lists the test ids
 │   ├── styles/            # Global CSS (base, cards, chat, dashboard, …); app.css is the entry
 │   ├── vendor/            # Third-party code kept in the tree (hlcWid)
@@ -173,7 +174,7 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
    `config/serverConfig.ts`; register your extension's fields from the barrel via
    `registerConfigEntry()` at module load
 5. **Registers custom icons** via `registerIcon(name, svgPaths)` from
-   `ui/dashboard/icons.ts` before asking for its view with `af-register-view` — core never needs to
+   `ui/shell/icons.ts` before asking for its view with `af-register-view` — core never needs to
    know your icon names
 6. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
 

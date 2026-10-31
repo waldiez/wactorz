@@ -15,7 +15,7 @@ import type { ModelAction, ModelDetail, ModelVersion, PastTrial, PointerMove } f
 import { POINTER_NAMES } from "../../types/models";
 import { modelOffers, roleOf, versionOffer, type Offer, type VersionRole } from "../../models/pointers";
 import { button, el, labelled, list, listItem } from "../dom";
-import { humanSize } from "../dashboard/uploads";
+import { humanSize } from "../chat/uploads";
 import { timeLabel } from "../../time";
 import { pastTrials, trialCard, type TrialHost } from "./modelTrial";
 

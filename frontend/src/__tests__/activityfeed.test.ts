@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActivityFeed, MAX_HEARTBEATS, MAX_ITEMS } from "../ui/dashboard/activityFeed";
+import { ActivityFeed, MAX_HEARTBEATS, MAX_ITEMS } from "../ui/feed/activityFeed";
 import type { FeedItem } from "../types/feed";
 
 /** How long a test that builds a large DOM on purpose may take. Generous: it only bounds a failure. */

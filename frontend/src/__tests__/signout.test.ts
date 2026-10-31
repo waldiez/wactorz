@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { SIGN_OUT_KEY } from "../config/keys";
-import { buildSignOutButton, canSignOut, setSignOutVisible, signOut } from "../ui/dashboard/signOut";
+import { buildSignOutButton, canSignOut, setSignOutVisible, signOut } from "../ui/shell/signOut";
 import { safeStorage } from "../safeStorage";
 
 beforeEach(() => {

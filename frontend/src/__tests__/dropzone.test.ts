@@ -7,14 +7,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock the network upload and the toast surface; keep isAccepted/humanSize/
 // MAX_BYTES real so partition/validation logic is exercised for real.
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
-vi.mock("../ui/dashboard/uploads", async importOriginal => {
-    const actual = await importOriginal<typeof import("../ui/dashboard/uploads")>();
+vi.mock("../ui/chat/uploads", async importOriginal => {
+    const actual = await importOriginal<typeof import("../ui/chat/uploads")>();
     return { ...actual, uploadFile: vi.fn() };
 });
 
 import { DropZone } from "../ui/DropZone";
 import { toast } from "../ui/ToastManager";
-import { uploadFile, MAX_BYTES } from "../ui/dashboard/uploads";
+import { uploadFile, MAX_BYTES } from "../ui/chat/uploads";
 
 function file(name: string, type: string, size?: number): File {
     const f = new File(["x"], name, { type });

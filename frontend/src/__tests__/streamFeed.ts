@@ -7,7 +7,7 @@
  * so far, and its end with all of it. The UI keeps what it is told rather than
  * putting the reply together itself, so a test that sends pieces says so here.
  */
-import type { ChatStreamUI } from "../ui/dashboard/chatStreaming";
+import type { ChatStreamUI } from "../ui/chat/chatStreaming";
 import { streamKey } from "../io/agentStreams";
 
 const soFar = new WeakMap<ChatStreamUI, Map<string, string>>();

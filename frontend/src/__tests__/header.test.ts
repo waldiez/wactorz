@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Isolate the header from the audio/reset popovers (and their singletons).
-vi.mock("../ui/dashboard/popovers", () => ({
+vi.mock("../ui/shell/popovers", () => ({
     buildAudioPopover: () => document.createElement("div"),
     buildResetPopover: () => document.createElement("div"),
 }));
@@ -17,7 +17,7 @@ import {
     resolveHaNavUrl,
     releaseHeaderPopovers,
     releaseBottomNav,
-} from "../ui/dashboard/header";
+} from "../ui/shell/header";
 import { safeStorage } from "../safeStorage";
 
 describe("buildHeader", () => {

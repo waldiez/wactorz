@@ -8,7 +8,7 @@
  * changes it (see `DashboardChat.setTarget`, the sole owner of that).
  */
 import type { AgentInfo } from "../../types/agent";
-import { canDirectMessage, MESSAGEABLE_PRIORITY } from "./agentState";
+import { canDirectMessage, MESSAGEABLE_PRIORITY } from "../overview/agentState";
 import { option } from "../dom";
 
 /** Pinned agents in their fixed order, then everyone else alphabetically. */

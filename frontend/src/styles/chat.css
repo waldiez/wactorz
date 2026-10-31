@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /* Dashboard chat styles: message thread, sidebar/agent list, markdown bubbles,
-   attachments and the image lightbox. Rendered by ui/dashboard/DashboardChat. */
+   attachments and the image lightbox. Rendered by ui/chat/DashboardChat. */
 
 /* ── Message attachments (history previews) ─────────────────────────── */
 .af-chat-attachments {

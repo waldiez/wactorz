@@ -18,7 +18,7 @@
  * their own.
  */
 
-import { CardMoments, patchedCards } from "./dashboard/cardMoments";
+import { CardMoments, patchedCards } from "./overview/cardMoments";
 import { ingressBase } from "../io/api";
 import type { AgentInfo } from "../types/agent";
 import type { AgentChanges, AgentStore } from "../agents/AgentStore";
@@ -31,26 +31,26 @@ import {
     releaseBottomNav,
     renderConnBadge,
     renderInboxCount,
-} from "./dashboard/header";
-import { setSignOutVisible } from "./dashboard/signOut";
-import { setAttachVisible } from "./dashboard/chatIobar";
-import { stateLabel, sortAgents } from "./dashboard/agentState";
+} from "./shell/header";
+import { setSignOutVisible } from "./shell/signOut";
+import { setAttachVisible } from "./chat/chatIobar";
+import { stateLabel, sortAgents } from "./overview/agentState";
 import type { ConnState } from "../types/ws";
-import type { View } from "./dashboard/types";
-import { IconName } from "./dashboard/icons";
-import { ActivityFeed } from "./dashboard/activityFeed";
-import { Heartbeats } from "./dashboard/heartbeats";
-import { DashboardChat } from "./dashboard/DashboardChat";
-import { OverviewView } from "./dashboard/overview";
-import { OverviewData } from "./dashboard/overviewData";
-import { TrendPanel } from "./dashboard/trendPanel";
-import type { AgentAction } from "./dashboard/cards";
+import type { View } from "./shell/types";
+import { IconName } from "./shell/icons";
+import { ActivityFeed } from "./feed/activityFeed";
+import { Heartbeats } from "./overview/heartbeats";
+import { DashboardChat } from "./chat/DashboardChat";
+import { OverviewView } from "./overview/overview";
+import { OverviewData } from "./overview/overviewData";
+import { TrendPanel } from "./overview/trendPanel";
+import type { AgentAction } from "./overview/cards";
 import { el, testId } from "./dom";
-import { MetricsController } from "./dashboard/metrics";
-import { confirmDialog } from "./dashboard/confirmDialog";
+import { MetricsController } from "./overview/metrics";
+import { confirmDialog } from "./shell/confirmDialog";
 import { emit, Listeners } from "../events";
 import { initialRoute } from "../router";
-import { ViewRoutes } from "./dashboard/viewRoutes";
+import { ViewRoutes } from "./shell/viewRoutes";
 import { ModelsView } from "./models/ModelsView";
 import { ModelCatalog } from "../models/ModelCatalog";
 import { ModelsApi } from "../io/modelsApi";

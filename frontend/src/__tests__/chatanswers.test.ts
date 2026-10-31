@@ -7,7 +7,7 @@
  * message that used the name goes again to the address picked.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ChatAnswers } from "../ui/dashboard/chatAnswers";
+import { ChatAnswers } from "../ui/chat/chatAnswers";
 import { ChatLog } from "../chat/chatLog";
 import { emit, Listeners } from "../events";
 import type { ChatMessage } from "../types/agent";

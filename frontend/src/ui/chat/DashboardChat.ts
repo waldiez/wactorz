@@ -8,8 +8,8 @@
  * host only for the shared root element, the agents (read-only), and view switching.
  */
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
-import type { View } from "./types";
-import { canOpenThread, messageableNames } from "./agentState";
+import type { View } from "../shell/types";
+import { canOpenThread, messageableNames } from "../overview/agentState";
 import { renderChatSidebar } from "./chatSidebar";
 import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
@@ -23,7 +23,7 @@ import { filedWithLastSent, senderOf, voiceThreadTarget } from "./chatRouting";
 import { ChatAnswers } from "./chatAnswers";
 import { ChatStreamUI } from "./chatStreaming";
 import { streamKey } from "../../io/agentStreams";
-import { postOrWarn } from "./mutate";
+import { postOrWarn } from "../shell/mutate";
 import { apiUrl } from "../../io/api";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";

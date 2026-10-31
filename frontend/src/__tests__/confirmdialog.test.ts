@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { confirmDialog, confirmWithReason, MAX_REASON_CHARS } from "../ui/dashboard/confirmDialog";
+import { confirmDialog, confirmWithReason, MAX_REASON_CHARS } from "../ui/shell/confirmDialog";
 
 const opts = { title: "Delete agent?", message: "Are you sure?", confirmLabel: "Delete" };
 

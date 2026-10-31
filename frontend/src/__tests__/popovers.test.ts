@@ -24,8 +24,8 @@ vi.mock("../io/AmbientManager", () => ({
 }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
-import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/dashboard/popovers";
-import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
+import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/shell/popovers";
+import { buildHeader, releaseHeaderPopovers } from "../ui/shell/header";
 import { tts } from "../ext/tts";
 import { provideVoiceControls } from "../io/voiceControls";
 import { ambient } from "../io/AmbientManager";

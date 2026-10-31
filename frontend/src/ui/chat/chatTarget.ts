@@ -17,8 +17,8 @@
 import type { AgentInfo } from "../../types/agent";
 import { MAIN_AGENT } from "../../agents/naming";
 import { labelAmong, resolveAmong } from "../../agents/addresses";
-import type { View } from "./types";
-import { rememberConversation, rememberedConversation } from "./viewRoutes";
+import type { View } from "../shell/types";
+import { rememberConversation, rememberedConversation } from "../shell/viewRoutes";
 import { replacementTarget, settlingTarget } from "./chatRouting";
 
 /** How a target was arrived at; see `ChatTarget.move`. */

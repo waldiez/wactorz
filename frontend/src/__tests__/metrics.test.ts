@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
-import { MetricsController, type MetricsHost } from "../ui/dashboard/metrics";
-import type { View } from "../ui/dashboard/types";
+import { MetricsController, type MetricsHost } from "../ui/overview/metrics";
+import type { View } from "../ui/shell/types";
 
 function hostBarMarkup(): HTMLElement {
     const root = document.createElement("div");

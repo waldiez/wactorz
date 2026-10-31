@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { ChatStreamUI, type StreamHost } from "../ui/dashboard/chatStreaming";
+import { ChatStreamUI, type StreamHost } from "../ui/chat/chatStreaming";
 import { chunk, end } from "./streamFeed";
 
 function makeHost(thread: HTMLElement, inChatView = true, openThread = "weather"): StreamHost {

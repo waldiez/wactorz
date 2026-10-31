@@ -355,7 +355,7 @@
   min-height: 0;
 }
 
-/* ── Confirmation dialog (see ui/dashboard/confirmDialog.ts) ────────── */
+/* ── Confirmation dialog (see ui/shell/confirmDialog.ts) ────────── */
 .af-confirm-backdrop {
   position: fixed;
   inset: 0;

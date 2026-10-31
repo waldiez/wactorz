@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Force uploads ON for this file so the paste and attach paths (dead until the
 // server has said it takes uploads) are exercised. The gate itself is covered in
 // uploads-gate.test.ts.
-vi.mock("../ui/dashboard/uploads", () => ({
+vi.mock("../ui/chat/uploads", () => ({
     uploadsEnabled: () => true,
     uploadFile: vi.fn(async () => ({ id: "att-1" })),
     ACCEPTED_MIME: ["image/"],
@@ -16,10 +16,10 @@ vi.mock("../ui/dashboard/uploads", () => ({
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { Listeners } from "../events";
-import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
-import type { ChatInput } from "../ui/dashboard/chatInput";
-import { CommandCatalog, CommandCompletion } from "../ui/dashboard/commandCompletion";
-import { uploadFile } from "../ui/dashboard/uploads";
+import { buildIobar, type IobarDeps } from "../ui/chat/chatIobar";
+import type { ChatInput } from "../ui/chat/chatInput";
+import { CommandCatalog, CommandCompletion } from "../ui/chat/commandCompletion";
+import { uploadFile } from "../ui/chat/uploads";
 
 function makeDeps(): IobarDeps {
     return {

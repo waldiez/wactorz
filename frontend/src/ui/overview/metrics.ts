@@ -9,10 +9,10 @@
  */
 import { apiUrl } from "../../io/api";
 import { readCostLimit, type CostLimitInfo } from "../../io/costApi";
-import { buildSettingsView } from "./settings";
-import { postOrWarn } from "./mutate";
+import { buildSettingsView } from "../shell/settings";
+import { postOrWarn } from "../shell/mutate";
 import { hostBarValues } from "./cards";
-import type { View } from "./types";
+import type { View } from "../shell/types";
 
 export interface MetricsHost {
     readonly root: HTMLElement;

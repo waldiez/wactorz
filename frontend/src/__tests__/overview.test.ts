@@ -3,10 +3,10 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { OverviewView, type OverviewHost } from "../ui/dashboard/overview";
+import { OverviewView, type OverviewHost } from "../ui/overview/overview";
 import type { AgentInfo, RemoteNode } from "../types/agent";
-import type { StatCardData, AgentAction } from "../ui/dashboard/cards";
-import type { TrendKind } from "../ui/dashboard/trendPanel";
+import type { StatCardData, AgentAction } from "../ui/overview/cards";
+import type { TrendKind } from "../ui/overview/trendPanel";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };

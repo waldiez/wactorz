@@ -6,7 +6,7 @@
  * The chat composer's recipient list: who it offers, and in what order.
  */
 import { describe, it, expect } from "vitest";
-import { renderTargetSelect } from "../ui/dashboard/targetSelect";
+import { renderTargetSelect } from "../ui/chat/targetSelect";
 import type { AgentInfo } from "../types/agent";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {

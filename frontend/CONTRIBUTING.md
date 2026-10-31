@@ -36,7 +36,7 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
       `src/events.ts`) — never imports from other extensions or `ui/` directly
 - [ ] Config fields (e.g. `available`, `url`) are registered from the barrel via
       `registerConfigEntry()` from `config/serverConfig.ts` and read from `safeStorage`
-- [ ] Custom icons registered via `registerIcon()` from `ui/dashboard/icons.ts`
+- [ ] Custom icons registered via `registerIcon()` from `ui/shell/icons.ts`
       before emitting `af-register-view` for the extension's view — core never imports your icons
 - [ ] Unit test in `src/__tests__/ext/<name>/` mirroring the extension layout
 - [ ] Extension docs in `backend` and `frontend` READMEs
@@ -52,7 +52,7 @@ TTS (`src/ext/tts/`) is the reference implementation. When adding one:
 - [ ] What a person acts on or reads has a role and a name (see [Finding elements](#finding-elements))
 - [ ] A new view needs nothing for its address: `src/router.ts` gives every view `#/<key>`, an
       extension's included. A view with levels of its own (`#/models/hvac/versions/7`) reads them
-      from `Route.path` in `ui/dashboard/viewRoutes.ts`, and reports where it is with `af-view-changed`
+      from `Route.path` in `ui/shell/viewRoutes.ts`, and reports where it is with `af-view-changed`
 - [ ] `bun run docs` — TypeDoc still builds
 
 ### New agent interaction (command / event)

@@ -14,7 +14,7 @@ import {
     throttleSummary,
     TrendPanel,
     type HistoryReader,
-} from "../ui/dashboard/trendPanel";
+} from "../ui/overview/trendPanel";
 
 const T0 = 1_700_000_000;
 

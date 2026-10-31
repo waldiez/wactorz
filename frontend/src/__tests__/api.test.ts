@@ -21,7 +21,7 @@ import { readCostLimit } from "../io/costApi";
 import { requestReset, RESET_TIMEOUT_MS } from "../io/resetApi";
 import { installSessionExpiry } from "../io/sessionExpiry";
 import { postUpload, UPLOAD_TIMEOUT_MS } from "../io/uploadsApi";
-import { postOrWarn } from "../ui/dashboard/mutate";
+import { postOrWarn } from "../ui/shell/mutate";
 import { toast } from "../ui/ToastManager";
 
 /** A server that never answers: the request ends only when it is aborted. */

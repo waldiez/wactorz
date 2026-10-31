@@ -3,8 +3,8 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { feedKey, dedupeAndSortFeed, DEFAULT_FILTERS, type FeedFilters } from "../ui/dashboard/feedEntries";
-import { feedItemEl, buildFeedView, appendFeedItemToView, applyFilters } from "../ui/dashboard/feedView";
+import { feedKey, dedupeAndSortFeed, DEFAULT_FILTERS, type FeedFilters } from "../ui/feed/feedEntries";
+import { feedItemEl, buildFeedView, appendFeedItemToView, applyFilters } from "../ui/feed/feedView";
 import type { FeedItem } from "../types/feed";
 
 function item(over: Partial<FeedItem>): FeedItem {

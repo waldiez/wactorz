@@ -11,7 +11,7 @@ import { AgentStore } from "../agents/AgentStore";
 import { emit } from "../events";
 import type { AgentInfo } from "../types/agent";
 import { CardDashboard } from "../ui/CardDashboard";
-import type { View } from "../ui/dashboard/types";
+import type { View } from "../ui/shell/types";
 import { allByRole, byRole } from "./queries";
 
 /** A running agent called `name`, whose id is its name unless `over` says otherwise. */

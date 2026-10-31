@@ -10,7 +10,7 @@
  */
 import type { AgentInfo, ChatMessage } from "../../types/agent";
 import { IO_GATEWAY, looksLikeAgentId, MAIN_AGENT } from "../../agents/naming";
-import { canDirectMessage, isReachable } from "./agentState";
+import { canDirectMessage, isReachable } from "../overview/agentState";
 import { resolveAmong, SEPARATOR } from "../../agents/addresses";
 import { answererOf } from "../../chat/turnTracker";
 

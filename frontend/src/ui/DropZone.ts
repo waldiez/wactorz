@@ -10,7 +10,7 @@
  * event the chat input picks up as a pending attachment chip.
  */
 import { toast } from "./ToastManager";
-import { isAccepted, humanSize, MAX_BYTES, uploadFile } from "./dashboard/uploads";
+import { isAccepted, humanSize, MAX_BYTES, uploadFile } from "./chat/uploads";
 import { emit } from "../events";
 import { el } from "./dom";
 

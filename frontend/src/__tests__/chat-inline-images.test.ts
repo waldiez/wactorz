@@ -12,8 +12,8 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { ChatStreamUI, type StreamHost } from "../ui/dashboard/chatStreaming";
-import { buildChatMessageEl } from "../ui/dashboard/chatThread";
+import { ChatStreamUI, type StreamHost } from "../ui/chat/chatStreaming";
+import { buildChatMessageEl } from "../ui/chat/chatThread";
 import type { ChatMessage } from "../types/agent";
 import { chunk } from "./streamFeed";
 

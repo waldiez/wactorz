@@ -12,7 +12,7 @@ import {
     readingParts,
     throttleText,
     type NodeCardData,
-} from "../ui/dashboard/nodeCard";
+} from "../ui/overview/nodeCard";
 
 const PI = {
     manifest_v: 1,

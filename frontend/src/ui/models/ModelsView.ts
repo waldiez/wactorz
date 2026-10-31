@@ -16,8 +16,8 @@ import type { ModelCatalog, CatalogState } from "../../models/ModelCatalog";
 import type { ModelSummary } from "../../types/models";
 import { statusOf, summaryLine, type Offer } from "../../models/pointers";
 import { formatRoute } from "../../router";
-import { confirmWithReason } from "../dashboard/confirmDialog";
-import { sayRefusal } from "../dashboard/mutate";
+import { confirmWithReason } from "../shell/confirmDialog";
+import { sayRefusal } from "../shell/mutate";
 import { el, labelled, list, named } from "../dom";
 import { buildModelDetail } from "./modelDetail";
 

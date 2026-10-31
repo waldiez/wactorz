@@ -13,7 +13,7 @@ import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
 import { ingressBase } from "../../io/api";
-import { el, iconButton, named } from "../dom";
+import { el, iconButton, labelled, named } from "../dom";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
 export function composerPlaceholder(target: string): string {
@@ -192,6 +192,7 @@ function buildAttachBtn(): { button: HTMLButtonElement; picker: HTMLInputElement
         ...ACCEPTED_EXT,
     ].join(",");
     picker.hidden = true;
+    labelled(picker, "Attach files");
     picker.addEventListener("change", () => {
         void attachFiles(Array.from(picker.files ?? []));
         // Cleared so choosing the same file twice in a row still counts as a
@@ -201,6 +202,14 @@ function buildAttachBtn(): { button: HTMLButtonElement; picker: HTMLInputElement
 
     btn.addEventListener("click", () => picker.click());
     return { button: btn, picker };
+}
+
+/** Show or hide the attach button under `root`, once /api/config lands. */
+export function setAttachVisible(root: ParentNode): void {
+    const button = root.querySelector<HTMLElement>(".af-attach-btn");
+    if (button) {
+        button.hidden = !uploadsEnabled();
+    }
 }
 
 /** Build the full chat input bar. */
@@ -217,12 +226,13 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);
     bar.append(select, inputWrap);
-    if (uploadsEnabled()) {
-        const { button, picker } = buildAttachBtn();
-        // The picker is a sibling rather than a child: interactive content
-        // nested inside a button is invalid, hidden or not.
-        bar.append(button, picker);
-    }
+    const { button, picker } = buildAttachBtn();
+    // Always built, shown as the server says: this bar is built once, before
+    // /api/config has answered, so a check here would decide with no answer, or
+    // the previous visit's. The picker is a sibling rather than a child:
+    // interactive content nested inside a button is invalid, hidden or not.
+    button.hidden = !uploadsEnabled();
+    bar.append(button, picker);
     const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);
     wireTurnState(stopBtn);

@@ -252,6 +252,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The attach button follows the server from the first visit.** A browser that had never opened
+  the dashboard got no attach button until it reloaded, which on a phone was the only way to attach
+  a file; a server that turned uploads off kept showing one.
 - **Replies that overlap on one dashboard stay with the agent that gave them.** While one agent was
   still answering, a message to another took over the first one's reply: the rest of it showed
   under the second agent, and it was stored in that agent's history, mixed into its answer. A turn

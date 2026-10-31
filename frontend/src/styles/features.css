@@ -67,6 +67,10 @@
     background 0.15s,
     color 0.15s;
 }
+/* The rule above sets `display`, which would otherwise beat the `hidden` attribute. */
+.af-attach-btn[hidden] {
+  display: none;
+}
 .af-attach-btn:hover {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;

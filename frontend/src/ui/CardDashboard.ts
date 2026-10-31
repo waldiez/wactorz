@@ -32,6 +32,7 @@ import {
     renderInboxCount,
 } from "./dashboard/header";
 import { setSignOutVisible } from "./dashboard/signOut";
+import { setAttachVisible } from "./dashboard/chatIobar";
 import { stateLabel, sortAgents } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
@@ -372,6 +373,7 @@ export class CardDashboard {
             .then(() => {
                 setHaNavUrl(this.root, this.haUrl);
                 setSignOutVisible(this.root);
+                setAttachVisible(this.root);
             })
             .catch(() => {});
     }

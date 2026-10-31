@@ -422,8 +422,13 @@ e2e-setup: install-frontend ## One-time: install Playwright, the browser the e2e
 	$(PYTHON) -m pip install -e ".[e2e]"
 	$(PYTHON) -m playwright install chromium
 
+# On disk rather than the system's temp directory, which can be a small tmpfs.
+# Overridable: a socket under here must stay short of the platform's path limit.
+E2E_TMPDIR ?= $(CURDIR)/e2e/out/tmp
+
 e2e: ## Run the end-to-end journeys (needs Docker; `make e2e-setup` once)
-	$(PYTHON) -m pytest -c e2e/pytest.ini --rootdir e2e e2e/journeys
+	@mkdir -p "$(E2E_TMPDIR)"
+	TMPDIR="$(E2E_TMPDIR)" $(PYTHON) -m pytest -c e2e/pytest.ini --rootdir e2e e2e/journeys
 
 e2e-clean: ## Delete what failed e2e runs kept (logs, traces, state)
 	@# A run that passes removes its own directory; one that fails keeps it.

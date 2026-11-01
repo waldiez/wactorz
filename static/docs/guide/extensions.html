@@ -169,8 +169,8 @@ frontend/src/
 
 <p>At startup the monitor calls <code>setup_all(app)</code>, which auto-discovers every module
 or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook, and every
-extension an installed package registers under the <code>wactorz.extensions</code> entry
-point, and wires them in. <code>collect_public_config(app)</code> gathers each extension's
+extension registered under the <code>wactorz.extensions</code> entry point by an installed
+package named in <code>WACTORZ_EXTENSIONS</code>, and wires them in. <code>collect_public_config(app)</code> gathers each extension's
 non-secret browser config and merges it into <code>/api/config</code>. Nothing in core
 references a specific extension.</p>
 <p>An extension is <strong>opt-in and self-disabling</strong>: it reads its own environment and
@@ -243,9 +243,10 @@ in place:</p>
 <code>setup_all()</code>; <code>None</code> in standalone mode). A raising factory or one returning
 <code>None</code> is skipped — never fatal.</p>
 <h3 id="from-another-package">From another package</h3>
-<p>An extension does not have to live in this repository. Any package that is
-<code>pip install</code>ed beside Wactorz can register one, free or commercial, and it is
-loaded exactly like a module under <code>wactorz/ext/</code>, after the built-ins:</p>
+<p>An extension does not have to live in this repository. Any package installed
+beside Wactorz can register one, free or commercial, and once it is named in
+<code>WACTORZ_EXTENSIONS</code> it is loaded exactly like a module under <code>wactorz/ext/</code>, after
+the built-ins:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># pyproject.toml of the other package</span>
 <span class="k">[project.entry-points.</span><span class="s2">"wactorz.extensions"</span><span class="k">]</span>
 <span class="n">mlops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wactorz_mlops.ext"</span>
@@ -258,6 +259,21 @@ extension's <code>__deps__</code> refers to. A name a built-in extension already
 refused with a log line, so a package cannot stand in for one; a package that
 fails to import, or has no <code>setup()</code>, is logged and skipped like a broken module
 under <code>wactorz/ext/</code>. Restart Wactorz after installing or removing such a package.</p>
+<h3 id="enabling-a-package">Enabling a package</h3>
+<p>Loading a package runs its code in the server, so being installed is not enough:
+an agent's own requirements install packages too. Name the ones you trust, by
+distribution name, or use <code>*</code> to load everything installed:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">WACTORZ_EXTENSIONS</span><span class="o">=</span>wactorz-mlops,wactorz-tts
+</code></pre></div>
+
+<p>The setting covers all three things a package can register: <code>wactorz.extensions</code>,
+<code>wactorz.agents</code> and <code>wactorz.pipelines</code>. An unlisted package is not imported at
+all; it is named once in the log, with the line to add, and on the Overview. The
+modules under <code>wactorz/ext/</code> always load.</p>
+<p>A node reads its own <code>WACTORZ_EXTENSIONS</code>. <code>/deploy</code> rewrites the node's <code>.env</code>, so
+set it on main as <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code>. On a node the setting decides which
+agents it can build. Under Home Assistant it is the <code>extensions</code> option, on the
+add-on and on each deploy target.</p>
 <h3 id="requirements">Requirements</h3>
 <ul>
 <li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
@@ -419,7 +435,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <h2 id="checklist">Checklist</h2>
 <ul>
 <li>[ ] Backend <code>setup()</code> registers routes under <code>/api/&lt;ext&gt;/…</code></li>
-<li>[ ] A packaged extension is named in <code>[project.entry-points."wactorz.extensions"]</code></li>
+<li>[ ] A packaged extension is named in <code>[project.entry-points."wactorz.extensions"]</code>, and its docs say to add the distribution to <code>WACTORZ_EXTENSIONS</code></li>
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
 <li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>

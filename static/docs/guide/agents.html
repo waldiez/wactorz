@@ -1187,7 +1187,7 @@ the class are read into the catalogue entry; <code>AGENT_NAME</code> names the a
 (default: the class name, <code>MyAgent</code> → <code>my-agent</code>); <code>AUTOSTART = False</code> keeps it
 in the catalogue until asked for.</p>
 <h3 id="registering-it">Registering it</h3>
-<p>Three ways in, all equivalent once the system is up:</p>
+<p>Three ways in, all equivalent once the system is up (a package's entry points load once it is named in <code>WACTORZ_EXTENSIONS</code>):</p>
 <table>
 <thead>
 <tr>
@@ -1209,8 +1209,8 @@ in the catalogue until asked for.</p>
 </tr>
 <tr>
 <td><code>[project.entry-points."wactorz.agents"]</code> in your package's <code>pyproject.toml</code></td>
-<td>the package</td>
-<td>anything <code>pip install</code>ed</td>
+<td>the package, named in <code>WACTORZ_EXTENSIONS</code></td>
+<td>an installed package</td>
 </tr>
 </tbody>
 </table>

@@ -443,6 +443,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Whether the Home Assistant agents start: <code>auto</code> starts them when <code>HA_URL</code> and <code>HA_TOKEN</code> are set, <code>on</code> and <code>off</code> decide outright</td>
 </tr>
 <tr>
+<td><code>WACTORZ_EXTENSIONS</code></td>
+<td>—</td>
+<td>Installed packages whose extensions, agents and pipelines are loaded: distribution names, comma separated, or <code>*</code> for all. Unset loads none, and each package left out is named once in the log and on the dashboard. What Wactorz ships always loads, and so do targets in <code>WACTORZ_AGENTS</code> and <code>WACTORZ_PIPELINES</code>. A node has its own list, <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code>; see <a href="../guide/extensions.html">Extensions</a></td>
+</tr>
+<tr>
 <td><code>WACTORZ_MINIMAL</code></td>
 <td><code>0</code></td>
 <td>Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as <code>wactorz --minimal</code></td>

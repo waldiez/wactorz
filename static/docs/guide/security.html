@@ -237,6 +237,9 @@ access to the machine, with the credentials attached.</p>
 social channels — Discord and Telegram use a restricted entry point that refuses
 spawning, deletion, code and automation, at the action rather than by inspecting
 the text, so it cannot be talked around.</p>
+<p>Installed packages are a second way in. A package can register extensions, agents and
+pipelines as entry points, and loading one runs its code in the server, so only those named
+in <code>WACTORZ_EXTENSIONS</code> are loaded. See <a href="../guide/extensions.html#enabling-a-package">Extensions</a>.</p>
 <p>If you need agents that cannot do this, run Wactorz in a container with only the
 credentials that deployment needs, and do not mount what it should not reach.</p>
 <hr />

@@ -167,7 +167,7 @@ text that keeps 4.5:1 on the dashboard's backgrounds, so nothing dimmer is used 
 make dev
 
 # Terminal 2 — Python backend
-make run-py
+make run
 
 # Terminal 3 — Vite HMR
 cd frontend && bun run dev

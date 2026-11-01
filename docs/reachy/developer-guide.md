@@ -115,7 +115,7 @@ The SDK is pinned (`reachy-mini==1.12.0`) in both `pyproject.toml` and
 Unit tests never call paid services or need hardware: patch `NS["_prepare_speech"]`
 (edge-tts), `reachy_stt.transcribe_wav` (recognizers) and `NS["_voice_input_problem"]`
 (the preflight) as the existing tests do. Before a pull request, run `make lint` and
-`make test`, and `uv run --no-sync ruff check` / `basedpyright` on what you touched.
+`make test`.
 
 ## Extension points beyond Reachy
 

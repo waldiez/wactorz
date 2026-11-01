@@ -1,7 +1,7 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
+		typecheck typecheck-py typecheck-frontend fmt fmt-py fmt-frontend lint lint-py lint-frontend lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
         up down logs shell mqtt-certs \
-        run run-py test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
+        run test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
         e2e e2e-setup e2e-clean \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
@@ -84,9 +84,6 @@ help: ## Show this help
 run: ## Start the Python backend via run.sh
 	./run.sh
 
-run-py: ## Explicitly start the Python backend
-	./run.sh
-
 dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 	WACTORZ_DEV_MODE=1 ./run.sh
 
@@ -136,19 +133,28 @@ build-frontend: ## Build Vite frontend and sync to installed package
 	  cp -r static/app/ "$$INST/"; \
 	fi
 
-check: ## Typecheck the frontend (fast)
+typecheck: typecheck-py typecheck-frontend ## Type-check everything (Python + frontend)
+
+typecheck-py: ## Type-check Python (basedpyright)
+	$(PYTHON) -m basedpyright
+
+typecheck-frontend: ## Type-check the frontend (fast)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
 
-fmt: ## Format TypeScript
-	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt 2>/dev/null || $(PKG_MGR) x prettier --write "src/**/*.ts"
+fmt: fmt-py fmt-frontend ## Format everything (Python + frontend)
 
-format: fmt ## Format TypeScript
+format: fmt ## Format everything (Python + frontend)
+
+fmt-frontend: ## Format the frontend (prettier)
+	cd $(FRONTEND_DIR) && $(PKG_MGR) run fmt
 
 fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the gate
 	$(PYTHON) -m ruff format wactorz tests scripts e2e examples
 	$(PYTHON) -m ruff check wactorz tests scripts e2e examples --fix
 
-lint: ## Full frontend lint (typecheck + prettier + eslint)
+lint: lint-py lint-frontend ## Lint everything (Python + frontend)
+
+lint-frontend: ## Lint the frontend (typecheck + prettier + eslint + markdownlint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
 lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff families (report only)

@@ -1,28 +1,37 @@
 """Configurable speech-to-text backends for the Reachy Mini voice interface.
 
-All optional dependencies are imported lazily. Selecting a hosted backend is
-explicit: the default is local ``faster-whisper`` and audio is never uploaded
-merely because an API key happens to exist in the environment.
+The module imports with the standard library alone. All optional dependencies,
+numpy included, are imported lazily. Reachy uses
+Deepgram by default, so voice clips are uploaded when a Deepgram API key is
+configured. Local Whisper backends remain available by explicit selection.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import math
 import os
+import sys
 import tempfile
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from wactorz.catalogue_agents.reachy_vad import VADConfig, VoiceCapture
 
 _DEFAULT_MODELS = {
+    "deepgram": "nova-3",
     "faster-whisper": "base",
     "whisper": "base",
     "openai": "gpt-4o-transcribe",
 }
 _BACKEND_ALIASES = {
+    "nova": "deepgram",
+    "nova-3": "deepgram",
     "faster_whisper": "faster-whisper",
     "fasterwhisper": "faster-whisper",
     "local": "faster-whisper",
@@ -31,6 +40,70 @@ _BACKEND_ALIASES = {
 }
 _LOCAL_MODELS: dict[tuple[str, str, str, str], Any] = {}
 _MODEL_LOCK = threading.Lock()
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
+class STTError(RuntimeError):
+    """A speech-to-text backend that cannot run here."""
+
+    @classmethod
+    def no_faster_whisper(cls) -> STTError:
+        return cls("faster-whisper is not installed; run: pip install faster-whisper")
+
+    @classmethod
+    def no_whisper(cls) -> STTError:
+        return cls("whisper is not installed; run: pip install openai-whisper")
+
+    @classmethod
+    def no_openai_key(cls) -> STTError:
+        return cls("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
+
+    @classmethod
+    def no_openai(cls) -> STTError:
+        return cls("openai is not installed; run: pip install 'wactorz[openai]'")
+
+    @classmethod
+    def no_deepgram_channel(cls) -> STTError:
+        return cls("Deepgram returned no transcription channel")
+
+    @classmethod
+    def no_deepgram_key(cls) -> STTError:
+        return cls("DEEPGRAM_API_KEY is required when REACHY_STT_BACKEND=deepgram")
+
+    @classmethod
+    def no_deepgram(cls) -> STTError:
+        return cls("deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'")
+
+    @classmethod
+    def no_streaming_key(cls) -> STTError:
+        return cls("DEEPGRAM_API_KEY is required for Deepgram streaming")
+
+    @classmethod
+    def stream_not_started(cls) -> STTError:
+        return cls("Deepgram streaming connection did not start")
+
+
+class STTInputError(ValueError):
+    """A backend name, or audio, that speech-to-text cannot take."""
+
+    @classmethod
+    def unknown_backend(cls, raw_backend: Any, choices: str) -> STTInputError:
+        return cls(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
+
+    @classmethod
+    def empty_wav(cls) -> STTInputError:
+        return cls("WAV payload is empty")
+
+    @classmethod
+    def streaming_backend(cls) -> STTInputError:
+        return cls("streaming capture requires the Deepgram backend")
 
 
 @dataclass(frozen=True)
@@ -49,6 +122,8 @@ class STTConfig:
     #: a recording made while the loudspeaker was playing, discards the speech
     #: it was meant to protect and returns an empty transcript.
     vad_filter: bool = True
+    timeout_s: float = 60.0
+    detect_language: bool = True
 
     @classmethod
     def resolve(
@@ -59,14 +134,14 @@ class STTConfig:
         payload = payload or {}
         environ = os.environ if environ is None else environ
         raw_backend = (
-            str(payload.get("stt_backend") or environ.get("REACHY_STT_BACKEND") or "faster-whisper")
+            str(payload.get("stt_backend") or environ.get("REACHY_STT_BACKEND") or "deepgram")
             .strip()
             .lower()
         )
         backend = _BACKEND_ALIASES.get(raw_backend, raw_backend)
         if backend not in _DEFAULT_MODELS:
             choices = ", ".join(sorted(_DEFAULT_MODELS))
-            raise ValueError(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
+            raise STTInputError.unknown_backend(raw_backend, choices)
         model = str(
             payload.get("stt_model") or environ.get("REACHY_STT_MODEL") or _DEFAULT_MODELS[backend]
         ).strip()
@@ -89,8 +164,26 @@ class STTConfig:
             str(payload.get("stt_hotwords") or environ.get("REACHY_STT_HOTWORDS") or "").strip()
             or None
         )
-        vad_filter = bool(payload.get("stt_vad_filter", True))
-        return cls(backend, model, language, device, compute_type, hotwords, vad_filter)
+        vad_filter = _as_bool(payload.get("stt_vad_filter"), True)
+        timeout_s = max(
+            1.0,
+            float(payload.get("stt_timeout_s") or environ.get("REACHY_STT_TIMEOUT_S") or 60.0),
+        )
+        detect_language = _as_bool(
+            payload.get("stt_detect_language", environ.get("REACHY_STT_DETECT_LANGUAGE")),
+            language is None,
+        )
+        return cls(
+            backend,
+            model,
+            language,
+            device,
+            compute_type,
+            hotwords,
+            vad_filter,
+            timeout_s,
+            detect_language,
+        )
 
 
 @dataclass(frozen=True)
@@ -104,6 +197,15 @@ class Transcription:
     no_speech_probability: float | None = None
     language: str | None = None
     language_probability: float | None = None
+
+
+@dataclass(frozen=True)
+class StreamingTurn:
+    """One locally gated microphone capture and its live Deepgram result."""
+
+    capture: VoiceCapture
+    transcription: Transcription | None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,9 +237,7 @@ class FasterWhisperBackend:
                     WhisperModel,
                 )
             except ImportError as exc:
-                raise RuntimeError(
-                    "faster-whisper is not installed; run: pip install faster-whisper"
-                ) from exc
+                raise STTError.no_faster_whisper() from exc
             key = ("faster-whisper", config.model, config.device, config.compute_type)
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
@@ -200,9 +300,7 @@ class WhisperBackend:
             try:
                 import whisper  # pyright: ignore[reportMissingImports]  # optional backend
             except ImportError as exc:
-                raise RuntimeError(
-                    "whisper is not installed; run: pip install openai-whisper"
-                ) from exc
+                raise STTError.no_whisper() from exc
             key = ("whisper", config.model, config.device, config.compute_type)
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
@@ -231,14 +329,12 @@ class OpenAIBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
+            raise STTError.no_openai_key()
         try:
             from openai import AsyncOpenAI  # pyright: ignore[reportMissingImports]  # optional
         except ImportError as exc:
-            raise RuntimeError(
-                "openai is not installed; run: pip install 'wactorz[openai]'"
-            ) from exc
-        client = AsyncOpenAI(api_key=api_key)
+            raise STTError.no_openai() from exc
+        client = AsyncOpenAI(api_key=api_key, timeout=config.timeout_s)
         file_arg = ("reachy.wav", wav_bytes, "audio/wav")
         kwargs: dict[str, Any] = {"file": file_arg, "model": config.model}
         if config.language:
@@ -247,7 +343,343 @@ class OpenAIBackend:
         return str(getattr(result, "text", "") or "").strip()
 
 
+def _deepgram_keyterms(hotwords: str | None) -> list[str] | None:
+    """Turn the shared comma-separated recognition hints into Nova-3 keyterms."""
+    if not hotwords:
+        return None
+    terms = [term.strip() for term in hotwords.split(",") if term.strip()]
+    return terms or None
+
+
+def _deepgram_stream_language(
+    config: STTConfig,
+    payload: Mapping[str, Any],
+    environ: Mapping[str, str],
+) -> str:
+    """Resolve the fixed language required by Deepgram's streaming endpoint."""
+    return str(
+        payload.get("stt_stream_language")
+        or environ.get("REACHY_STT_STREAM_LANGUAGE")
+        or config.language
+        or "multi"
+    ).strip()
+
+
+def _deepgram_result(response: Any) -> _BackendResult:
+    """Extract the first Deepgram channel without coupling callers to its SDK types."""
+    try:
+        channel = response.results.channels[0]
+        alternative = channel.alternatives[0]
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise STTError.no_deepgram_channel() from exc
+    return _BackendResult(
+        text=str(getattr(alternative, "transcript", "") or "").strip(),
+        confidence=getattr(alternative, "confidence", None),
+        language=str(getattr(channel, "detected_language", "") or "").strip() or None,
+        language_probability=getattr(channel, "language_confidence", None),
+    )
+
+
+def _transcribe_deepgram_sync(
+    wav_bytes: bytes,
+    config: STTConfig,
+    api_key: str,
+    client_cls: Any,
+    options_cls: Any,
+    httpx_module: Any,
+) -> _BackendResult:
+    """Send one bounded WAV clip through the synchronous Deepgram v3 client."""
+    options_kwargs: dict[str, Any] = {
+        "model": config.model,
+        "punctuate": True,
+        "smart_format": True,
+    }
+    if config.language:
+        options_kwargs["language"] = config.language
+    elif config.detect_language:
+        options_kwargs["detect_language"] = True
+    keyterms = _deepgram_keyterms(config.hotwords)
+    if keyterms:
+        options_kwargs["keyterm"] = keyterms
+    client = client_cls(api_key)
+    response = client.listen.prerecorded.v("1").transcribe_file(
+        {"buffer": wav_bytes, "mimetype": "audio/wav"},
+        options_cls(**options_kwargs),
+        timeout=httpx_module.Timeout(config.timeout_s, connect=min(10.0, config.timeout_s)),
+    )
+    return _deepgram_result(response)
+
+
+class DeepgramBackend:
+    """Hosted Nova transcription using the optional Deepgram SDK v3."""
+
+    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
+        api_key = os.environ.get("DEEPGRAM_API_KEY")
+        if not api_key:
+            raise STTError.no_deepgram_key()
+        try:
+            import httpx  # pyright: ignore[reportMissingImports]  # optional Deepgram dependency
+            from deepgram import (  # pyright: ignore[reportMissingImports]  # optional backend
+                DeepgramClient,
+                PrerecordedOptions,
+            )
+        except ImportError as exc:
+            raise STTError.no_deepgram() from exc
+        return await asyncio.to_thread(
+            _transcribe_deepgram_sync,
+            wav_bytes,
+            config,
+            api_key,
+            DeepgramClient,
+            PrerecordedOptions,
+            httpx,
+        )
+
+
+def capture_deepgram_turn(
+    media: Any,
+    cancel_event: threading.Event,
+    vad_config: VADConfig,
+    payload: Mapping[str, Any] | None = None,
+    on_speech_start: Callable[[], None] | None = None,
+    on_interim: Callable[[str], None] | None = None,
+) -> StreamingTurn:
+    """Stream Reachy's WebRTC PCM to Deepgram while local VAD gates the turn.
+
+    Local VAD remains the authority for speech onset, noise rejection, timeouts,
+    and cancellation. Deepgram can close a real utterance sooner through
+    ``speech_final``; if its socket fails, the completed local capture remains
+    available to the caller for prerecorded fallback.
+    """
+    # Imported here, not at the top: it needs numpy, and transcribing an upload
+    # through `transcribe_wav` must not.
+    from wactorz.catalogue_agents.reachy_vad import capture_utterance
+
+    resolved_payload = payload or {}
+    config = STTConfig.resolve(resolved_payload)
+    if config.backend != "deepgram":
+        raise STTInputError.streaming_backend()
+    api_key = os.environ.get("DEEPGRAM_API_KEY")
+    if not api_key:
+        raise STTError.no_streaming_key()
+    try:
+        from deepgram import (  # pyright: ignore[reportMissingImports]  # optional backend
+            DeepgramClient,
+            LiveOptions,
+            LiveTranscriptionEvents,
+        )
+    except ImportError as exc:
+        raise STTError.no_deepgram() from exc
+
+    samplerate = int(media.get_input_audio_samplerate() or 16000)
+    endpointing_ms = max(
+        100,
+        min(2000, int(resolved_payload.get("stt_endpointing_ms") or 500)),
+    )
+    utterance_end_ms = max(
+        1000,
+        min(5000, int(resolved_payload.get("stt_utterance_end_ms") or 1200)),
+    )
+    options_kwargs: dict[str, Any] = {
+        "model": config.model,
+        "language": _deepgram_stream_language(config, resolved_payload, os.environ),
+        "smart_format": True,
+        "punctuate": True,
+        "encoding": "linear16",
+        "sample_rate": samplerate,
+        "channels": 1,
+        "interim_results": True,
+        "utterance_end_ms": str(utterance_end_ms),
+        "vad_events": True,
+        "endpointing": endpointing_ms,
+    }
+    keyterms = _deepgram_keyterms(config.hotwords)
+    if keyterms:
+        options_kwargs["keyterm"] = keyterms
+
+    # The SDK types `v()` as a union of every listen client, REST ones included;
+    # this one is the live websocket client, whose `on`/`send`/`finish` are used.
+    connection: Any = DeepgramClient(api_key).listen.websocket.v("1")
+    endpoint = threading.Event()
+    final_result = threading.Event()
+    lock = threading.Lock()
+    chunks: list[str] = []
+    confidences: list[float] = []
+    language: str | None = None
+    language_probability: float | None = None
+    stream_error: str | None = None
+    last_interim = ""
+
+    def on_transcript(sender: Any, result: Any = None, **_kwargs: Any) -> None:
+        nonlocal language, language_probability, last_interim
+        result = sender if result is None else result
+        try:
+            channel = result.channel
+            alternative = channel.alternatives[0]
+            text = str(getattr(alternative, "transcript", "") or "").strip()
+        except (AttributeError, IndexError, TypeError):
+            return
+        if not text:
+            return
+        if bool(getattr(result, "is_final", False)):
+            with lock:
+                chunks.append(text)
+                confidence = getattr(alternative, "confidence", None)
+                if confidence is not None:
+                    confidences.append(float(confidence))
+                language = str(getattr(channel, "detected_language", "") or "").strip() or None
+                language_probability = getattr(channel, "language_confidence", None)
+            final_result.set()
+            if bool(getattr(result, "speech_final", False)):
+                endpoint.set()
+        elif on_interim is not None and text != last_interim:
+            last_interim = text
+            on_interim(text)
+
+    def on_utterance_end(_sender: Any, _event: Any = None, **_kwargs: Any) -> None:
+        with lock:
+            has_text = bool(chunks)
+        if has_text:
+            endpoint.set()
+
+    def on_error(sender: Any, error: Any = None, **_kwargs: Any) -> None:
+        nonlocal stream_error
+        error = sender if error is None else error
+        stream_error = str(error)
+
+    connection.on(LiveTranscriptionEvents.Transcript, on_transcript)
+    connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
+    connection.on(LiveTranscriptionEvents.Error, on_error)
+    if not connection.start(LiveOptions(**options_kwargs)):
+        raise STTError.stream_not_started()
+
+    def send_frame(frame: bytes) -> None:
+        nonlocal stream_error
+        if stream_error is not None:
+            return
+        try:
+            connection.send(frame)
+        except Exception as exc:
+            stream_error = str(exc)
+
+    capture = None
+    try:
+        capture = capture_utterance(
+            media,
+            cancel_event,
+            vad_config,
+            on_speech_start,
+            send_frame,
+            endpoint.is_set,
+        )
+        # Local VAD owns capture timing, so it can finish before Deepgram emits
+        # its final result. Flush pending audio and give the listener thread a
+        # short, bounded window to deliver that result before closing the socket.
+        if capture.audio.size and not final_result.is_set() and stream_error is None:
+            finalize = getattr(connection, "finalize", None)
+            if callable(finalize):
+                try:
+                    if finalize() is False:
+                        stream_error = "Deepgram streaming finalize failed"
+                except Exception as exc:
+                    stream_error = str(exc)
+            if stream_error is None:
+                final_result.wait(
+                    timeout=max(
+                        0.5,
+                        min(
+                            3.0,
+                            float(resolved_payload.get("stt_finalize_timeout_s") or 1.5),
+                        ),
+                    )
+                )
+    finally:
+        try:
+            connection.finish()
+        except Exception as exc:
+            if stream_error is None:
+                stream_error = str(exc)
+
+    with lock:
+        text = " ".join(chunks).strip()
+        confidence = sum(confidences) / len(confidences) if confidences else None
+    transcription = None
+    if text:
+        transcription = Transcription(
+            text=text,
+            backend="deepgram-streaming",
+            model=config.model,
+            confidence=confidence,
+            language=language or options_kwargs["language"],
+            language_probability=language_probability,
+        )
+    elif capture is not None and capture.audio.size and stream_error is None:
+        stream_error = "Deepgram streaming returned no final transcript"
+    if capture is None:
+        raise RuntimeError(stream_error or "Deepgram streaming capture failed")
+    return StreamingTurn(capture, transcription, stream_error)
+
+
+#: For each backend: the Python module it imports, the package that provides it,
+#: and the environment variable holding its key (None for local backends).
+_BACKEND_REQUIREMENTS: dict[str, tuple[str, str, str | None]] = {
+    "deepgram": ("deepgram", "pip install 'wactorz[reachy]'", "DEEPGRAM_API_KEY"),
+    "faster-whisper": ("faster_whisper", "pip install faster-whisper", None),
+    "whisper": ("whisper", "pip install openai-whisper", None),
+    "openai": ("openai", "pip install 'wactorz[openai]'", "OPENAI_API_KEY"),
+}
+
+
+def _module_available(name: str, find_spec: Callable[[str], Any]) -> bool:
+    """Whether a module can be imported, without importing it."""
+    if name in sys.modules:
+        return True
+    try:
+        return find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def configuration_problem(
+    payload: Mapping[str, Any] | None = None,
+    environ: Mapping[str, str] | None = None,
+    *,
+    needs_vad: bool = False,
+    find_spec: Callable[[str], Any] = importlib.util.find_spec,
+) -> str | None:
+    """Why voice input cannot work as configured, in words a user can act on.
+
+    Checked before recording rather than discovered after it: a missing key
+    otherwise surfaces only once someone has spoken, as a transcription failure,
+    and a conversation session ends after a few of those without saying why.
+    Returns None when nothing is known to be missing. It does not contact the
+    service, so a key that is set but wrong is still found at first use.
+    """
+    environ = os.environ if environ is None else environ
+    try:
+        config = STTConfig.resolve(payload, environ)
+    except ValueError as exc:
+        return f"{exc}. Set REACHY_STT_BACKEND in .env and restart Wactorz."
+    module, install, key_name = _BACKEND_REQUIREMENTS[config.backend]
+    if not _module_available(module, find_spec):
+        return f"the {config.backend} speech recognizer is not installed. Run: {install}"
+    if key_name and not environ.get(key_name):
+        hint = (
+            " Or set REACHY_STT_BACKEND=faster-whisper to keep audio on this computer."
+            if config.backend == "deepgram"
+            else ""
+        )
+        return (
+            f"voice input with {config.backend} needs an API key. Put {key_name} in "
+            f"the .env file Wactorz reads, then restart Wactorz.{hint}"
+        )
+    if needs_vad and not _module_available("webrtcvad", find_spec):
+        return "voice detection is not installed. Run: pip install webrtcvad-wheels"
+    return None
+
+
 _BACKENDS: dict[str, STTBackend] = {
+    "deepgram": DeepgramBackend(),
     "faster-whisper": FasterWhisperBackend(),
     "whisper": WhisperBackend(),
     "openai": OpenAIBackend(),
@@ -260,7 +692,7 @@ async def transcribe_wav(
 ) -> Transcription:
     """Transcribe WAV bytes with the backend selected by payload/environment."""
     if not wav_bytes:
-        raise ValueError("WAV payload is empty")
+        raise STTInputError.empty_wav()
     config = STTConfig.resolve(payload)
     result = await _BACKENDS[config.backend].transcribe(wav_bytes, config)
     if isinstance(result, _BackendResult):

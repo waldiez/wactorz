@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderAttachTray } from "../ui/dashboard/attachTray";
+import { renderAttachTray } from "../ui/chat/attachTray";
 import type { Attachment } from "../types/agent";
 
 function att(id: string, name: string, mime: string): Attachment {

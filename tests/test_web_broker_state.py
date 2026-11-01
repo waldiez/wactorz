@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import events, lifecycle, mqtt, runtime, ws
 
 
@@ -138,6 +139,68 @@ class TestTopics:
         assert runtime.state["agents"] == {}
         assert event["subtype"] == "status"
 
+    @pytest.mark.parametrize(("uptime", "back"), [(9.9, True), (10.0, False)])
+    def test_only_a_status_from_a_fresh_start_brings_a_deleted_agent_back(
+        self, uptime: float, back: bool
+    ) -> None:
+        runtime.mark_deleted("a1")
+
+        _parse("agents/a1/status", {"name": "weather", "uptime": uptime, "state": "running"})
+
+        assert ("a1" in runtime.state["agents"]) is back
+
+    def test_another_system_topic_is_relayed_and_changes_nothing(self) -> None:
+        event = _parse("system/spawn", {"name": "x"})
+
+        assert event == {"type": "system", "subtype": "spawn", "data": {"name": "x"}}
+        assert runtime.state["system_health"] == {}
+        assert runtime.state["alerts"] == []
+
+    def test_a_status_that_is_not_an_object_is_kept_as_it_came(self) -> None:
+        _parse("agents/a1/status", "starting")
+
+        agent = runtime.state["agents"]["a1"]
+        assert (agent["status"], agent["name"]) == ("starting", "a1")
+        assert runtime.state["log_feed"][0]["status"] == "starting"
+
+    def test_a_heartbeat_during_a_hard_reset_adds_no_agent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(runtime, "hard_resetting", True)
+
+        event = _parse("agents/a1/heartbeat", {"name": "weather"})
+
+        assert runtime.state["agents"] == {}
+        assert event["metric"] == "heartbeat"
+
+    def test_a_chat_frame_that_is_plain_text_is_shown_from_the_agent(self) -> None:
+        _parse("agents/a1/status", {"name": "weather"})
+
+        event = _parse("agents/a1/chat", "  It will rain.  ")
+
+        assert event["_push_chat"]["content"] == "It will rain."
+        assert event["_push_chat"]["from"] == "weather"
+        assert runtime.state["log_feed"][0]["type"] == "chat"
+
+    def test_a_chat_frame_with_nothing_to_say_is_relayed_but_not_shown(self) -> None:
+        event = _parse("agents/a1/chat", "42")
+
+        assert event == {"type": "agent", "agent_id": "a1", "metric": "chat", "data": 42}
+        assert runtime.state["log_feed"] == []
+
+    def test_a_question_keeps_its_id_options_and_channel_on_the_way_to_the_chat(self) -> None:
+        event = _parse(
+            "agents/a1/chat",
+            {"content": "Install?", "id": "q1", "options": ["yes", "no"], "channel": "telegram"},
+        )
+
+        pushed = event["_push_chat"]
+        assert (pushed["id"], pushed["options"], pushed["channel"]) == (
+            "q1",
+            ["yes", "no"],
+            "telegram",
+        )
+
 
 class _Actor:
     def __init__(
@@ -166,14 +229,21 @@ class _Registry:
 
 
 class _Main:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, kept: tuple[dict[str, Any], ...] = ()) -> None:
         self.deleted: list[str] = []
+        #: Which agent of its name each delete named: its node, "" for main.
+        self.nodes: list[str | None] = []
         self.fail = fail
+        self.kept = kept
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry({entry["actor_id"]: entry for entry in self.kept})
+
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         if self.fail:
             raise RuntimeError("spawn registry locked")
         self.deleted.append(name)
+        self.nodes.append(node)
 
 
 async def _settle() -> None:
@@ -202,6 +272,25 @@ class TestDelete:
         assert routed == "via main.delete_spawned_agent('weather')"
         assert main.deleted == ["weather"]
         assert runtime.is_deleted("a1") and runtime.state["agents"] == {}
+
+    async def test_the_agent_deleted_is_the_one_its_id_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two agents called weather: the dashboard deletes by id, and main is
+        # told which one by where its registry keeps that id.
+        main = _Main(
+            kept=(
+                {"name": "weather", "node": "", "actor_id": "here"},
+                {"name": "weather", "node": "pi", "actor_id": "a1"},
+            )
+        )
+        monkeypatch.setattr(runtime, "registry", _Registry())
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _r: main)
+        runtime.state["agents"]["a1"] = {"name": "weather"}
+
+        await lifecycle.delete_agent("a1")
+
+        assert (main.deleted, main.nodes) == (["weather"], ["pi"])
 
     async def test_a_failing_main_falls_back_to_the_local_registry(
         self, monkeypatch: pytest.MonkeyPatch

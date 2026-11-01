@@ -21,8 +21,10 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands import info, state
 from wactorz.agents.main.commands import nodes as node_cmds
+from wactorz.agents.main.commands import packages as package_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import CONFIG
 from wactorz.core import topic_bus
 from wactorz.core.actor import ActorState
@@ -94,6 +96,7 @@ class _Main:
         self.published: list[tuple[str, Any]] = []
         self.migrate_result: Any = {"success": True, "message": "moved"}
         self.delete_error: Exception | None = None
+        self.installer_result: Any = {"success": True, "output": "up 3 days", "exit_code": 0}
 
     # memory
     def persist(self, key: str, value: Any) -> None:
@@ -142,8 +145,8 @@ class _Main:
         return self.capability_list
 
     # agents
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.spawn_registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.spawn_registry)
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
@@ -159,13 +162,17 @@ class _Main:
             raise self.migrate_result
         return self.migrate_result
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         if self.delete_error:
             raise self.delete_error
         self.calls.append(("delete", name))
 
     def _record_agent_deletion(self, name: str, reason: str = "") -> None:
         self.calls.append(("record", (name, reason)))
+
+    async def delegate_to_installer(self, payload: dict[str, Any], timeout: float = 0) -> Any:
+        self.calls.append(("installer", payload))
+        return self.installer_result
 
 
 @pytest.fixture(name="main")
@@ -646,6 +653,15 @@ class TestMigrate:
 
         assert await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor rpi") == reply
 
+    async def test_an_address_names_the_agent_it_moves(self, main: _Main) -> None:
+        main.migrate_result = {"success": True, "message": "moved"}
+        main.spawn_registry = {"sensor": {"node": "pc"}}
+
+        await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor@pc rpi")
+
+        # The move takes the address: which agent of the name, it decides there.
+        assert ("migrate", ("sensor@pc", "rpi", False)) in main.calls
+
     @pytest.mark.parametrize(
         ("argument", "force"),
         [("sensor rpi", False), ("sensor rpi --force", True), ("--force sensor rpi", True)],
@@ -673,6 +689,39 @@ class TestRestart:
 
         assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
         assert "on node 'rpi'" in text
+
+    async def test_the_full_address_restarts_the_agent_on_that_node(self, main: _Main) -> None:
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+
+        await agent_cmds.restart_agent(_ctx(main), "cam@rpi")
+
+        assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
+
+    async def test_an_address_naming_another_node_acts_on_nothing(self, main: _Main) -> None:
+        # Typed for an agent on the PC, it must not restart the Pi's.
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+
+        text = await agent_cmds.restart_agent(_ctx(main), "cam@pc")
+
+        assert text == "'cam' is on 'rpi', not on 'pc'."
+        assert main.published == []
+
+    async def test_an_address_on_a_node_that_keeps_no_such_agent_acts_on_nothing(
+        self, main: _Main
+    ) -> None:
+        text = await agent_cmds.stop_agent(_ctx(main), "weather@pc")
+
+        assert text == "No agent 'weather' is kept on node 'pc'."
+        assert main.published == []
+
+    async def test_an_agent_on_main_is_named_by_any_of_mains_names(self, main: _Main) -> None:
+        running = _Agent("weather")
+        main._registry = _Registry(running)
+        main.spawn_registry = {"weather": {"type": "native", "node": ""}}
+
+        assert await agent_cmds.restart_agent(_ctx(main), "weather@local") == (
+            "Agent 'weather' restarted locally."
+        )
 
     async def test_an_unknown_local_agent_is_refused(self, main: _Main) -> None:
         text = await agent_cmds.restart_agent(_ctx(main), "ghost")
@@ -832,3 +881,133 @@ class TestListAgents:
         assert "📦 [gmail]" in text
         assert "    spawnable   : yes — @catalog spawn gmail" in text
         assert "🔴 [old]" in text
+
+
+class TestRunningACommandOnANode:
+    """`/nodes run`: the one way free text reaches a node's shell, typed by the operator."""
+
+    async def test_the_command_goes_to_the_installer_for_that_node(self, main: _Main) -> None:
+        await node_cmds.run_on_node(_ctx(main), "rpi-kitchen df -h /home")
+
+        assert main.calls == [
+            (
+                "installer",
+                {"action": "node_run", "node_name": "rpi-kitchen", "command": "df -h /home"},
+            )
+        ]
+
+    async def test_a_tab_after_the_node_separates_it_too(self, main: _Main) -> None:
+        await node_cmds.run_on_node(_ctx(main), "rpi-kitchen\tuptime")
+
+        assert main.calls == [
+            ("installer", {"action": "node_run", "node_name": "rpi-kitchen", "command": "uptime"})
+        ]
+
+    async def test_its_output_is_the_reply(self, main: _Main) -> None:
+        text = await node_cmds.run_on_node(_ctx(main), "rpi-kitchen uptime")
+
+        assert "up 3 days" in text
+
+    async def test_a_failure_says_so(self, main: _Main) -> None:
+        main.installer_result = {"success": False, "error": "No deploy target configured"}
+
+        text = await node_cmds.run_on_node(_ctx(main), "ghost uptime")
+
+        assert "No deploy target configured" in text
+
+    @pytest.mark.parametrize("argument", ["", "rpi-kitchen", "rpi-kitchen   "])
+    async def test_without_a_node_and_a_command_it_says_how(
+        self, main: _Main, argument: str
+    ) -> None:
+        text = await node_cmds.run_on_node(_ctx(main), argument)
+
+        assert text.startswith("Usage: /nodes run")
+        assert main.calls == []
+
+
+class TestThePackagesInstalledWithoutAsking:
+    """`/packages`: the operator's list, which neither the model nor an agent may change."""
+
+    async def test_allowing_names_the_packages(self, main: _Main) -> None:
+        main.installer_result = {"allowed": ["wactorz-unlisted-probe"], "refused": []}
+
+        text = await package_cmds.manage_packages(_ctx(main), "allow wactorz-unlisted-probe, other")
+
+        assert main.calls == [
+            (
+                "installer",
+                {"action": "packages_allow", "packages": ["wactorz-unlisted-probe", "other"]},
+            )
+        ]
+        assert "wactorz-unlisted-probe" in text
+
+    async def test_a_name_that_is_not_one_is_said_to_be_refused(self, main: _Main) -> None:
+        main.installer_result = {"allowed": [], "refused": ["--index-url=x"]}
+
+        text = await package_cmds.manage_packages(_ctx(main), "allow --index-url=x")
+
+        assert "Not package names: --index-url=x" in text
+
+    async def test_forgetting_takes_them_off(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": [],
+            "forgotten": ["wactorz-unlisted-probe"],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget wactorz-unlisted-probe")
+
+        assert main.calls == [
+            ("installer", {"action": "packages_forget", "packages": ["wactorz-unlisted-probe"]})
+        ]
+        assert "Forgotten: wactorz-unlisted-probe." in text
+
+    async def test_forgetting_says_what_was_taken_off_and_what_was_never_on(
+        self, main: _Main
+    ) -> None:
+        # A misspelt name forgets nothing, and saying it was forgotten would hide the typo.
+        main.installer_result = {
+            "allowed": ["wactorz-unlisted-probe"],
+            "forgotten": [],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget wactorz-ulisted-probe")
+
+        assert "Forgotten" not in text
+        assert "Not on your list: wactorz-ulisted-probe" in text
+
+    async def test_forgetting_a_built_in_one_says_it_stays(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": [],
+            "forgotten": [],
+            "refused": [],
+            "default": ["numpy"],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "forget NumPy")
+
+        assert "Still allowed, built in or named in WACTORZ_PIP_ALLOW: NumPy" in text
+
+    async def test_with_nothing_after_it_the_list_is_shown(self, main: _Main) -> None:
+        main.installer_result = {
+            "allowed": ["wactorz-unlisted-probe"],
+            "from_env": ["internal-lib"],
+            "default": ["numpy"],
+            "refused": [],
+        }
+
+        text = await package_cmds.manage_packages(_ctx(main), "")
+
+        assert main.calls == [("installer", {"action": "packages_list"})]
+        assert "wactorz-unlisted-probe" in text and "internal-lib" in text and "numpy" in text
+
+    @pytest.mark.parametrize("argument", ["allow", "forget  ", "remove wactorz-unlisted-probe"])
+    async def test_anything_else_says_how(self, main: _Main, argument: str) -> None:
+        text = await package_cmds.manage_packages(_ctx(main), argument)
+
+        assert text.startswith("Usage: /packages")
+        assert main.calls == []
+
+    def test_a_social_channel_may_not_use_it(self) -> None:
+        assert package_cmds.manage_packages.command.restricted_ok is False  # pyright: ignore[reportFunctionMemberAccess]

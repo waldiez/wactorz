@@ -4,7 +4,7 @@
 # published before the pinned base image picks it up: add the ID here with a
 # short expiry rather than leave every push red.
 vulnerabilities:
-  # Both are copies pip vendors, listed in pip/_vendor/vendor.txt, and the newest
+  # These are copies pip vendors, listed in pip/_vendor/vendor.txt, and the newest
   # pip still ships them. pip stays in the image: agents install packages at
   # runtime through it.
   - id: GHSA-6v7p-g79w-8964
@@ -13,6 +13,14 @@ vulnerabilities:
     statement: >-
       pip's vendored msgpack, used only to read pip's own HTTP cache. The flaw
       needs an Unpacker reused after a caught error, which pip does not do.
+    expired_at: 2027-03-31
+  - id: CVE-2026-114613
+    purls:
+      - pkg:pypi/msgpack@1.1.2
+    statement: >-
+      pip's vendored msgpack, which pip ships without the C extension. The leak
+      is in that extension (msgpack._cmsgpack); the pure-Python fallback pip
+      uses does not have it. pip's main branch vendors the fixed 1.2.3.
     expired_at: 2027-03-31
   - id: CVE-2025-47273
     purls:

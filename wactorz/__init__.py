@@ -3,18 +3,7 @@
 from typing import Any
 
 from ._version import __version__
-from .core.actor import DEFAULT_ASK_TIMEOUT_S, Actor, ActorState, Message, MessageType
-from .core.registry import ActorRegistry, ActorSystem
 
-__all__ = [
-    "Actor",
-    "ActorRegistry",
-    "ActorState",
-    "ActorSystem",
-    "Message",
-    "MessageType",
-    "__version__",
-]
 # Agents & LLM providers. Optional provider SDKs (anthropic/openai) are imported
 # lazily inside the providers, so every symbol below resolves on a base install.
 from .agents import (
@@ -41,10 +30,16 @@ from .agents import (
 )
 from .agents.function_agent import spec_of
 from .agents.rule_agent import RuleAction, RuleCondition, RuleConfig
-from .errors import StartupError
+from .core.actor import DEFAULT_ASK_TIMEOUT_S, Actor, ActorState, Message, MessageType
+from .core.registry import ActorRegistry, ActorSystem
+from .errors import NoSystemError, StartupError
 from .orchestration import DirectOrchestrator, MainOrchestrator, Orchestrator
 
-__all__ += [
+__all__ = [
+    "Actor",
+    "ActorRegistry",
+    "ActorState",
+    "ActorSystem",
     "AnthropicProvider",
     "CatalogAgent",
     "DirectOrchestrator",
@@ -58,6 +53,8 @@ __all__ += [
     "LLMAgent",
     "MainActor",
     "MainOrchestrator",
+    "Message",
+    "MessageType",
     "MonitorActor",
     "NIMProvider",
     "OllamaProvider",
@@ -71,6 +68,7 @@ __all__ += [
     "RuleConfig",
     "ScheduledAgent",
     "StartupError",
+    "__version__",
     "agent",
     "ask",
     "pipeline",
@@ -128,7 +126,7 @@ async def ask(target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT
     """
     running = system()
     if running is None:
-        raise RuntimeError("wactorz.ask: no system is running; start one with run() or serve()")
+        raise NoSystemError()
     return await running.registry.ask(target, payload, timeout=timeout)
 
 

@@ -198,6 +198,11 @@ export WACTORZ_RETENTION_OUTBOX_DAYS="${WACTORZ_RETENTION_OUTBOX_DAYS}"
 WACTORZ_NODE_SIGNING=$(get_config_safe 'node_signing' 'enforce')
 export WACTORZ_NODE_SIGNING="${WACTORZ_NODE_SIGNING}"
 
+# The installed packages whose extensions, agents and pipelines are loaded: their
+# distribution names, comma separated, or `*` for all.
+WACTORZ_EXTENSIONS=$(get_config_safe 'extensions' '')
+export WACTORZ_EXTENSIONS="${WACTORZ_EXTENSIONS}"
+
 # ── Remote deploy targets ─────────────────────────────────────────────────────
 # A list of objects in options.json, flattened into the DEPLOY_TARGETS +
 # DEPLOY_<NAME>_* variables wactorz/config.py reads. SSH credentials are
@@ -218,7 +223,7 @@ if [ -f "$options_file" ]; then
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password broker_tls broker_tls_port; do
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password broker_tls broker_tls_port extensions; do
                 deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" "$options_file")
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
@@ -301,6 +306,25 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     WACTORZ_NODE_ACCOUNTS=true
 fi
 export WACTORZ_NODE_ACCOUNTS
+
+# ── Sandbox node ──────────────────────────────────────────────────────────────
+# A node in this container, under a user of its own, where code the model writes
+# runs instead of beside every secret the add-on holds. Off unless asked for.
+# It needs a broker account of its own: without node accounts it would be handed
+# this add-on's, which reaches the whole broker. Named before the broker's files
+# are generated below, so its account is among them.
+SANDBOX_NODE=$(get_config_safe 'sandbox_node' 'false')
+SANDBOX_NAME=sandbox
+SANDBOX_HOME=/data/sandbox
+sandbox_on=false
+if [ "$SANDBOX_NODE" = "true" ]; then
+    if [ "$WACTORZ_NODE_ACCOUNTS" = "true" ]; then
+        sandbox_on=true
+        export WACTORZ_MODEL_CODE_NODE="$SANDBOX_NAME"
+    else
+        bashio::log.warning "sandbox_node is on, but node_accounts is off: the sandbox would get this add-on's own broker account. Turn node_accounts on (and paste its logins into the Mosquitto add-on), or use the embedded broker. Code the model writes stays in the add-on until then."
+    fi
+fi
 # What the embedded broker's access list adds for nodes, and the other accounts
 # that keep the whole broker. Empty leaves the list as generated.
 WACTORZ_NODE_TOPICS=$(get_config_safe 'node_topics' '')
@@ -325,6 +349,14 @@ say_account_warnings() {
 
 MQTT_BROKER_FILES=/tmp/mosquitto-tls
 mqtt_tls_ready=false
+# The embedded broker's account for the add-on itself, named before the access
+# list is generated below: the list gives the whole broker to the accounts it
+# names, and to clients with no account only when it names none. Named after,
+# the add-on would connect as an account the list does not know, and reach
+# nothing on its own broker once any node had an account.
+if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
+    export MQTT_USERNAME="wactorz"
+fi
 if mqtt_tls_log=$(python3 -m wactorz.broker_certificates --export "$MQTT_BROKER_FILES" 2>&1); then
     mqtt_tls_ready=true
     bashio::log.info "Broker TLS certificate ready (CA: ${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt)."
@@ -401,6 +433,12 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
         # say why. Back to the shared account until a start generates them.
         WACTORZ_NODE_ACCOUNTS=false
         export WACTORZ_NODE_ACCOUNTS
+        # The sandbox's account was among those, so it cannot connect either.
+        if [ "$sandbox_on" = true ]; then
+            sandbox_on=false
+            unset WACTORZ_MODEL_CODE_NODE
+            bashio::log.warning "No node accounts were generated, so the sandbox node is not started; code the model writes stays in the add-on."
+        fi
         # Worth saying only where there is a node to deploy: with none
         # configured there was nothing to generate, and nothing went wrong.
         if [ -n "$DEPLOY_TARGETS" ]; then
@@ -563,20 +601,81 @@ if [ "$(id -u)" = "0" ] && id wactorz > /dev/null 2>&1; then
     fi
 
     # The add-on's data becomes this user's, where it is not already: an install
-    # that ran as root left it root's. Three things stay as they are. The options
+    # that ran as root left it root's. Four things stay as they are. The options
     # and the generated API key hold secrets the app is handed through its
     # environment and has no reason to read back; the broker's directory belongs
-    # to the broker's own user.
+    # to the broker's own user, and the sandbox node's to the sandbox's.
     chown wactorz:wactorz /data 2> /dev/null || true
     for entry in /data/* /data/.[!.]*; do
         case "$entry" in
-            /data/options.json | /data/api_key | /data/mosquitto) continue ;;
+            /data/options.json | /data/api_key | /data/mosquitto | "$SANDBOX_HOME") continue ;;
         esac
         if [ -e "$entry" ]; then
             find "$entry" \( ! -user wactorz -o ! -group wactorz \) -exec chown -h wactorz:wactorz {} + 2> /dev/null \
                 || bashio::log.warning "Could not hand ${entry} to the wactorz user."
         fi
     done
+fi
+
+# ── Start the sandbox node ────────────────────────────────────────────────────
+# Under a user of its own, with nothing of the add-on's: its settings are what
+# /deploy writes any node, its environment holds those alone, and the add-on's
+# data is closed to it. Restarted when it stops, as a unit would.
+start_sandbox() {
+    install -d -m 0700 -o wactorz-sandbox -g wactorz-sandbox "$SANDBOX_HOME" "$SANDBOX_HOME/home"
+
+    # /data stays traversable, so the sandbox reaches its own directory, and
+    # everything else in it becomes its owner's alone. Each entry's owner keeps
+    # what it had: the broker its directory, the add-on its state.
+    chmod 0711 /data
+    for entry in /data/* /data/.[!.]*; do
+        if [ -e "$entry" ] && [ "$entry" != "$SANDBOX_HOME" ]; then
+            chmod go-rwx "$entry" 2> /dev/null \
+                || bashio::log.warning "Could not close ${entry} to the sandbox node."
+        fi
+    done
+
+    # Written by the add-on's own user, which holds what they are made from, and
+    # then handed over.
+    install -d -m 0700 -o wactorz -g wactorz /run/wactorz-sandbox
+    if ! s6-setuidgid wactorz python3 -m wactorz.node.compose_env \
+            --out /run/wactorz-sandbox --broker "$MQTT_HOST"; then
+        bashio::log.warning "Could not write the sandbox node's settings; it is not started, and code the model writes cannot be placed until it is."
+        return
+    fi
+    chown -R wactorz-sandbox:wactorz-sandbox /run/wactorz-sandbox
+
+    # Restarted after 5 seconds, doubling to a minute while it keeps stopping,
+    # and back to 5 once it has run for a minute: a node that cannot start
+    # does not fill the log, and one that stops now and then comes back fast.
+    (
+        delay=5
+        while true; do
+            started=$(date +%s)
+            env -i PATH="$PATH" HOME="$SANDBOX_HOME/home" \
+                PYTHONUSERBASE="$SANDBOX_HOME/.python" PIP_CACHE_DIR=/tmp/pip-cache-sandbox \
+                setpriv --no-new-privs s6-setuidgid wactorz-sandbox /bin/sh -c \
+                'set -a && . /run/wactorz-sandbox/.env && set +a && exec wactorz-node'
+            if [ $(($(date +%s) - started)) -ge 60 ]; then
+                delay=5
+            fi
+            bashio::log.warning "The sandbox node stopped; starting it again in ${delay} seconds."
+            sleep "$delay"
+            if [ "$delay" -lt 60 ]; then
+                delay=$((delay * 2 > 60 ? 60 : delay * 2))
+            fi
+        done
+    ) &
+    bashio::log.info "Started the sandbox node '${SANDBOX_NAME}' as the user 'wactorz-sandbox'."
+}
+
+if [ "$sandbox_on" = true ]; then
+    if [ -n "$run_as" ] && id wactorz-sandbox > /dev/null 2>&1; then
+        start_sandbox
+    else
+        unset WACTORZ_MODEL_CODE_NODE
+        bashio::log.warning "The sandbox node needs to start as root with the wactorz-sandbox user in the image; it is not started."
+    fi
 fi
 
 if [ -d /data ]; then

@@ -19,9 +19,14 @@ from ..config import CONFIG, MAX_REQUEST_BYTES
 from ..core.paths import ensure_state_dir
 from ..monitoring import http_metrics
 from . import (
+    answers,
     api_actors,
+    api_commands,
+    api_data,
+    api_labels,
     api_log_capture,
     api_logs,
+    api_models,
     api_reset,
     api_system,
     api_uploads,
@@ -34,6 +39,7 @@ from . import (
     mqtt,
     origins,
     probes,
+    questions,
     runtime,
     sessions,
     static_site,
@@ -177,6 +183,8 @@ def build_app() -> web.Application:
 
     app.router.add_get("/api/chats", api_system.chat_log_handler)
     app.router.add_get("/chats", api_system.chat_log_handler)
+    # `/api/` only, unlike the pairs around it: the commands the chat box completes.
+    app.router.add_get("/api/commands", api_commands.commands_handler)
 
     app.router.add_get("/api/config", api_system.config_handler)
     app.router.add_get("/config", api_system.config_handler)
@@ -198,6 +206,24 @@ def build_app() -> web.Application:
     app.router.add_get("/api/feed", api_system.feed_handler)
     app.router.add_get("/feed", api_system.feed_handler)
     app.router.add_post("/api/reset", api_reset.reset_handler)
+    # `/api/` only, as every route added since `/api/logs`: the bare pairs above
+    # are kept for the clients that called them before the prefix.
+    app.router.add_get("/api/models", api_models.models_handler)
+    app.router.add_get("/api/models/{name}", api_models.model_handler)
+    app.router.add_get("/api/models/{name}/moves", api_models.moves_handler)
+    app.router.add_get("/api/models/{name}/trial", api_models.trial_handler)
+    app.router.add_get("/api/models/{name}/trial/series", api_models.trial_series_handler)
+    app.router.add_get("/api/models/{name}/trials", api_models.trials_handler)
+    app.router.add_post("/api/models/{name}/active", api_models.set_active_handler)
+    app.router.add_post("/api/models/{name}/shadow", api_models.set_shadow_handler)
+    app.router.add_delete("/api/models/{name}/shadow", api_models.clear_shadow_handler)
+    app.router.add_post("/api/models/{name}/promote", api_models.promote_handler)
+    app.router.add_post("/api/models/{name}/rollback", api_models.rollback_handler)
+    app.router.add_get("/api/labels", api_labels.labels_handler)
+    app.router.add_get("/api/labels/effective", api_labels.effective_handler)
+    api_data.setup(app)
+    app.router.add_get("/api/questions", questions.questions_handler)
+    app.router.add_post("/api/questions/{agent_id}/{question_id}/answer", answers.answer_handler)
 
     # Extensions (wactorz/ext/): additive features register their own routes
     # and startup/teardown hooks here. Must run BEFORE the docs/static

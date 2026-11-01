@@ -20,14 +20,19 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from ... import plugins
 from ...config import CONFIG
 from ...core.actor import ask_through
+from ...core.artifacts import ArtifactError, ArtifactStore, summary
+from ...core.paths import resolve_state_dir
 from ...plugins import AgentPlugin
 from ..lookup import find_main_actor
+from ..mixins.spawning import PlacedOnNode
 from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from ..prompts.planner_prompts import (
     HA_FEASIBILITY_PROMPT,
+    NODE_PLACEMENT_RULES,
     pipeline_design_prompt,
     rule_conflict_prompt,
 )
+from .nodes import nodes_section
 from .parsing import extract_json_array, extract_json_object, loads_lenient
 
 if TYPE_CHECKING:
@@ -174,7 +179,7 @@ class PipelineMixin(_Host):
             await self._log("Step missing name — skipping")
             return StepOutcome()
 
-        if self._registry and self._registry.find_by_name(name):
+        if self._registry and (self._registry.find_by_name(name) or self._running_on_a_node(name)):
             await self._log(f"'{name}' already running — skipping")
             self._spawn_results[name] = {"ok": True, "status": "already_running"}
             return StepOutcome(wired=f"**{name}** (already active)", rule_agent=name)
@@ -200,11 +205,20 @@ class PipelineMixin(_Host):
             return StepOutcome(wired=f"**{name}** — spawn failed: {e}")
 
         if not actor:
-            self._spawn_results[name] = {"ok": False, "status": "spawn_returned_none"}
-            return StepOutcome(wired=f"**{name}** — failed to spawn")
+            # Kept when the spawn said why it failed: placement refused it, or
+            # its node never reported it.
+            known = self._spawn_results.get(name) or {}
+            if known.get("ok") is not False:
+                known = {"ok": False, "status": "spawn_returned_none"}
+                self._spawn_results[name] = known
+            why = f": {known['error']}" if known.get("error") else ""
+            return StepOutcome(wired=f"**{name}** — failed to spawn{why}")
 
         self._spawned_by_planner.append(name)
         self._spawn_results[name] = {"ok": True, "status": "spawned"}
+        if isinstance(actor, PlacedOnNode):
+            # Saved with its node, or a restart would bring it back on main.
+            spawn_cfg["node"] = actor.node
         self._register_for_restore(spawn_cfg, name, task)
 
         topics = spawn_cfg.get("mqtt_topics", [])
@@ -328,10 +342,15 @@ class PipelineMixin(_Host):
             )
 
         topic_bus_section, topic_samples_section = await self._gather_topic_bus_context()
+        topic_samples_section = with_named_samples(
+            topic_samples_section, await self._sample_named_topics(task)
+        )
 
         registered_section = self._gather_registered_agents()
 
         notif_section = await self._gather_notification_urls(task)
+
+        models_section = await _stored_models_section()
 
         if ha_available and ha_entities_text and not skips_ha_feasibility(task):
             verdict = await self._check_ha_feasibility(task, ha_section, topic_bus_section)
@@ -379,6 +398,14 @@ class PipelineMixin(_Host):
             *home_assistant_parts,
             "═══ NOTIFICATION URLS ═══",
             notif_section,
+            "",
+            "═══ STORED MODELS ═══",
+            models_section,
+            "",
+            "═══ NODES (the machines an agent can run on) ═══",
+            nodes_section(find_main_actor(self._registry) if self._registry else None),
+            "",
+            NODE_PLACEMENT_RULES,
             "",
             "═══ OUTPUT FORMAT ═══",
             "JSON array. Each element:",
@@ -506,7 +533,7 @@ class PipelineMixin(_Host):
                             example = info.get("example", {})
                             fields = info.get("fields", {})
                             sample_lines.append(
-                                f"  Topic: {topic}  (published by {contract.name})\n"
+                                f"  Topic: {topic}  (published by {bus.registry.label(contract)})\n"
                                 f"    Fields: {fields}\n"
                                 f"    Example payload: {example}"
                             )
@@ -1128,3 +1155,41 @@ def registered_agents_section(
         "  needs an answer rather than a stream.",
     ]
     return "\n".join(lines)
+
+
+def with_named_samples(samples_section: str, named: list[str]) -> str:
+    """``samples_section`` with the samples of the topics a request names added.
+
+    A topic an agent declares is already sampled there, under its publisher;
+    it is not repeated.
+    """
+    added = [
+        line
+        for line in named
+        if line.splitlines()[0].split("  (")[0] + "  (" not in samples_section
+    ]
+    if not added:
+        return samples_section
+    if not samples_section:
+        samples_section = "LIVE TOPIC SAMPLES (actual payloads — use THESE field names in code):"
+    return "\n".join([samples_section, *added])
+
+
+async def _stored_models_section() -> str:
+    """The models a spawn may name in ``artifacts``, read off the event loop.
+
+    A store that cannot be read is said to hold none rather than failing the
+    plan: the user asked for a pipeline, not for the store.
+    """
+    store = ArtifactStore.in_state_dir(resolve_state_dir())
+    try:
+        lines = await asyncio.to_thread(summary, store)
+    except (ArtifactError, OSError) as exc:
+        logger.warning("Could not list the stored models for the planner: %s", exc)
+        lines = []
+    if not lines:
+        return 'STORED MODELS: none. A step must not name "artifacts".'
+    return "\n".join(
+        ['STORED MODELS (name one in "artifacts" by its name, or name:version):']
+        + [f"  {line}" for line in lines]
+    )

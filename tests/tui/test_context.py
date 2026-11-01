@@ -74,8 +74,9 @@ class _DB:
             raise RuntimeError("database is locked")
         return list(self.rows)[:limit]
 
-    def write_chat_log(self, **row: Any) -> None:
-        self.writes.append(row)
+    def write_chat_log(self, *, agent_id: str, **row: Any) -> None:
+        # Keyword-only and required, as the real one is: history is kept by id.
+        self.writes.append({"agent_id": agent_id, **row})
 
 
 @pytest.fixture(name="no_db", autouse=True)

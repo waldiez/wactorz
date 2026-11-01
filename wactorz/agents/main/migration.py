@@ -1,12 +1,19 @@
 """Bringing an agent back from the node that was running it.
 
-A migration home asks the node for everything it holds — the spawn config and
-the persistent state — and spawns the agent locally from what comes back.
+A migration home asks the node for the agent's persistent state, and spawns the
+agent locally from main's own config for it with that state loaded into it: its
+spawn registry entry, or for a library agent the plugin main has installed.
 
-**The config in that message is executed**: it carries the agent's code. The
-token is what makes that acceptable. Main mints one per migration it starts, and
-only a message quoting it is acted on; it is consumed on use and expires, so a
-replayed message spawns nothing.
+**Only the state is taken from the node, never the program.** The node's message
+carries the config it was running too, a library agent's bundle included, but a
+node is not trusted to say what main or another node executes: the registry
+entry is what main placed there, kept current by `code_refresh` when the node
+repaired it, and a bundle is made again from main's own copy of the code for
+each node it goes to. So main migrates only an agent it holds a program for. The token decides whether the state is
+accepted at all: main mints one per migration it starts, and only a message
+quoting it, from the node it was asked of and about the agent it was asked
+about, is acted on; it is consumed on use and expires, so a replayed message
+spawns nothing.
 
 An agent's blobs -- its models, arrays and bytes -- travel beside its state, on
 topics of their own (see `wactorz.core.blob_transfer`). Main sends them with an
@@ -16,17 +23,21 @@ agent it places on a node, and receives them with one a node hands back.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import json
 import logging
 import secrets
 import sys
 import time
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
+from ...core.addresses import MAIN_NODE
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsTooLarge,
@@ -53,8 +64,11 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
-from ...core.state_snapshot import why_it_cannot_travel
-from .spawns import why_a_node_cannot_run, without_transient_keys
+from ...core.state_snapshot import json_safe, why_it_cannot_travel
+from ...plugins import MODULE_TYPE, is_module_config
+from .addresses import registered_agent
+from .spawn_registry import SpawnRegistry, address_of, without_transient_keys
+from .spawns import why_a_node_cannot_run, with_code_for
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -83,6 +97,27 @@ INBOX_KEEP_S = 3600.0
 #: can be dropped when the agent comes back. Hand-written code never has it.
 BRIDGE_CODE_MARKER = "Auto-generated LLM bridge"
 
+
+def library_agent_config(agent_name: str, registry: Any) -> dict[str, Any] | None:
+    """The spawn config of a library agent, as a ``type: module`` spawn would state it.
+
+    None when no plugin goes by ``agent_name``, or the one that does was
+    registered in code under no import path, which nothing elsewhere could
+    name. The running actor's options go with it, those that can be written
+    as JSON: a path, a threshold. One starting with an underscore is the
+    actor's own working value -- a loaded model -- and is left.
+    """
+    plugin = plugins.for_name(agent_name)
+    if plugin is None or not plugin.target:
+        return None
+    local = registry.find_by_name(agent_name) if registry else None
+    held = getattr(local, "options", None)
+    options: dict[str, Any] = {}
+    if isinstance(held, dict):
+        options, _dropped = json_safe({k: v for k, v in held.items() if not k.startswith("_")})
+    return {"name": agent_name, "type": MODULE_TYPE, "target": plugin.target, "options": options}
+
+
 #: `from_node` for an agent that was running here rather than on a node. The
 #: source of a migration is a node name everywhere else, so the sentinel is what
 #: tells the completion and rollback paths to act on this process instead of
@@ -103,6 +138,25 @@ PENDING_MIGRATIONS_KEY = "_pending_migrations"
 #: `_purge_local_source`.
 _TRANSIENT_ENTRY_FIELDS = ("local_actor",)
 
+#: A move as the guard against a second one knows it: the agent's name, the
+#: place it is leaving and the place it is going, "" for main.
+Move = tuple[str, str, str]
+
+
+def _place(node: Any) -> str:
+    """A node name as a place a move leaves or reaches: "" for main, however it was written."""
+    text = str(node or "").strip()
+    return "" if text.lower() in ("local", "main") else text
+
+
+def _move_of(pending: Mapping[str, Any]) -> Move:
+    """The move a pending return or spawn is part of."""
+    return (
+        str(pending.get("agent_name") or ""),
+        _place(pending.get("from_node")),
+        _place(pending.get("target_node")),
+    )
+
 
 class Migration:
     """Agents in flight between main and a node."""
@@ -120,6 +174,11 @@ class Migration:
         self._inbox: Inbox | None = None
         #: State returns waiting on their blobs, held so none is collected.
         self._returns: set[asyncio.Task[None]] = set()
+        #: Moves being started, or finished, with no pending entry to show it:
+        #: a move asked for until it is sent, and a return or a confirmation
+        #: from when its entry is taken until the agent is placed or put back.
+        #: Counted, as a return waiting on its blobs holds its move twice.
+        self._in_hand: Counter[Move] = Counter()
 
     @property
     def inbox(self) -> Inbox:
@@ -257,10 +316,11 @@ class Migration:
     async def receive_state_return(self, topic: str, payload: bytes | None) -> None:
         """Take an agent back from the node that was running it.
 
-        The config in this message is executed — it carries the agent's code.
-        The token is what makes that acceptable: main mints one per migration it
-        starts, and only a message quoting it is acted on. Consumed on use, so a
-        replay finds nothing waiting.
+        Only the state in this message is used. The agent is placed from main's
+        own registry entry, so what runs is the program main sent out, not one
+        the node supplies. The token decides whether the state is accepted:
+        main mints one per migration it starts, and only a message quoting it is
+        acted on. Consumed on use, so a replay finds nothing waiting.
         """
         if not payload:
             return
@@ -281,31 +341,37 @@ class Migration:
             )
             return
 
-        started = self.pending_returns.pop(token)
+        started = self.pending_returns[token]
+        if _misaddressed(topic, data, started["agent_name"], started["from_node"]):
+            return
+        self.pending_returns.pop(token)
         self._save_pending()
-        agent_name = data.get("agent") or started.get("agent_name", "?")
-        from_node = started.get("from_node", "?")
+        # Still under way until the agent is placed, though its entry is gone.
+        with self._holding(_move_of(started)):
+            await self._take_returned(started, data)
+
+    async def _take_returned(self, started: dict[str, Any], data: dict[str, Any]) -> None:
+        """Place an agent its node handed back, or leave it there if the node refused."""
+        agent_name = started["agent_name"]
+        from_node = started["from_node"]
         if data.get("refused"):
             # The node kept the agent running and said why on `migrate_result`
             # too, which is what the user is told; repeating it here would be a
             # second notice for one refusal.
             logger.info("[main] %r stays on %r: %s", agent_name, from_node, data.get("refused"))
             return
-        cfg = data.get("config") or {}
         state = data.get("state") or {}
         left_behind = [str(k) for k in data.get("state_keys_dropped") or []]
 
-        if not cfg or not isinstance(cfg, dict):
-            logger.warning(
-                "[main] state_return for %r from %r has no config — cannot spawn locally",
-                agent_name,
-                from_node,
-            )
+        cfg = self._registry_config(agent_name, from_node, data.get("config"))
+        if cfg is None:
             return
 
         if isinstance(state, dict) and references(state):
             # Off the listener: the blobs arrive through it, and it would
-            # otherwise be waiting for itself.
+            # otherwise be waiting for itself. The task holds the move until
+            # it ends, from before it is started.
+            self._in_hand[_move_of(started)] += 1
             task = asyncio.create_task(
                 self._place_returned_or_restart(agent_name, started, cfg, state, left_behind)
             )
@@ -313,6 +379,89 @@ class Migration:
             task.add_done_callback(self._returns.discard)
             return
         await self._place_returned(agent_name, started, cfg, state, left_behind, blobs=False)
+
+    async def _ready_for(
+        self, config: dict[str, Any], target_node: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """``config`` as ``target_node`` will be sent it, and why it cannot be, or None.
+
+        A library agent's code goes as the bundle main makes from its own copy,
+        every model the agent names is pinned, and the packages it installs are
+        cleared, which may ask the operator. Done before the agent stops
+        wherever it is: a node handed a config with no program starts an empty
+        agent and confirms it, and a model that is not stored would otherwise be
+        found by the spawn, with the agent running nowhere.
+        """
+        if self.host is None or self.host_nodes is None:
+            return config, "main is not running"
+        targets = self.host_nodes.targets_of(target_node)
+        config, problem = await with_code_for(
+            config, targets, self.host_nodes.takes_bundles(target_node)
+        )
+        unrunnable = problem or why_a_node_cannot_run(config, targets)
+        if unrunnable:
+            return config, unrunnable
+        packages = config.get("install") or []
+        if isinstance(packages, str):
+            packages = packages.replace(",", " ").split()
+        if packages:
+            refusal = await self.host.spawns._packages_cleared(
+                str(config.get("name", "")), packages
+            )
+            if refusal:
+                return config, refusal
+        return await self.host.spawns.pinned_for(config, target_node)
+
+    def _registry_config(
+        self, agent_name: str, from_node: str, returned: Any
+    ) -> dict[str, Any] | None:
+        """The config a returning agent is placed from: main's own.
+
+        Its spawn registry entry, or for a library agent started with the
+        system, the config main makes from the plugin it has installed.
+        ``returned`` is the config the node sent back, its program or bundle
+        included. It is compared, never used: a node that differs may have
+        repaired the program before the `code_refresh` exchange caught up, or
+        may be trying to have main run a program of its choosing, and from here
+        the two look the same. The repair is lost either way, which the notice
+        says.
+
+        None when main holds neither. `migrate_agent` refuses such a move before
+        anything stops, so this is an entry that went away while the agent was
+        in flight; the agent is left stopped on its node, with its state.
+        """
+        if self.host is None:
+            return None
+        entry = _entry_on(self.host._get_spawn_registry(), agent_name, from_node) or (
+            library_agent_config(agent_name, self.host._registry)
+        )
+        if not entry:
+            logger.warning(
+                "[main] %r came back from %r, but main holds no program for it",
+                agent_name,
+                from_node,
+            )
+            self._announce(
+                f"'{agent_name}' came back from '{from_node}', but main holds no program for it, "
+                f"so it was not started anywhere. Its state is still on '{from_node}'.",
+                "warning",
+            )
+            return None
+        # What main sent: an LLM agent's entry holds no code, and the node was
+        # given bridge code synthesized from it, which is rebuilt the same way.
+        sent = self.host._inject_llm_bridge_code(dict(entry)).get("code")
+        if _another_program(returned, sent) or _another_bundle(returned, entry):
+            logger.warning(
+                "[main] %r came back from %r with a program main did not send — discarded",
+                agent_name,
+                from_node,
+            )
+            self._announce(
+                f"'{agent_name}' came back from '{from_node}' with a program that differs from "
+                "the one main holds. Main's copy is used; the node's was discarded.",
+                "warning",
+            )
+        return dict(entry)
 
     async def _place_returned_or_restart(
         self,
@@ -339,6 +488,61 @@ class Migration:
                 await self._restart_on_source(
                     agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
                 )
+        finally:
+            self._release(_move_of(started))
+
+    def moving_to(self, agent_name: str) -> str:
+        """The node a move under way is starting ``agent_name`` on, or "" for none.
+
+        The spawn registry names the target only once it confirms, and the
+        agent speaks from there before that: its manifest and its first replies.
+        """
+        return next(
+            (
+                str(p.get("target_node") or "")
+                for p in self.pending_spawns.values()
+                if p.get("agent_name") == agent_name
+            ),
+            "",
+        )
+
+    def move_under_way(self, move: Move) -> Move | None:
+        """The move under way that ``move`` would cross, or None.
+
+        Under way from the moment a move is asked for until the agent is
+        confirmed where it went or put back where it was. Two moves cross when
+        they are of agents of one name and share a place: one leaving it or
+        arriving there while the other does. Agents of one name on two other
+        hosts move apart.
+        """
+        name, leaving, going = move
+        under_way = [
+            *(_move_of(p) for p in self.pending_returns.values()),
+            *(_move_of(p) for p in self.pending_spawns.values()),
+            *(m for m, held in self._in_hand.items() if held > 0),
+        ]
+        return next(
+            (
+                other
+                for other in under_way
+                if other[0] == name and {other[1], other[2]} & {leaving, going}
+            ),
+            None,
+        )
+
+    @contextlib.contextmanager
+    def _holding(self, move: Move) -> Iterator[None]:
+        """Count ``move`` as under way while the block runs."""
+        self._in_hand[move] += 1
+        try:
+            yield
+        finally:
+            self._release(move)
+
+    def _release(self, move: Move) -> None:
+        self._in_hand[move] -= 1
+        if self._in_hand[move] <= 0:
+            del self._in_hand[move]
 
     def _placed(self, agent_name: str) -> bool:
         """Whether a handed-back agent is running here, or waiting on a target to confirm it.
@@ -364,6 +568,15 @@ class Migration:
     ) -> None:
         """Put a handed-back agent where it was going: here, or on another node."""
         from_node = started.get("from_node", "?")
+        target_node = started.get("target_node", "")
+        if target_node:
+            # Sent on as a move from main is: the bundle main makes from its
+            # own copy of the code, never the one the node handed back.
+            ready, problem = await self._ready_for(cfg, target_node)
+            if problem:
+                await self._restart_on_source(agent_name, from_node, cfg, problem)
+                return
+            cfg = ready
         # A node does not send main, or through main another node, what runs
         # code when it loads; one that sent it anyway has it left behind here,
         # before anything waits for it to arrive.
@@ -380,7 +593,6 @@ class Migration:
                 await self._restart_on_source(agent_name, from_node, cfg, str(exc))
                 return
 
-        target_node = started.get("target_node", "")
         if target_node:
             await self._place_on_target(
                 agent_name, from_node, target_node, cfg, state, left_behind, received
@@ -423,7 +635,7 @@ class Migration:
         restored = {k: v for k, v in cfg.items() if k not in ("_initial_state", "replace")}
         restored["name"] = agent_name
         restored["node"] = from_node
-        await self.host._spawn_remote(restored, from_node, save=True)
+        await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
         self._announce(
             f"Migration of '{agent_name}' from '{from_node}' failed: {reason}. "
             f"It is running on '{from_node}' again.",
@@ -489,10 +701,12 @@ class Migration:
         )
 
     async def receive_spawn_ack(self, topic: str, payload: bytes | None) -> None:
-        """A target node confirms an agent it was handed is running.
+        """A target node confirms an agent it was handed is running, or says it is not.
 
-        Only now is the migration complete: the registry moves, both nodes'
-        desired state is rewritten, and the source is told to drop its copy.
+        Only a confirmation completes the migration: the registry moves, both
+        nodes' desired state is rewritten, and the source is told to drop its
+        copy. An answer carrying ``refused`` puts the agent back on its source
+        now, as the sweep would once the token ran out.
         """
         if not payload or self.host is None:
             return
@@ -505,10 +719,24 @@ class Migration:
 
         self._expire_tokens()
         token = data.get("migration_token", "")
-        pending = self.pending_spawns.pop(token, None) if token else None
-        self._save_pending()
+        pending = self.pending_spawns.get(token) if token else None
         if pending is None:
             logger.debug("[main] spawn_ack with unknown/expired token from %s — ignoring", topic)
+            return
+        if _misaddressed(topic, data, pending["agent_name"], pending["target_node"]):
+            return
+        self.pending_spawns.pop(token)
+        self._save_pending()
+        # Still under way until it is committed or put back, though its entry is gone.
+        with self._holding(_move_of(pending)):
+            await self._confirmed(pending, data)
+
+    async def _confirmed(self, pending: dict[str, Any], data: dict[str, Any]) -> None:
+        """Commit a move its target confirmed, or put the agent back if the target refused it."""
+        if self.host is None:
+            return
+        if data.get("refused"):
+            await self._put_back(pending, str(data["refused"]))
             return
 
         agent_name = pending["agent_name"]
@@ -638,48 +866,89 @@ class Migration:
                 continue
             self.pending_spawns.pop(token, None)
             self._save_pending()
-            agent_name = pending["agent_name"]
-            from_node = pending["from_node"]
-            target_node = pending["target_node"]
-            logger.warning(
-                "[%s] %r never confirmed on %r — putting it back on %r",
-                self.host.name,
-                agent_name,
-                target_node,
-                from_node,
+            with self._holding(_move_of(pending)):
+                await self._put_back(pending, None)
+
+    async def _put_back(self, pending: dict[str, Any], refused: str | None) -> None:
+        """Restore an agent on its source after its target did not take it.
+
+        ``refused`` is the target's reason when it said the agent did not start,
+        and None when it never answered. A restore that fails is said on the
+        dashboard, naming where the agent's state is kept: silence here is an
+        agent running nowhere that nobody is told about, and it must not stop
+        the sweep that found it from reaching the next.
+        """
+        if self.host is None:
+            return
+        agent_name = pending["agent_name"]
+        from_node = pending["from_node"]
+        target_node = pending["target_node"]
+        try:
+            await self._put_back_on_source(pending, refused)
+        except Exception as exc:
+            logger.exception(
+                "[%s] Could not put %r back on %r", self.host.name, agent_name, from_node
             )
-            # Clear the target first, best effort. The ack may have been lost
-            # rather than never sent, in which case the target is running the
-            # agent and putting it back on the source would leave two -- the
-            # duplicate this whole choreography exists to avoid. An agent that
-            # never started ignores the stop.
-            #
-            # Its retained topics are kept. An actor id comes from the name, so
-            # they are the topics of the copy being restored below: cleared, its
-            # manifest reads as that copy withdrawing, and the registry forgets
-            # the agent this rollback exists to keep.
-            await self.host._mqtt_publish(
-                f"nodes/{target_node}/stop",
-                {"name": agent_name, "delete": True, "keep_topics": True},
-                qos=1,
+            where = (
+                "its state is kept in main's state directory"
+                if from_node == LOCAL_SOURCE
+                else f"its state is kept on '{from_node}'"
             )
-            # The stop is a one-off, but placing the agent added it to the
-            # target's desired state, and that message is retained. Left there,
-            # the next time the node reboots it reconciles the agent back into
-            # existence beside the copy this rollback is restoring, and the two
-            # of them carry the same name and diverge from the same state.
-            await self.update_desired_state(target_node, remove_name=agent_name)
-            if from_node == LOCAL_SOURCE:
-                await self._restore_local(pending)
-            else:
-                restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
-                restored["node"] = from_node
-                await self.host._spawn_remote(restored, from_node, save=True)
             self._announce(
-                f"Migration of '{agent_name}' to '{target_node}' failed — "
-                f"it is back on '{from_node}'.",
-                "warning",
+                f"Migration of '{agent_name}' to '{target_node}' failed"
+                + (f": {refused}" if refused else "")
+                + f", and it could not be started on '{from_node}' again: {exc}. "
+                f"It is running nowhere; {where}. Fix the cause and spawn it again.",
+                "error",
             )
+
+    async def _put_back_on_source(self, pending: dict[str, Any], refused: str | None) -> None:
+        if self.host is None:
+            return
+        agent_name = pending["agent_name"]
+        from_node = pending["from_node"]
+        target_node = pending["target_node"]
+        logger.warning(
+            "[%s] %r %s on %r — putting it back on %r",
+            self.host.name,
+            agent_name,
+            f"did not start ({refused})" if refused else "never confirmed",
+            target_node,
+            from_node,
+        )
+        # Clear the target first, best effort. The ack may have been lost
+        # rather than never sent, in which case the target is running the
+        # agent and putting it back on the source would leave two -- the
+        # duplicate this whole choreography exists to avoid. An agent that
+        # never started ignores the stop.
+        #
+        # Its retained topics are kept. An actor id comes from the name, so
+        # they are the topics of the copy being restored below: cleared, its
+        # manifest reads as that copy withdrawing, and the registry forgets
+        # the agent this rollback exists to keep.
+        await self.host._mqtt_publish(
+            f"nodes/{target_node}/stop",
+            {"name": agent_name, "delete": True, "keep_topics": True},
+            qos=1,
+        )
+        # The stop is a one-off, but placing the agent added it to the
+        # target's desired state, and that message is retained. Left there,
+        # the next time the node reboots it reconciles the agent back into
+        # existence beside the copy this rollback is restoring, and the two
+        # of them carry the same name and diverge from the same state.
+        await self.update_desired_state(target_node, remove_name=agent_name)
+        if from_node == LOCAL_SOURCE:
+            await self._restore_local(pending)
+        else:
+            restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
+            restored["node"] = from_node
+            await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
+        self._announce(
+            f"Migration of '{agent_name}' to '{target_node}' failed"
+            + (f": {refused}" if refused else "")
+            + f" — it is back on '{from_node}'.",
+            "warning",
+        )
 
     async def _restore_local(self, pending: dict[str, Any]) -> None:
         """Start the agent here again after its target never confirmed.
@@ -731,7 +1000,7 @@ class Migration:
             from_node = started.get("from_node", "")
             if not agent_name or not from_node:
                 continue
-            config = self.host._get_spawn_registry().get(agent_name)
+            config = _entry_on(self.host._get_spawn_registry(), agent_name, from_node)
             if not config:
                 logger.warning(
                     "[%s] %r never came back from %r and is not in the registry — "
@@ -749,7 +1018,8 @@ class Migration:
             )
             restored = dict(config)
             restored["node"] = from_node
-            await self.host._spawn_remote(restored, from_node, save=True)
+            with self._holding(_move_of(started)):
+                await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
             self._announce(
                 f"'{agent_name}' did not come back from '{from_node}' — "
                 f"it has been restarted there.",
@@ -875,6 +1145,22 @@ class Migration:
     async def migrate_agent(
         self, agent_name: str, target_node: str, *, force: bool = False
     ) -> dict[str, Any]:
+        """Move a running agent to a different node; see `_migrate_agent`.
+
+        Returns {"success": bool, "message": str}. The move counts as under way
+        from its checks until it is sent, so a second one asked meanwhile is
+        refused (`move_under_way`); once sent, its pending entry says so.
+        """
+        held: list[Move] = []
+        try:
+            return await self._migrate_agent(agent_name, target_node, force=force, held=held)
+        finally:
+            for move in held:
+                self._release(move)
+
+    async def _migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool, held: list[Move]
+    ) -> dict[str, Any]:
         """Move a running agent to a different node.
 
         A move that would lose state is refused before anything stops: keys
@@ -883,33 +1169,46 @@ class Migration:
         a node checks its own, from the same two values sent with the request.
 
         Sources of truth, in priority order:
-          1. Spawn registry — has the full config including code.
+          1. Spawn registry — has the full config including code; with the
+             agent running in main's own process, settles that it is on main.
           2. Agent manifest — has node, description, schemas (no code).
           3. Node heartbeats — minimum: tells us which node the agent runs on.
 
-        If we have code (case 1), we can do any migration unilaterally.
-        If we only have node info (cases 2/3), remote→local migration uses the
-        '@main' sentinel — the remote node ships its full config back and main
-        re-spawns locally.
+        Any of them locates the agent, but an agent on a node moves only with a
+        registry entry: the node hands back its state through the '@main'
+        sentinel, and main places the agent from its own copy of the program,
+        never from one the node supplies.
 
         Returns {"success": bool, "message": str}
         """
         if self.host is None or self.host_nodes is None:
             return {}
-        reg = self.host._get_spawn_registry()
-        config = reg.get(agent_name)
+        named, refusal = registered_agent(self.host, agent_name)
+        if refusal:
+            return {"success": False, "message": refusal}
+        agent_name = named.name
+        config = named.entry
+        if config is None:
+            # A library agent started with the system has no entry: its config
+            # is what a `type: module` spawn of it would say.
+            config = library_agent_config(agent_name, self.host._registry)
         have_code = bool(config and config.get("code"))
 
         # ── Locate the agent via every source we have ─────────────────────────
-        # Registry first, then manifest, then heartbeats. We need at least to
-        # know WHERE the agent is to do anything useful.
+        # What main holds first: a registry entry says where the agent is, its
+        # empty node meaning main itself, and an agent running in this process
+        # is here. Only an agent main has neither for is looked for in the
+        # manifests, then the heartbeats: a manifest retained from where the
+        # agent ran before would otherwise send the move to a node that no
+        # longer has it. A name kept in more than one place always has its
+        # entry here: `registered_agent` takes only an address for it.
         manifest = self.host._agent_manifests.get(agent_name, {})
-        current_node = ""
-        if config:
-            current_node = (config.get("node") or "").strip()
-        if not current_node and manifest:
+        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
+        current_node = named.node
+        placed_by_main = named.entry is not None or local_alive
+        if not placed_by_main and manifest:
             current_node = (manifest.get("node") or "").strip()
-        if not current_node:
+        if not current_node and not placed_by_main:
             # Last resort — the live heartbeats, which may know a node the spawn
             # registry does not record.
             current_node = self.host_nodes.running_agent(agent_name)
@@ -918,7 +1217,6 @@ class Migration:
         # If we found nothing — not in registry, not in manifest, not heart-
         # beating from any node, not in the local registry — we genuinely
         # can't migrate what doesn't exist.
-        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
         if not config and not manifest and not current_node and not local_alive:
             return {
                 "success": False,
@@ -926,14 +1224,51 @@ class Migration:
                 f"entry, no manifest, no heartbeat). Nothing to migrate.",
             }
 
-        if current_node == target_node:
-            return {
-                "success": False,
-                "message": f"Agent '{agent_name}' is already on '{target_node or 'local'}'.",
-            }
-
         # Normalise "local" as a target so users can type /migrate agent-name local
         is_target_local = target_node.strip().lower() in ("", "local", "main")
+
+        # Before anything waits: two moves asked at once must not both pass.
+        move = (agent_name, _place(current_node), "" if is_target_local else target_node)
+        crossed = self.move_under_way(move)
+        if crossed is not None:
+            # Until a move is confirmed, the registry still places the agent
+            # where it left, while it may already run where it is going: a
+            # second move would start from the wrong one.
+            return {
+                "success": False,
+                "message": f"'{agent_name}' is moving from '{crossed[1] or 'local'}' to "
+                f"'{crossed[2] or 'local'}'; ask again once that move is done.",
+            }
+
+        if current_node == ("" if is_target_local else target_node):
+            return {
+                "success": False,
+                "message": f"Agent '{agent_name}' is already on '{current_node or 'local'}'.",
+            }
+        self._in_hand[move] += 1
+        held.append(move)
+
+        if current_node and not config:
+            # Wherever it goes, it is placed from main's registry entry; the
+            # node supplies only its state. Refused now, while it still runs.
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': main holds no program for it "
+                f"(it is not in the spawn registry), and a node's own copy is not run "
+                f"elsewhere. It stays on '{current_node}'.",
+            }
+
+        occupied = self._occupied(
+            agent_name,
+            "" if is_target_local else target_node,
+            str((config or {}).get("actor_id") or ""),
+        )
+        if occupied:
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {occupied} It stays on "
+                f"'{current_node or 'local'}'.",
+            }
 
         # ── Verify the target node exists and is online ────────────────────────
         # This must happen BEFORE anything destructive. Without it, a typo'd or
@@ -959,7 +1294,11 @@ class Migration:
                 f"'{current_node or 'local'}'.",
             }
 
-        mismatch = None if is_target_local else self.host._node_version_mismatch(target_node)
+        mismatch = None
+        if not is_target_local:
+            mismatch = self.host._node_version_mismatch(target_node)
+            unheard = self.host._node_refuses_tasks(target_node)
+            mismatch = mismatch or (f"{unheard}." if unheard else None)
         if mismatch:
             # Same footing as an offline target: nothing has moved yet, so the
             # agent simply stays where it is.
@@ -984,6 +1323,16 @@ class Migration:
                 current_node,
                 target_node,
             )
+            # Checked before the source stops it, as a move from main is: the
+            # target is sent main's own config, so main can tell now whether
+            # the target can take it.
+            _ready, unrunnable = await self._ready_for(dict(config or {}), target_node)
+            if unrunnable:
+                return {
+                    "success": False,
+                    "message": f"Cannot migrate '{agent_name}' to '{target_node}': {unrunnable}. "
+                    f"It stays on '{current_node}'.",
+                }
             # Routed through main, in two legs: ask the source to hand the
             # agent back (the `@main` machinery), then place it on the target
             # ourselves. The source no longer publishes to another node's spawn
@@ -1029,13 +1378,10 @@ class Migration:
             # always correct. The state_return listener handles the spawn
             # once the remote node replies.
             logger.info(
-                "[%s] Migrating %r from node %r → local (via @main sentinel; %s)",
+                "[%s] Migrating %r from node %r → local (via @main sentinel)",
                 self.host.name,
                 agent_name,
                 current_node,
-                "spawn-registry code available as fallback"
-                if have_code
-                else "no local code, fully remote-driven",
             )
             return_token = secrets.token_hex(8)
             # Stash the token so the listener knows this return is ours
@@ -1072,7 +1418,7 @@ class Migration:
         # Before anything stops: a node handed a config with no program starts
         # an empty agent and confirms it, and the migration would then purge
         # the only copy that worked.
-        unrunnable = why_a_node_cannot_run(dict(config or {}))
+        config, unrunnable = await self._ready_for(dict(config or {}), target_node)
         if unrunnable:
             return {
                 "success": False,
@@ -1117,7 +1463,7 @@ class Migration:
 
             bus = get_topic_bus()
             if bus:
-                c = bus.registry.get(agent_name)
+                c = bus.registry.at(agent_name, MAIN_NODE)
                 if c is not None:
                     live_contract = {
                         "publishes": list(c.publishes or []),
@@ -1237,6 +1583,32 @@ class Migration:
         logger.info("[%s] %s", self.host.name, msg)
         return {"success": True, "message": msg}
 
+    def _occupied(self, agent_name: str, target_node: str, moving_id: str = "") -> str | None:
+        """Why ``target_node`` ("" for main) cannot take ``agent_name``: it runs one of the name already.
+
+        A name is unique on a host, so a move there would leave two agents
+        answering to one address. Renaming one on the way is not offered: it
+        would break every address that names it. What runs under the moving
+        agent's own id, ``moving_id``, is that agent -- main keeps its copy
+        until a move out is confirmed -- and is not another one.
+        """
+        if self.host is None:
+            return None
+        here = self.host._registry.find_by_name(agent_name) if self.host._registry else None
+        if here is not None and moving_id and here.actor_id == moving_id:
+            here = None
+        kept = self.host._get_spawn_registry().at(agent_name, target_node)
+        if kept is not None and moving_id and kept["actor_id"] == moving_id:
+            kept = None
+        listed = (
+            bool(target_node)
+            and self.host_nodes is not None
+            and (agent_name in self.host_nodes.known.get(target_node, {}).get("agents", []))
+        )
+        if kept is None and not listed and (target_node or here is None):
+            return None
+        return f"{address_of({'name': agent_name, 'node': target_node})} already runs."
+
     @staticmethod
     def _hand_back_request(agent_name: str, return_token: str, force: bool) -> dict[str, Any]:
         """What a source node is sent to hand an agent back to main.
@@ -1283,7 +1655,7 @@ class Migration:
         if self.host is None:
             return {}
         message = f"Cannot migrate '{agent_name}': {reason}"
-        if config and config.get("code"):
+        if config and (config.get("code") or is_module_config(config)):
             await self._restore_local({"config": dict(config)})
             return {"success": False, "message": f"{message} It is running on 'local' again."}
         logger.warning(
@@ -1310,8 +1682,7 @@ class Migration:
         if self.host is None:
             return
         # Build desired state from spawn registry filtered to this node
-        reg = self.host._get_spawn_registry()
-        agents = {name: cfg for name, cfg in reg.items() if cfg.get("node", "").strip() == node}
+        agents = {cfg["name"]: cfg for cfg in self.host._get_spawn_registry().on_node(node)}
 
         # Apply pending change before publishing. Stripped, because this message
         # is retained: the runner reconciles from it on every reboot, and a
@@ -1340,6 +1711,41 @@ class Migration:
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
 
 
+def _entry_on(registry: SpawnRegistry, agent_name: str, node: str) -> dict[str, Any] | None:
+    """The registry entry of ``agent_name`` on ``node``, or else its only entry, or None."""
+    return registry.at(agent_name, node) or registry.only(agent_name)
+
+
+def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) -> bool:
+    """Whether a node's answer quoting a migration's token is not that migration's.
+
+    The token is one migration's: one agent, answered by one node -- the source
+    handing it back, or the target confirming it started. An answer naming
+    another agent, or arriving on another node's topics, is not the answer to
+    it. The topic is the part a node cannot choose: with an account of its own,
+    the broker lets it write under its own ``nodes/<node>/`` and nowhere else.
+
+    Asked before the token is spent, and that order is the point. The token
+    travels in the clear, so anyone who can read the topics it crosses can
+    quote it. Spending it on a misaddressed answer would let them cancel the
+    migration: the real answer, a moment later, would find nothing waiting.
+    Dropped without spending, the migration stands and the right answer lands.
+    """
+    parts = topic.split("/")
+    sender = parts[1] if len(parts) > 2 and parts[0] == "nodes" else ""
+    if data.get("agent") == agent and sender == node:
+        return False
+    logger.warning(
+        "[main] %s quotes the token for %r on %r but names %r on %r — ignoring",
+        parts[-1],
+        agent,
+        node,
+        data.get("agent"),
+        sender,
+    )
+    return True
+
+
 def _left_behind_note(keys: list[str] | None) -> str:
     """The sentence an announcement ends with when some state did not travel."""
     if not keys:
@@ -1350,6 +1756,28 @@ def _left_behind_note(keys: list[str] | None) -> str:
 def _ttl(blob_bytes: int) -> float:
     """How long a placement may take to be confirmed, with ``blob_bytes`` of blobs to send."""
     return TOKEN_TTL_S + (wait_for(blob_bytes) if blob_bytes else 0.0)
+
+
+def _another_bundle(returned: Any, held: dict[str, Any]) -> bool:
+    """Whether a node's returned config carries a bundle other than the one main placed.
+
+    A library agent main builds from its plugin holds none in its config: main
+    makes the bundle again for each node it sends the agent to, so any bundle
+    a node hands back for one is not main's.
+    """
+    bundle = returned.get("bundle") if isinstance(returned, dict) else None
+    if not isinstance(bundle, dict):
+        return False
+    placed = held.get("bundle")
+    return not isinstance(placed, dict) or bundle.get("sha256") != placed.get("sha256")
+
+
+def _another_program(returned: Any, sent: Any) -> bool:
+    """Whether a node's returned config carries a program other than ``sent``."""
+    code = returned.get("code") if isinstance(returned, dict) else None
+    if not isinstance(code, str) or not code.strip():
+        return False
+    return code.strip() != str(sent or "").strip()
 
 
 def _runs_code(reference: dict[str, Any]) -> bool:

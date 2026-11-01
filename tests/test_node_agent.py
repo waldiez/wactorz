@@ -3,9 +3,10 @@
 A node used to carry its own retelling of the agent contract, because the file
 deployed to it could not import the package. It installs the package now, so
 `NodeAgent` is a `DynamicAgent` and the surface generated code is handed is the
-same `AgentAPI` — which is what these pin, along with the four things that are
+same `AgentAPI` — which is what these pin, along with the things that are
 genuinely different on a node: where its messages go, where its memory lives,
-what answers its LLM calls, and how a task reaches it.
+what answers its LLM calls, where its history comes from, and how a task
+reaches it.
 
 The shared surface itself is covered in `test_dynamic_agent_api_surface.py` and
 the sliding window in `test_topic_bus_window.py`; nothing here repeats them.
@@ -46,6 +47,18 @@ def _agent(runner: NodeRunner, code: str = "", **config: Any) -> NodeAgent:
 class TestItIsTheSameAgent:
     def test_a_node_agent_is_a_dynamic_agent(self, runner: NodeRunner) -> None:
         assert isinstance(_agent(runner), DynamicAgent)
+
+    @pytest.mark.parametrize("timeout", [None, 140.0])
+    def test_task_timeouts_match_local_agents(
+        self, runner: NodeRunner, tmp_path: Path, timeout: float | None
+    ) -> None:
+        config: dict[str, Any] = {} if timeout is None else {"task_timeout_s": timeout}
+        remote = _agent(runner, **config)
+        local = DynamicAgent(name="local-timeout", code="", persistence_dir=str(tmp_path), **config)
+
+        assert remote._HANDLE_TASK_TIMEOUT == local._HANDLE_TASK_TIMEOUT
+        expected = 60.0 if timeout is None else timeout
+        assert expected == remote._HANDLE_TASK_TIMEOUT
 
     def test_generated_code_is_handed_the_shared_api(self, runner: NodeRunner) -> None:
         # Not a lookalike: the class itself, so a method added for main is on a
@@ -192,6 +205,34 @@ class TestWhatIsDifferentOnANode:
         assert _agent(runner).deliver_reply("nodes/node-a/reply/nobody", {"text": "x"}) is False
 
 
+class TestItsHistoryComesFromMain:
+    async def test_a_query_is_a_signed_read_of_main_s_history(self, runner: NodeRunner) -> None:
+        runner._control = ControlGuard(node_key("node-a"), "", "enforce", runner.state_dir)
+        agent = _agent(runner)
+        sent: list[tuple[str, dict[str, Any]]] = []
+
+        async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
+            if isinstance(payload, dict) and "_reply_topic" in payload:
+                sent.append((topic, payload))
+                agent.deliver_reply(
+                    payload["_reply_topic"], {"rows": [{"value": 21.5}], "since": 0, "next": None}
+                )
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+
+        rows = await agent._api.query_ts(field="temp")
+
+        assert rows == [{"value": 21.5}]
+        topic, payload = sent[0]
+        assert topic == "main/history_request"
+        assert (payload["query"], payload["filters"]) == ("ts", {"field": "temp"})
+        assert request_signed_for(json.loads(json.dumps(payload)), "node-a")
+
+    def test_a_bare_query_says_to_await_it(self, runner: NodeRunner) -> None:
+        with pytest.raises(TypeError, match="await"):
+            len(_agent(runner)._api.query_ts())
+
+
 class TestTheNameANodeAnswersTo:
     """`/deploy` writes `WACTORZ_NODE` into every node's `.env`.
 
@@ -230,11 +271,10 @@ class TestTheNameANodeAnswersTo:
 
 class TestReachingAnAgentElsewhere:
     async def test_send_to_addresses_an_unknown_agent_by_name(self, runner: NodeRunner) -> None:
-        """A node cannot look up which machine holds an agent — main can.
+        """An agent no manifest has placed is sent to by name.
 
-        Refusing for want of that lookup made `send_to` unusable from a node
-        entirely. Every node subscribes to `agents/by-name/+/task`, so naming
-        the agent reaches it wherever among them it runs.
+        Every node subscribes to `agents/by-name/+/task`, so naming the agent
+        reaches it wherever among them it runs, as before nodes read manifests.
         """
         agent = _agent(runner)
         sent: list[tuple[str, Any]] = []
@@ -257,7 +297,36 @@ class TestReachingAnAgentElsewhere:
         (topic, payload) = sent[0]
         assert topic == "agents/by-name/elsewhere/task"
         assert payload["city"] == "Athens"
-        assert payload["_reply_topic"].startswith("agents/by-name/edge-agent/reply/")
+        assert payload["_reply_topic"].startswith("agents/at/node-a/edge-agent/reply/")
+
+    async def test_send_to_reaches_an_agent_on_its_nodes_own_topic(
+        self, runner: NodeRunner
+    ) -> None:
+        # Two nodes run the name; the manifests say where, and pc takes its tasks
+        # on its own topic.
+        for node in ("pc", "pi"):
+            runner.directory.take(
+                f"agents/id-{node}/manifest",
+                json.dumps({"name": "counter", "node": node, "tasks_by_node": True}).encode(),
+            )
+        agent = _agent(runner)
+        sent: list[str] = []
+
+        async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+        await runner.registry.register(agent)
+
+        with contextlib.suppress(ConnectionRefusedError, asyncio.TimeoutError):
+            await asyncio.wait_for(
+                agent._api.send_to("counter@pc", {"n": 1}, timeout=0.05), timeout=2
+            )
+        refused = await agent._api.send_to("counter", {"n": 1}, timeout=0.05)
+
+        assert sent == ["agents/at/pc/counter/task"]
+        assert refused is not None
+        assert "`counter@pc` or `counter@pi`" in refused["error"]
 
     async def test_an_agent_on_this_node_is_reached_in_process(self, runner: NodeRunner) -> None:
         # No broker involved when both are here: the registry delivers it.
@@ -269,6 +338,55 @@ class TestReachingAnAgentElsewhere:
         )
         # Spawned rather than built: the reply comes back through the caller's
         # own mailbox, so it has to be running to receive it.
+        await runner.spawn_agent({"name": "caller", "code": ""})
+        caller = runner.get("caller")
+        assert caller is not None
+
+        result = await asyncio.wait_for(
+            caller._api.send_to("worker", {"do": "the thing"}, timeout=2), timeout=5
+        )
+
+        assert isinstance(result, dict)
+        assert result["did"] == "the thing"
+
+    async def test_send_to_reaches_an_agent_on_an_older_node_by_name(
+        self, runner: NodeRunner
+    ) -> None:
+        # A library agent on a node from before this release: its manifest names
+        # neither its node nor how to reach it.
+        runner.directory.take(
+            "agents/legacy-worker/manifest",
+            json.dumps({"name": "worker", "actor_id": "legacy-worker"}).encode(),
+        )
+        agent = _agent(runner)
+        sent: list[str] = []
+
+        async def _publish(topic: str, _payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+        await runner.registry.register(agent)
+
+        with contextlib.suppress(ConnectionRefusedError, asyncio.TimeoutError):
+            await asyncio.wait_for(agent._api.send_to("worker", {}, timeout=0.05), timeout=2)
+
+        assert sent == ["agents/by-name/worker/task"]
+
+    async def test_one_here_is_asked_in_process_whatever_an_old_manifest_says(
+        self, runner: NodeRunner
+    ) -> None:
+        # A node that has gone left its `worker` manifest retained, and this
+        # one's has not come back yet: the registry here is first-hand.
+        runner.directory.take(
+            "agents/gone/manifest",
+            json.dumps({"name": "worker", "node": "gone", "tasks_by_node": True}).encode(),
+        )
+        await runner.spawn_agent(
+            {
+                "name": "worker",
+                "code": "async def handle_task(agent, payload):\n    return {'did': payload['do']}\n",
+            }
+        )
         await runner.spawn_agent({"name": "caller", "code": ""})
         caller = runner.get("caller")
         assert caller is not None
@@ -406,9 +524,9 @@ class TestTasksArriveOnATopic:
                 "async def handle_task(agent, payload):\n"
                 "    await asyncio.sleep(3600)\n"
             ),
+            task_timeout_s=0.05,
         )
         agent._compile_code(agent._code)
-        agent._HANDLE_TASK_TIMEOUT = 0.05  # type: ignore[misc]
 
         result = await asyncio.wait_for(agent.run_task({}), timeout=5)
 

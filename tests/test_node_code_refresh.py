@@ -20,6 +20,7 @@ import pytest
 
 from wactorz.agents.main import code_refresh as code_refresh_mod
 from wactorz.agents.main.code_refresh import ASK_INTERVAL_S, TOKEN_TTL_S, CodeRefresh
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.node_signing import CONTROL_LEAVES
 
 BROKEN = "async def process(agent):\n    boom()\n"
@@ -40,8 +41,8 @@ class _Main:
         }
         self.published: list[tuple[str, Any]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.registry[config["name"]] = config
@@ -91,6 +92,20 @@ class TestMainAsksBeforeItBelieves:
         await refresh.receive_code_return("nodes/rpi/code_return", _answer(refresh, main))
 
         assert main.registry["collector"]["code"] == REPAIRED
+
+    async def test_a_filed_program_is_no_longer_trusted(
+        self, refresh: CodeRefresh, main: _Main
+    ) -> None:
+        # `trusted` vouches for the catalogue's source. A repair is the model's,
+        # and the node is not trusted to say what it wrote: kept, the flag would
+        # let the node's program run unscanned on main after a migration home.
+        main.registry["collector"]["trusted"] = True
+        await refresh.note_change("rpi", "collector")
+
+        await refresh.receive_code_return("nodes/rpi/code_return", _answer(refresh, main))
+
+        assert main.registry["collector"]["code"] == REPAIRED
+        assert "trusted" not in main.registry["collector"]
 
     async def test_a_notice_for_an_agent_main_never_placed_is_ignored(
         self, refresh: CodeRefresh, main: _Main

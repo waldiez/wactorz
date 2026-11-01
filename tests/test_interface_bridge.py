@@ -61,13 +61,13 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
             sent.append((target, message_type, payload))
             replied.set()
 
-        actor.process_user_input = AsyncMock(side_effect=process)
+        actor.process_user_input_restricted = AsyncMock(side_effect=process)
         actor.send = send  # pyright: ignore[reportAttributeAccessIssue]
+        # The robot as main finds it: a catalogue agent running the catalogue's program.
+        robot = types.SimpleNamespace(name="reachy-mini", _trusted=True)
         actor._registry = types.SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-            all_actors=lambda: [
-                types.SimpleNamespace(name="reachy-mini"),
-                types.SimpleNamespace(name="weather-agent"),
-            ]
+            get=lambda actor_id: robot if actor_id == "reachy-id" else None,
+            all_actors=lambda: [robot, types.SimpleNamespace(name="weather-agent")],
         )
         msg = Message(
             type=MessageType.TASK,

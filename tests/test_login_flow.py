@@ -14,6 +14,7 @@ A test that finds the key in a `Set-Cookie` header is the one worth being
 loudest about.
 """
 
+import re
 from collections.abc import AsyncGenerator
 from dataclasses import replace
 from pathlib import Path
@@ -128,6 +129,41 @@ class TestSigningIn:
 
         assert resp.headers["Location"] == "/api/logs"
 
+    async def test_it_returns_to_the_view_the_address_named(self, client: TestClient) -> None:
+        # The page's script puts the address's #... on `next`, the one part a
+        # browser never sends: the redirect must keep it.
+        resp = await client.post(
+            "/login", data={"key": KEY, "next": "/#/models/imu"}, allow_redirects=False
+        )
+
+        assert resp.headers["Location"] == "/#/models/imu"
+
+    async def test_a_refused_key_keeps_the_view_for_the_next_try(self, client: TestClient) -> None:
+        # The page the refusal answers with is at /login with no #..., so the
+        # view rides in its form or is lost.
+        resp = await client.post("/login", data={"key": "wrong", "next": "/#/models/imu"})
+
+        assert 'name="next" value="/#/models/imu"' in await resp.text()
+
+    async def test_the_page_adds_the_address_view_to_the_form(self, client: TestClient) -> None:
+        resp = await client.get("/login")
+        body = await resp.text()
+
+        assert "location.hash" in body
+
+    async def test_its_script_runs_by_a_nonce_and_nothing_else_may(
+        self, client: TestClient
+    ) -> None:
+        first = await client.get("/login")
+        second = await client.get("/login")
+
+        policy = first.headers["Content-Security-Policy"]
+        nonce = re.search(r"'nonce-([^']+)'", policy)
+        assert nonce is not None
+        assert "'unsafe-inline'" not in policy.split("script-src", 1)[1].split(";", 1)[0]
+        assert f'<script nonce="{nonce[1]}">' in await first.text()
+        assert second.headers["Content-Security-Policy"] != policy
+
     async def test_it_will_not_be_redirected_off_this_server(self, client: TestClient) -> None:
         # The login page is the one page a stranger can always reach, so an
         # unchecked `next` would make it an open redirect.
@@ -135,6 +171,21 @@ class TestSigningIn:
             "/login", data={"key": KEY, "next": "https://elsewhere.example/"}, allow_redirects=False
         )
 
+        assert resp.headers["Location"] == "/"
+
+    @pytest.mark.parametrize("hidden", ["\t", "\n", "\r", "\x00", "\x7f"])
+    async def test_a_host_hidden_behind_a_control_character_is_refused(
+        self, client: TestClient, hidden: str
+    ) -> None:
+        # A browser drops tabs and newlines before reading a URL, and aiohttp
+        # drops them from a Location, so `/<tab>/host` would arrive as `//host`.
+        resp = await client.post(
+            "/login",
+            data={"key": KEY, "next": f"/{hidden}/elsewhere.example/"},
+            allow_redirects=False,
+        )
+
+        assert resp.status == 302
         assert resp.headers["Location"] == "/"
 
     async def test_a_scheme_relative_target_is_refused_too(self, client: TestClient) -> None:

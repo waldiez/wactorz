@@ -15,18 +15,26 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import aiomqtt
 import pytest
 
 from wactorz.agents.dynamic import messaging
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
+from wactorz.agents.main.addresses import resolve_address, task_refusal, task_topic_for
+from wactorz.agents.main.hosts import AddressHost
+from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core import actor as actor_module
 from wactorz.core import topic_bus
-from wactorz.core.actor import Actor, Message, MessageType
+from wactorz.core.actor import Actor, ActorMetrics, Message, MessageType
+from wactorz.core.addresses import Address, Resolution
 from wactorz.core.registry import ActorRegistry
 from wactorz.core.topic_bus import TopicBus, TopicContract
+
+from .node_messages import SignedMessage
 
 
 class _Broker:
@@ -46,15 +54,35 @@ class _Worker(Actor):
 
 
 class _Main:
-    """Only what the remote route reads from the orchestrator."""
+    """Only what the remote route reads from main: its node table, with no host behind it.
+
+    No agent runs in its process, and it started long ago, so only the node
+    table says where an agent is.
+    """
+
+    _registry: Any = None
 
     def __init__(self, known_nodes: dict[str, dict[str, Any]]) -> None:
-        self._known_nodes = known_nodes
+        self.nodes = NodeManager()
+        self.nodes.known = known_nodes
+        self.metrics = ActorMetrics(start_time=0.0)
 
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names({})
 
-class _Reply:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
+    def resolve_address(self, wanted: str, *, heard_within: float | None = None) -> Resolution:
+        # As main's: the real lookup, over this table.
+        return resolve_address(cast(AddressHost, self), wanted, heard_within=heard_within)
+
+    def task_refusal(self, address: Address) -> str | None:
+        return task_refusal(cast(AddressHost, self), address)
+
+    def task_topic_for(self, address: Address) -> str:
+        return task_topic_for(cast(AddressHost, self), address)
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        return self.nodes.known
 
 
 class _ReplyClient:
@@ -74,13 +102,14 @@ class _ReplyClient:
         self.subscribed.append(topic)
 
     @property
-    def messages(self) -> AsyncIterator[_Reply]:
+    def messages(self) -> AsyncIterator[SignedMessage]:
         return self._stream()
 
-    async def _stream(self) -> AsyncIterator[_Reply]:
+    async def _stream(self) -> AsyncIterator[SignedMessage]:
         if self._reply is None:
             await asyncio.Event().wait()
-        yield _Reply(self._reply or b"")
+        # From node `rpi`, signed on the topic subscribed.
+        yield SignedMessage(self.subscribed[-1], self._reply or b"", node="rpi")
 
 
 @pytest.fixture(name="broker")
@@ -168,6 +197,23 @@ class TestPublish:
         assert contract is not None
         assert contract.publishes == ["sensors/raw"]
         assert contract.produces_schema == {}
+
+    async def test_another_agent_of_the_name_keeps_its_contract(
+        self, api: AgentAPI, bus: TopicBus
+    ) -> None:
+        other = TopicContract(
+            name="probe",
+            publishes=["elsewhere"],
+            actor_id="22222222-2222-4222-8222-222222222222",
+            node="pi",
+        )
+        bus.register_contract(other)
+
+        await api.publish("sensors/temp", {"temp": 21.5})
+
+        own = bus.registry.get("probe", api.actor_id)
+        assert other.publishes == ["elsewhere"]
+        assert own is not None and own.publishes == ["sensors/temp"]
 
     async def test_an_existing_contract_gains_the_topic_and_its_fields(
         self, api: AgentAPI, bus: TopicBus
@@ -409,6 +455,42 @@ class TestSendToRemote:
         assert result == {"error": "Agent 'ghost' not found"}
         assert broker.published == []
 
+    async def test_a_name_two_nodes_report_is_refused_with_the_addresses(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main({"rpi": {"agents": ["counter"]}, "pc": {"agents": ["counter"]}})
+        monkeypatch.setattr(messaging, "find_main_actor", lambda _registry: main)
+
+        result = await api.send_to("counter", {})
+
+        assert result is not None
+        assert "`counter@rpi` or `counter@pc`" in result["error"]
+        assert broker.published == []
+
+    async def test_one_of_two_nodes_sharing_the_name_is_not_sent_it(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main({"rpi": {"agents": ["counter"]}, "pc": {"agents": ["counter"]}})
+        monkeypatch.setattr(messaging, "find_main_actor", lambda _registry: main)
+
+        result = await api.send_to("counter@pc", {})
+
+        assert result is not None
+        assert "takes a task only by name" in result["error"]
+        assert broker.published == []
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main({"rpi": {"agents": ["counter"]}, "pc": {"agents": ["counter"]}})
+        main.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+        monkeypatch.setattr(messaging, "find_main_actor", lambda _registry: main)
+
+        await api.send_to("counter@pc", {}, timeout=0.05)
+
+        assert len(broker.on("agents/at/pc/counter/task")) == 1
+        assert broker.on("agents/by-name/counter/task") == []
+
     async def test_without_an_orchestrator_the_agent_is_not_found(
         self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -430,8 +512,26 @@ class TestSendToRemote:
         assert task["message"] == "snap"
         assert task["_remote_task"] is True
         assert client.subscribed == [task["_reply_topic"]]
-        assert task["_reply_topic"].startswith("agents/by-name/probe/reply/")
+        assert task["_reply_topic"].startswith("agents/at/main/probe/reply/")
         assert api._actor._result_futures == {}
+
+    async def test_the_reply_is_read_over_mqtt_5(
+        self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The node's signature travels in user properties, which an MQTT 3.1.1
+        # connection never receives: every reply would read as unsigned.
+        self._on_node(monkeypatch, agents=["camera"])
+        connected: list[dict[str, Any]] = []
+
+        def _connect(_host: str, _port: int, **kwargs: Any) -> _ReplyClient:
+            connected.append(kwargs)
+            return _ReplyClient(b'{"frames": 3}')
+
+        monkeypatch.setattr(messaging, "mqtt_client", _connect)
+
+        await api.send_to("camera", "snap", timeout=5)
+
+        assert connected[0]["protocol"] == aiomqtt.ProtocolVersion.V5
 
     async def test_it_subscribes_to_the_reply_before_it_publishes_the_task(
         self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch

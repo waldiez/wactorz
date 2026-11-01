@@ -22,16 +22,18 @@ from collections.abc import Sequence
 from typing import Any
 
 from ...core.actor import Actor, Message, MessageType
+from ...core.addresses import MAIN_NODE, Address
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
-from ..prompts.planner_prompts import decompose_prompt
+from ..prompts.planner_prompts import NODE_PLACEMENT_RULES, decompose_prompt
 from .cache import PLAN_CACHE_KEY, select_cached_plan, with_plan_cached
 from .context import ContextMixin
 from .detection import is_pipeline_request
 from .execution import ExecutionMixin
+from .nodes import nodes_section
 from .parsing import extract_json_array, loads_lenient, task_hash
 from .pipeline import PipelineMixin
 from .validation import validate_pipeline_code
@@ -275,13 +277,13 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
             bus = get_topic_bus()
             if bus and self._registry:
-                live = {a.name for a in self._registry.all_actors()}
+                live = {Address(a.name, MAIN_NODE) for a in self._registry.all_actors()}
                 # Add remotely-running agents from main's known_nodes
                 main = find_main_actor(self._registry)
                 if main:
-                    for nd in main._known_nodes.values():
+                    for node, nd in main._known_nodes.items():
                         if time.time() - nd.get("last_seen", 0) < 30:
-                            live.update(nd.get("agents", []))
+                            live.update(Address(name, node) for name in nd.get("agents", []))
                 pruned = bus.registry.prune_stale(live)
                 if pruned:
                     await self._log(f"Pruned {len(pruned)} stale TopicBus contract(s): {pruned}")
@@ -478,7 +480,8 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                         example = info.get("example", {})
                         fields = info.get("fields", {})
                         sample_lines.append(
-                            f"  {topic} (by {contract.name}): fields={fields}  example={example}"
+                            f"  {topic} (by {bus.registry.label(contract)}): "
+                            f"fields={fields}  example={example}"
                         )
                 if not sample_lines:
                     sample_lines = await self._sample_live_topics(bus)
@@ -503,9 +506,12 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # ── Gather live topic samples for schema context ──────────────────
         topic_schema_ctx = await self._topic_schema_context()
 
+        main = find_main_actor(self._registry) if self._registry else None
         prompt = decompose_prompt(self._prompt_fragments).format(
             workers_desc=workers_desc,
             topic_schema_ctx=topic_schema_ctx,
+            nodes_ctx=f"\nNODES (the machines an agent can run on):\n{nodes_section(main)}\n\n"
+            f"{NODE_PLACEMENT_RULES}\n",
             task=task,
         )
 

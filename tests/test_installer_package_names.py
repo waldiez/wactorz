@@ -320,6 +320,7 @@ def _spawn_runner(monkeypatch: pytest.MonkeyPatch) -> Any:
     runner = _runner()
     runner.registry = ActorRegistry()
     runner.node_name = "node-1"
+    runner._starting = set()
     runner.published = []
 
     async def _publish(topic: str, payload: Any, **_kw: Any) -> None:

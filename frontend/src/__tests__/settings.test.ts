@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { buildSettingsView, type CostLimitCallbacks } from "../ui/dashboard/settings";
+import { buildSettingsView, type CostLimitCallbacks } from "../ui/shell/settings";
 
 function cbs(): CostLimitCallbacks {
     return { onSaveLimit: vi.fn(), onResetSpend: vi.fn() };

@@ -7,6 +7,7 @@ arrives over this socket.
 """
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -16,7 +17,7 @@ from aiohttp import WSMsgType, web
 
 from ..core.persistence import chat_turn_recorded
 from ..monitoring.log_redaction import redact
-from . import chat, events, lifecycle, origins, runtime, uploads
+from . import answers, chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 #: The conversation, on the console. Its own name rather than this module's:
@@ -221,6 +222,146 @@ def log_chat_turn(role: str, content: str, agent_name: str) -> None:
     chat_logger.info("[chat] %s: %s", direction, text)
 
 
+def _persist_chat(
+    owner: chat.TurnOwner,
+    role: str,
+    content: str,
+    attachments: list[dict[str, Any]] | None = None,
+) -> None:
+    """Best-effort write to chat_log, and a line on the console. Never raises into the WS path.
+
+    Filed under the agent the turn belongs to.
+    """
+    if content:
+        log_chat_turn(role, content, owner.name)
+    if runtime.db is None or not (content or attachments):
+        return
+    try:
+        runtime.db.write_chat_log(
+            ts=time.time(),
+            agent_name=owner.name,
+            agent_id=owner.agent_id,
+            role=role,
+            attachments=attachments,
+            # The log outlives the conversation and is readable through the
+            # API, so it gets the same treatment as the log file: a user can
+            # still type a credential even where no command accepts one.
+            content=redact(content),
+        )
+    except Exception as exc:
+        logger.warning("[ws] chat_log write failed: %s", exc)
+
+
+class TurnReplies:
+    """The callbacks one chat turn answers through, on one socket.
+
+    One per turn rather than one per socket: the turns on a socket run at the
+    same time, each in its own task, and a reply ends when its own turn does.
+    Shared, the first turn to end closes the stream of whichever one is still
+    answering, and files that one's text under its own agent.
+
+    Replies are attributed to the agent the turn addressed rather than to the
+    transport, so the page and the reloaded history show who answered. A
+    streamed reply is stored once, whole, when it ends, rather than a row per
+    piece.
+    """
+
+    def __init__(self, ws: web.WebSocketResponse, owner: chat.TurnOwner) -> None:
+        self._ws = ws
+        self._owner = owner
+        self._streamed: list[str] = []
+
+    async def reply(self, text: str, **offered: Any) -> None:
+        """Send one whole reply, and store it: slash command output, errors, system messages."""
+        try:
+            await self._send("chat", content=text, **offered)
+            _persist_chat(self._owner, "assistant", text)
+        except Exception:
+            logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
+
+    async def offer(self, text: str, addresses: tuple[str, ...], *, retry_of: str) -> None:
+        """Answer a mention that fits more than one agent.
+
+        The words, the addresses it fits, and the message (``retry_of``) a pick re-sends.
+        """
+        await self.reply(text, choices=list(addresses), retry_of=retry_of)
+
+    async def chunk(self, chunk: str) -> None:
+        """Send one piece of a reply that is still arriving."""
+        try:
+            await self._send("stream_chunk", content=chunk)
+            if chunk:
+                self._streamed.append(chunk)
+        except Exception:
+            logger.debug("[ws] Could not deliver a stream chunk", exc_info=True)
+
+    async def end(self) -> None:
+        """Close the streamed reply, and store it whole.
+
+        Stored even when the socket has gone, so a turn is not lost to a hiccup
+        on the way out.
+        """
+        try:
+            await self._send("stream_end")
+        except Exception:
+            logger.debug("[ws] Could not deliver the end of a stream", exc_info=True)
+        if self._streamed:
+            whole, self._streamed = "".join(self._streamed), []
+            _persist_chat(self._owner, "assistant", whole)
+
+    async def _send(self, kind: str, **fields: Any) -> None:
+        await self._ws.send_str(
+            json.dumps(
+                {
+                    "type": kind,
+                    "from": self._owner.name,
+                    "agent_id": self._owner.agent_id,
+                    **fields,
+                    "timestamp": time.time(),
+                }
+            )
+        )
+
+
+async def _run_turn(
+    content: str, files: list[dict[str, Any]], sent: str, replies: TurnReplies
+) -> None:
+    """Route one chat turn, answering through `replies`."""
+    # Both halves of this turn are stored by the socket's side: the user's before
+    # it starts, the reply once it has finished. So an agent that also stores its
+    # own turns must not write them again. Set inside this task, the mark follows
+    # the call into the agent and no other turn sees it.
+    chat_turn_recorded.set(True)
+    try:
+        await chat.route_chat(
+            content,
+            replies.reply,
+            stream_fn=replies.chunk,
+            stream_end_fn=replies.end,
+            attachments=files,
+            choices_fn=functools.partial(replies.offer, retry_of=sent),
+        )
+    except asyncio.CancelledError:
+        # Stop button: finalize the partial stream so the UI re-enables its
+        # composer, then say so. Without the stream-end the send control stays
+        # disabled with nothing to re-enable it.
+        try:
+            await replies.end()
+            await replies.reply("⏹ Stopped.")
+        # The socket is already gone; that is why we are here.
+        except Exception:  # noqa: S110
+            pass
+        raise
+    except Exception as exc:
+        logger.exception("[ws] chat error")
+        try:
+            await replies.reply(f"[error] {exc}")
+            await replies.end()
+        # The socket is already gone; that is why we are here.
+        except Exception:  # noqa: S110
+            pass
+
+
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     """Handle websocket connection.
 
@@ -244,102 +385,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # Current server↔broker state so the "live" badge is right immediately on load.
     await ws.send_str(json.dumps({"type": "mqtt_status", "connected": runtime.mqtt_connected}))
 
-    # Per-connection accumulator for streamed assistant replies.
-    # We only persist once at stream_end so chat_log gets one row per turn
-    # with the full content, not a row per chunk.
-    _stream_buffer: list[str] = []
-
-    # The agent the current turn is addressed to. Reply frames and chat_log are
-    # attributed to it instead of the generic "io-gateway" transport id, so the
-    # UI (and persisted/reloaded history) shows the agent that actually answered
-    # rather than the gateway. Set per turn from the user's @mention before
-    # routing; defaults to the gateway id until a chat turn arrives.
-    _reply_from = {"name": runtime.IO_GATEWAY_ID}
-
-    def _persist_chat(
-        role: str,
-        content: str,
-        agent_name: str = "main",
-        attachments: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Best-effort write to chat_log, and a line on the console. Never raises into the WS path."""
-        if content:
-            log_chat_turn(role, content, agent_name)
-        if runtime.db is None or not (content or attachments):
-            return
-        try:
-            runtime.db.write_chat_log(
-                ts=time.time(),
-                agent_name=agent_name,
-                role=role,
-                attachments=attachments,
-                # The log outlives the conversation and is readable through the
-                # API, so it gets the same treatment as the log file: a user can
-                # still type a credential even where no command accepts one.
-                content=redact(content),
-            )
-        except Exception as exc:
-            logger.warning("[ws] chat_log write failed: %s", exc)
-
-    async def ws_reply(text: str):
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "chat",
-                        "from": _reply_from["name"],
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Non-streamed replies (slash command output, errors, system
-            # messages) — persist immediately.
-            _persist_chat("assistant", text, _reply_from["name"])
-        except Exception:
-            logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
-
-    async def ws_stream_chunk(chunk: str):
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "stream_chunk",
-                        "from": _reply_from["name"],
-                        "content": chunk,
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Buffer for end-of-stream persistence; do NOT write per chunk.
-            if chunk:
-                _stream_buffer.append(chunk)
-        except Exception:
-            logger.debug("[ws] Could not deliver a stream chunk", exc_info=True)
-
-    async def ws_stream_end():
-        try:
-            await ws.send_str(
-                json.dumps(
-                    {
-                        "type": "stream_end",
-                        "from": _reply_from["name"],
-                        "timestamp": time.time(),
-                    }
-                )
-            )
-            # Now persist the full assembled assistant turn — once.
-            if _stream_buffer:
-                full = "".join(_stream_buffer)
-                _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
-        except Exception:
-            # Even if the send_str failed, flush anything we accumulated
-            # so the user's session isn't lost on a transient ws hiccup.
-            if _stream_buffer:
-                full = "".join(_stream_buffer)
-                _stream_buffer.clear()
-                _persist_chat("assistant", full, _reply_from["name"])
+    # Who answers what arrives outside any turn: a refused answer to a question,
+    # say. The turn in hand, once there is one; the gateway until then.
+    replies = TurnReplies(
+        ws, chat.TurnOwner(runtime.IO_GATEWAY_ID, chat.agent_id_of(runtime.IO_GATEWAY_ID))
+    )
 
     try:
         async for msg in ws:
@@ -358,6 +408,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     elif msg_type == "command":
                         await handle_command(data)
 
+                    elif msg_type == "answer":
+                        problem = await answers.answer_from_dashboard(data)
+                        if problem:
+                            await replies.reply(f"[error] {problem}")
+
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
                         # Ids only travel on the wire; the name and type come
@@ -373,53 +428,37 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             # ("not found") arrives where the user is looking and
                             # ends the turn there; attributed to the mention, it
                             # would name an agent no view has a thread for.
-                            _reply_from["name"] = chat.turn_attribution(
-                                content, str(data.get("agent_name") or "")
+                            owner = chat.turn_owner(
+                                content,
+                                str(data.get("agent_name") or ""),
+                                data.get("agent_id"),
+                            )
+                            replies = TurnReplies(ws, owner)
+                            # Said before anything else of the turn, so the page
+                            # files the user's own message with the agent it
+                            # reached: a mention names that agent by name, and
+                            # the page keeps its threads by id.
+                            await ws.send_str(
+                                json.dumps(
+                                    {
+                                        "type": "turn",
+                                        "agent_id": owner.agent_id,
+                                        "name": owner.name,
+                                        "id": data.get("id"),
+                                        "timestamp": time.time(),
+                                    }
+                                )
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
-                            _persist_chat("user", content, _reply_from["name"], files)
-
-                            async def _safe_route(c=content, files=files):
-                                # Both halves of this turn are stored here — the
-                                # user's above, the reply once it has finished —
-                                # so an agent that also stores its own turns must
-                                # not write them again. Set inside this task, the
-                                # mark follows the call into the agent and no other
-                                # turn sees it.
-                                chat_turn_recorded.set(True)
-                                try:
-                                    await chat.route_chat(
-                                        c,
-                                        ws_reply,
-                                        stream_fn=ws_stream_chunk,
-                                        stream_end_fn=ws_stream_end,
-                                        attachments=files,
-                                    )
-                                except asyncio.CancelledError:
-                                    # Stop button: finalize the partial stream so
-                                    # the UI re-enables its composer, then say so.
-                                    # Without the stream-end the send control
-                                    # stays disabled with nothing to re-enable it.
-                                    try:
-                                        await ws_stream_end()
-                                        await ws_reply("⏹ Stopped.")
-                                    # The socket is already gone; that is why we are here.
-                                    except Exception:  # noqa: S110
-                                        pass
-                                    raise
-                                except Exception as exc:
-                                    logger.exception("[ws] chat error")
-                                    try:
-                                        await ws_reply(f"[error] {exc}")
-                                        await ws_stream_end()
-                                    # The socket is already gone; that is why we are here.
-                                    except Exception:  # noqa: S110
-                                        pass
-
-                            chat.track_chat_task(asyncio.create_task(_safe_route()))
+                            _persist_chat(owner, "user", content, files)
+                            chat.track_chat_task(
+                                asyncio.create_task(
+                                    _run_turn(content, files, str(data.get("id") or ""), replies)
+                                )
+                            )
                         elif content:
-                            await ws_reply("[system] Chat unavailable — no actor registry.")
+                            await replies.reply("[system] Chat unavailable — no actor registry.")
 
                 except Exception as e:
                     logger.warning("[ws] Bad message: %s", e)

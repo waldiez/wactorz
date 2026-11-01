@@ -160,17 +160,19 @@ or config — there is no <code>if extension == "tts"</code> anywhere.</p>
 
 frontend/src/
 ├── ext/                    # Frontend extensions (TypeScript) — mirror backend
-│   └── tts/index.ts        #     register({ apiBase, available })
-├── ui/dashboard/
+│   └── tts/index.ts        #     register({ apiBase, configRead })
+├── ui/shell/
 │   └── icons.ts            #     Icon registry — registerIcon(name, svg)
 ├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
 └── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
 </code></pre></div>
 
 <p>At startup the monitor calls <code>setup_all(app)</code>, which auto-discovers every module
-or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook and wires it in.
-<code>collect_public_config(app)</code> gathers each extension's non-secret browser config
-and merges it into <code>/api/config</code>. Nothing in core references a specific extension.</p>
+or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook, and every
+extension registered under the <code>wactorz.extensions</code> entry point by an installed
+package named in <code>WACTORZ_EXTENSIONS</code>, and wires them in. <code>collect_public_config(app)</code> gathers each extension's
+non-secret browser config and merges it into <code>/api/config</code>. Nothing in core
+references a specific extension.</p>
 <p>An extension is <strong>opt-in and self-disabling</strong>: it reads its own environment and
 no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <hr />
@@ -240,6 +242,38 @@ in place:</p>
 <p>The registry itself is on <code>app[contract.ACTOR_REGISTRY]</code> (set by core before
 <code>setup_all()</code>; <code>None</code> in standalone mode). A raising factory or one returning
 <code>None</code> is skipped — never fatal.</p>
+<h3 id="from-another-package">From another package</h3>
+<p>An extension does not have to live in this repository. Any package installed
+beside Wactorz can register one, free or commercial, and once it is named in
+<code>WACTORZ_EXTENSIONS</code> it is loaded exactly like a module under <code>wactorz/ext/</code>, after
+the built-ins:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># pyproject.toml of the other package</span>
+<span class="k">[project.entry-points.</span><span class="s2">"wactorz.extensions"</span><span class="k">]</span>
+<span class="n">mlops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"wactorz_mlops.ext"</span>
+</code></pre></div>
+
+<p>The value names a module with the hooks above, or <code>module:object</code> for an object
+that has them. The entry point's name is the extension's short name: it namespaces
+<code>public_config()</code> on <code>/api/config</code> (<code>{"mlops": {...}}</code>) and is what another
+extension's <code>__deps__</code> refers to. A name a built-in extension already uses is
+refused with a log line, so a package cannot stand in for one; a package that
+fails to import, or has no <code>setup()</code>, is logged and skipped like a broken module
+under <code>wactorz/ext/</code>. Restart Wactorz after installing or removing such a package.</p>
+<h3 id="enabling-a-package">Enabling a package</h3>
+<p>Loading a package runs its code in the server, so being installed is not enough:
+an agent's own requirements install packages too. Name the ones you trust, by
+distribution name, or use <code>*</code> to load everything installed:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">WACTORZ_EXTENSIONS</span><span class="o">=</span>wactorz-mlops,wactorz-tts
+</code></pre></div>
+
+<p>The setting covers all three things a package can register: <code>wactorz.extensions</code>,
+<code>wactorz.agents</code> and <code>wactorz.pipelines</code>. An unlisted package is not imported at
+all; it is named once in the log, with the line to add, and on the Overview. The
+modules under <code>wactorz/ext/</code> always load.</p>
+<p>A node reads its own <code>WACTORZ_EXTENSIONS</code>. <code>/deploy</code> rewrites the node's <code>.env</code>, so
+set it on main as <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code>. On a node the setting decides which
+agents it can build. Under Home Assistant it is the <code>extensions</code> option, on the
+add-on and on each deploy target.</p>
 <h3 id="requirements">Requirements</h3>
 <ul>
 <li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
@@ -272,19 +306,21 @@ never by calling other components directly.</p>
 <span class="w">    </span><span class="nx">available</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
 <span class="p">}</span>
 
-<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{};</span>
 <span class="w">    </span><span class="c1">// Seed the singleton, then let it self-wire via the event bus.</span>
 <span class="w">    </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">setApiBase</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">apiBase</span><span class="p">);</span>
 <span class="w">    </span><span class="ow">void</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">init</span><span class="p">();</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">listen</span><span class="p">(</span><span class="s2">"my-event"</span><span class="p">,</span><span class="w"> </span><span class="nx">detail</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">handle</span><span class="p">(</span><span class="nx">detail</span><span class="p">));</span>
 <span class="p">}</span>
 </code></pre></div>
 
-<h3 id="wiring-in-maints">Wiring in main.ts</h3>
-<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded:</p>
+<h3 id="wiring-in-appts">Wiring in app.ts</h3>
+<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded, by
+<code>bootFromConfig</code> in <code>app.ts</code>; what it returns is how <code>createApp</code>'s <code>stop</code> ends it:</p>
 <div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">register</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"./ext/myname"</span><span class="p">;</span>
 
-<span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">_apiBase</span><span class="p">,</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
+<span class="nx">running</span><span class="p">.</span><span class="nx">stopMyExt</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">ingressBase</span><span class="p">(),</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
 
 <h3 id="config-seeding">Config seeding</h3>
@@ -305,7 +341,7 @@ keys; your barrel contributes the extension's at module load — before
 <h3 id="dashboard-views-and-icons">Dashboard views and icons</h3>
 <p>An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:</p>
-<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/dashboard/icons"</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/shell/icons"</span><span class="p">;</span>
 
 <span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// 1. Register the icon BEFORE registerView() uses its name.</span>
@@ -316,9 +352,8 @@ imports extension views or icon names:</p>
 <span class="p">}</span>
 </code></pre></div>
 
-<p><code>registerView(key, icon, label, builder)</code> is a <code>CardDashboard</code> method; <code>main.ts</code>
-passes it (plus an <code>onRender</code> re-render thunk) into <code>register()</code>. The builder is
-a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
+<p>A view is asked for on the bus: <code>emit("af-register-view", { key, icon, label, build })</code>
+reaches <code>CardDashboard.registerView</code>. <code>build</code> is a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
 a fresh element tree per call.</p>
 <table>
 <thead>
@@ -331,7 +366,7 @@ a fresh element tree per call.</p>
 <tbody>
 <tr>
 <td><code>registerIcon()</code></td>
-<td><code>ui/dashboard/icons.ts</code></td>
+<td><code>ui/shell/icons.ts</code></td>
 <td>Add SVG icons by name</td>
 </tr>
 <tr>
@@ -400,6 +435,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <h2 id="checklist">Checklist</h2>
 <ul>
 <li>[ ] Backend <code>setup()</code> registers routes under <code>/api/&lt;ext&gt;/…</code></li>
+<li>[ ] A packaged extension is named in <code>[project.entry-points."wactorz.extensions"]</code>, and its docs say to add the distribution to <code>WACTORZ_EXTENSIONS</code></li>
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
 <li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>

@@ -28,7 +28,9 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import ActorMetrics
 
 
 class _Registry:
@@ -65,6 +67,8 @@ class _Main:
         m._registry = _Registry(agents)  # pyright: ignore[reportAttributeAccessIssue]
         m.manifests = ManifestRegistry(m)
         m.nodes = NodeManager(m, m.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        m.metrics = ActorMetrics(start_time=0.0)
         m.delegation = DelegationManager(m)
         m.spawns = SpawnService(m)
         m.lifecycle = LifecycleService(m)
@@ -93,9 +97,9 @@ class _Main:
         m._drain_notifications = lambda: notification
         m.list_nodes = list
         m.list_topics = lambda keyword="": (self.calls["topics"].append(keyword), [])[1]
-        m._get_spawn_registry = dict
+        m._get_spawn_registry = SpawnRegistry
 
-        async def _delete(name: str) -> None:
+        async def _delete(name: str, node: str | None = None) -> None:
             self.calls["deleted"].append(name)
 
         m.delete_spawned_agent = _delete
@@ -182,6 +186,23 @@ class TestCommandsWithoutASlash:
     @pytest.mark.parametrize("text", ["help", "list_nodes", "main.list_nodes"])
     def test_a_bare_alias_is_still_a_command(self, text: str) -> None:
         assert not went_to_the_model(text)
+
+
+def test_other_voice_turn_cannot_replay_a_home_assistant_delegation() -> None:
+    main = _Main(agents=("home-assistant-agent",))
+    setattr(main.actor, "_current_interface_is_voice", lambda: True)
+
+    async def stale_reply(_text: str, attachments: Any = None) -> str:
+        return (
+            "Let me turn off the lights. "
+            '<delegate>{"agent":"home-assistant-agent","task":"turn off all lights"}</delegate>'
+        )
+
+    main.actor.chat = stale_reply  # pyright: ignore[reportAttributeAccessIssue]
+
+    response = main("Please see the photo")
+
+    assert response == "I may have misheard that. Please repeat the device command."
 
 
 class TestTheReadOnlyReports:
@@ -521,3 +542,23 @@ class TestNotificationsRideAlong:
         assert reply("/start", notification="[alert] disk full\n") == (
             "[alert] disk full\nUsage: /start <agent-name>"
         )
+
+
+def test_a_streamed_voice_turn_cannot_replay_a_home_assistant_delegation() -> None:
+    """The streaming path holds to the same rule as the one-shot path above."""
+    main = _Main(agents=("home-assistant-agent",))
+    setattr(main.actor, "_current_interface_is_voice", lambda: True)
+
+    async def stale_stream(_text: str, attachments: Any = None) -> Any:
+        yield "Let me turn off the lights. "
+        yield '<delegate>{"agent":"home-assistant-agent","task":"turn off all lights"}</delegate>'
+
+    main.actor.chat_stream = stale_stream  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def collect() -> list[Any]:
+        return [chunk async for chunk in main.actor.process_user_input_stream("see the photo")]
+
+    chunks = asyncio.run(collect())
+
+    assert chunks[-2] == "\nI may have misheard that. Please repeat the device command."
+    assert chunks[-1] == {"done": True, "spawned": [], "system_msg": ""}

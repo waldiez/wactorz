@@ -34,32 +34,57 @@ Its prompts are assembled for the installation: a core every installation shares
 | `OTHER` | `main.chat()` | "what's the weather like?" |
 | `@mention` | named actor directly | `@my-agent {"action": "status"}` |
 
+#### Addressing an agent
+
+An agent's full address is `name@node`: `@counter@pi-kitchen`, `@weather@main` (main is the
+node `main`, also spelled `local`). A bare name is enough while one agent has it. When agents
+on more than one node have the name, nothing is sent: a person is told the addresses, and a
+program (`send_to`, `delegate_task`, `POST /api/chat`, `POST /api/reset`) is refused with
+them. Main never picks one. The dashboard offers the addresses as buttons, and sends the
+message again to the one pressed; it calls each agent of a shared name by its address, in
+the chat list, the target picker and the `@mention` suggestions, and `#/chat/<name>@<node>`
+opens that one's conversation. The same address works in the terminal chat and in
+`/agents restart|stop|delete`, `/start` and `/migrate`, and one naming a node the agent is
+not on is refused. `@` is not allowed in a new agent's name or a new node's name.
+
+A task for an agent on a node goes on that node's own topic, `agents/at/<node>/<name>/task`,
+so it reaches that agent alone. A node from before that takes tasks only by name, and every
+node running the name hears a task sent by name, so while another node runs the name, a task
+for the agent on such a node is refused even by its full address; deploying the node again
+lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
+a reset clears by name.
+
+#### Two agents of one name
+
+A name is unique on one host, so two hosts may each run an agent of the same name. A spawn
+naming a node where the name does not run, while it runs on another host, says what it
+means: `"replace": true` moves that agent there, keeping its id, and `"alongside": true`
+runs a second agent of the name there, under an id of its own. A spawn that says neither
+spawns nothing, and you are told both. `/agents copy <agent> <node>` does the second from
+chat: `/agents copy counter pi-kitchen` leaves `counter@main` running and starts
+`counter@pi-kitchen` from the same config, with none of its state.
+
+Two agents of one name on one host would share an address, so a spawn, a move or a copy
+onto a host that already runs the name is refused, and so is a second agent of a name on a
+node from before ids were kept, which would give it the first one's id; deploy that node
+again first. `"replace"` with the name on more than one host does not say which one moves:
+move one with `/migrate <agent>@<node> <node>`. Every command that acts on one agent —
+`/agents restart|stop|delete`, `/start`, `/migrate`, `/agents copy`, a `<delete>` block —
+takes the address, and a bare name kept on more than one host acts on none of them.
+
 #### Memory
 
 After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into `_user_facts`, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.
 
 #### Spawn registry
 
-Every DynamicAgent spawned during the session is saved to the `_spawned_agents` key in SQLite. On restart, MainActor re-spawns every entry so pipelines survive reboots. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.
+Every DynamicAgent spawned during the session is saved to the spawn registry in SQLite, one entry per agent, kept by its id (`_spawned_agents_by_id`). On restart, MainActor re-spawns every entry so pipelines survive reboots. A registry from before entries were kept by id (`_spawned_agents`, by name) is read once and left as it was. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.
 
 #### Commands
 
-```
-/agents                   — list all running agents with type and status
-/agents <keyword>         — filter agents by capability keyword
-/agents stop <name>       — stop and remove an agent
-/rules                    — list active pipeline rules
-/rules delete <id>        — stop agents and remove rule
-/memory                   — show user facts and conversation summary
-/memory clear             — wipe all memory
-/memory forget <key>      — remove one fact
-/webhook discord <url>    — store a Discord webhook URL
-/webhook                  — list stored webhooks
-/topics                   — list MQTT topics published by known agents
-/nodes                    — list remote nodes and their agents
-/bus                      — list TopicBus — Reactive Pub/Sub Registry
-/help                     — show all commands
-```
+Main answers slash commands without a model call: agents, nodes, models, pipelines and
+plans, memory, notifications, diagnostics. `/help` on the dashboard lists them all, and the
+[reference's command table](reference.md#13-interfaces) is written from the same source.
 
 ---
 
@@ -129,7 +154,7 @@ Tracks heartbeat timestamps from every registered actor. If an actor's last hear
 | **name** | `installer` |
 | **restarts** | 3 |
 
-Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. Also handles remote node deployment via SSH (`node_deploy`, `node_install`, `node_run` actions), for machines listed in `DEPLOY_TARGETS` — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
+Runs `pip install` in a subprocess on request. Called automatically by `CatalogAgent` before spawning a recipe that declares an `"install": [...]` list. A package not on the list of packages installed without asking (the catalogue's, the examples', `WACTORZ_PIP_ALLOW`, and what the operator has allowed with `/packages allow` or the dashboard) is asked about on the dashboard first, and not installed if the operator refuses or does not answer. Also handles remote nodes over SSH (`node_deploy`, `node_install`, `node_op` — a named read-only operation — and `node_run` — a command typed as `/nodes run`), for machines listed in `DEPLOY_TARGETS`, and takes those only from main — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.
 
 ```
 @installer {"action": "install", "packages": ["httpx", "aiomqtt"]}
@@ -156,6 +181,8 @@ Pre-built agent recipe library. On startup it reads every recipe's program from 
 @catalog info anomaly-detector
 @catalog spawn anomaly-detector
 ```
+
+A recipe starts on main. If an agent of its name already runs on a node, nothing is spawned and the catalog says so: `@catalog spawn anomaly-detector replace` moves that agent to main, keeping its id, and `@catalog spawn anomaly-detector alongside` starts a second one on main.
 
 See the [Catalog recipes](#catalog-recipes) section below for available recipes.
 
@@ -429,6 +456,8 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `async def process(agent)` | Every `poll_interval` seconds | For periodic work. Timeout: 120s per call. Only started after `setup()` returns (or immediately if no setup). |
 | `async def handle_task(agent, payload)` | On every inbound TASK message | Must return a dict. Timeout: 60s per call. Used for command/response interactions. |
 
+> **A task's payload is untrusted input.** On main, any agent may send one; on a node, any node on the broker may, on its node's topic (`agents/at/<node>/<name>/task`) or by name (`agents/by-name/<name>/task`); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what `handle_task` acts on, and never run, install or fetch what a payload names without checking it.
+
 #### Agent API (`agent` object inside generated code)
 
 | Method | Sync/Async | Description |
@@ -440,13 +469,16 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `await agent.alert(message, level)` | async | Publish an alert (`info`, `warning`, `error`) |
 | `agent.persist(key, value)` | **sync** | Write a value (routes to SQLite/memory/Pickle based on key) |
 | `agent.recall(key)` | **sync** | Read a persisted value |
+| `agent.artifact_path(key)` | **sync** | Where the artifact the spawn names as `key` is on this host — `"artifacts": {"model": "imu-detector:3"}` in the spawn, then `onnxruntime.InferenceSession(agent.artifact_path("model"))`. A file, or for a directory artifact the directory it unpacks to; a `str`. `KeyError` naming the keys the spawn gave for any other |
+| `await agent.load_model(key)` | async | The artifact named `key`, loaded once: a dict of numpy arrays for `npz` and `safetensors`, an array for `npy`, an `onnxruntime.InferenceSession` for `onnx`, tensors for a `state_dict`, bytes for `raw`. A pickle, joblib file or whole torch module only with `allow_code=True` |
+| `agent.artifacts` | — | Each artifact the spawn names: name, version, format, size and path |
 | `agent.state` | — | In-memory dict (not persisted) |
 | `agent.window(topic, seconds)` | **sync** | Create a sliding time window over an MQTT topic stream |
 | `agent.declare_contract(...)` | **sync** | Register a TopicBus contract for auto-wiring |
-| `agent.query_ts(hours, field, ...)` | **sync** | Query historical sensor data from SQLite |
-| `agent.query_detections(hours, ...)` | **sync** | Query historical YOLO detections from SQLite |
-| `agent.query_ha_states(hours, ...)` | **sync** | Query historical HA state changes from SQLite |
-| `agent.ts_stats()` | **sync** | Row counts for all time-series tables |
+| `await agent.query_ts(hours, field, ...)` | async | Query historical sensor data from main's SQLite |
+| `await agent.query_detections(hours, ...)` | async | Query historical YOLO detections from main's SQLite |
+| `await agent.query_ha_states(hours, ...)` | async | Query historical HA state changes from main's SQLite |
+| `await agent.ts_stats()` | async | Row counts for all time-series tables |
 | `agent.agents()` | **sync** | List all currently running agents |
 | `agent.topics(keyword)` | **sync** | List known MQTT topics |
 
@@ -457,18 +489,25 @@ Any dynamic agent can query historical data collected by the TimeSeriesCollector
 ```python
 async def handle_task(agent, payload):
     # Get last 24h of temperature readings
-    rows = agent.query_ts(hours=24, field='temp')
+    rows = await agent.query_ts(hours=24, field='temp')
 
     # Get as pandas DataFrame for ML training
-    df = agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
+    df = await agent.query_ts(hours=168, entity_id='sensor.kitchen_temp', as_dataframe=True)
 
     # Query YOLO detections
-    df = agent.query_detections(hours=12, class_name='person', as_dataframe=True)
+    df = await agent.query_detections(hours=12, class_name='person', as_dataframe=True)
 
     # Check available data volume
-    stats = agent.ts_stats()
+    stats = await agent.ts_stats()
     # {'sensor_readings': 145230, 'detections': 8920, ...}
 ```
+
+The history lives in main's database. On a node, a query reads it from main
+over the broker, a page at a time, so there it must be awaited; written with
+`await`, the same code runs on main and on a node. On main the call without
+`await` works too, as it always has. On a node that form fails as soon as
+its result is used, and the error says to add `await`. If main does not answer
+a read, the agent gets no rows (`None` for a DataFrame) and the node logs why.
 
 #### Code safety
 
@@ -645,13 +684,13 @@ in the catalogue until asked for.
 
 ### Registering it
 
-Three ways in, all equivalent once the system is up:
+Three ways in, all equivalent once the system is up (a package's entry points load once it is named in `WACTORZ_EXTENSIONS`):
 
 | How | Where | For |
 | --- | ----- | --- |
 | `wactorz.run(agents=[detect, MyAgent], web=True)` | a script | development, a single deployment |
 | `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:MyAgent wactorz` | the environment | a configured deployment |
-| `[project.entry-points."wactorz.agents"]` in your package's `pyproject.toml` | the package | anything `pip install`ed |
+| `[project.entry-points."wactorz.agents"]` in your package's `pyproject.toml` | the package, named in `WACTORZ_EXTENSIONS` | an installed package |
 
 A registered agent is supervised at startup, listed by `@catalog list`, and
 restored from the spawn registry after a restart. A spawn config may also name

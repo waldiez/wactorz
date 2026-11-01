@@ -1,4 +1,4 @@
-"""The detector as one stage of a pipeline, with a notifier, a rule and a schedule.
+"""The detector as one stage of a pipeline, with a notifier, triage, a rule and a schedule.
 
 Each step stays an agent of its own; the pipeline groups them, ticks the
 report every five minutes, and acts on a strong anomaly without a program for
@@ -10,6 +10,8 @@ the glue. Run it the way `run.py` is run:
 import threading
 
 from agent import detect
+from model import STATE_DIR
+from triage import triage
 
 import wactorz
 
@@ -48,7 +50,7 @@ def report(message: dict, me: wactorz.FunctionAgent) -> dict | None:
 
 watch = wactorz.pipeline(
     "imu-watch",
-    steps=[detect, notify, report],
+    steps=[detect, notify, report, triage],
     schedule={"type": "interval", "seconds": 300},
     rules=[
         {
@@ -64,4 +66,4 @@ watch = wactorz.pipeline(
 )
 
 if __name__ == "__main__":
-    wactorz.run(web=True, minimal=True, state_dir="./state")
+    wactorz.run(web=True, minimal=True, state_dir=STATE_DIR)

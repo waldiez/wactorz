@@ -574,12 +574,14 @@ describe("TTSManager", () => {
         const { TTSManager } = await freshTTS();
         // Same fresh module graph → this is the exact singleton TTSManager ducks.
         const { ambient } = await import("../../../io/AmbientManager");
+        const stopDucking = ambient.followSpeech();
         const duckSpy = vi.spyOn(ambient, "duck");
 
         const m = new TTSManager();
         m.notify("boom");
         await vi.waitFor(() => expect(duckSpy).toHaveBeenCalledWith(false));
         expect(duckSpy).toHaveBeenCalledWith(true); // ducked on entry
+        stopDucking();
         expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalled(); // browser fallback ran
 
         globalThis.fetch = origFetch;

@@ -548,6 +548,31 @@ async def test_deploy_refuses_an_unusable_name_before_touching_the_network(
     assert "MQTT topic" in result["error"]
 
 
+@pytest.mark.parametrize("taken", ["local", "main", "Local"])
+async def test_deploy_refuses_a_name_that_already_means_main(
+    installer, targets, monkeypatch: pytest.MonkeyPatch, taken: str
+) -> None:
+    # `/migrate <agent> local` moves an agent to main; a node by that name could
+    # never be moved to.
+    targets(DeployTarget(name=taken, host="127.0.0.1", password="pw"))
+
+    async def _no_ssh(*_args, **_kwargs):  # pragma: no cover - must never run
+        raise AssertionError("deploy connected despite a name that means main")
+
+    monkeypatch.setattr(installer_module.asyncssh, "connect", _no_ssh)
+
+    result = await installer._node_deploy({"host": "127.0.0.1", "node_name": taken})
+
+    assert result["success"] is False
+    assert "already means main" in result["error"]
+
+
+def test_a_node_already_running_under_such_a_name_still_starts() -> None:
+    # The reservation is for making nodes, not for starting them: a node
+    # deployed under one of these names before keeps working until redeployed.
+    assert deploy_name_error("local") is None
+
+
 # ── Installer: where a deploy puts things ──────────────────────────────────
 
 
@@ -608,6 +633,9 @@ class _FakeConn:
         # these tests is the paths, not which unit gets installed.
         if "id -u" in command:
             stdout = "1000"
+        # No unit set up beforehand by setup-local, as on any remote node.
+        if "grep -qxF" in command:
+            return SimpleNamespace(stdout="", stderr="", exit_status=1)
         return SimpleNamespace(stdout=stdout, stderr="", exit_status=0)
 
     def start_sftp_client(self) -> _FakeSftpClient:

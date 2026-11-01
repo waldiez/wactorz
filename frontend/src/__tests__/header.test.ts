@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Isolate the header from the audio/reset popovers (and their singletons).
-vi.mock("../ui/dashboard/popovers", () => ({
+vi.mock("../ui/shell/popovers", () => ({
     buildAudioPopover: () => document.createElement("div"),
     buildResetPopover: () => document.createElement("div"),
 }));
@@ -17,12 +17,16 @@ import {
     resolveHaNavUrl,
     releaseHeaderPopovers,
     releaseBottomNav,
-} from "../ui/dashboard/header";
+} from "../ui/shell/header";
 import { safeStorage } from "../safeStorage";
 
 describe("buildHeader", () => {
     beforeEach(() => {
         document.body.innerHTML = "";
+    });
+    // Popovers hang document-level listeners; one left open answers the next test's Escape.
+    afterEach(() => {
+        releaseHeaderPopovers();
     });
 
     it("renders the logo/title, connection badge and the view tabs", () => {
@@ -35,16 +39,16 @@ describe("buildHeader", () => {
         });
         expect(header.querySelector(".af-title")!.textContent).toBe("Wactorz");
         expect(header.querySelector(".af-conn-badge")!.classList.contains("af-conn-live")).toBe(true);
-        // 4 built-in view tabs + the Devices link + audio, reset and sign-out
+        // 5 built-in view tabs + the Devices link + audio, reset and sign-out
         // icon buttons. Devices and sign-out are always built and hidden until
         // /api/config says otherwise, so both are here whatever it will answer.
-        expect(header.querySelectorAll(".af-view-btn").length).toBe(8);
+        expect(header.querySelectorAll(".af-view-btn").length).toBe(10);
     });
 
     it("marks the current view active (class + aria-current)", () => {
         const header = buildHeader({
             view: "feed",
-            connState: "demo",
+            connState: "disconnected",
             onSetView: vi.fn(),
             haUrl: null,
             extraViews: [],
@@ -78,8 +82,12 @@ describe("buildHeader", () => {
         });
         document.body.appendChild(header);
         const audioBtn = header.querySelector<HTMLButtonElement>('[title="Audio settings"]')!;
-        expect(audioBtn.getAttribute("aria-haspopup")).toBe("true");
-        expect(audioBtn.getAttribute("aria-controls")).toBeTruthy();
+        // A disclosure, not a menu: no popup role is promised, and the panel it
+        // controls is a group named after it.
+        expect(audioBtn.hasAttribute("aria-haspopup")).toBe(false);
+        const panel = document.getElementById(audioBtn.getAttribute("aria-controls")!)!;
+        expect(panel.getAttribute("role")).toBe("group");
+        expect(panel.getAttribute("aria-label")).toBe("Audio settings");
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         audioBtn.click(); // open: toggles `.open` and positions the popover
         expect(document.querySelector("div.open")).not.toBeNull();
@@ -107,6 +115,26 @@ describe("buildHeader", () => {
         expect(document.querySelector("div.open")).toBeNull();
         expect(audioBtn.getAttribute("aria-expanded")).toBe("false");
         expect(document.activeElement).toBe(audioBtn);
+    });
+
+    it("opening a popover moves focus into it, since it sits at the end of the page", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+        document.body.appendChild(header);
+        const resetBtn = header.querySelector<HTMLButtonElement>('[title="Clear stored state"]')!;
+        // The popovers are stubbed above; give this one something to focus.
+        const panel = document.getElementById(resetBtn.getAttribute("aria-controls")!)!;
+        const first = document.createElement("button");
+        panel.append(first, document.createElement("button"));
+
+        resetBtn.click();
+
+        expect(document.activeElement).toBe(first);
     });
 
     it("Escape closes the More sheet and returns focus to the More button", () => {
@@ -300,6 +328,20 @@ describe("buildBottomNav", () => {
         const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
         more.click();
         expect(sheet.classList.contains("open")).toBe(true);
+    });
+
+    it("puts the built-in views the bar has no room for in the More sheet, before Settings", () => {
+        const nav = buildBottomNav({ view: "overview", onSetView: vi.fn(), haUrl: null, extraViews: [] });
+        const sheet = nav.querySelector<HTMLElement>(".af-bottom-sheet")!;
+
+        expect([...sheet.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"])).toEqual([
+            "feed",
+            "models",
+            "settings",
+        ]);
+        expect(nav.querySelector(':scope > [data-view="models"]')).toBeNull();
+        expect(nav.querySelector(':scope > [data-view="feed"]')).toBeNull();
+        expect(nav.querySelector(':scope > [data-view="inbox"]')).not.toBeNull();
     });
 
     it("a secondary (settings) tab routes through onSetView", () => {

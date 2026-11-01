@@ -104,7 +104,7 @@ Every remote node main knows: whether it is online, its agents, its latest readi
 {
   "nodes": [
     {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
-     "version": "0.7.0", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "version": "0.7.2", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
      "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
      "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
      "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
@@ -186,12 +186,18 @@ Send a chat message to a named agent.
 { "message": "what is the weather?", "agent_name": "main" }
 ```
 
-`agent_name` is optional and defaults to `main`, the orchestrator.
+`agent_name` is optional and defaults to `main`, the orchestrator. It is a name or a full
+address, `name@node` (see [Addressing an agent](agents.md#addressing-an-agent)).
 
 **Response** `200 OK`
 ```json
 { "status": "sent", "agent": "main" }
 ```
+
+`404` when no agent has the name; `409` when agents on more than one node have it, with an
+`error` that lists their addresses, and when the address names one of them on a node from
+before tasks went by node, which would share the task with the others (see
+[Addressing an agent](agents.md#addressing-an-agent)).
 
 The reply is delivered asynchronously over MQTT (`agents/{id}/chat`) and via the `/ws` WebSocket bridge.
 
@@ -203,10 +209,46 @@ Query the persistent chat log table. Query parameters:
 
 | Param | Description |
 |---|---|
-| `agent` | filter by agent name |
+| `agent_id` | one agent's history, by its id |
+| `agent` | filter by agent name: every agent that went by it |
 | `role` | filter by role (`user` or `assistant`) |
 | `since` | Unix timestamp float — only newer rows |
 | `limit` | max rows (default 200, max 1000) |
+
+An agent's question is stored as its words with the options numbered under them. A row that
+is a question the ledger still knows (`GET /api/questions`) carries it, so the dashboard can
+show it with its buttons, or with the pick once it is answered:
+
+```json
+{"id": 41, "ts": 1760000000.4, "agent_name": "hvac-watch", "agent_id": "…", "role": "assistant",
+ "content": "Did something change at 14:02?\n\n1. maintenance\n2. real problem",
+ "question": {"id": "3f2a…", "agent_id": "…", "text": "Did something change at 14:02?",
+              "options": ["maintenance", "real problem"], "answer": null}}
+```
+
+The same words asked more than once are told apart by time: a row is the question asked
+nearest it.
+
+A row's `agent_id` is the id of the agent whose thread the turn is in, and the history is kept
+by it: two agents may share a name, and `agent` returns the rows of both. A row stored before
+ids were kept has the id its agent had then, derived from its name.
+
+---
+
+### `GET /api/commands`
+
+The slash commands the chat can send, each way to type them, for the dashboard's chat box to offer as a person types `/`. They come from the orchestrator that answers the chat (main's commands, the model-free profile's few, or an orchestrator's own by name), and from the server for the few it answers itself before any orchestrator: `/agents` where nothing else does, `/deploy`, `/migrate` and `/clear-plans`.
+
+**Response** `200 OK`
+```json
+{
+  "commands": [
+    {"usage": "/plans approve <id>", "typed": "/plans approve", "summary": "execute a proposed pipeline"}
+  ]
+}
+```
+
+`typed` is what goes in the box before the first argument. `/help` lists the same forms.
 
 ---
 
@@ -264,9 +306,11 @@ Clear stored state and broadcast a reset event over the dashboard WebSocket.
 ```
 
 `scope` must be one of `"chat"`, `"state"`, `"metrics"`, `"spawns"`, `"logs"`, or `"all"`.
-`agent` is optional — when set, the reset is limited to that agent by name.
+`agent` is optional — when set, the reset is limited to that agent, by name or `name@node`, for `chat`, `state`, `metrics` and `spawns`. `logs` is this server's log files, which every agent shares, and `all` is a factory reset, which stops and wipes everything whatever agent is named; both ignore it. A `chat` reset for one agent deletes the uploaded files only that agent's thread referred to; a file another thread also shows is kept. A `state` reset also restarts each agent it covers on a node, and each on main that the supervisor runs, so the agent forgets what it read when it started as well as the file; the system's own agents (main, the monitor, the installer, the catalogue), and any the supervisor does not hold, keep running with their copies cleared.
 
-**Response** `200 OK` with the result of the reset operation; `400` if `scope` is missing or invalid. Also available as the `wactorz-reset` CLI for offline use.
+`chat`, `state` and `metrics` also reach the agents on nodes: main asks each node concerned to clear its own copies, and waits up to 10 s for it to say so.
+
+**Response** `200 OK` with `{"status": "ok", "scope": ..., "agent": ..., "nodes": {...}}`. `nodes` (empty for `all`, which deletes the agents on nodes rather than resetting them) says, for each node the reset concerned, `"cleared"`, `"no answer"`, `"offline"` (not asked: the request is not kept for it), or `"older release"` (a node that does not reset its agents; deploy it again). `400` if `scope` is missing or invalid; `404` if `agent` is an address and the name is not on that node; `409` if `agent` is a bare name in more than one place, main and nodes alike (the `error` lists the addresses), or an address whose agent's id cannot be found. An address of a name in more than one place resets that agent alone, and the others of the name keep everything. Also available as the `wactorz-reset` CLI for offline use.
 
 ---
 
@@ -279,6 +323,277 @@ Sanitized runtime configuration (no secrets).
 ### `GET /api/feed`
 
 Recent activity feed events.
+
+---
+
+### `GET /api/models`
+
+Every model kept with `wactorz-artifacts`: its newest version and where its pointers stand.
+
+**Response** `200 OK`
+```json
+{
+  "models": [
+    {
+      "name": "imu-detector",
+      "newest": {"name": "imu-detector", "version": 4, "format": "npz", "size": 2048,
+                 "sha256": "…", "metadata": {"caught": 0.92}, "reference": "imu-detector:4", "…": "…"},
+      "versions": 4,
+      "pointers": {
+        "active": {"name": "imu-detector", "pointer": "active", "version": 3, "previous": 2,
+                   "by": "dashboard", "reason": "auc 0.95", "moved_at": 1760000000.0,
+                   "sha256": "…", "holds": true}
+      }
+    }
+  ]
+}
+```
+
+A pointer's `holds` is false when the version it names no longer holds the bytes it was set to, which happens once a removed version's number is reused: move the pointer.
+
+---
+
+### `GET /api/models/{name}`
+
+One model: every version, oldest first, with what was said of it when it was stored (`metadata`), and its pointers as above. `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
+
+---
+
+### `GET /api/models/{name}/moves`
+
+Every move of the model's pointers, newest first: who made it, why, and from which version to which. The store journals each change as it is made, whoever made it (the dashboard, the chat, the CLI beside the server), and main records the journal in the provenance graph on its next look. `limit` caps how many (default 200, at most 1000).
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector",
+ "moves": [
+   {"at": 1760000300.0, "pointer": "shadow", "change": "promoted", "version": null, "from": 4,
+    "by": "dashboard", "reason": "won the trial"},
+   {"at": 1760000300.0, "pointer": "active", "change": "moved", "version": 4, "from": 3,
+    "by": "dashboard", "reason": "won the trial"}
+ ]}
+```
+
+`change` is `moved` (set to `version`), `cleared` (unset, with the clear's own `reason`; `by` is empty for a pointer dropped by removing every version of the model), or `promoted` (the shadow cleared by a promotion, with the promotion's `by` and `reason`). Every change is kept, however quickly the next follows; one made while main was down is recorded when it starts. The history outlives the versions, so a model whose versions were all removed still has its moves. `400` for a bad `name` or `limit`, `503` when persistence is not running.
+
+---
+
+### `POST /api/models/{name}/active` · `POST /api/models/{name}/shadow`
+
+Point `active`, the version agents serve, or `shadow`, the one on trial beside it, at a version.
+
+**Request body**
+```json
+{"version": 3, "reason": "auc 0.95 on imu-2026"}
+```
+
+`reason` is optional. The move is recorded as made `by` `dashboard`, as the CLI's are `by` `cli`. Pointing `active` at the shadow version promotes it.
+
+**Response** `200 OK`: `{"pointer": {...}}`, where the pointer stands now. Main publishes it on `models/{name}/{pointer}` within a few seconds.
+
+---
+
+### `POST /api/models/{name}/promote`
+
+Make the shadow version active and end the trial. Body optional: `{"reason": "..."}`.
+
+---
+
+### `POST /api/models/{name}/rollback`
+
+Move `active` back to the version it named before its last move. Only that one step is kept, so a second rollback returns to where the first started. Body optional: `{"reason": "..."}`.
+
+---
+
+### `DELETE /api/models/{name}/shadow`
+
+End the trial: unset `shadow`. The body is optional: `{"reason": "..."}` is kept with the clear in the history.
+
+---
+
+### `GET /api/models/{name}/trial`
+
+What the shadow trial shows: the pairs the serving agents kept, compared. By default the trial's own window, from when `shadow` was set to now; `since` and `until` (Unix seconds) choose another, and are the only way to read a trial that has ended. `source` and `positive` (label values, comma separated) add each side's precision and recall over the pairs a label of that source covers, as `GET /api/labels/effective` resolves them.
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector", "shadow": {"version": 4, "moved_at": 1760000000.0, "...": "..."},
+ "since": 1760000000.0, "until": 1760086400.0, "source": "sensors/imu/left-wrist",
+ "pairs": 8640, "agreement": 0.97, "flagged": {"active": 41, "shadow": 38}, "shadow_errors": 0,
+ "versions": {"active": [3], "shadow": [4]},
+ "latency": {"active": {"mean_ms": 1.2, "p95_ms": 2.9}, "shadow": {"mean_ms": 1.4, "p95_ms": 3.1}},
+ "score": {"active_mean": 2.1, "shadow_mean": 2.0, "difference_mean": -0.1, "scored": 8640},
+ "labels": {"labelled": 120, "positives": 9, "positive": ["fault"],
+            "active": {"tp": 7, "fp": 3, "fn": 2, "precision": 0.7, "recall": 0.78},
+            "shadow": {"tp": 8, "fp": 1, "fn": 1, "precision": 0.89, "recall": 0.89}}}
+```
+
+`agreement` is the share of pairs where both sides answered alike; `flagged` how many inputs each side published something for; `score` is read from a `score` field in the outputs, over the pairs where both gave one. `404` when no shadow is set and no window is given, `400` for a bad `name`, `since` or `until`, `503` when the pairs cannot be read because the `data` extra is not installed, or when labels are asked for and persistence is not running.
+
+---
+
+### `GET /api/models/{name}/trial/series`
+
+The same pairs over time, for a chart: the window as above, cut into `points` stretches of equal length (120 unless said, at most 1000).
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector", "since": 1760000000.0, "until": 1760086400.0,
+ "buckets": [{"ts": 1760000360.0, "pairs": 72, "active_score": 2.1, "shadow_score": 2.0,
+              "active_ms": 1.2, "shadow_ms": 1.4},
+             {"ts": 1760001080.0, "pairs": 0, "active_score": null, "shadow_score": null,
+              "active_ms": null, "shadow_ms": null}]}
+```
+
+Every stretch is there, with `pairs` 0 and nulls where no input came, so a chart can show the gap. `ts` is the middle of the stretch; each value is that side's mean over it. `400` for a bad `points`, and otherwise the same answers as `.../trial`.
+
+---
+
+### `GET /api/models/{name}/trials`
+
+The outcomes of the model's trials that ended, newest first: how each ended (`promoted` or `cleared`), the versions on either side, the window, and the comparison above as it stood then. `503` when persistence is not running.
+
+---
+
+### `GET /api/data`
+
+The sources with recorded readings under the state directory's `data/`: every source a recorder filed at least one hour of, and `shadow/<model>` and `serving/<model>` for pairs and serving logs (`docs/design/data-storage.md`). Each says what it holds, and the answer says the retention in force (`WACTORZ_DATA_RETENTION_DAYS`; `null` when everything is kept).
+
+**Response** `200 OK`
+```json
+{"sources": [{"source": "sensors/imu/left-wrist", "hours": 312, "files": 320, "bytes": 48213990,
+              "from": 1759000000.0, "to": 1760123600.0}],
+ "retention_days": 30}
+```
+
+---
+
+### `GET /api/data/{source}/series`
+
+One `column` of `source` over a window, in `points` buckets of equal width (default 200, at most 2000), for a chart: each bucket's row count and, of the numbers in it, their mean, least and most; an empty bucket is a gap with nulls. `since` and `until` as for the profile.
+
+**Response** `200 OK`
+```json
+{"source": "sensors/imu/left-wrist", "column": "ax", "since": 1760000000.0, "until": 1760086400.0, "points": 200,
+ "buckets": [{"from": 1760000000.0, "to": 1760000432.0, "count": 43, "mean": 0.02, "min": -1.1, "max": 1.3}, "..."]}
+```
+
+`400` for a missing `column`, a bad source, window or `points`; `404` for a column the window's files lack; `503` without the `data` extra.
+
+---
+
+### `GET /api/data/{source}/profile`
+
+The dataset card of a window of `source`: rows, span, rate, gaps, and each column described. `since` and `until` are Unix seconds; the last day ending now when unsaid. A number column reports count, missing, min, max, mean and the 5th, 50th and 95th percentiles; a text or bool column its distinct values and the most common.
+
+**Response** `200 OK`
+```json
+{"source": "sensors/imu/left-wrist", "rows": 8640, "since": 1760000000.0, "until": 1760086400.0,
+ "from": 1760000003.1, "to": 1760086398.7, "span_s": 86395.6, "rate_per_s": 0.1, "median_step_s": 10.0,
+ "gaps": {"count": 2, "longest_s": 1800.0},
+ "columns": {"ax": {"type": "number", "count": 8640, "missing": 0, "min": -3.1, "max": 12.4, "mean": 0.02,
+                    "quantiles": {"0.05": -1.9, "0.5": 0.0, "0.95": 1.9}},
+             "device": {"type": "text", "count": 8640, "missing": 0, "distinct": 1,
+                        "top": [{"value": "left-wrist", "count": 8640}]}}}
+```
+
+`400` for a source that cannot name one or a bad window, `503` when the `data` extra is not installed. The same card from a terminal: `wactorz-data profile <source>`.
+
+---
+
+Every pointer move answers `200 OK` with `{"pointer": {...}}`, the pointer it moved as it stands now; for `DELETE .../shadow`, the shadow pointer as it was before it was cleared. Each answers `409` for a move the pointers do not allow now (already there, no shadow to promote, nothing to roll back to, a shadow on the active version), `404` for a name or version that is not stored, and `400` for a request that is not one; `{"error": "..."}` says which in the store's words.
+
+---
+
+### `GET /api/questions`
+
+The questions agents have put to a person, on any channel, from main or a node: the open ones oldest first, and the newest answered ones.
+
+**Response** `200 OK`
+```json
+{
+  "open": [
+    {"id": "3f2a…", "agent_id": "…", "agent": "hvac-watch",
+     "text": "Did something change at 14:02?", "options": ["maintenance", "real problem"],
+     "channel": "telegram", "user": "123456789", "asked_at": 1760000000.0,
+     "answer": null, "answer_index": null, "answer_channel": "", "answered_at": 0.0,
+     "answer_note": "", "fallen_back": false, "label": null,
+     "context": "Supply air rose 6 degrees in ten minutes."}
+  ],
+  "answered": []
+}
+```
+
+Read from the books agents publish on `agents/{id}/questions`. `label` is the label spec a question was asked with (`ask_operator(..., label=...)`), or `null`; see `GET /api/labels`. `context` is why the agent says it asks (`ask_operator(..., context=...)`), or empty; the dashboard's Inbox shows it, and chat channels are sent the question alone.
+
+---
+
+### `POST /api/questions/{agent_id}/{question_id}/answer`
+
+Pick one of a question's options, as the dashboard's button does. The first pick on any channel is the answer.
+
+**Request body**
+```json
+{"option": "maintenance", "note": "valve replaced at 14:02"}
+```
+
+`note` is optional: what the person adds in their own words, up to 500 characters. The agent keeps it with the answer as `answer_note`.
+
+**Response** `200 OK`: `{"answer": {"id": "...", "option": "maintenance", "index": 0, "channel": "dashboard", ...}}`, the pick as it went to the agent on `agents/{agent_id}/answer`. `404` for a question that is not in `GET /api/questions`, `409` for one already answered, `400` for an option it did not offer, `503` when the broker is not connected.
+
+A `200` says the pick was sent, not that it was first: the `409` is checked against the ledger, which learns of an answer only when the agent publishes its book again. Two picks sent at nearly the same moment can both be sent, and the agent keeps the one that reaches it first. `GET /api/questions` shows which.
+
+The dashboard's button is checked the same way when the question is listed. A message sent with `notify_user` alone keeps no book, so its pick goes to the agent unchecked, for the agent to judge.
+
+The installer's question about a package and main's about running model-written code are listed like any other, with `"permission": true`. They are settled only by a pick made here or on the dashboard, in the server's own process: one published on `agents/{agent_id}/answer` changes nothing. They close with `answer` set to what ended them when no pick came: `No answer in time`, `Allowed` or `The server restarted first`.
+
+---
+
+### `GET /api/labels`
+
+Labels: what a source was doing over a period, as the operator, an agent or a rule said. Oldest recorded first. Query parameters, all optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `source` | Only labels on this topic or entity |
+| `since`, `until` | Only labels whose window touches this stretch of event time, in Unix seconds |
+| `all` | `1` to include labels a later one has superseded entirely |
+| `limit` | At most this many, up to 5000 (default 1000) |
+
+**Response** `200 OK`
+```json
+{
+  "labels": [
+    {"id": "…", "source": "sensors/ahu-1", "start": 1760000000.0, "end": null,
+     "value": "maintenance", "status": "partly_superseded", "recorded": 1760001860.0,
+     "actor": "operator", "node": "rpi", "channel": "telegram", "note": "valve replaced",
+     "question_id": "3f2a…", "model": "", "verified": false}
+  ]
+}
+```
+
+A label is written, never here, by an answer to a question asked with a label spec, by an agent's `agent.label(...)` on main, or by a rule's `label` action. A later label on the same source supersedes an earlier one where their windows overlap: the earlier one stays, `partly_superseded` or `superseded`. `verified` is `true` for a label from an answer the dashboard sent, from an agent or from a rule, and `false` for one from an answer heard on the broker, which anything there could have published. `400` for a parameter that is not what it should be, `503` when persistence is not running. See `docs/design/labels-and-provenance.md`.
+
+---
+
+### `GET /api/labels/effective`
+
+What one `source` was doing, moment by moment: the newest label at each moment over `since` to `until` (Unix seconds, both optional). Adjacent stretches of one label are one interval, and a stretch no label covers is left out.
+
+**Response** `200 OK`
+```json
+{
+  "source": "sensors/ahu-1", "since": null, "until": null,
+  "intervals": [
+    {"start": 1760000000.0, "end": 1760003600.0, "value": "maintenance",
+     "label_id": "…", "actor": "operator", "channel": "telegram", "verified": false},
+    {"start": 1760003600.0, "end": null, "value": "fault",
+     "label_id": "…", "actor": "operator", "channel": "dashboard", "verified": true}
+  ]
+}
+```
+
+`400` without a `source`, `503` when persistence is not running.
 
 ---
 
@@ -397,6 +712,20 @@ After connection the server streams every MQTT message as a JSON object. Field n
 ```
 
 The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
+
+### Chat frames
+
+A chat turn is sent as `{"type": "chat", "content": "...", "agent_name": "main", "agent_id": "…", "id": "…"}`: the thread the page is in, by name and id, and the page's id for the message. Only `content` is required.
+
+The server answers first with the agent the turn reached, which is the agent an `@mention` names when it can reach one, and otherwise the thread the page said:
+
+```json
+{"type": "turn", "agent_id": "…", "name": "catalog", "id": "…", "timestamp": 1760000000.4}
+```
+
+`id` is the message's own, so the page files the person's words in that agent's thread. Every reply frame that follows (`chat`, `stream_chunk`, `stream_end`) carries the same `from` (the agent's name) and `agent_id`.
+
+A relayed `server_event` for an agent's chat message carries `thread_id`, the id of the agent whose thread it is in, when that is not the agent whose topic it came on: a voice surface relays the person's words to the agent that answers them, which it names only by name.
 
 ---
 

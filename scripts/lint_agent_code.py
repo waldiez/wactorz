@@ -80,11 +80,23 @@ def programs() -> list[Program]:
     return found
 
 
+class WriteRefusedError(SystemExit):
+    """An edit not written back, because writing it would damage the file it came from."""
+
+    @classmethod
+    def not_unique(cls, name: str) -> "WriteRefusedError":
+        return cls(f"{name}: program is not uniquely locatable; refusing to write")
+
+    @classmethod
+    def invalid(cls, label: str, lineno: int | None) -> "WriteRefusedError":
+        return cls(f"{label}: rewriting produced invalid Python at line {lineno}")
+
+
 def _write_back(program: Program, source: str) -> None:
     """Put an edited program back inside the string it came from."""
     text = program.path.read_text(encoding="utf-8")
     if text.count(program.source) != 1:
-        raise SystemExit(f"{program.name}: program is not uniquely locatable; refusing to write")
+        raise WriteRefusedError.not_unique(program.name)
     program.path.write_text(text.replace(program.source, source, 1), encoding="utf-8")
 
 
@@ -93,9 +105,7 @@ def _still_loads(source: str, label: str) -> None:
     try:
         ast.parse(source)
     except SyntaxError as exc:
-        raise SystemExit(
-            f"{label}: rewriting produced invalid Python at line {exc.lineno}"
-        ) from exc
+        raise WriteRefusedError.invalid(label, exc.lineno) from exc
 
 
 def check(program: Program, *, fix: bool, fmt: bool) -> tuple[int, str]:

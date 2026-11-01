@@ -24,6 +24,10 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core.identity import derive_actor_id
+from wactorz.core.persistence import WactorzDB
+from wactorz.reset import reset_chat
 from wactorz.web import api_reset, cost, runtime
 
 
@@ -502,6 +506,12 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
         mocks = await self._call_with_mocks("all")
         mocks["reset_all"].assert_called_once()
 
+    async def test_all_scope_wipes_everything_whatever_agent_is_named(self):
+        # Every agent is stopped whatever is named, so the records go for all of
+        # them too: wiping one agent's would leave a half-wiped install.
+        mocks = await self._call_with_mocks("all", agent="counter")
+        mocks["reset_all"].assert_called_once_with(None)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. reset_spawns clears the AUTHORITATIVE kv-backed registry
@@ -541,6 +551,35 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 reset_spawns(agent_name="a", db_path=db_path)
                 reg = db.kv_get("main", "_spawned_agents", None)
                 self.assertEqual(reg, {"b": {"node": "n1"}})
+
+    def test_all_clears_the_registry_kept_by_id_and_the_one_by_name(self):
+        # Main reads the old one when the new one is absent, so both go, or a
+        # cleared registry would come back from the older store.
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}})
+                db.kv_set("main", "_spawned_agents_by_id", {"id-a": {"name": "a", "node": ""}})
+                reset_spawns(db_path=db_path)
+                self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
+                self.assertIsNone(db.kv_get("main", "_spawned_agents_by_id", None))
+
+    def test_single_agent_pops_every_entry_of_that_name_by_id(self):
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                db.kv_set(
+                    "main",
+                    "_spawned_agents_by_id",
+                    {"id-a": {"name": "a", "node": ""}, "id-b": {"name": "b", "node": "n1"}},
+                )
+                reset_spawns(agent_name="a", db_path=db_path)
+                reg = db.kv_get("main", "_spawned_agents_by_id", None)
+                self.assertEqual(reg, {"id-b": {"name": "b", "node": "n1"}})
 
     def test_restart_read_sees_empty_registry_after_wipe(self):
         """End-to-end of the actual symptom: after a wipe, the registry read
@@ -687,7 +726,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # publish. `recall` already answers None for an unset key.
         main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main._get_spawn_registry = lambda: {"agentX": {"node": "n1"}}  # type: ignore[method-assign]
+        main._get_spawn_registry = lambda: SpawnRegistry.from_names({"agentX": {"node": "n1"}})  # type: ignore[method-assign]
 
         fake_registry = MagicMock()
         fake_registry.all_actors.return_value = [main]
@@ -868,18 +907,64 @@ class ResetUploadsTest(unittest.TestCase):
 
             self.assertEqual(list(uploads.iterdir()), [])
 
-    def test_one_agent_leaves_them_alone(self):
-        from wactorz.reset import reset_chat
+    @staticmethod
+    def _stored(uploads: Path, file_id: str) -> None:
+        (uploads / file_id).write_bytes(b"\x89PNG\r\n\x1a\n")
+        (uploads / f"{file_id}.json").write_text('{"name":"shot.png"}', encoding="utf-8")
 
-        # An upload records the file's name, type and size — never who attached
-        # it — so there is no way to select one agent's files. Deleting all of
-        # them here would take another agent's attachments with it.
+    def test_one_agent_takes_the_files_only_its_thread_named(self):
+        # A row is filed under its thread whoever attached the file, so the rows
+        # are what say whose files are whose.
+        mine, shared, unsent = "a" * 32, "b" * 32, "c" * 32
         with tempfile.TemporaryDirectory() as tmp:
             uploads = self._seed(tmp)
+            self._stored(uploads, shared)
+            self._stored(uploads, unsent)
+            db_path = str(Path(tmp) / "wactorz.db")
+            db = WactorzDB(db_path)
+            db.write_chat_log(
+                1.0,
+                "counter",
+                "user",
+                "look",
+                attachments=[{"id": mine}],
+                agent_id=derive_actor_id("counter"),
+            )
+            db.write_chat_log(
+                2.0,
+                "counter",
+                "user",
+                "and",
+                attachments=[{"id": shared}],
+                agent_id=derive_actor_id("counter"),
+            )
+            db.write_chat_log(
+                3.0,
+                "main",
+                "user",
+                "this too",
+                attachments=[{"id": shared}],
+                agent_id=derive_actor_id("main"),
+            )
+            db.close()
 
-            reset_chat(agent_name="main", db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+            reset_chat(agent_name="counter", db_path=db_path, state_dir=tmp)
 
-            self.assertEqual(len(list(uploads.iterdir())), 2)
+            # The one main's thread still shows stays, and so does one no turn
+            # has sent yet: it may be in a message still being written.
+            left = sorted(p.name for p in uploads.iterdir())
+            self.assertEqual(left, [shared, f"{shared}.json", unsent, f"{unsent}.json"])
+
+    def test_a_name_in_a_row_cannot_reach_outside_the_directory(self):
+        from wactorz.web import uploads as upload_store
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "keep.txt"
+            outside.write_text("mine")
+            (Path(tmp) / "uploads").mkdir()
+
+            self.assertEqual(upload_store.discard({"../keep.txt"}, state_dir=tmp), 0)
+            self.assertTrue(outside.exists())
 
     def test_a_state_dir_with_no_uploads_is_not_created(self):
         from wactorz.reset import reset_uploads

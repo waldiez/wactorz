@@ -13,6 +13,7 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD, NodeManager
+from wactorz.agents.main.spawn_registry import NAME_KEYED_REGISTRY_KEY
 from wactorz.agents.main.spawns import SpawnService
 
 
@@ -26,7 +27,8 @@ def _bare_main(registry: dict) -> MainActor:
     m.migration = Migration(m, m.nodes)
     m.name = "main"
     m._node_agent_misses = {}
-    m.recall = lambda *a, **k: registry  # the spawn registry
+    # The spawn registry, as a store from before ids were kept holds it: by name.
+    m.recall = lambda key, default=None: registry if key == NAME_KEYED_REGISTRY_KEY else default
     return m
 
 

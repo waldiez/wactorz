@@ -8,10 +8,14 @@ that state for a newly connected websocket client.
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ..agents.llm.cost import get_global_alltime_cost
-from . import cost, runtime
+from ..core import outbound
+from ..core.questions import QUESTIONS_LEAF
+from . import chat, cost, runtime
+from . import questions as question_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,12 @@ logger = logging.getLogger(__name__)
 #: so a client publishing under fresh ids grows this map for as long as it keeps
 #: publishing. Well above any real deployment; it is a ceiling, not a budget.
 MAX_TRACKED_AGENTS = 500
+
+#: Alerts kept for the dashboard, newest first.
+MAX_ALERTS = 50
+
+#: Feed entries kept for the dashboard, newest first.
+MAX_FEED_ENTRIES = 100
 
 #: Frame type announcing that an agent is gone. The dashboard matches this
 #: string exactly to drop the card and tombstone the id; a state snapshot alone
@@ -147,8 +157,28 @@ def add_log(entry: dict[str, Any]) -> None:
     """
     entry["source"] = "agent"
     runtime.state["log_feed"].insert(0, entry)
-    if len(runtime.state["log_feed"]) > 100:
+    if len(runtime.state["log_feed"]) > MAX_FEED_ENTRIES:
         runtime.state["log_feed"].pop()
+
+
+def question_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """What a chat frame says about the choice it offers, for the dashboard.
+
+    Only present when the frame carries them: a plain message stays as it was,
+    and a frame that names a channel says so, so the dashboard can show where
+    the question also went.
+    """
+    fields: dict[str, Any] = {}
+    message_id = data.get("id")
+    if isinstance(message_id, str) and message_id:
+        fields["id"] = message_id
+    options = data.get("options")
+    if isinstance(options, list) and options:
+        fields["options"] = [str(o) for o in options]
+    channel = data.get("channel")
+    if isinstance(channel, str) and channel and channel != outbound.DASHBOARD:
+        fields["channel"] = channel
+    return fields
 
 
 def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
@@ -163,250 +193,335 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
         data = payload_str
 
     parts = topic.split("/")
-
     if parts[0] == "system" and len(parts) >= 2:
-        if parts[1] == "health":
-            runtime.state["system_health"] = data
-        elif parts[1] == "alerts":
-            runtime.state["alerts"].insert(0, data)
-            if len(runtime.state["alerts"]) > 50:
-                runtime.state["alerts"].pop()
-        return {"type": "system", "subtype": parts[1], "data": data}
-
+        return _on_system(parts[1], data)
     if parts[0] == "agents" and len(parts) >= 3:
-        agent_id = parts[1]
-        metric = parts[2]
-
-        # A withdrawn manifest is an agent saying it no longer exists. It is the
-        # one removal signal every ending publishes — an actor that ends itself,
-        # main deleting one on the user's behalf, and a node's runner, which
-        # runs where none of this module is reachable — so the dashboard listens
-        # for it rather than each of those paths reaching in here.
-        #
-        # Dropping the entry is what clears the card. The REST actor list comes
-        # from the registry and a state patch from this map, so an entry left
-        # here outlives the agent and every patch re-adds the card that each
-        # reconcile removes. The tombstone keeps a trailing frame from the same
-        # stop window putting it back; a respawn re-admits itself on its first
-        # status.
-        if metric == "manifest" and not payload_str.strip():
-            runtime.state["agents"].pop(agent_id, None)
-            runtime.mark_deleted(agent_id)
-            logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
-            return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
-
-        # Re-admit a deleted agent on a FRESH status event. Every actor
-        # publishes its first status from on_start(), with uptime ≈ 0; that's
-        # the unambiguous "I just started" signal. A stale retained status
-        # from the previous (deleted) incarnation would carry the uptime it
-        # had at the moment of deletion (typically large), so we don't
-        # confuse it with a respawn.
-        #
-        # Without this, deleting an agent and respawning it under the same
-        # name produces the same deterministic actor_id (uuid5 of the name),
-        # the deleted guard fires, and the new instance is invisible in the
-        # dashboard even though it's actually running.
-        if metric == "status" and isinstance(data, dict) and runtime.is_deleted(agent_id):
-            uptime = data.get("uptime", 0)
-            try:
-                uptime = float(uptime)
-            except (TypeError, ValueError):
-                uptime = 0.0
-            agent_state = data.get("state", "")
-            if uptime < 10.0 and agent_state not in ("stopped", "failed"):
-                runtime.undelete(agent_id)
-                logger.info(
-                    "[MQTT] Re-admitting respawned agent %s "
-                    "(uptime=%.1fs, state=%s, previously deleted)",
-                    agent_id[:8],
-                    uptime,
-                    agent_state,
-                )
-
-        # If the agent was just deleted, update_agent() refuses to recreate
-        # the entry — so any direct state["agents"][agent_id] access below
-        # would KeyError. Skip the whole branch; the agent is gone.
-        if runtime.is_deleted(agent_id):
-            return {"type": "agent", "subtype": metric, "agent_id": agent_id, "data": data}
-
-        if metric == "status":
-            update_agent(agent_id, "status", data)
-            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
-                if "name" in data:
-                    runtime.state["agents"][agent_id]["name"] = data["name"]
-                if "state" in data:
-                    runtime.state["agents"][agent_id]["state"] = data["state"]
-                if "protected" in data:
-                    runtime.state["agents"][agent_id]["protected"] = data["protected"]
-                if "essential" in data:
-                    runtime.state["agents"][agent_id]["essential"] = data["essential"]
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {
-                    "type": "status",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "status": data,
-                    "timestamp": time.time(),
-                }
-            )
-
-        elif metric == "heartbeat":
-            record_heartbeat(agent_id, data)
-            if agent_id in runtime.state["agents"]:
-                agent_name = runtime.state["agents"][agent_id].get("name", agent_id[:8])
-                logger.info("[MQTT] Heartbeat: %s", agent_name)
-
-        elif metric == "metrics":
-            update_agent(agent_id, "metrics", data)
-            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
-                runtime.state["agents"][agent_id]["messages_processed"] = data.get(
-                    "messages_processed", 0
-                )
-                if "cost_usd" in data:
-                    runtime.state["agents"][agent_id]["cost_usd"] = data.get("cost_usd", 0.0)
-                    runtime.state["agents"][agent_id]["input_tokens"] = data.get("input_tokens", 0)
-                    runtime.state["agents"][agent_id]["output_tokens"] = data.get(
-                        "output_tokens", 0
-                    )
-                    # Bank the spend durably so it survives the agent being
-                    # deleted or hard-killed before its on_stop() can persist.
-                    cost.record_lifetime_cost(agent_id, data.get("cost_usd"))
-
-        elif metric == "logs":
-            # Log frames carry only the agent id; resolve the friendly name the
-            # same way alert/completed do so the feed never shows a bare id.
-            # `**data` last lets a payload that already includes a name win.
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {
-                    "type": "log",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "timestamp": time.time(),
-                    **(data if isinstance(data, dict) else {}),
-                }
-            )
-        elif metric == "spawned":
-            # Payload carries child_name/child_id, not name — resolve the (parent)
-            # agent's name from state so the feed row isn't attributed to a bare id.
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {
-                    "type": "spawned",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "timestamp": time.time(),
-                    **(data if isinstance(data, dict) else {}),
-                }
-            )
-        elif metric == "chat":
-            # Usually an agent notification; voice agents may also publish the
-            # recognized user turn so it appears in the same dashboard thread.
-            sender = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            recipient = "user"
-            content = ""
-            timestamp = time.time()
-            source = ""
-            surface = ""
-            surface_label = ""
-            brain = ""
-            if isinstance(data, dict):
-                content = (data.get("content") or data.get("text") or "").strip()
-                sender = data.get("from") or sender
-                recipient = data.get("to") or recipient
-                source = data.get("source") if isinstance(data.get("source"), str) else ""
-                surface = data.get("surface") if isinstance(data.get("surface"), str) else ""
-                surface_label = (
-                    data.get("surface_label") if isinstance(data.get("surface_label"), str) else ""
-                )
-                brain = data.get("brain") if isinstance(data.get("brain"), str) else ""
-                try:
-                    timestamp = float(data.get("timestamp") or timestamp)
-                except (TypeError, ValueError):
-                    timestamp = time.time()
-            elif isinstance(data, str):
-                content = data.strip()
-            if content:
-                add_log(
-                    {
-                        "type": "chat",
-                        "agent_id": agent_id,
-                        "from": sender,
-                        "to": recipient,
-                        "content": content,
-                        "timestamp": timestamp,
-                        "source": source,
-                        "surface": surface,
-                        "surface_label": surface_label,
-                        "brain": brain,
-                    }
-                )
-                return {
-                    "type": "agent",
-                    "agent_id": agent_id,
-                    "metric": "chat",
-                    "data": data,
-                    "_push_chat": {
-                        "type": "chat",
-                        "from": sender,
-                        "to": recipient,
-                        "content": content,
-                        "timestamp": timestamp,
-                        "source": source,
-                        "surface": surface,
-                        "surface_label": surface_label,
-                        "brain": brain,
-                    },
-                }
-            return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
-        elif metric == "completed":
-            update_agent(agent_id, "last_completed", data)
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            add_log(
-                {"type": "completed", "agent_id": agent_id, "name": name, "timestamp": time.time()}
-            )
-        elif metric == "alert":
-            if isinstance(data, dict):
-                data["agent_id"] = agent_id
-                data.setdefault(
-                    "name", runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-                )
-            runtime.state["alerts"].insert(
-                0, data if isinstance(data, dict) else {"agent_id": agent_id}
-            )
-            if len(runtime.state["alerts"]) > 50:
-                runtime.state["alerts"].pop()
-            name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
-            severity = data.get("severity", "warning") if isinstance(data, dict) else "warning"
-            add_log(
-                {
-                    "type": "alert",
-                    "agent_id": agent_id,
-                    "name": name,
-                    "message": f"{name} unresponsive ({severity})",
-                    "timestamp": time.time(),
-                }
-            )
-
-        return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
-
+        return _on_agent(parts[1], parts[2], data, payload_str)
     if parts[0] == "nodes" and len(parts) >= 3 and parts[2] == "heartbeat":
-        node_name = parts[1]
-        if isinstance(data, dict):
-            runtime.state["nodes"][node_name] = {
-                "node": node_name,
-                "agents": data.get("agents", []),
-                "last_seen": time.time(),
-                "online": True,
-                "node_id": data.get("node_id", ""),
-                "version": data.get("version"),
-                "runtime": data.get("runtime") or "runner",
-            }
-            logger.info("[MQTT] Node heartbeat: %s | agents: %s", node_name, data.get("agents", []))
-            return {"type": "node", "node_name": node_name, "data": data}
-
+        return _on_node_heartbeat(parts[1], data)
     return None
+
+
+def _name_of(agent_id: str) -> str:
+    """The agent's name as live state knows it, or the start of its id when it knows none."""
+    return runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+
+
+def _on_system(subtopic: str, data: Any) -> dict[str, Any]:
+    if subtopic == "health":
+        runtime.state["system_health"] = data
+    elif subtopic == "alerts":
+        _add_alert(data)
+    return {"type": "system", "subtype": subtopic, "data": data}
+
+
+def _add_alert(alert: Any) -> None:
+    """Put ``alert`` first in the bounded alert list."""
+    runtime.state["alerts"].insert(0, alert)
+    if len(runtime.state["alerts"]) > MAX_ALERTS:
+        runtime.state["alerts"].pop()
+
+
+def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[str, Any]:
+    """One ``agents/<id>/<metric>`` message: the agent's comings and goings, then its leaf."""
+    # A withdrawn manifest is an agent saying it no longer exists. It is the
+    # one removal signal every ending publishes — an actor that ends itself,
+    # main deleting one on the user's behalf, and a node's runner, which
+    # runs where none of this module is reachable — so the dashboard listens
+    # for it rather than each of those paths reaching in here.
+    #
+    # Dropping the entry is what clears the card. The REST actor list comes
+    # from the registry and a state patch from this map, so an entry left
+    # here outlives the agent and every patch re-adds the card that each
+    # reconcile removes. The tombstone keeps a trailing frame from the same
+    # stop window putting it back; a respawn re-admits itself on its first
+    # status.
+    if metric == "manifest" and not payload_str.strip():
+        runtime.state["agents"].pop(agent_id, None)
+        question_ledger.forget(agent_id)
+        runtime.mark_deleted(agent_id)
+        logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
+        return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
+
+    if metric == "status" and isinstance(data, dict) and runtime.is_deleted(agent_id):
+        _readmit_if_respawned(agent_id, data)
+
+    # Deleting an agent clears its retained book, so a cleared one is heard
+    # even for an agent already marked deleted: the mark expires, and a book
+    # kept past it would bring the agent's questions back.
+    if metric == QUESTIONS_LEAF and not payload_str.strip():
+        question_ledger.forget(agent_id)
+
+    # If the agent was just deleted, update_agent() refuses to recreate
+    # the entry — so any direct state["agents"][agent_id] access in a
+    # handler would KeyError. Skip them all; the agent is gone.
+    if runtime.is_deleted(agent_id):
+        return {"type": "agent", "subtype": metric, "agent_id": agent_id, "data": data}
+
+    handler = _AGENT_HANDLERS.get(metric)
+    frame = handler(agent_id, data) if handler is not None else None
+    if frame is not None:
+        return frame
+    return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
+
+
+def _readmit_if_respawned(agent_id: str, data: dict[str, Any]) -> None:
+    """Re-admit a deleted agent whose status says it has just started.
+
+    Every actor publishes its first status from on_start(), with uptime ≈ 0;
+    that's the unambiguous "I just started" signal. A stale retained status
+    from the previous (deleted) incarnation would carry the uptime it had at
+    the moment of deletion (typically large), so it is not taken for a respawn.
+
+    Without this, deleting an agent and respawning it under the same name
+    produces the same deterministic actor_id (uuid5 of the name), the deleted
+    guard fires, and the new instance is invisible in the dashboard even
+    though it's actually running.
+    """
+    uptime = data.get("uptime", 0)
+    try:
+        uptime = float(uptime)
+    except (TypeError, ValueError):
+        uptime = 0.0
+    agent_state = data.get("state", "")
+    if uptime < 10.0 and agent_state not in ("stopped", "failed"):
+        runtime.undelete(agent_id)
+        logger.info(
+            "[MQTT] Re-admitting respawned agent %s (uptime=%.1fs, state=%s, previously deleted)",
+            agent_id[:8],
+            uptime,
+            agent_state,
+        )
+
+
+# ── One handler per agent leaf ───────────────────────────────────────────────
+# Each takes the agent's id and the decoded payload, and returns the frame to
+# broadcast, or None for the plain ``{"type": "agent", ...}`` one.
+
+#: What a status payload may say about the agent that its live entry keeps.
+_STATUS_FIELDS = ("name", "state", "protected", "essential")
+
+
+def _on_status(agent_id: str, data: Any) -> None:
+    update_agent(agent_id, "status", data)
+    if isinstance(data, dict) and agent_id in runtime.state["agents"]:
+        entry = runtime.state["agents"][agent_id]
+        for key in _STATUS_FIELDS:
+            if key in data:
+                entry[key] = data[key]
+    add_log(
+        {
+            "type": "status",
+            "agent_id": agent_id,
+            "name": _name_of(agent_id),
+            "status": data,
+            "timestamp": time.time(),
+        }
+    )
+
+
+def _on_heartbeat(agent_id: str, data: Any) -> None:
+    record_heartbeat(agent_id, data)
+    if agent_id in runtime.state["agents"]:
+        logger.info("[MQTT] Heartbeat: %s", _name_of(agent_id))
+
+
+def _on_metrics(agent_id: str, data: Any) -> None:
+    update_agent(agent_id, "metrics", data)
+    if not isinstance(data, dict) or agent_id not in runtime.state["agents"]:
+        return
+    entry = runtime.state["agents"][agent_id]
+    entry["messages_processed"] = data.get("messages_processed", 0)
+    if "cost_usd" in data:
+        entry["cost_usd"] = data.get("cost_usd", 0.0)
+        entry["input_tokens"] = data.get("input_tokens", 0)
+        entry["output_tokens"] = data.get("output_tokens", 0)
+        # Bank the spend durably so it survives the agent being
+        # deleted or hard-killed before its on_stop() can persist.
+        cost.record_lifetime_cost(agent_id, data.get("cost_usd"))
+
+
+def _on_logs(agent_id: str, data: Any) -> None:
+    # Log frames carry only the agent id; resolve the friendly name the
+    # same way alert/completed do so the feed never shows a bare id.
+    # `**data` last lets a payload that already includes a name win.
+    add_log(
+        {
+            "type": "log",
+            "agent_id": agent_id,
+            "name": _name_of(agent_id),
+            "timestamp": time.time(),
+            **(data if isinstance(data, dict) else {}),
+        }
+    )
+
+
+def _on_spawned(agent_id: str, data: Any) -> None:
+    # Payload carries child_name/child_id, not name — resolve the (parent)
+    # agent's name from state so the feed row isn't attributed to a bare id.
+    add_log(
+        {
+            "type": "spawned",
+            "agent_id": agent_id,
+            "name": _name_of(agent_id),
+            "timestamp": time.time(),
+            **(data if isinstance(data, dict) else {}),
+        }
+    )
+
+
+def _text_field(data: dict[str, Any], key: str) -> str:
+    """``data[key]`` when it is a string, else empty."""
+    value = data.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _chat_message(agent_id: str, data: Any) -> dict[str, Any]:
+    """What one ``agents/<id>/chat`` payload says, as the feed and the chat show it.
+
+    ``content`` is empty for a frame that says nothing; such a frame is relayed
+    but neither logged nor pushed to the chat.
+    """
+    message: dict[str, Any] = {
+        "from": _name_of(agent_id),
+        "to": "user",
+        "content": "",
+        "timestamp": time.time(),
+        "source": "",
+        "surface": "",
+        "surface_label": "",
+        "brain": "",
+    }
+    if isinstance(data, str):
+        message["content"] = data.strip()
+    if not isinstance(data, dict):
+        return message
+    message["content"] = (data.get("content") or data.get("text") or "").strip()
+    message["from"] = data.get("from") or message["from"]
+    message["to"] = data.get("to") or message["to"]
+    for key in ("source", "surface", "surface_label", "brain"):
+        message[key] = _text_field(data, key)
+    try:
+        message["timestamp"] = float(data.get("timestamp") or message["timestamp"])
+    except (TypeError, ValueError):
+        message["timestamp"] = time.time()
+    message.update(question_fields(data))
+    return message
+
+
+def _on_chat(agent_id: str, data: Any) -> dict[str, Any]:
+    # Usually an agent notification; voice agents may also publish the
+    # recognized user turn so it appears in the same dashboard thread.
+    message = _chat_message(agent_id, data)
+    frame: dict[str, Any] = {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
+    if message["content"]:
+        add_log({"type": "chat", "agent_id": agent_id, **message})
+        frame["_push_chat"] = {
+            "type": "chat",
+            **message,
+            "thread_id": _thread_id(agent_id, message),
+        }
+    return frame
+
+
+def _thread_id(agent_id: str, message: dict[str, Any]) -> str:
+    """The id of the agent whose thread ``message``, heard on ``agent_id``'s topic, is in.
+
+    Usually that agent's own. A voice agent relays a user's words as from the
+    user to another agent, and those are in that agent's thread.
+    """
+    owner = message["to"] if message["from"] == "user" else message["from"]
+    if owner == _name_of(agent_id):
+        return agent_id
+    return chat.agent_id_of(str(owner))
+
+
+def _on_answer(agent_id: str, data: Any) -> None:
+    # A person picked one of the options an agent offered, on whichever
+    # channel showed them. The feed records the pick; the raw frame is
+    # relayed so every open dashboard marks the question answered.
+    answer = outbound.Answer.from_payload(agent_id, data)
+    if answer is None:
+        return
+    add_log(
+        {
+            "type": "answer",
+            "agent_id": agent_id,
+            "name": _name_of(agent_id),
+            "id": answer.id,
+            "option": answer.option,
+            "index": answer.index,
+            "channel": answer.channel,
+            "timestamp": answer.timestamp or time.time(),
+            **({"note": answer.note} if answer.note else {}),
+        }
+    )
+
+
+def _on_questions(agent_id: str, data: Any) -> None:
+    question_ledger.record(agent_id, data)
+
+
+def _on_completed(agent_id: str, data: Any) -> None:
+    update_agent(agent_id, "last_completed", data)
+    add_log(
+        {
+            "type": "completed",
+            "agent_id": agent_id,
+            "name": _name_of(agent_id),
+            "timestamp": time.time(),
+        }
+    )
+
+
+def _on_alert(agent_id: str, data: Any) -> None:
+    if isinstance(data, dict):
+        data["agent_id"] = agent_id
+        data.setdefault("name", _name_of(agent_id))
+    _add_alert(data if isinstance(data, dict) else {"agent_id": agent_id})
+    name = _name_of(agent_id)
+    severity = data.get("severity", "warning") if isinstance(data, dict) else "warning"
+    add_log(
+        {
+            "type": "alert",
+            "agent_id": agent_id,
+            "name": name,
+            "message": f"{name} unresponsive ({severity})",
+            "timestamp": time.time(),
+        }
+    )
+
+
+#: The handler for each agent leaf that changes live state; any other leaf is
+#: relayed as it came.
+_AGENT_HANDLERS: dict[str, Callable[[str, Any], dict[str, Any] | None]] = {
+    "status": _on_status,
+    "heartbeat": _on_heartbeat,
+    "metrics": _on_metrics,
+    "logs": _on_logs,
+    "spawned": _on_spawned,
+    "chat": _on_chat,
+    outbound.ANSWER_LEAF: _on_answer,
+    QUESTIONS_LEAF: _on_questions,
+    "completed": _on_completed,
+    "alert": _on_alert,
+}
+
+
+def _on_node_heartbeat(node_name: str, data: Any) -> dict[str, Any] | None:
+    if not isinstance(data, dict):
+        return None
+    runtime.state["nodes"][node_name] = {
+        "node": node_name,
+        "agents": data.get("agents", []),
+        "last_seen": time.time(),
+        "online": True,
+        "node_id": data.get("node_id", ""),
+        "version": data.get("version"),
+        "runtime": data.get("runtime") or "runner",
+    }
+    logger.info("[MQTT] Node heartbeat: %s | agents: %s", node_name, data.get("agents", []))
+    return {"type": "node", "node_name": node_name, "data": data}
 
 
 def node_online(last_seen: float, threshold: float = 45.0) -> bool:

@@ -1,0 +1,111 @@
+name: Accessibility issue
+description: Something in the dashboard is hard or impossible to use with a keyboard, a screen reader, magnification, or another way of using a computer or phone.
+title: "[a11y]: "
+labels: ["accessibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for telling us. Share as much as you are comfortable with: a partial report is still useful, and you never need to tell us about a disability or anything else personal. [ACCESSIBILITY.md](https://github.com/waldiez/wactorz/blob/main/ACCESSIBILITY.md) says what we aim for and what we already know falls short.
+
+        A security problem goes to [SECURITY.md](https://github.com/waldiez/wactorz/blob/main/SECURITY.md) instead, not to a public issue.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you were trying to do, and what got in the way, in your own words.
+      placeholder: "I could not reach the answer buttons of an agent's question with the keyboard."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: "Tab would take me to the buttons, and Enter would answer."
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to see it
+      description: The steps that lead to it, if you know them.
+      placeholder: |
+        1. Open the Chat view.
+        2. Wait for the installer to ask a question.
+        3. Press Tab…
+    validations:
+      required: false
+
+  - type: input
+    id: where
+    attributes:
+      label: Where in the dashboard
+      description: The view, or what was on screen.
+      placeholder: "Chat, the installer's question"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: How much does it stop you? (we may adjust this)
+      description: |
+        - **Critical:** you cannot do something the dashboard is for.
+        - **Serious:** you can, but only with real difficulty or a workaround.
+        - **Moderate:** it gets in the way, or behaves inconsistently.
+        - **Minor:** it is noticeable but barely affects what you can do.
+      options:
+        - Critical
+        - Serious
+        - Moderate
+        - Minor
+      default: 2
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and operating system
+      placeholder: "Firefox 133 on Windows 11, Safari on iOS 18"
+    validations:
+      required: false
+
+  - type: input
+    id: assistive-tech
+    attributes:
+      label: Assistive technology, if you used any
+      placeholder: "NVDA 2024.4, VoiceOver on iOS 18, browser zoom at 200%"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: home-assistant
+    attributes:
+      label: Was the dashboard open inside Home Assistant?
+      options:
+        - "No"
+        - "Yes"
+        - "Not sure"
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Wactorz version
+      description: Shown beside the name at the top of the dashboard.
+      placeholder: "0.7.1"
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots or a recording (only if you want to share them), a workaround you found, or related issues.
+    validations:
+      required: false

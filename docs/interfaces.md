@@ -37,15 +37,10 @@ wactorz --interface cli --llm gemini
 
 #### Special commands
 
-```
-/help                    — list available commands
-/rules                   — show active pipeline rules
-/rules delete <id>       — stop and remove a pipeline rule
-/memory                  — show stored user facts
-/memory clear            — wipe memory
-/webhook discord <url>   — store a Discord webhook URL
-@agent-name <payload>    — send directly to a named agent
-```
+Every slash command main answers works here, and `@agent-name <message>` sends straight to
+an agent; the [reference's command table](reference.md#13-interfaces) lists them. The
+terminal also takes `/deploy-pkg <node> <package> …` and `quit` or `exit`, and its own
+`/help` is a short summary.
 
 ---
 
@@ -323,6 +318,122 @@ wactorz --monitor-port 9000
 # Disable dashboard entirely
 wactorz --no-monitor
 ```
+
+---
+
+## Messages from an agent, and the answer back
+
+The channels above answer a person who writes first. An agent can also write first: say something to the operator outside any turn, and offer a choice.
+
+```python
+message_id = await me.notify_user(
+    "Every reading since 14:02 looks like an anomaly. Did something change?",
+    options=["maintenance", "real problem", "not sure"],
+    channel="telegram",
+    user="123456789",
+)
+```
+
+- `channel` is where to send it: `dashboard` (the default), `telegram`, `discord` or `whatsapp`.
+- `user` is who to reach there: a Telegram or Discord user id, a WhatsApp number. The dashboard has one operator and needs none.
+- `options` is the choice. Telegram and the dashboard show buttons; Discord and WhatsApp show a numbered list, and the person replies with the number or the option's words. Up to ten options of a few words each.
+
+The message goes on the agent's own `agents/{id}/chat` topic, wherever the agent runs, so the dashboard shows it whatever channel it names, as a card with the buttons and a note of where else it went. The channel delivers it if it is running; one that is not, or one that cannot reach the person, logs the message's words rather than losing them.
+
+The pick comes back on `agents/{id}/answer`, from whichever channel the person answered on, as `{"id": <the message id>, "option": "maintenance", "index": 0, "channel": "telegram"}`. An agent that wants it subscribes to its own topic:
+
+```python
+class HvacWatch(wactorz.Actor):
+    async def on_start(self):
+        self.subscribe(f"agents/{self.actor_id}/answer", self.on_answer)
+
+    async def on_answer(self, answer: dict) -> None:
+        self.persist("last_answer", answer["option"])
+```
+
+A generated agent has the same call, `await agent.notify_user(...)`, and `agent.subscribe("agents/<its id>/answer", callback)`. Every open dashboard marks the question answered once any channel has the pick, and the pick is a row on the activity feed.
+
+### Asking and waiting: `ask_operator`
+
+Most of the time the agent wants the answer, not the topic. `ask_operator` sends the same message and waits for the pick:
+
+```python
+answer = await me.ask_operator(
+    "Every reading since 14:02 looks like an anomaly. Did something change?",
+    options=["maintenance", "real problem", "not sure"],
+    channel="telegram",
+    user="123456789",
+    timeout=3600,
+)
+if answer == "maintenance":
+    me.persist("regime_change_at", "14:02")
+```
+
+- The question is written into the agent's state until it is answered, so a restart in between loses nothing. When the agent starts it listens again, and a pick that arrives while nothing waits for it reaches `on_operator_answer(question, option)` on an `Actor`, or `async def on_answer(agent, question, option)` in a generated agent's program. `me.open_questions()` lists what is still unanswered, and `await me.wait_for_answer(question_id)` waits for one of them by id.
+- A pick may come with a note, what the person added in their own words; it is kept as `question.answer_note`, empty when there is none.
+- `context="..."` says why the question is being asked: what the agent saw, what the answer will change. It is kept in the book and shown with the question in the dashboard's Inbox; chat channels are sent the question alone. It is redacted and cut to a thousand characters.
+- The agent publishes its questions, retained, on `agents/{id}/questions` whenever one is asked or answered, and again when it starts. The monitor's `GET /api/questions` lists them from there, so one asked while the monitor was down is not missed.
+- The first pick on any channel is the answer. The dashboard shows every question whatever channel it went to, in its Inbox (`#/inbox`), so the operator can answer there as well, with a note if they want; a question sent with `notify_user` alone keeps no book, so it shows as a notice and in the agent's thread but not in the Inbox.
+- The answer is not authenticated. It arrives on the agent's `agents/{id}/answer` topic, and anything that can publish to the broker, any node included, can publish one there. Read it as what someone picked, never as proof that the operator did, and do not make it the approval for an action you would not let the agent take unasked.
+- `timeout` is seconds; `None` waits for as long as the agent runs. When it passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more for the same time. Then `asyncio.TimeoutError` is raised, and the question stays open: a later pick still reaches `on_operator_answer`.
+
+#### Answers that become labels
+
+Pass `label=` and the answer becomes a label: a record that a source was doing something over a period, which models train on, the controller reads and a simulator scores against.
+
+```python
+answer = await me.ask_operator(
+    "Every reading on AHU-1 looks unusual since 14:02. Did something change?",
+    options=["Maintenance", "Real problem", "Not sure"],
+    label={
+        "source": "sensors/ahu-1",          # the topic or entity it is about
+        "start": shift_ts,                  # event time, Unix seconds or ISO 8601 with an offset
+        "values": {"Maintenance": "maintenance", "Real problem": "fault"},
+    },
+)
+```
+
+- `values` maps an option to the label value it stands for; an option left out, such as "Not sure", makes no label. `end` closes the window; left out, it stays open, "until further notice". `model` names the model a label is meant for, if any.
+- The spec is checked before the question is sent, and a spec that cannot be used raises a `ValueError` (`LabelError`) without sending anything.
+- Main writes the label once the agent's question book says the question was answered, for an agent on main or on a node. It takes a book only from where its agent is, as it does a manifest.
+- A later label on the same source overrides an earlier one where their windows overlap. The earlier one is kept, marked superseded; `GET /api/labels/effective` says what held when.
+- A label from an answer the dashboard sent is marked verified; one from an answer heard on the broker is not, since anything there could have published it.
+- An agent on main can also write a label of its own: `await me.label("sensors/ahu-1", "maintenance", start=ts)`. On a node, use a question.
+
+See `docs/design/labels-and-provenance.md` for the design, and `GET /api/labels` in the API reference.
+
+A rule can ask without any code, with the `ask_operator` action:
+
+```python
+RuleConfig(
+    triggers=("anomalies/hvac",),
+    conditions=(RuleCondition("score", "gt", 20),),
+    actions=(
+        RuleAction(
+            "ask_operator",
+            text="HVAC score {score} since {since}. Did something change?",
+            options=("maintenance", "real problem", "not sure"),
+            channel="telegram",
+            user="123456789",
+            timeout=3600,
+            topic="labels/hvac",
+            context="Above 20 for ten minutes on {sensor}.",
+        ),
+    ),
+    cooldown_seconds=3600,
+)
+```
+
+The text and `context` may name trigger fields in braces, as a payload may. The rule keeps evaluating while the person thinks; when they pick, `{"question", "option", "index", "trigger"}` is published on `topic`, or on `answers/<rule name>` when none is given, which is where a label store or a controller listens.
+
+A rule can also record a label itself, with the `label` action: `{"type": "label", "source": "sensors/{entity_id}", "value": "maintenance", "text": "maintenance switch on"}` records that the source was under maintenance from when the trigger says it happened (its `ts` or `timestamp`, else now), as the rule's own label. `source` and `value` may name trigger fields in braces, and `text` is kept as the label's note.
+
+Two things a channel cannot do:
+
+- **WhatsApp lets a business write first only inside a day of the person's last message**, or through a template Meta approved. Outside that window Twilio refuses the send, and the refusal is logged with the message's words. Telegram and the dashboard have no such limit.
+- **A question offered before a restart is answered on the dashboard, not by number.** Discord and WhatsApp match a bare "2" to the latest question they sent that person, and keep that in memory; after a restart the reply reaches the model as a message like any other. The dashboard card still answers it.
+
+A chat channel object also has the call directly, `await interface.send(user, text, options)`, for a host program that holds one.
 
 ---
 

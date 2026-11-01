@@ -12,8 +12,8 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { registerIcon, iconMarkup } from "../ui/dashboard/icons";
-import { buildHeader } from "../ui/dashboard/header";
+import { registerIcon, iconMarkup } from "../ui/shell/icons";
+import { buildHeader } from "../ui/shell/header";
 
 describe("registerIcon reduces markup to shapes", () => {
     it("keeps a legitimate icon intact", () => {

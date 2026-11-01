@@ -70,7 +70,7 @@ def run_fixture(pytestconfig: pytest.Config) -> Iterator[runs.Run]:
     run = runs.new()
     yield run
     if pytestconfig.stash[_FAILED]:
-        print(f"\ne2e: this run's logs and trace are kept in {run.root}")
+        print(f"\ne2e: this run's logs and trace are kept in {run.root}")  # noqa: T201  # where to look, after the summary
     else:
         shutil.rmtree(run.root, ignore_errors=True)
 

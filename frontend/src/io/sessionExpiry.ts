@@ -12,21 +12,21 @@
  * that looks alive and is not is worse than one that plainly asks you to sign
  * in.
  *
- * Installed once over `fetch` rather than added to each caller. There are a
+ * Watched in the API client rather than added to each caller. There are a
  * dozen call sites across the views and more arrive with each feature, so the
  * per-caller version protects whichever ones its author remembered — the same
  * reasoning that puts the server's own key check in middleware instead of on
  * each route.
  */
+import { ingressBase, watchResponses } from "./api";
 import { log } from "./logger";
-import { showDeadSession } from "../ui/deadSession";
 
 /** Where the server's sign-in page lives, under any ingress prefix. */
 function loginUrl(target: Window): string {
     // `target`, not the global: the two are the same in the running app, and
     // reading one while redirecting the other is the kind of difference that
     // only shows up as a test that cannot be written.
-    const base = window.__WACTORZ_INGRESS_PATH ?? "";
+    const base = ingressBase();
     const here = target.location.pathname + target.location.search;
     return `${base}/login?next=${encodeURIComponent(here)}`;
 }
@@ -111,44 +111,32 @@ function sessionRevokedTracker(target: Window): (response: Response) => boolean 
 }
 
 /**
- * Replace `fetch` with one that redirects to sign-in on a 401, and says so when
- * an ingress session has been revoked.
+ * Watch every response, redirecting to sign-in on a 401 and saying so when an
+ * ingress session has been revoked.
  *
- * `onRevoked` is called once, for a caller that holds things this module does
- * not -- the socket, chiefly, which would otherwise go on reconnecting to a
- * prefix that cannot answer.
+ * `onRevoked` is called once, for a caller that holds what this module does not:
+ * the overlay that says so, and the socket, which would otherwise go on
+ * reconnecting to a prefix that cannot answer.
  *
- * Returns a function that puts the original back, for tests and for a teardown
- * that wants the global left as it found it.
+ * Returns the way to stop watching.
  */
 export function installSessionExpiry(target: Window = window, onRevoked: () => void = () => {}): () => void {
-    // Kept unbound so releasing puts back the very function that was there —
-    // a bound copy behaves the same and is not the same object, which makes
-    // "restore" quietly untrue for anyone comparing. The lint rule guards
-    // against losing `this` by accident; here it is supplied explicitly on
-    // every call below, which is the case the rule cannot see.
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    const original = target.fetch;
     // Concurrent polls all fail together when a session ends, so without this
     // the first navigation is cancelled by the second and the address bar can
     // end up somewhere between the two.
     let redirecting = false;
     const revoked = sessionRevokedTracker(target);
+    let told = false;
 
-    target.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        const response = await original.call(target, input, init);
+    return watchResponses(response => {
         if (isSessionGone(response) && !redirecting) {
             redirecting = true;
             log.warn("[auth] session expired — returning to sign-in");
             target.location.assign(loginUrl(target));
-        } else if (revoked(response) && showDeadSession()) {
+        } else if (!told && revoked(response)) {
+            told = true;
             log.warn("[auth] ingress session revoked — this page cannot recover");
             onRevoked();
         }
-        return response;
-    };
-
-    return () => {
-        target.fetch = original;
-    };
+    });
 }

@@ -195,6 +195,26 @@ a natural companion to the <a href="catalogue-anomaly-detector.html">Anomaly Det
 </tbody>
 </table>
 <p>Returns <code>total_received</code>, <code>total_written</code>, <code>buffer_sizes</code>, <code>table_rows</code>, and <code>retention_days</code>.</p>
+<h2 id="recording-to-parquet-for-the-model-loop">Recording to Parquet, for the model loop</h2>
+<p>The collector keeps the dashboard's live window in SQLite. Readings the model loop
+trains on and watches for drift go to Parquet instead, one file per source and hour
+under the state directory's <code>data/</code>, written by the <code>recorder</code> library agent
+(<code>docs/design/data-storage.md</code>):</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn recorder {"topics": ["sensors/imu/#"], "source_field": "device"}
+</code></pre></div>
+
+<p>Or on a node, where it records what that node sees and the node ships each closed
+file to main:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">,</span><span class="w"> </span><span class="nt">"target"</span><span class="p">:</span><span class="w"> </span><span class="s2">"wactorz.agents.recorder_agent:RecorderAgent"</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"recorder"</span><span class="p">,</span><span class="w"> </span><span class="nt">"node"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pi-kitchen"</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"topics"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"sensors/imu/#"</span><span class="p">],</span><span class="w"> </span><span class="nt">"source_field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"device"</span><span class="p">}}</span>
+</code></pre></div>
+
+<p>Each reading is a row of its source, the payload's <code>source</code> or <code>device</code> field, or the
+topic without its wildcards when it names none, filed under its event time with the
+arrival beside it. <code>wactorz-data sources</code>, <code>wactorz-data profile &lt;source&gt;</code> and
+<code>GET /api/data/{source}/profile</code> say what was recorded; <code>wactorz-data export</code> writes a
+window as one file for a notebook. The recorder needs the <code>data</code> extra (pyarrow).</p>
   </main>
 </div>
 

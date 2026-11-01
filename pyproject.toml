@@ -62,13 +62,27 @@ whatsapp  = ["twilio>=9.10.4"]
 # reaches only what is named here): the two are built against each other.
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "torchvision>=0.15.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-tts       = ["edge-tts>=6.1.9"]
+tts       = ["edge-tts>=7.3.1"]
 cron      = ["croniter>=2.0.0"]
 # Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
 # no Bluetooth adapter has nothing to install it for.
 flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
-data      = ["pandas>=2.0.0"]
+# Parquet, for the readings and shadow pairs the model loop keeps (docs/design/data-storage.md).
+data      = ["pandas>=2.0.0", "pyarrow>=15.0.0"]
 vision    = ["opencv-python>=4.8.0"]
+# The Reachy Mini catalogue agent's packages, the same list its recipe installs
+# on first spawn. Installed up front they resolve together with Wactorz's own,
+# so that spawn has nothing to install and needs no restart. Out of `all`: on
+# Linux the robot SDK compiles part of itself and needs system GStreamer.
+reachy    = [
+    "reachy-mini==1.12.0; python_version >= '3.11'",
+    "numpy; python_version >= '3.11'",
+    "edge-tts; python_version >= '3.11'",
+    "pillow>=13; python_version >= '3.11'",
+    "webrtcvad-wheels; python_version >= '3.11'",
+    "deepgram-sdk>=3,<4; python_version >= '3.11'",
+]
+
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported
 # through `wactorz.core.integrations.langchain`.
 langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
@@ -100,7 +114,11 @@ dev       = [
     # Test-only support for optional catalogue-agent media paths. These stay out
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
+    # So the Parquet writer and the shadow trial are tested for real.
+    "pyarrow>=15.0.0",
     "Pillow>=10.0.0",
+    # So the doc-to-pptx agent's deck is built for real in its tests.
+    "python-pptx>=1.0.2",
     "prek>=0.5.3",
     "coverage>=7.13.5",
     "watchdog>=6.0.0",
@@ -127,7 +145,7 @@ dev       = [
 # suite - and with no dependency lock in this project, nothing else would catch
 # that. Same reasoning as the `docs` extra above pins markdown and pygments: the
 # dependency decides the thing being compared.
-e2e       = ["playwright==1.63.0"]
+e2e       = ["playwright==1.64.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
@@ -151,6 +169,8 @@ wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 wactorz-tui     = "wactorz.tui.app:run"
 wactorz-state   = "wactorz.state_archive:main"
+wactorz-artifacts = "wactorz.artifacts_cli:main"
+wactorz-data    = "wactorz.data.cli:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
@@ -176,6 +196,32 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # proposes older ones in their place. Kept in the lockfile as a span, so
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
+# A security fix younger than that is let through by name, up to the day it was
+# taken: pyasn1 0.6.5 closes quadratic-time decoding (GHSA-9m75-vc3g-4x39 and
+# others). An entry can go once the release it admits is older than the window.
+exclude-newer-package = { pyasn1 = "2026-10-28T00:00:00Z" }
+# Python 3.10 cannot have the fixed filelock (4.1.1 onwards needs 3.11), and the
+# 4.1 line it could have adds advisories of its own. It stays on the 4.0 line, which
+# has the fewest; only torch, an optional dependency, pulls it in. Drop this with 3.10.
+# These plugin releases publish only cp313t/cp314t Windows wheels. Universal
+# resolution otherwise selects them for ordinary CPython and macOS as well.
+# Keep the SDK's supported ranges; allow subsequent compatible releases.
+constraint-dependencies = [
+    "filelock<4.1; python_version < '3.11'",
+    "gstreamer-plugins!=1.28.8",
+    "gstreamer-plugins-gpl!=1.28.8",
+    "gstreamer-plugins-gpl-restricted!=1.28.8",
+    "gstreamer-plugins-libs!=1.28.8",
+    "gstreamer-plugins-restricted!=1.28.8",
+]
+
+# PyGObject's metadata build requires native Cairo and introspection libraries.
+# Use its published runtime requirements so resolving the opt-in Reachy extra
+# does not require those system libraries on development or CI hosts.
+[[tool.uv.dependency-metadata]]
+name = "pygobject"
+version = "3.46.0"
+requires-dist = ["pycairo>=1.16.0"]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
@@ -291,9 +337,8 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
-    "TRY300",  # a try guards the call that can fail; the success return goes in its else
-    "TRY301",  # a raise inside a try that catches it: control flow by exception
-    "TRY400",  # logger.error in an except drops the traceback; log after the handler
+    "TRY",     # tryceratops — exception style; see the note below the ignores
+    "T20",     # flake8-print — output goes through logging, except where it is the product
     "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
 ]
 ignore = [
@@ -312,8 +357,12 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, prints) stay advisory via
-# `make lint-py` until each is triaged and gated. Pathlib moved out once the tree
+# Exceptions: an exception class says its own message, each reason a
+# classmethod or a class of its own, so the words for one failure are written
+# once and every place that gives it can be found by name (TRY003). A try guards
+# only the call that can fail (TRY300), never raises to its own handler (TRY301),
+# and an error logged in an except keeps its traceback (TRY400).
+# Complexity stays advisory via `make lint-py` until it is triaged and gated. Pathlib moved out once the tree
 # reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
@@ -331,17 +380,22 @@ ignore = [
 # strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
 # a path a test asserts about rather than writes to, and `exec` is how the
 # catalogue programs get parsed. None of it reaches an installed wheel. A test
-# raises inside a `try` to produce the exception, or the rollback, it examines.
-"tests/*" = ["B", "E402", "D", "S", "TRY301"]
+# raises inside a `try` to produce the exception, or the rollback, it examines,
+# and a fake fails with whatever message the test then looks for.
+"tests/*" = ["B", "E402", "D", "S", "TRY003", "TRY301"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
-# `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
-"scripts/*" = ["S603", "S607", "S110"]
+# `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag, and what each
+# prints is what it was run to say.
+"scripts/*" = ["S603", "S607", "S110", "T201"]
+# An example prints what it shows: the score, the model it trained.
+"examples/*" = ["T201"]
 # The end-to-end suite is test code that drives real processes. `assert` is the
 # mechanism, as it is under tests/; every subprocess is a literal argv naming
 # `docker` or this interpreter; and every URL it opens is the backend it
-# started or the Home Assistant instance `HA_URL` names.
-"e2e/*" = ["S101", "S310", "S603", "S607"]
+# started or the Home Assistant instance `HA_URL` names. A failed check is an
+# `AssertionError` saying what was seen, as an `assert` would.
+"e2e/*" = ["S101", "S310", "S603", "S607", "TRY003"]
 # A node runs agent code it is sent, installs what that code imports, and
 # re-execs itself when main asks it to restart — so the pip subprocess and the
 # `execv` are the feature rather than an oversight. How far either should be
@@ -356,30 +410,9 @@ ignore = [
 "wactorz/evalharness.py" = ["T201"]                  # prints the results table
 "wactorz/interfaces/chat/cli.py" = ["T201"]          # a terminal chat UI
 "wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow
-"wactorz/core/integrations/google_mcp.py" = ["T201", "PTH105"] # the OAuth URL the user must open
+"wactorz/core/integrations/google_mcp.py" = ["T201"] # the OAuth URL the user must open
 "wactorz/monitoring/log_setup.py" = ["T201"]         # stderr, because file logging just failed
-# Atomic writes, written at the os level deliberately: the replace is ordered
-# against an `os.fsync` here, and against a 0600 `os.open` there, so the whole
-# sequence reads in one vocabulary. `Path.replace` is the same syscall.
-"wactorz/core/atomic_io.py" = ["PTH105"]
-"wactorz/web/sessions.py" = ["PTH105"]
-# Cost accounting reads rows this app persisted over its whole history, in
-# whatever shape the version that wrote them used. Every read there skips a row
-# it cannot parse and carries on with the rest, because a headline total that
-# omits one agent is worth more than a dashboard that will not render — so the
-# swallow is the design of these two modules rather than an oversight in them.
-"wactorz/web/cost.py" = ["S110"]
-"wactorz/agents/llm/cost.py" = ["S110"]
-# The weather agent's "today" is the server's local date on purpose: it is what
-# "tomorrow" means to the person asking. A timezone argument would not make it
-# more correct — UTC is simply wrong for most users. The known limit it leaves:
-# forecast rows are dated in the location's own timezone, so for a place far
-# enough east or west the today/tomorrow labels can be a day off.
-"wactorz/catalogue_agents/weather_agent.py" = ["DTZ011"]
-# A schedule that is not a dict is rejected user input from a spawn, and the
-# spawner catches ValueError to report it as such; a TypeError would surface as
-# a spawn-failure traceback instead.
-"wactorz/agents/scheduled_agent.py" = ["TRY004"]
+"wactorz/node/local_setup.py" = ["T201"]             # a command run once, by hand, as root
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257

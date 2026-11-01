@@ -5,6 +5,7 @@ a cooldown, and actions that publish, send a task or call a webhook. A Home
 Assistant service call stays with the `ha_actuator` type.
 """
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -98,16 +99,18 @@ class TestConfig:
             RuleConfig.from_dict({"triggers": "a/b"})
 
     @pytest.mark.parametrize(
-        "raw",
+        ("raw", "why"),
         [
-            {"type": "publish"},
-            {"type": "task"},
-            {"type": "webhook", "url": "ftp://x"},
-            {"type": "email"},
+            ({"type": "publish"}, "topic"),
+            ({"type": "task"}, "agent"),
+            ({"type": "webhook", "url": "ftp://x"}, "url"),
+            ({"type": "email"}, "unknown action"),
+            # A field that belongs to another kind does not complete this one.
+            ({"type": "publish", "agent": "notify"}, "topic"),
         ],
     )
-    def test_an_incomplete_action_is_refused(self, raw: dict) -> None:
-        with pytest.raises(ValueError):
+    def test_an_incomplete_action_is_refused(self, raw: dict, why: str) -> None:
+        with pytest.raises(ValueError, match=why):
             RuleAction.from_dict(raw)
 
     def test_round_trip(self) -> None:
@@ -277,3 +280,161 @@ class TestEvaluation:
         manifest = next(p for t, p in published if t.endswith("/manifest"))
         assert manifest["publishes"] == ["alerts/imu"]
         assert manifest["subscribes"] == ["a/one", "b/#"]
+
+
+class TestAskingTheOperator:
+    def test_the_action_is_checked_and_round_trips(self) -> None:
+        raw = {
+            "type": "ask_operator",
+            "text": "Pump {name} looks off. Is it being serviced?",
+            "options": ["yes", " no "],
+            "channel": "Telegram",
+            "user": "42",
+            "timeout": 600,
+            "topic": "labels/pump",
+            "context": "Score {score}.",
+        }
+        action = RuleAction.from_dict(raw)
+        assert action.options == ("yes", "no")
+        assert action.channel == "telegram"
+        assert action.timeout == 600
+        assert RuleAction.from_dict(action.to_dict()) == action
+        # The dashboard when nothing is said; the topic is optional.
+        bare = RuleAction.from_dict(
+            {"type": "ask_operator", "text": "Sure?", "options": ["a", "b"]}
+        )
+        assert bare.channel == "dashboard"
+        assert bare.to_dict() == {
+            "type": "ask_operator",
+            "payload": {},
+            "text": "Sure?",
+            "options": ["a", "b"],
+            "channel": "dashboard",
+        }
+
+    @pytest.mark.parametrize(
+        ("raw", "why"),
+        [
+            ({"type": "ask_operator", "options": ["a"]}, "text"),
+            ({"type": "ask_operator", "text": "x"}, "options"),
+            ({"type": "ask_operator", "text": "x", "options": ["a", "a"]}, "twice"),
+            (
+                {"type": "ask_operator", "text": "x", "options": ["a"], "channel": "pager"},
+                "chat channel",
+            ),
+            ({"type": "ask_operator", "text": "x", "options": ["a"], "timeout": -1}, "timeout"),
+            # With more than one thing wrong, the first in reading order is named.
+            ({"type": "ask_operator", "text": " "}, "text"),
+            ({"type": "ask_operator", "text": "x", "options": ["a", "a"], "timeout": -1}, "twice"),
+        ],
+    )
+    def test_an_incomplete_question_is_refused(self, raw: dict, why: str) -> None:
+        with pytest.raises(ValueError, match=why):
+            RuleAction.from_dict(raw)
+
+    def test_a_question_with_a_topic_counts_as_published(self) -> None:
+        config = RuleConfig.from_dict(
+            {
+                "triggers": ["anomalies/imu"],
+                "actions": [
+                    {"type": "ask_operator", "text": "x", "options": ["a"], "topic": "labels/imu"},
+                    {"type": "ask_operator", "text": "y", "options": ["a"]},
+                ],
+            }
+        )
+        assert config.publishes == ("labels/imu",)
+
+    async def test_the_pick_is_published_beside_the_trigger(
+        self, tmp_path: Path, published: list[tuple[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rule = _rule(
+            tmp_path,
+            actions=[
+                {
+                    "type": "ask_operator",
+                    "text": "Pump {name} looks off. Serviced?",
+                    "options": ["yes", "no"],
+                    "channel": "telegram",
+                    "user": "42",
+                    "topic": "labels/pump",
+                    "context": "Score {score} on {name}.",
+                }
+            ],
+        )
+        asked: list[dict[str, Any]] = []
+
+        async def ask(text: str, **kwargs: Any) -> str:
+            asked.append({"text": text, **kwargs})
+            return "no"
+
+        monkeypatch.setattr(rule, "ask_operator", ask)
+
+        assert await rule.evaluate({"name": "P3", "score": 9})
+        await asyncio.gather(*[t for t in rule._tasks if t.get_name() == "ask_operator"])
+
+        assert asked == [
+            {
+                "text": "Pump P3 looks off. Serviced?",
+                "options": ("yes", "no"),
+                "channel": "telegram",
+                "user": "42",
+                "timeout": None,
+                "context": "Score 9 on P3.",
+            }
+        ]
+        assert (
+            "labels/pump",
+            {
+                "question": "Pump P3 looks off. Serviced?",
+                "option": "no",
+                "index": 1,
+                "trigger": {"name": "P3", "score": 9},
+            },
+        ) in published
+
+    async def test_without_a_topic_the_pick_goes_under_the_rules_name(
+        self, tmp_path: Path, published: list[tuple[str, Any]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rule = _rule(
+            tmp_path,
+            actions=[
+                {"type": "ask_operator", "text": "Sure?", "options": ["yes", "no"], "timeout": 5}
+            ],
+        )
+
+        async def ask(text: str, **kwargs: Any) -> str:
+            assert kwargs["timeout"] == 5
+            return "yes"
+
+        monkeypatch.setattr(rule, "ask_operator", ask)
+
+        assert await rule.evaluate({"score": 1})
+        await asyncio.gather(*[t for t in rule._tasks if t.get_name() == "ask_operator"])
+
+        topics = [t for t, _ in published if t == "answers/imu-alert"]
+        assert topics == ["answers/imu-alert"]
+
+    async def test_a_question_nobody_answers_is_logged_and_the_rule_goes_on(
+        self,
+        tmp_path: Path,
+        published: list[tuple[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        rule = _rule(
+            tmp_path,
+            actions=[
+                {"type": "ask_operator", "text": "Sure?", "options": ["yes", "no"], "timeout": 1}
+            ],
+        )
+
+        async def ask(text: str, **kwargs: Any) -> str:
+            raise asyncio.TimeoutError("nobody")
+
+        monkeypatch.setattr(rule, "ask_operator", ask)
+
+        assert await rule.evaluate({"score": 1})
+        await asyncio.gather(*[t for t in rule._tasks if t.get_name() == "ask_operator"])
+
+        assert "nobody answered" in caplog.text
+        assert not any(t.startswith("answers/") for t, _ in published)

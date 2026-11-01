@@ -1,0 +1,215 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── Inbox view (see ui/inbox/) ─────────────────────────────────────── */
+.af-inbox {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+}
+.af-inbox-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-inbox-lead {
+  margin-top: 2px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-inbox-columns {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+}
+/* The panel the Models view has, but as tall as the view: there is nothing else in this column. */
+.af-inbox-side {
+  min-height: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+}
+.af-inbox-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.af-inbox-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-inbox-lists {
+  min-height: 0;
+  overflow-y: auto;
+}
+.af-inbox-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 860px;
+  margin: 0;
+  padding: 0;
+}
+.af-inbox-list[hidden],
+.af-inbox-none[hidden],
+.af-inbox-refusal[hidden] {
+  display: none;
+}
+.af-inbox-card {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+  overflow-wrap: anywhere;
+}
+.af-inbox-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-inbox-agent {
+  color: #8ab4ff;
+}
+.af-inbox-text {
+  margin-top: 8px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-inbox-why {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-inbox-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.af-inbox-option {
+  min-height: 44px;
+  padding: 8px 16px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.af-inbox-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.af-inbox-noting {
+  margin-top: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-inbox-noting summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+}
+.af-inbox-note-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  font: inherit;
+  font-size: 16px; /* below this a phone zooms the page on focus */
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  resize: vertical;
+}
+.af-inbox-refusal {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #ff9b9b;
+}
+.af-inbox-answer {
+  margin-top: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-inbox-note {
+  margin-top: 4px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: pre-wrap;
+}
+/* A phone: the panel is one short row above the questions. */
+@media (max-width: 639px) {
+  .af-inbox {
+    padding: 8px;
+  }
+  .af-inbox-heading,
+  .af-inbox-side .af-models-title {
+    display: none;
+  }
+  .af-inbox-columns {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+  .af-inbox-side {
+    padding: 8px;
+  }
+  .af-inbox-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 0;
+  }
+}
+.af-inbox-none {
+  padding: 16px 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+/* The count of questions waiting, on the Inbox tab in the header and the phone bar. */
+.af-nav-count {
+  min-width: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  color: #10131a;
+  background: #8ab4ff;
+  border-radius: 9px;
+}
+.af-screen-reader {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.af-view-btn:not(.af-bottom-tab) .af-nav-count {
+  margin-left: 6px;
+}
+.af-bottom-tab .af-nav-count {
+  position: absolute;
+  top: 2px;
+  left: calc(50% + 4px);
+}

@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect } from "vitest";
-import { dedupeAndSortFeed, feedKey } from "../ui/dashboard/feedView";
+import { dedupeAndSortFeed, feedKey } from "../ui/feed/feedEntries";
 import type { AppLogItem, FeedItem } from "../types/feed";
 
 // The in-card feed is fed from several unsynchronised sources (SQLite seed, WS

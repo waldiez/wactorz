@@ -16,6 +16,7 @@ Three properties, each load-bearing:
   matches on the `image/` prefix, which includes SVG.
 """
 
+import contextlib
 import json
 import re
 import time
@@ -255,6 +256,29 @@ def sweep(keep: set[str], now: float | None = None, state_dir: str | None = None
             continue
         removed.add(file_id)
     return len(removed)
+
+
+def discard(ids: set[str], state_dir: str | None = None) -> int:
+    """Delete the stored files for `ids` now, whatever their age. Returns how many went.
+
+    For a reset of one thread, which knows exactly which files only it referred
+    to: the grace the sweep gives an unsent file is for a message still being
+    written, and these were sent in turns that no longer exist. An id that is
+    not one of ours is skipped, so a name read from a row cannot reach outside
+    the directory.
+    """
+    root = Path(resolve_state_dir(state_dir)) / UPLOADS_DIRNAME
+    removed = 0
+    for file_id in ids:
+        if not is_id(file_id):
+            continue
+        found = False
+        for name in (file_id, f"{file_id}.json", f".{file_id}.part"):
+            with contextlib.suppress(OSError):
+                (root / name).unlink()
+                found = True
+        removed += found
+    return removed
 
 
 def _stored_id(name: str) -> str | None:

@@ -2,17 +2,9 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright 2025 - 2026 Waldiez & contributors
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-    feedItemEl,
-    feedKey,
-    dedupeAndSortFeed,
-    buildFeedView,
-    appendFeedItemToView,
-    applyFilters,
-    DEFAULT_FILTERS,
-    type FeedFilters,
-} from "../ui/dashboard/feedView";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { feedKey, dedupeAndSortFeed, DEFAULT_FILTERS, type FeedFilters } from "../ui/feed/feedEntries";
+import { feedItemEl, buildFeedView, appendFeedItemToView, applyFilters } from "../ui/feed/feedView";
 import type { FeedItem } from "../types/feed";
 
 function item(over: Partial<FeedItem>): FeedItem {
@@ -87,7 +79,7 @@ describe("feedItemEl — a long or multi-line message", () => {
 
         expect(full.hidden).toBe(false);
         expect(full.textContent).toBe(long);
-        expect(r.getAttribute("aria-expanded")).toBe("true");
+        expect(r.querySelector(".af-feed-toggle")!.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("shows its first line collapsed and keeps its line breaks expanded", () => {
@@ -112,12 +104,47 @@ describe("feedItemEl — a long or multi-line message", () => {
         expect(r.querySelector(".af-feed-full")!.textContent).toBe("@researcher first line\nsecond line");
     });
 
-    it("expands from the keyboard too", () => {
+    it("expands from the keyboard too, with a toggle that says what it does", () => {
         const r = row("a\nb");
+        const toggle = r.querySelector<HTMLButtonElement>(".af-feed-toggle")!;
 
-        r.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        // A real button, so Enter and Space press it as they press any button.
+        expect(toggle.type).toBe("button");
+        expect(toggle.getAttribute("aria-label")).toBe("Show the whole message");
+        expect(toggle.getAttribute("aria-controls")).toBe(r.querySelector(".af-feed-full")!.id);
+        toggle.click();
 
         expect(r.querySelector<HTMLElement>(".af-feed-full")!.hidden).toBe(false);
+        expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("is not a button itself, so the buttons in it are announced as buttons", () => {
+        const r = row("a\nb", { turn: "t1" });
+
+        expect(r.hasAttribute("role")).toBe(false);
+        expect(r.hasAttribute("tabindex")).toBe(false);
+    });
+
+    it("stays open for a click inside its text, so the text can be selected", () => {
+        const r = row("a\nb");
+        r.click();
+        const full = r.querySelector<HTMLElement>(".af-feed-full")!;
+
+        full.click();
+
+        expect(full.hidden).toBe(false);
+    });
+
+    it("does not open when a click ends a drag selecting its text", () => {
+        const r = row("a\nb");
+        document.body.appendChild(r);
+        window.getSelection()!.selectAllChildren(r.querySelector(".af-feed-text")!);
+
+        r.click();
+
+        expect(r.querySelector<HTMLElement>(".af-feed-full")!.hidden).toBe(true);
+        window.getSelection()!.removeAllRanges();
+        r.remove();
     });
 
     it("leaves a short single-line message as it is", () => {
@@ -280,5 +307,73 @@ describe("appendFeedItemToView", () => {
         appendFeedItemToView(root, item({ agentName: "worker" }), shown({ source: "app" }));
 
         expect(root.querySelector<HTMLElement>(".af-feed-item")!.hidden).toBe(true);
+    });
+});
+
+describe("copying an expanded message", () => {
+    function row(label: string): HTMLElement {
+        const c = document.createElement("div");
+        feedItemEl(c, item({ label }));
+        return c.firstElementChild as HTMLElement;
+    }
+
+    function allowClipboard(writeText: (text: string) => Promise<void>): void {
+        vi.stubGlobal("isSecureContext", true);
+        vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    }
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
+    });
+
+    it("copies the whole text, says so, and leaves the row open", async () => {
+        const writeText = vi.fn(async () => {});
+        allowClipboard(writeText);
+        const r = row("first line\nsecond line");
+        const copy = r.querySelector<HTMLButtonElement>(".af-feed-copy")!;
+        expect(copy.hidden).toBe(true);
+
+        r.click();
+        expect(copy.hidden).toBe(false);
+        copy.click();
+        await vi.waitFor(() => expect(copy.textContent).toBe("Copied"));
+
+        expect(writeText).toHaveBeenCalledWith("first line\nsecond line");
+        expect(r.querySelector<HTMLElement>(".af-feed-full")!.hidden).toBe(false);
+        expect(copy.getAttribute("aria-label")).toBe("Copy the whole message");
+    });
+
+    it("reads Copy again after a moment", async () => {
+        vi.useFakeTimers();
+        allowClipboard(async () => {});
+        const r = row("a\nb");
+        const copy = r.querySelector<HTMLButtonElement>(".af-feed-copy")!;
+        r.click();
+
+        copy.click();
+        await vi.waitFor(() => expect(copy.textContent).toBe("Copied"));
+        vi.advanceTimersByTime(2000);
+
+        expect(copy.textContent).toBe("Copy");
+    });
+
+    it("says when the browser refused", async () => {
+        allowClipboard(async () => {
+            throw new Error("denied");
+        });
+        const r = row("a\nb");
+        const copy = r.querySelector<HTMLButtonElement>(".af-feed-copy")!;
+        r.click();
+
+        copy.click();
+
+        await vi.waitFor(() => expect(copy.textContent).toBe("Not copied"));
+    });
+
+    it("is not offered where the page may not use the clipboard", () => {
+        vi.stubGlobal("isSecureContext", false);
+
+        expect(row("a\nb").querySelector(".af-feed-copy")).toBeNull();
     });
 });

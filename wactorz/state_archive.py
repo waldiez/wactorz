@@ -37,7 +37,8 @@ only, and should be kept like the keys themselves.
 
 Left out always: logs, the MQTT outbox (what it holds would be stale on the way
 back), dashboard sign-in sessions, files part way through being written or
-received, and the lock.
+received, the lock, and directory artifacts as unpacked for agents to read,
+which are unpacked again from the archive kept beside them.
 """
 
 import argparse
@@ -60,6 +61,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
 from wactorz import __version__
+from wactorz.core.artifacts import UNPACKED_DIRNAME
 from wactorz.core.blob_transfer import INBOX_DIRNAME
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.state_lock import LOCK_FILE, in_use
@@ -74,7 +76,7 @@ MANIFEST = "manifest.json"
 PREFIX = "state"
 
 #: Never exported: regenerated, stale on the way back, or not state at all.
-_LEFT_OUT_NAMES = frozenset({LOCK_FILE, "sessions.json", INBOX_DIRNAME})
+_LEFT_OUT_NAMES = frozenset({LOCK_FILE, "sessions.json", INBOX_DIRNAME, UNPACKED_DIRNAME})
 _LEFT_OUT_PREFIXES = ("mqtt_outbox.db",)
 _LEFT_OUT_SUFFIXES = (".log", ".part", "-wal", "-shm", "-journal")
 

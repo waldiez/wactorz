@@ -3,29 +3,43 @@
 Three things can know where an agent currently is, and they are consulted in
 order of how much they know: the spawn registry (which holds the code), the
 agent's manifest (which does not), and the live heartbeats (which only name a
-node). Migration works from whichever answers first.
+node). Any of them locates the agent; an agent on a node moves only when the
+registry holds its program.
 
-Which direction the move goes decides how it is done. Between two nodes, main
-tells the source node to hand the agent over. Coming home, main cannot be told
-to spawn something it has no code for, so it asks the source to send everything
-back — that is the `@main` sentinel, and the reply arrives on the state-return
-path. Going out from local, main already has the config and sends it.
+Which direction the move goes decides how it is done. Leaving a node, for main
+or for another node, main asks the source to hand back the agent's state — that
+is the `@main` sentinel, and the reply arrives on the state-return path — and
+places the agent from its own registry entry, never from the program the node
+sends with the state. Going out from local, main already has the config and
+sends it.
 
 The refusals matter as much as the moves: migrating to a node that is not
 listening loses the agent, so the checks that come first are pinned first.
 """
 
+import asyncio
 import json
 import time
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from wactorz import plugins
+from wactorz.agents.function_agent import agent as declare_agent
+from wactorz.agents.main import artifact_service as service_module
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.manifests import ManifestRegistry
-from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.migration import BRIDGE_CODE_MARKER, Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.artifacts import ArtifactStore
+
+#: The id an agent on main and its registry entry share.
+ACTOR_ID = "9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
 
 
 class _Supervisor:
@@ -110,7 +124,11 @@ class _Main:
         self.saved: list[dict[str, Any]] = []
         self.desired_state: list[tuple[str, Any, Any]] = []
         self.spawned_remote: list[tuple[dict[str, Any], str, bool]] = []
+        #: Whether each remote spawn put an agent back where it ran, which clears nothing.
+        self.restoring: list[bool] = []
         self.spawned_local: list[dict[str, Any]] = []
+        #: The `from_registry` each local spawn was given: what lets `trusted` stand.
+        self.from_registry: list[bool] = []
         self.purged: list[tuple[Any, str]] = []
         self.notifications: list[dict[str, Any]] = []
         self.recorded: dict[str, Any] = {}
@@ -123,18 +141,28 @@ class _Main:
         async def _desired(node: str, cfg: Any = None, remove_name: Any = None) -> None:
             self.desired_state.append((node, cfg, remove_name))
 
-        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        async def _spawn_remote(
+            cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+        ) -> None:
             self.spawned_remote.append((cfg, node, save))
+            self.restoring.append(restoring)
 
-        async def _spawn_from_config(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+        async def _spawn_from_config(
+            cfg: dict[str, Any], save: bool = False, *, from_registry: bool = False
+        ) -> None:
             self.spawned_local.append(cfg)
+            self.from_registry.append(from_registry)
 
         async def _purge(actor: Any, name: str) -> None:
             self.purged.append((actor, name))
 
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
-        setattr(main, "_get_spawn_registry", lambda: dict(self._spawn_registry))
+        setattr(
+            main,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names(dict(self._spawn_registry)),
+        )
         setattr(main, "_save_to_spawn_registry", self.saved.append)
         setattr(main, "_spawn_remote", _spawn_remote)
         setattr(main, "_spawn_from_config", _spawn_from_config)
@@ -235,6 +263,154 @@ class TestRefusingTheMove:
         assert "pi2" in result["message"]
 
 
+class TestOneMoveAtATime:
+    """A move is under way from its checks until the agent is confirmed or put back.
+
+    Until it is confirmed, the registry still places the agent where it left,
+    while it may already run where it is going: a second move would start from
+    the wrong one. Agents of one name on other hosts are not held up by it.
+    """
+
+    @staticmethod
+    def _main() -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code()},
+            nodes={"nuc": online(), "edge": online()},
+            local=("collector",),
+        )
+
+    async def test_a_move_out_waiting_for_its_target_holds_off_another(self) -> None:
+        main = self._main()
+        await main.migrate("collector", "nuc")
+        published = len(main.published)
+
+        result = await main.migrate("collector", "local")
+
+        assert result["success"] is False
+        assert "from 'local' to 'nuc'" in result["message"]
+        assert len(main.published) == published
+        assert len(main.spawned_remote) == 1
+
+    @pytest.mark.parametrize(("target", "said"), [("local", "local"), ("nuc", "nuc")])
+    async def test_a_hand_back_asked_for_holds_off_another(self, target: str, said: str) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code(node="rpi")},
+            nodes={"rpi": online(), "nuc": online(), "edge": online()},
+        )
+        await main.migrate("collector", target)
+
+        result = await main.migrate("collector", "edge")
+
+        assert result["success"] is False
+        assert f"from 'rpi' to '{said}'" in result["message"]
+        assert len(main.published_to("/migrate")) == 1
+
+    async def test_two_moves_asked_at_once_make_one(self) -> None:
+        main = self._main()
+        migration = main.actor.migration
+        let_go = asyncio.Event()
+        ready_for = migration._ready_for
+
+        async def _slow_ready_for(config: dict[str, Any], target: str) -> Any:
+            await let_go.wait()
+            return await ready_for(config, target)
+
+        setattr(migration, "_ready_for", _slow_ready_for)
+        first = asyncio.create_task(main.migrate("collector", "nuc"))
+        await asyncio.sleep(0)
+
+        second = await main.migrate("collector", "edge")
+        let_go.set()
+        done = await first
+
+        assert second["success"] is False and "to 'nuc'" in second["message"]
+        assert done["success"] is True
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    async def test_a_move_refused_before_it_is_sent_holds_off_nothing(self) -> None:
+        main = self._main()
+
+        refused = await main.migrate("collector", "nowhere")
+        result = await main.migrate("collector", "nuc")
+
+        assert refused["success"] is False
+        assert result["success"] is True
+        assert not main.actor.migration._in_hand
+
+    async def test_a_confirmation_being_committed_holds_off_another(self) -> None:
+        main = self._main()
+        migration = main.actor.migration
+        await main.migrate("collector", "nuc")
+        token = next(iter(migration.pending_spawns))
+        let_go = asyncio.Event()
+        release = migration._release_source
+
+        async def _slow_release(pending: dict[str, Any]) -> None:
+            await let_go.wait()
+            await release(pending)
+
+        setattr(migration, "_release_source", _slow_release)
+        ack = json.dumps({"migration_token": token, "agent": "collector", "node": "nuc"})
+        committing = asyncio.create_task(
+            migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack.encode())
+        )
+        await asyncio.sleep(0)
+        assert not migration.pending_spawns, "the entry is taken before the commit ends"
+
+        result = await main.migrate("collector", "local")
+        let_go.set()
+        await committing
+
+        assert result["success"] is False and "to 'nuc'" in result["message"]
+        assert not migration._in_hand
+
+    async def test_a_returned_agent_being_placed_holds_off_another(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code(node="rpi")},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+        migration = main.actor.migration
+        await main.migrate("collector", "local")
+        token = next(iter(migration.pending_returns))
+        let_go = asyncio.Event()
+        place = migration._place_returned
+
+        async def _slow_place(*args: Any, **kwargs: Any) -> None:
+            await let_go.wait()
+            await place(*args, **kwargs)
+
+        setattr(migration, "_place_returned", _slow_place)
+        returned = json.dumps(
+            {"return_token": token, "agent": "collector", "node": "rpi", "state": {}}
+        )
+        placing = asyncio.create_task(
+            migration.receive_state_return("nodes/rpi/state_return", returned.encode())
+        )
+        await asyncio.sleep(0)
+        assert not migration.pending_returns, "the entry is taken before the agent is placed"
+
+        result = await main.migrate("collector", "nuc")
+        let_go.set()
+        await placing
+
+        assert result["success"] is False and "from 'rpi' to 'local'" in result["message"]
+        assert not migration._in_hand
+
+    async def test_an_agent_of_the_same_name_elsewhere_moves_all_the_same(self) -> None:
+        main = _Main(nodes={"rpi": online(), "edge": online(), "nuc": online()})
+        here = with_code(node="rpi", actor_id=ACTOR_ID)
+        there = with_code(node="edge", actor_id="1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b")
+        registry = SpawnRegistry({e["actor_id"]: e for e in (here, there)})
+        setattr(main.actor, "_get_spawn_registry", lambda: registry)
+        await main.migrate("collector@rpi", "nuc")
+
+        result = await main.migrate("collector@edge", "local")
+        crossing = await main.migrate("collector@edge", "nuc")
+
+        assert result["success"] is True, result
+        assert crossing["success"] is False and "to 'nuc'" in crossing["message"]
+
+
 class TestFindingWhereTheAgentIs:
     """Registry, then manifest, then heartbeats — most informative first."""
 
@@ -249,23 +425,64 @@ class TestFindingWhereTheAgentIs:
 
         assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
 
+    async def test_an_agent_the_registry_keeps_on_main_moves_from_main(self) -> None:
+        # Its manifest from the node it ran on before is still retained: asking
+        # that node to hand it back would wait for an agent it no longer has.
+        main = _Main(
+            spawn_registry={"collector": with_code()},
+            manifests={"collector": {"node": "rpi"}},
+            nodes={"rpi": online(), "nuc": online()},
+            local=("collector",),
+        )
+
+        result = await main.migrate("collector", "nuc")
+
+        assert result["success"] is True
+        assert main.published_to("/migrate") == []
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    @pytest.mark.parametrize("target", ["", "local", "main", "Local"])
+    async def test_an_agent_the_registry_keeps_on_main_is_already_there(self, target: str) -> None:
+        # The running agent and its entry share one id, as they do on main: the
+        # move is refused as one onto where it is, not taken as one to a node.
+        main = _Main(
+            spawn_registry={"collector": with_code(actor_id=ACTOR_ID)},
+            manifests={"collector": {"node": "rpi"}},
+            nodes={"rpi": online(("collector",))},
+            local=("collector",),
+        )
+        main.local().actor_id = ACTOR_ID
+
+        result = await main.migrate("collector", target)
+
+        assert result["success"] is False
+        assert "already on 'local'" in result["message"]
+        assert not main.published
+        assert main.spawned_remote == []
+
     async def test_the_manifest_answers_when_the_registry_does_not(self) -> None:
+        # Located, and refused there: with no registry entry main holds no
+        # program to place, and a node's own copy is not run anywhere else.
         main = _Main(
             manifests={"collector": {"node": "rpi"}},
             nodes={"rpi": online(), "nuc": online()},
         )
 
-        await main.migrate("collector", "nuc")
+        result = await main.migrate("collector", "nuc")
 
-        assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
+        assert result["success"] is False
+        assert "no program" in result["message"] and "stays on 'rpi'" in result["message"]
+        assert not main.published
 
     async def test_a_heartbeat_answers_when_neither_does(self) -> None:
         # Nothing recorded it, but a node is reporting it right now.
         main = _Main(nodes={"rpi": online(("collector",)), "nuc": online()})
 
-        await main.migrate("collector", "nuc")
+        result = await main.migrate("collector", "local")
 
-        assert main.published_to("/migrate")[0][0] == "nodes/rpi/migrate"
+        assert result["success"] is False
+        assert "stays on 'rpi'" in result["message"]
+        assert not main.published
 
 
 class TestBetweenTwoNodes:
@@ -707,6 +924,198 @@ class TestTheStateThatComesBack:
         assert "_initial_state" not in entry["config"]
 
 
+MAINS = "async def process(agent):\n    pass  # the program main sent out\n"
+NODES = "async def process(agent):\n    steal()  # a program the node chose\n"
+
+
+class TestTheProgramThatComesBack:
+    """A node hands back an agent's state; the program is always main's own.
+
+    A node is not trusted to say what main, or another node, executes. Were its
+    returned config spawned, a compromised node would only have to wait for the
+    agent to be moved to get code onto main -- unscanned, for a catalogue agent,
+    whose trust main re-attaches from its registry -- or onto another node,
+    signed by main.
+    """
+
+    @staticmethod
+    def _main(**entry: Any) -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code("rpi", code=MAINS, **entry)},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+
+    @staticmethod
+    async def _hand_back(
+        main: _Main,
+        target: str,
+        *,
+        topic: str = "nodes/rpi/state_return",
+        **over: Any,
+    ) -> str:
+        """Start the move to ``target`` and deliver the node's answer; return its token."""
+        await main.migrate("collector", target)
+        ((_topic, request),) = main.published_to("/migrate")
+        token = request["return_token"]
+        answer = {
+            "agent": "collector",
+            "return_token": token,
+            "config": with_code("rpi", code=NODES),
+            "state": {"turns": 7},
+            **over,
+        }
+        await main.actor.migration.receive_state_return(topic, json.dumps(answer).encode())
+        return token
+
+    async def test_coming_home_runs_mains_program(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local")
+
+        (spawned,) = main.spawned_local
+        assert spawned["code"] == MAINS
+
+    async def test_the_nodes_state_comes_with_it(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local")
+
+        assert main.spawned_local[0]["_initial_state"] == {"turns": 7}
+
+    async def test_a_catalogue_agent_comes_home_trusted_with_its_own_program(self) -> None:
+        # Trust is earned from the registry, so it must cover the registry's
+        # program: the node's would run past the safety scanner.
+        main = self._main(trusted=True)
+
+        await self._hand_back(main, "local")
+
+        (spawned,) = main.spawned_local
+        assert main.from_registry == [True]
+        assert spawned["trusted"] is True
+        assert spawned["code"] == MAINS
+
+    async def test_another_node_is_sent_mains_program(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "nuc")
+
+        ((config, node, _save),) = main.spawned_remote
+        assert node == "nuc"
+        assert config["code"] == MAINS
+        assert config["_initial_state"] == {"turns": 7}
+
+    async def test_the_registry_keeps_mains_program_when_the_move_completes(self) -> None:
+        main = self._main()
+        await self._hand_back(main, "nuc")
+        token = next(iter(main.actor.migration.pending_spawns))
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        (committed,) = main.saved
+        assert committed["code"] == MAINS
+        assert committed["node"] == "nuc"
+
+    async def test_a_program_that_differs_is_named_as_discarded(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local")
+
+        warnings = [n["message"] for n in main.notifications if n["severity"] == "warning"]
+        assert any("differs" in m and "discarded" in m for m in warnings)
+
+    async def test_the_same_program_is_not_called_different(self) -> None:
+        main = self._main()
+
+        await self._hand_back(main, "local", config=with_code("rpi", code=MAINS))
+
+        assert [n["severity"] for n in main.notifications] == ["info"]
+
+    @staticmethod
+    def _llm_main() -> tuple[_Main, str]:
+        """An LLM agent on rpi, and the bridge code main sent it out with."""
+        entry = {"name": "collector", "node": "rpi", "type": "llm", "system_prompt": "Be brief."}
+        main = _Main(spawn_registry={"collector": entry}, nodes={"rpi": online()})
+        return main, main.actor._inject_llm_bridge_code(dict(entry))["code"]
+
+    async def test_bridge_code_for_an_llm_agent_is_not_called_different(self) -> None:
+        # The registry holds an LLM agent without code; the node ran the bridge
+        # main synthesized for it on the way out.
+        main, bridge = self._llm_main()
+
+        await self._hand_back(
+            main, "local", config={"name": "collector", "type": "llm", "code": bridge}
+        )
+
+        (spawned,) = main.spawned_local
+        assert "code" not in spawned
+        assert [n["severity"] for n in main.notifications] == ["info"]
+
+    async def test_a_tampered_bridge_is_called_different(self) -> None:
+        # The marker is a comment anyone can write: only the bridge main would
+        # send passes as its own.
+        main, bridge = self._llm_main()
+        tampered = bridge + "\nsteal()\n"
+        assert BRIDGE_CODE_MARKER in tampered
+
+        await self._hand_back(
+            main, "local", config={"name": "collector", "type": "llm", "code": tampered}
+        )
+
+        (spawned,) = main.spawned_local
+        assert "code" not in spawned
+        warnings = [n["message"] for n in main.notifications if n["severity"] == "warning"]
+        assert any("discarded" in m for m in warnings)
+
+    async def test_an_answer_from_another_node_is_ignored_and_the_question_stands(
+        self,
+    ) -> None:
+        # The token travels in the clear; spending it here would let anyone who
+        # read it cancel the real answer.
+        main = self._main()
+
+        token = await self._hand_back(main, "local", topic="nodes/nuc/state_return")
+
+        assert not main.spawned_local
+        assert token in main.actor.migration.pending_returns
+
+    async def test_an_answer_naming_another_agent_is_ignored(self) -> None:
+        # The name picks the registry entry that is spawned: a node must not
+        # get another agent's program started with its state.
+        main = self._main()
+        main._spawn_registry["vault"] = {"name": "vault", "code": MAINS, "trusted": True}
+
+        token = await self._hand_back(main, "local", agent="vault")
+
+        assert not main.spawned_local
+        assert token in main.actor.migration.pending_returns
+
+    async def test_an_entry_gone_while_in_flight_starts_nothing(self) -> None:
+        main = self._main()
+        await main.migrate("collector", "local")
+        ((_topic, request),) = main.published_to("/migrate")
+        del main._spawn_registry["collector"]
+
+        await main.actor.migration.receive_state_return(
+            "nodes/rpi/state_return",
+            json.dumps(
+                {
+                    "agent": "collector",
+                    "return_token": request["return_token"],
+                    "config": with_code("rpi", code=NODES),
+                    "state": {},
+                }
+            ).encode(),
+        )
+
+        assert not main.spawned_local
+        assert not main.spawned_remote
+        (notice,) = main.notifications
+        assert "no program" in notice["message"]
+
+
 class TestAnAgentANodeCannotRun:
     """A built-in agent stays where it is, rather than arriving on a node empty.
 
@@ -739,4 +1148,203 @@ class TestAnAgentANodeCannotRun:
 
         assert not agent.stopped
         assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns
+
+
+class TestAnAgentWhosePackagesAreNotCleared:
+    """A node installs what the spawn lists, so the packages are cleared before anything stops."""
+
+    @staticmethod
+    def _main() -> _Main:
+        # No installer running: only what is on the list without asking is cleared.
+        return _Main(
+            spawn_registry={"collector": with_code(install=["wactorz-unlisted-probe"])},
+            nodes={"rpi": online()},
+            local=("collector",),
+        )
+
+    async def test_it_is_refused_with_the_reason(self) -> None:
+        result = await self._main().migrate("collector", "rpi")
+
+        assert result["success"] is False
+        assert "wactorz-unlisted-probe" in result["message"]
+
+    async def test_nothing_is_stopped_or_sent(self) -> None:
+        main = self._main()
+
+        await main.migrate("collector", "rpi")
+
+        assert not main.local("collector").stopped
+        assert not main.spawned_remote
+
+
+@declare_agent(subscribes="probe/in")
+def probe(reading: dict) -> dict:
+    return reading
+
+
+class TestALibraryAgent:
+    """One started with the system: no registry entry, a plugin under its name.
+
+    It goes as a `type: module` spawn of its target, with its state, to a node
+    whose manifest says it can build that target; to any other node it is
+    refused, with what to install there.
+    """
+
+    @pytest.fixture(autouse=True)
+    def target(self) -> Iterator[str]:
+        with plugins.registered([probe]) as (plugin,):
+            yield plugin.target
+
+    @staticmethod
+    def _main(*, builds: list[str]) -> _Main:
+        main = _Main(nodes={"nuc": online()}, local=("probe",))
+        main.actor.nodes.node_manifests["nuc"] = {"manifest_v": 1, "agents": builds}
+        main.local("probe").holding(seen=3)
+        return main
+
+    async def test_it_goes_as_a_module_agent_with_its_state(self, target: str) -> None:
+        main = self._main(builds=[target])
+
+        result = await main.migrate("probe", "nuc")
+
+        assert result["success"] is True
+        config, node, _save = main.spawned_remote[0]
+        assert node == "nuc"
+        assert config["type"] == "module"
+        assert config["target"] == target
+        assert config["_initial_state"] == {"seen": 3}
+
+    async def test_it_goes_from_main_whatever_a_retained_manifest_says(self, target: str) -> None:
+        main = self._main(builds=[target])
+        main.actor._agent_manifests["probe"] = {"node": "rpi"}
+        main.actor.nodes.known["rpi"] = online(("probe",))
+
+        result = await main.migrate("probe", "nuc")
+
+        assert result["success"] is True
+        assert main.published_to("/migrate") == []
+        assert [node for _config, node, _save in main.spawned_remote] == ["nuc"]
+
+    async def test_a_node_that_cannot_build_it_is_refused(self, target: str) -> None:
+        main = self._main(builds=["other.pkg:agent"])
+
+        result = await main.migrate("probe", "nuc")
+
+        assert result["success"] is False
+        assert target in result["message"]
+        assert "WACTORZ_AGENTS" in result["message"]
+        assert main.spawned_remote == []
+        assert main.local("probe").stopped is False
+
+
+@declare_agent(subscribes="imu/in", models={"model": "imu-detector"})
+def scorer(reading: dict) -> dict:
+    return reading
+
+
+class TestAnAgentWhoseModelIsMissing:
+    """Nothing stops until everything the node will need is known to be there.
+
+    The models an agent names are pinned before the stop, as the spawn pins
+    them again after: a model removed from the store refuses the move with
+    the agent still running, rather than after it has been stopped.
+    """
+
+    @pytest.fixture(autouse=True)
+    def target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+        monkeypatch.setattr(
+            service_module, "resolve_state_dir", lambda: str(tmp_path / "main-state")
+        )
+        with plugins.registered([scorer]) as (plugin,):
+            yield plugin.target
+
+    @staticmethod
+    def _main(target: str) -> _Main:
+        main = _Main(nodes={"nuc": online()}, local=("scorer",))
+        main.actor.artifact_service = ArtifactService(main.actor)
+        main.actor.nodes.node_manifests["nuc"] = {"code_bundles": True, "agents": [target]}
+        return main
+
+    async def test_it_is_refused_before_anything_stops(self, target: str) -> None:
+        main = self._main(target)
+
+        result = await main.migrate("scorer", "nuc")
+
+        assert result["success"] is False
+        assert "imu-detector" in result["message"]
+        assert "stays on 'local'" in result["message"]
+        assert main.local("scorer").stopped is False
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns
+
+    async def test_with_the_model_stored_it_goes_pinned(self, target: str, tmp_path: Path) -> None:
+        main = self._main(target)
+        path = tmp_path / "imu.npz"
+        path.write_bytes(b"arrays")
+        ArtifactStore.in_state_dir(tmp_path / "main-state").add(path, "imu-detector")
+
+        result = await main.migrate("scorer", "nuc")
+
+        assert result["success"] is True, result
+        config, _node, _save = main.spawned_remote[0]
+        assert config["artifacts"]["model"]["name"] == "imu-detector"
+        assert config["artifacts"]["model"]["version"] == 1
+
+
+class TestAPutBackThatFails:
+    """An agent that cannot be started again is said to be running nowhere."""
+
+    @staticmethod
+    def _stuck(main: _Main) -> None:
+        async def _cannot(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+            raise RuntimeError("no artifact 'imu-detector:1'")
+
+        setattr(main.actor, "_spawn_from_config", _cannot)
+
+    async def _pending(self, main: _Main) -> str:
+        await main.migrate("collector", "rpi")
+        (token,) = main.actor.migration.pending_spawns
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+        return token
+
+    async def test_the_dashboard_is_told_and_where_the_state_is(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code()},
+            nodes={"rpi": online()},
+            local=("collector",),
+        )
+        await self._pending(main)
+        self._stuck(main)
+
+        await main.actor.migration.expire_pending_spawns()
+
+        (notice,) = [n for n in main.notifications if n["severity"] == "error"]
+        assert "running nowhere" in notice["message"]
+        assert "no artifact 'imu-detector:1'" in notice["message"]
+        assert "main's state directory" in notice["message"]
+        assert not main.actor.migration.pending_spawns
+
+    async def test_the_sweep_reaches_the_next_agent(self) -> None:
+        main = _Main(
+            spawn_registry={"collector": with_code(), "other": with_code(name="other")},
+            nodes={"rpi": online()},
+            local=("collector", "other"),
+        )
+        await self._pending(main)
+        await main.migrate("other", "rpi")
+        for pending in main.actor.migration.pending_spawns.values():
+            pending["started_at"] = 0.0
+        restored: list[str] = []
+
+        async def _first_fails(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+            restored.append(cfg["name"])
+            if cfg["name"] == "collector":
+                raise RuntimeError("boom")
+
+        setattr(main.actor, "_spawn_from_config", _first_fails)
+
+        await main.actor.migration.expire_pending_spawns()
+
+        assert restored == ["collector", "other"]
         assert not main.actor.migration.pending_spawns

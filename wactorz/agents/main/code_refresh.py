@@ -18,9 +18,13 @@ So the node volunteers a *notice* and never the program:
     node → nodes/<node>/code_return    {agent, token, code}
 
 Main acts on the last one only for a token it minted, has not yet spent and has
-not let expire — the same rule :mod:`.migration` follows for the config a
+not let expire — the same rule :mod:`.migration` follows for the state a
 returning agent carries. A forged notice therefore buys nothing: main asks the
 node, and the node answers with what it is really running.
+
+A node's program reaches the registry this way and arrives untrusted: a filed
+program loses the entry's ``trusted`` flag, so it meets the
+safety scanner wherever it runs next. A migration never takes code from a node.
 """
 
 from __future__ import annotations
@@ -144,8 +148,7 @@ class CodeRefresh:
         host = self.host
         if host is None:
             return False
-        entry = host._get_spawn_registry().get(agent_name)
-        return bool(entry) and (entry.get("node") or "") == node
+        return host._get_spawn_registry().at(agent_name, node) is not None
 
     # ── Answering ─────────────────────────────────────────────────────────
 
@@ -209,11 +212,16 @@ class CodeRefresh:
         if not isinstance(code, str) or not code.strip():
             return
 
-        entry = dict(host._get_spawn_registry().get(asked["agent"]) or {})
+        entry = host._get_spawn_registry().at(asked["agent"], asked["node"]) or {}
         if not entry or entry.get("code") == code:
             return
         entry["code"] = code
         entry["_code_fixed_at"] = time.time()
+        # `trusted` vouches for the catalogue's own source, which this no longer
+        # is: a repair is model-written, and the node is not trusted to say what
+        # it wrote. Kept, it would let the program run unscanned wherever the
+        # agent is spawned next, main included.
+        entry.pop("trusted", None)
         host._save_to_spawn_registry(entry)
         logger.info(
             "[%s] %r on %r repaired itself; its registry entry now holds the program it runs.",

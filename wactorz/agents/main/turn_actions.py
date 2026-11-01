@@ -17,7 +17,7 @@ asked to describe it, which is why it can be read and tested on its own.
 from dataclasses import dataclass
 from typing import Any
 
-from ..mixins import SpawnPlaceholder
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, SpawnPlaceholder
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,8 @@ class TurnActions:
     spawned: tuple[Any, ...] = ()
     deleted: tuple[str, ...] = ()
     missing: tuple[str, ...] = ()
+    #: Why a delete that named an agent was not done, one sentence each.
+    refused: tuple[str, ...] = ()
 
     def summary(self, response: str) -> str:
         """One line naming what happened, or empty when nothing did.
@@ -46,12 +48,33 @@ class TurnActions:
         anything the spawn returned.
         """
         parts: list[str] = []
-        live = [a.name for a in self.spawned if not isinstance(a, SpawnPlaceholder)]
+        elsewhere = (SpawnPlaceholder, PlacedOnNode, NotSpawned, KeptHere)
+        live = [a.name for a in self.spawned if not isinstance(a, elsewhere)]
         installing = [a.name for a in self.spawned if isinstance(a, SpawnPlaceholder)]
+        replaced = '"replace": true' in response or '"replace":true' in response
+        action = "Replaced" if replaced else "Spawned"
         if live:
-            replaced = '"replace": true' in response or '"replace":true' in response
-            action = "Replaced" if replaced else "Spawned"
             parts.append(f"{action} {_named(live)} — will auto-restore on restart")
+        for placed in (a for a in self.spawned if isinstance(a, PlacedOnNode)):
+            parts.append(
+                f"{action} '{placed.name}' on node '{placed.node}'"
+                + (
+                    ""
+                    if placed.running
+                    else f", which is not running: it starts there when the node does "
+                    f"(/deploy {placed.node})"
+                )
+            )
+        for kept in (a for a in self.spawned if isinstance(a, KeptHere)):
+            where = " and ".join(f"'{a}'" for a in kept.elsewhere) or "main"
+            parts.append(
+                f"Did not spawn '{kept.name}' on '{kept.node}': it already runs as {where}. "
+                f'"replace": true moves it to \'{kept.node}\', and "alongside": true runs a '
+                f"second one there (/agents copy {kept.elsewhere[0] if kept.elsewhere else kept.name} "
+                f"{kept.node})"
+            )
+        for refused in (a for a in self.spawned if isinstance(a, NotSpawned)):
+            parts.append(f"Did not spawn '{refused.name}': {refused.reason}")
         if installing:
             parts.append(f"Installing packages for {_named(installing)} — will appear shortly")
         # Deletions are unquoted because both paths already wrote them that way;
@@ -61,6 +84,7 @@ class TurnActions:
             parts.append(f"Deleted {', '.join(self.deleted)}")
         if self.missing:
             parts.append(f"Could not delete {', '.join(self.missing)} — not currently registered")
+        parts.extend(f"Did not delete: {reason}" for reason in self.refused)
         return " | ".join(parts)
 
 

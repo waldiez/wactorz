@@ -23,8 +23,11 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.delegation import DelegationManager
 from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import ActorMetrics
 
 _RECIPE_FAILED = "recipe exploded"
 
@@ -85,9 +88,12 @@ class _ReplyTopic:
         self._answer = answer
         self._times_out = times_out
         self.opened = 0
+        #: The node each reply channel was opened for, whose answer it takes.
+        self.nodes: list[str] = []
 
-    def __call__(self) -> "_ReplyTopic":
+    def __call__(self, node: str) -> "_ReplyTopic":
         self.opened += 1
+        self.nodes.append(node)
         return self
 
     async def __aenter__(self) -> tuple[str, Any]:
@@ -120,6 +126,9 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        main.metrics = ActorMetrics(start_time=0.0)
+        main.migration = Migration(main, main.nodes)
         main.spawns = SpawnService(main)
         main.delegation = DelegationManager(main)
         main.lifecycle = LifecycleService(main)
@@ -127,6 +136,7 @@ class _Main:
         main._known_nodes = dict(nodes or {})
         main._conversation_history = []
         setattr(main, "_registry", _Registry(running, catalogue, appears_after_spawn))
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
 
         self.delegated: list[tuple[str, str]] = []
         self.published: list[tuple[str, Any]] = []
@@ -313,6 +323,42 @@ class TestAnAgentOnAnotherMachine:
         await main.ask("@sensor status")
 
         assert not main.published
+
+
+class TestANameTwoNodesShare:
+    """Asked which one is meant, rather than sent to either."""
+
+    async def test_a_bare_name_is_answered_with_the_addresses(self) -> None:
+        main = _Main(nodes={"rpi": node("sensor"), "pc": node("sensor")})
+
+        answer = await main.ask("@sensor status")
+
+        assert "`@sensor@rpi` or `@sensor@pc`" in answer
+        assert not main.published
+
+    async def test_the_full_address_of_one_of_them_is_refused_too(self) -> None:
+        # The task would go on the name's topic, which both nodes run.
+        main = _Main(nodes={"rpi": node("sensor"), "pc": node("sensor")})
+
+        answer = await main.ask("@sensor@pc status")
+
+        assert "takes a task only by name" in answer
+        assert not main.published
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(self) -> None:
+        main = _Main(
+            nodes={"rpi": node("sensor"), "pc": node("sensor")}, remote_answer={"result": "on"}
+        )
+        main.actor.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+
+        assert await main.ask("@sensor@pc status") == "**sensor** (on pc): on"
+        topic, _payload = main.published[0]
+        assert topic == "agents/at/pc/sensor/task"
+
+    async def test_the_full_address_of_the_only_one_reaches_it(self) -> None:
+        main = _Main(nodes={"pc": node("sensor")}, remote_answer={"result": "on"})
+
+        assert await main.ask("@sensor@pc status") == "**sensor** (on pc): on"
 
 
 class TestAnAgentThatIsNowhere:

@@ -11,9 +11,12 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { seedServerConfig } from "../config/serverConfig";
-import { uploadsEnabled, UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { loadServerConfig, seedServerConfig } from "../config/serverConfig";
+import { UPLOADS_KEY } from "../config/keys";
+import { uploadsEnabled } from "../ui/chat/uploads";
 import { safeStorage } from "../safeStorage";
+import { byRole } from "./queries";
+import { openDashboard } from "./dashboard";
 
 function respondWith(cfg: Record<string, unknown>): void {
     vi.stubGlobal(
@@ -85,5 +88,53 @@ describe("the uploads gate", () => {
         await seedServerConfig();
 
         expect(uploadsEnabled()).toBe(false);
+    });
+});
+
+describe("the attach button", () => {
+    const attach = () => document.querySelector<HTMLButtonElement>(".af-attach-btn");
+
+    beforeEach(() => {
+        safeStorage.remove(UPLOADS_KEY);
+        safeStorage.remove(`${UPLOADS_KEY}__server`);
+        document.body.innerHTML = "";
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("appears on a first visit, once the server says it takes uploads", async () => {
+        respondWith({ uploads: { enabled: true } });
+
+        openDashboard();
+        expect(attach()?.hidden).toBe(true);
+
+        await loadServerConfig();
+
+        expect(attach()?.hidden).toBe(false);
+        expect(byRole(document, "button", "Attach files")).toBeDefined();
+    });
+
+    it("makes the one request a page makes for its config", async () => {
+        respondWith({ uploads: { enabled: true } });
+
+        openDashboard();
+        await loadServerConfig();
+
+        const asked = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/api/config"));
+        expect(asked).toHaveLength(1);
+    });
+
+    it("goes away when a server has stopped taking what it took on the last visit", async () => {
+        safeStorage.set(UPLOADS_KEY, "1");
+        respondWith({ uploads: { enabled: false } });
+
+        openDashboard();
+        expect(attach()?.hidden).toBe(false);
+
+        await loadServerConfig();
+
+        expect(attach()?.hidden).toBe(true);
     });
 });

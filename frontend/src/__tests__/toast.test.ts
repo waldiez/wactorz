@@ -62,16 +62,28 @@ describe("ToastManager (DOM)", () => {
         return mod.toast;
     }
 
-    it("injects CSS into document.head on first import", async () => {
-        await freshToast();
-        expect(document.getElementById("wz-toast-css")).not.toBeNull();
+    it("show() with a key replaces the toast shown with it rather than stacking", async () => {
+        const t = await freshToast();
+        t.show({ title: "triage", message: "first", key: "q-1", sticky: true });
+        t.show({ title: "other", message: "unkeyed" });
+        t.show({ title: "triage", message: "again", key: "q-1", sticky: true });
+
+        const live = [...document.querySelectorAll<HTMLElement>(".wz-toast:not(.wz-toast--out)")];
+        expect(live.map(el => el.dataset["key"] ?? "")).toEqual(["", "q-1"]);
+        expect(live[1]!.textContent).toContain("again");
     });
 
-    it("does not inject CSS twice on repeated show calls", async () => {
+    it("a toast being dismissed is hidden from assistive technology while it fades", async () => {
         const t = await freshToast();
-        t.show({ title: "A", message: "a" });
-        t.show({ title: "B", message: "b" });
-        expect(document.querySelectorAll("#wz-toast-css").length).toBe(1);
+        t.show({ title: "triage", message: "asked", key: "q-1", sticky: true });
+        const shown = document.querySelector<HTMLElement>("[data-key='q-1']")!;
+        expect(shown.getAttribute("aria-hidden")).toBeNull();
+
+        t.close("q-1");
+
+        expect(shown.isConnected).toBe(true);
+        expect(shown.getAttribute("aria-hidden")).toBe("true");
+        expect(shown.inert).toBe(true);
     });
 
     it("show() appends a .wz-toast element to the DOM", async () => {
@@ -110,6 +122,25 @@ describe("ToastManager (DOM)", () => {
         expect(btns.length).toBe(2);
         (btns[0] as HTMLButtonElement).click();
         expect(onClick).toHaveBeenCalled();
+    });
+
+    it("a sticky toast stays until it is closed by its key", async () => {
+        vi.useFakeTimers();
+        try {
+            const t = await freshToast();
+            t.show({ title: "installer", message: "Install?", sticky: true, key: "q1" });
+            const el = document.querySelector<HTMLElement>(".wz-toast")!;
+
+            vi.advanceTimersByTime(10 * 60 * 1000);
+            expect(el.classList.contains("wz-toast--out")).toBe(false);
+
+            t.close("other");
+            expect(el.classList.contains("wz-toast--out")).toBe(false);
+            t.close("q1");
+            expect(el.classList.contains("wz-toast--out")).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("clicking a toast dismisses it", async () => {

@@ -3,7 +3,627 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — pending
+## [Unreleased]
+
+- **Reachy remains opt-in.** Its SDK is updated to 1.12.0 with upstream's secure Starlette requirements and Python 3.11+ support; core Wactorz keeps Python 3.10 support. General Greek entity-selection changes are deferred. Trusted recipe code refresh is opt-in and refuses dependency migrations until a fresh approved catalogue spawn.
+
+- Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
+
+### Changed
+
+- **Installed packages load only when named.** Extensions, agents and pipelines registered as
+  entry points were loaded from anything installed, outside the safety check, and an agent's
+  requirements install packages too. Now a package is loaded only when its distribution is in
+  `WACTORZ_EXTENSIONS` (`WACTORZ_EXTENSIONS=wactorz-mlops,wactorz-tts`, or `*` for everything
+  installed, as before). What Wactorz ships always loads, and so do targets in `WACTORZ_AGENTS`
+  and `WACTORZ_PIPELINES`. A package left out is not imported, and is named once in the log, with
+  the line to add, and on the Overview. **To upgrade:** if you rely on a package's entry points,
+  add it to `WACTORZ_EXTENSIONS`; under Home Assistant, the `extensions` option. A node reads its
+  own list: set `DEPLOY_<NODE>_EXTENSIONS` on main, or `extensions` on the add-on's deploy target,
+  and run `/deploy` again.
+
+### Added
+
+- **Recorded readings can be let go after a while, except what a model learned from.**
+  `WACTORZ_DATA_RETENTION_DAYS` makes main remove hours of readings older than that from its
+  data directory, a few times a day, keeping any hour a stored model says it was trained on
+  (`data` windows in the version's metadata, which the train step writes); unset, everything
+  is kept, as before. `wactorz-data sweep --days N --dry-run` says what a retention would
+  remove, and without `--dry-run` removes it. `GET /api/data` and `wactorz-data sources` now
+  say what each source holds, its hours, files and bytes and its first and last hour, and
+  the retention in force; `GET /api/data/{source}/series` gives one column over a window in
+  buckets, for a chart.
+- **Readings are recorded as Parquet, where they are seen, and read back as frames.** A new
+  `recorder` library agent in the catalogue (`@catalog spawn recorder {"topics": [...]}`, or a
+  `module` spawn with `target: wactorz.agents.recorder_agent:RecorderAgent` on a node) keeps
+  every reading of its topics as a row of its source, the payload's `device` or `source` or the
+  topic, under the state directory's `data/<source>/<yyyy>/<mm>/<dd>/<hh>.parquet`, in event
+  time with the arrival beside it. A node ships each closed file to main over the blob path and
+  keeps its copy until main has answered and a week has passed. `wactorz.data` reads a window
+  back as an Arrow frame and cuts it into segments (by gap, label, column or length), splits it
+  without shuffling (`time_split`, `rolling_origin`, `leave_k_out`, each with a manifest a
+  trainer stores), joins the effective labels, profiles it and exports it. `wactorz-data
+  sources|profile|export` and `GET /api/data` and `/api/data/{source}/profile` show what was
+  recorded. All of it needs the `data` extra (pyarrow). See `docs/design/data-storage.md`.
+- **A reading keeps when it happened apart from when it arrived.** The collector files each
+  row under the payload's event time (`ts`, then `timestamp`), and the readings table gains
+  `arrived` and `time_source` by a migration; rows written before read as before. A stream
+  window asked with `event_time=True` orders and trims by what the payloads say, ending at
+  the newest entry, for a replay or a source on its own clock.
+- **Swaps and shadow pairs name the agent's id**, beside its name, so a record outlives a rename
+  and two agents of one name are told apart.
+- **A model's shadow trial on its page.** While a shadow is set, the Models tab shows what the trial
+  shows so far: how often the two versions agreed, what each flagged, the tried version's errors,
+  each side's latency and, when outputs carry one, their scores, as figures and as charts over the
+  trial, with a gap where no input came (`GET /api/models/{name}/trial/series`). It says so when
+  there are no pairs yet, or why they cannot be read, and a Refresh button reads them again. Below,
+  Past trials lists how earlier trials ended and what they showed.
+- **An Inbox for what the agents wait on you for.** A new tab, `#/inbox`, lists every question still
+  open, from main and from nodes, whatever channel it went to, with who asked and a link to their
+  thread; `#/inbox/answered` lists the newest answered, with the pick, where it was made and the
+  note. A question is answered from its card, with an optional note, and a refusal is said on the
+  card. The tab counts what waits, in the header and in the phone's bar, and follows the agents'
+  books live. The installer's question about a package and main's about running
+  model-written code are there too, kept across a reload, and still take their answer only from the
+  dashboard. A question an agent sends with `notify_user` alone keeps no book, so it
+  stays a toast and a thread message. On a phone the bar is now Overview, Chat, Inbox, Devices and
+  More, with Feed and Models under More.
+- **An agent can say why it asks.** `ask_operator(..., context="...")`, and `context` on a rule's
+  `ask_operator` action, where it may name trigger fields. It is kept in the question book and shown
+  on the Inbox's card; chat channels are sent the question alone.
+
+- **Where the model loop's data lives is decided, before it is built.** `docs/design/data-storage.md`
+  records that readings from streams are recorded as Parquet files under the state directory, one
+  file per source and hour, by a recorder that runs on main or on a node, with a node shipping each
+  closed file to main over the blob path; that shadow pairs and serving logs are written the same
+  way under their own prefixes; that SQLite keeps what is small and transactional, labels, the
+  graph, questions, pointer moves, and a short live window of readings for the dashboard; that one
+  loader, `wactorz.data`, reads frames, cuts them into segments, makes time-based and leave-k-out
+  splits that never shuffle, joins the effective labels and profiles a source; that pyarrow is the
+  data package's one dependency, as the `data` extra, with no DuckDB; and what was decided against.
+- **A model's shadow version runs beside the one served, and the trial is compared and kept.**
+  A function agent serving a model by its bare name takes the version the `shadow` pointer
+  names as soon as it is set, from the Models tab, chat or `train.py --set shadow`: after
+  each reading is answered with the active version, the same function runs once more with
+  the shadow version, publishing under `shadow/` and never writing the agent's state, and
+  the two answers are kept as a pair. A pass is skipped, never queued, while the last one
+  runs, so a trial never slows what is served. `GET /api/models/{name}/trial` shows how
+  often the two agree, how their scores differ, their latencies, and, given a source and
+  which label values count as positive, each side's precision and recall against the labels.
+  Clearing or promoting the shadow ends the trial, records its outcome in the provenance
+  graph (`GET /api/models/{name}/trials`) and says what it showed on the feed. Pairs are
+  Parquet files under the state directory's `data/shadow/<model>`, the layout
+  `docs/design/data-storage.md` decided, written by the new `wactorz.data` package; the
+  `data` extra now carries pyarrow for it. Function agents on main only in this step; a
+  program written from chat, and an agent on a node, run no shadow yet.
+- **A library agent the system started follows a moved pointer too.** The hot swap now finds
+  the agents on main among those running, not only among those main spawned, so an agent
+  brought by `WACTORZ_AGENTS` or `wactorz.run(agents=...)` swaps its model when its
+  pointer moves.
+- **A Models tab on the dashboard.** It lists every stored model, saying which serves
+  a version, which is trying one beside it and which has none active, and opens one at
+  `#/models/<name>`: its versions along a line with the active, the shadow and the
+  previous active marked in words and colour, a table of versions with what was said of
+  each, and the history of its pointer moves, each with who made it and why. From there
+  a version is tried as shadow, the shadow promoted or cleared, and the active rolled
+  back to the version it replaced, each after a question that takes an optional reason.
+  A pointer moved anywhere else, by the CLI, chat or an agent, shows there within
+  seconds. On a phone it is in the More sheet. Making a version active directly stays with the CLI and chat.
+- **Agents written from chat know how to label.** Main's and the planner's prompts now say
+  what `label=` on `ask_operator` does and when to use it, and that an agent on main can
+  write a label itself with `agent.label(source, value, start=...)`, so a generated agent
+  asks about a source in a way that trains the next model rather than only reporting.
+- **How two agents can share a name is decided, before it is built.** `docs/design/agent-identity.md` records the following. A name is unique per node, and `name@node` is the full address, with a bare name working while it is unique. An agent's id is minted at spawn and kept across restarts and moves. An ambiguous bare name is answered with a question, never guessed. Tasks are routed by node. A spawn says whether it moves an agent or adds a second one. An optional `WACTORZ_NAMESPACE` puts an install's own control topics under a prefix, while the world topics stay shared. An upgrade changes nothing that is configured. The record also lists what was decided against. Nothing changes until it is built.
+- **An operator's answer can become a label, and labels live in a provenance graph.** `ask_operator(..., label={"source": "sensors/ahu-1", "start": ts, "values": {"Maintenance": "maintenance", "Real problem": "fault"}})` makes the answer a record that the source was doing something from `start` (to `end`, open when unsaid), in event time; an option the spec leaves out, such as "Not sure", makes none, and a spec that cannot be used is refused before the question is sent. The agent keeps the spec in its question book, and main writes the label once the book says the question was answered, for an agent on main or on a node; it takes a book only from where its agent is, as it takes a manifest, so a node cannot answer for another node's agent. A later label on the same source supersedes an earlier one wherever their windows overlap, without editing it: the earlier one is kept, `partly_superseded` or `superseded`, and what held when is the newest label at each moment. A label from an answer the dashboard sent is marked verified; one heard on the broker, where anything can publish an answer, is not. An agent on main can write its own with `agent.label(source, value, start=...)`, and a rule with the new `label` action, from when its trigger says it happened. `GET /api/labels` lists labels by source and event-time window, and `GET /api/labels/effective` resolves a source into what held when. Labels are nodes of a new provenance graph in main's database, two tables of nodes and of edges from cause to effect, which the rest of the model loop will record its decisions and actions in; the database migrates to it at start. See `docs/design/labels-and-provenance.md`.
+
+- **Event time, labels and the provenance graph are decided, before they are built.** `docs/design/event-time.md` records that the model loop reads when a thing happened, as the payload says (`ts`, then `timestamp`, then the arrival time marked as such), rather than when the message arrived; that clocks far in the future are reported rather than trusted; that "now" is per source; and what the collector and `StreamWindow` change for it. `docs/design/labels-and-provenance.md` records that a label covers a period of a source; that an answer becomes one when its question says how; that a later answer supersedes an earlier one over their overlap without editing it; that labels, questions, decisions, actions, model versions and outcomes are nodes of one graph in main's database, joined from cause to effect; that an overridden answer produces a plan for review rather than undoing what followed; who may write the graph; and what was decided against. The rest of the model loop builds on both; nothing changes until it is built.
+
+- **Reachy now has built-in, topic-aware help.** Typed or spoken requests such as `help`,
+  `what can you do?`, and `how do I use the camera?` return commands and keywords without
+  an LLM call or robot connection. Focused guides cover movement, voice, camera, connection,
+  volume, and Wactorz/Home Assistant.
+- **Reachy says what voice input is missing before it listens.** Without a Deepgram key, or with the chosen recognizer not installed, `start conversation` and `listen and ask Wactorz` now refuse with the fix instead of failing after someone has spoken. A conversation that ends by itself (nobody spoke, repeated failures) says why in chat. New guides in `docs/reachy/` for users, developers and demonstrators, and `scripts/reachy_sim_check.py` runs the agent against the SDK's simulated robot.
+
+- **The IMU example trains versions you can compare, and asks about what it finds.**
+  `train.py --seed --samples` stores each version with how it did on the same held-out
+  readings (`caught`, `false_alarms`), and `--set active` or `--set shadow` points at it;
+  the agent serves the active one. A new `triage` agent asks on the dashboard whether a
+  strong jolt was maintenance or a real problem, and with main running the answer is kept
+  as a label of the device (`GET /api/labels`). `publish_imu.py` uses the broker settings
+  and credentials Wactorz itself is configured with, so it reaches a broker with a password,
+  and each reading carries its device and time.
+
+- **A model keeps the history of its pointers.** Every move of `active` or `shadow` is
+  recorded with who made it, why, and from which version to which, whether it was made on
+  the dashboard, in chat or with `wactorz-artifacts`; `GET /api/models/{name}/moves` lists
+  them, newest first. A clear says who cleared it and why, and a shadow ended by a
+  promotion is recorded as part of it. Each change is journalled beside the store's index
+  as it is made, and kept in the provenance graph in main's database once main has read
+  it; the store's index format does not change. Both moves are listed when one follows
+  another within seconds, as when a shadow is set and promoted at once, and so is a change
+  made while main was down. Clearing a pointer takes a reason: `DELETE
+  /api/models/{name}/shadow` with `{"reason": "..."}`, `/artifacts clear active|shadow <name>
+  [reason]` in chat, `wactorz-artifacts clear --reason` and the Models tab's question.
+- **A running agent follows its model's pointer, without a restart.** An agent whose
+  spawn named a model by its bare name, or as `NAME:active` or `NAME:shadow`, serves the
+  version that pointer moves to as soon as it has loaded: promote, roll back, point at a
+  new version from `train.py --set active`, the dashboard or chat, and every agent that
+  follows the pointer, on main or on a node, swaps in place. The old version is served
+  until the new one is in memory, and one that will not load leaves the agent as it was,
+  with the reason on the feed. An agent that named a version is left alone, and a
+  pointer cleared moves nobody. Generated code that keeps what it loaded in `agent.state`
+  can define `async def on_model(agent, key, model)` to take the new one; code that calls
+  `await agent.load_model(key)` as it goes, like the IMU example's function, needs
+  nothing. Each swap that landed is an `action` in the provenance graph, joined to the
+  move that caused it, and one line on the feed. A node takes the new version only from
+  a command main signed; the version is fetched the way the first was.
+- **An agent can be named by its full address, `name@node`.** `@counter@pi-kitchen` in
+  chat or the terminal, `send_to("counter@pi-kitchen", ...)`, `delegate_task`,
+  `POST /api/chat`, `POST /api/reset` and `/agents restart|stop|delete`, `/start` and
+  `/migrate` all take one; main is the node `main` (or `local`). A bare name works as
+  before while one agent has it. When agents on more than one node report the same name,
+  nothing is sent to either: a person is told the addresses (the dashboard offers them
+  as buttons, and the one pressed is sent the message), and a program is refused with
+  them (`409` from the REST routes). A task for an agent on a node goes on that
+  node's own topic, `agents/at/<node>/<name>/task`, so the full address reaches that
+  agent alone, from main or from an agent on another node (which learns where agents
+  run from their retained manifests). A node says it takes tasks there with
+  `"tasks_by_node": true` in its manifest; one from before that is still sent tasks by
+  name, which every node running the name hears, so while another node runs the name a
+  task for it is refused until it is deployed again. An agent whose manifest names no
+  node, as main's own and those on older nodes do, is still sent tasks by name from a
+  node. A reset of a name kept in more than one place is refused,
+  since what it clears is kept by name. An address naming a node the agent is not on is
+  refused rather than taken as the bare name. `@` is no longer allowed in the name of a
+  new agent or a new node; an agent that already has one keeps it and is still reached
+  by its whole name.
+- **Two agents may share a name, one per host.** A spawn naming a node where the name
+  does not run, while it runs on another host, says what it means: `"replace": true`
+  moves the agent there, keeping its id, and `"alongside": true` runs a second agent of
+  the name there, under an id of its own. One that says neither spawns nothing, and the
+  chat says both; before, a spawn onto a node left the first agent running where it was
+  and started another. `/agents copy <agent> <node>` runs a second one from chat, from the
+  first one's config and with none of its state. A spawn, move or copy onto a host that
+  already runs the name is refused, and so is a second agent of a name on a node from
+  before ids were kept, which would give it the first one's id. A move whose spawn is
+  refused puts the agent back where it was. `/agents restart|stop|delete`, `/start`,
+  `/migrate`, `/agents copy`, a `<delete>` block and a delete from the dashboard each act
+  on the one agent named, by its address; a bare name kept on more than one host acts on
+  none and says the addresses. Main keeps each one's manifest, so `/agents` lists both.
+  On the dashboard, the `@mention` suggestions offer each by its address, a message typed
+  in one's thread goes to that one, and a turn, a streaming reply and the "is working"
+  row each follow the agent's id, so a reply from the other one of the name neither ends
+  the turn nor joins it.
+  Main's spawn registry keeps each agent by its id: the
+  registry by name is read once on upgrade, every agent keeping its id, and left as it
+  was. A reset of a name kept in more than one place is still refused.
+
+### Changed
+
+- **An agent's card says which node it runs on, and two agents may share a name on the dashboard.**
+  A card for an agent on a node reads "on <node>", and follows it when it moves. A second
+  agent with a name already shown gets a card of its own, each called `name@node`, rather
+  than replacing the first. The dashboard is ready for it, and the server lets two agents
+  share a name, one per host (see Added). A heartbeat that changes an agent's state now shows on its card
+  at once. The chat's agent picker no longer comes up blank when the agent you were talking
+  to is not in the list. After a voice turn moves the chat to the agent spoken to (a
+  robot), a reply the server does not name is credited to that agent in the notices and
+  the activity feed too, not only in the chat.
+
+- **A message sent while an agent is still answering waits its turn instead of being blocked.**
+  It shows in the thread at once, marked "Waiting to send", and goes when the reply ends,
+  one at a time and in order. One written while the dashboard's connection to the server is
+  down, or that could not go out because it dropped, is kept the same way and goes once the
+  connection is back; a broker outage alone holds nothing back, since main answers without
+  it. Send and Enter both work during a turn; Stop shows while one is under way.
+
+- **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
+  first-run installation, connection checks, first commands, and recovery steps are presented
+  before the advanced MQTT, media, and motion reference. It says what to expect before
+  starting, which systems Reachy works on and what each supports, how to prepare Linux,
+  what the chat shows during a first install and what each outcome means, how to add voice
+  input, and what to do about the common problems. It also corrects two claims: an edited
+  `.env` needs Wactorz restarted, not just the agent; and streaming voice input handles
+  English and Greek together by default. Reachy is not supported in the Docker image or the
+  Home Assistant add-ons, whose images cannot install the robot SDK.
+- **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
+  API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
+  faster-whisper alternative without including any credential.
+- **Reachy distinguishes working audio from failed motor commands.** A movement-task timeout now
+  directs the user to reconnect instead of implying the robot is offline, animation presets say
+  when they are only saved for later, and health reports whether its live motor-fault monitor is
+  actually connected. “Overheating status” now reaches Reachy's local health check.
+- **Reachy understands natural volume adjustments locally.** “Raise,” “increase,” “lower,” and
+  “decrease” volume or voice wording now controls the robot speaker without falling through to
+  the general chat agent.
+- **The README now has a maker-first onboarding path.** It states the intended audience,
+  removes product comparisons, and gives a Docker Compose quick start that includes the
+  broker password required by current releases.
+- **Reachy routes framework, health, and Home Assistant questions more reliably.** Questions about
+  running Wactorz agents now bypass smart-home planning, natural connection-health wording reads
+  live robot diagnostics, and device-state questions use Home Assistant's information path rather
+  than an actuator. Reachy no longer claims to perform gestures with hands or arms it does not have,
+  and dashboard-formatted answers are cleaned before speech.
+- **Reachy's network media failures recover locally.** A dropped WebRTC microphone or speaker link
+  gets one bounded reconnect-and-retry with a cooldown. Empty Deepgram results no longer trigger a
+  second language request, Home Assistant status tables are reduced to their answer for speech,
+  repeated verified unknown device requests use a short-lived negative cache, and health replies
+  use conversational wording.
+- **Long Reachy speech is no longer canceled at the generated-agent timeout.** A catalogue
+  recipe can now declare its own `task_timeout_s`, and Reachy's allows for real-time playback
+  while staying below the dashboard gateway's own deadline. Every other agent keeps the default
+  limit.
+- **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
+  weather city are no longer converted into JSON text before local or remote dispatch, preventing
+  an agent from silently falling back to its default input.
+- **Reachy's lifecycle messages are concise and actionable.** The startup log collapses
+  connection, audio, and ambient-motion details into one ready message with the next voice
+  action. Setup-only internals now stay in debug logs; a failed connection names the recovery
+  action first.
+
+- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
+  conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor
+  noise, cancellation, and timeouts; Deepgram endpointing closes a turn sooner and interim text is
+  published as it arrives. A broken stream falls back to prerecorded transcription of the same
+  captured audio. Set `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local
+  `faster-whisper`, Whisper, and OpenAI transcription remain available through
+  `REACHY_STT_BACKEND`.
+- **Reachy's bilingual voice-control path is safer and more responsive.** Nova-3 streaming uses
+  multilingual English/Greek recognition, explicitly flushes a locally-ended turn before closing
+  the socket, and keeps prerecorded recognition as a same-audio fallback. A low-confidence
+  multilingual result gets one Greek retry using the same recording, while confident English stays
+  on the fast single-pass path.
+  Raw delegation blocks are removed from durable conversation history, and an unrelated voice turn
+  cannot replay an older Home Assistant action. Conversation state antenna cues can be enabled
+  independently from continuous listening motion, which remains opt-in because servo noise can
+  reach the live microphone.
+
+- **An agent keeps an id of its own, across restarts and moves, and its chat history follows the id.**
+  A new agent is given an id when it is first spawned, kept in main's spawn registry; a restart,
+  a `replace` or a move to another node keeps it, and a node runs the agent under it. Deleting an
+  agent and spawning one of the same name makes a new agent, whose history starts empty. Main's
+  own agents, and every agent spawned before this, keep the id derived from their name, so an
+  upgrade changes nothing: registry entries and stored chat turns read back with the id they
+  already had. Chat history is kept by that id (`GET /api/chats?agent_id=`; `?agent=` still
+  returns every agent that went by the name), and the dashboard's WebSocket frames carry it,
+  with a `turn` frame naming the agent a turn reached. The dashboard keeps its chat threads by
+  that id: two agents of one name have a thread each, the chat list and the target picker name
+  them `name@node`, and a message whose `@mention` reaches another agent moves to that agent's
+  thread, the view with it. The chat's address names the agent (`#/chat/<name>`, and
+  `#/chat/<name>@<node>` where the name is shared, which the open conversation's header and
+  address follow as another agent of its name comes or goes; a shared name alone opens
+  neither and links both); the browser remembers the open conversation by id. A node says in its manifest that it
+  honours the id (`actor_ids`); one deployed before this gives a new agent the id derived from
+  its name, and main refuses to move an agent with an id of its own there until the node is
+  deployed again. One restored onto such a node before its manifest arrived, as at a restart,
+  runs there under the derived id: main says so in chat once the manifest comes, naming the
+  agents and saying to deploy the node again.
+
+### Fixed
+
+- **A page that could not read its settings still finds its voices.** It used what an earlier visit
+  stored, so a browser that had never loaded them stayed silent; now it asks the server. The page
+  also reads `/api/config` once, and no longer shows "disconnected" for a moment while connecting.
+- **The attach button follows the server from the first visit.** A browser that had never opened
+  the dashboard got no attach button until it reloaded, which on a phone was the only way to attach
+  a file; a server that turned uploads off kept showing one.
+- **Replies that overlap on one dashboard stay with the agent that gave them.** While one agent was
+  still answering, a message to another took over the first one's reply: the rest of it showed
+  under the second agent, and it was stored in that agent's history, mixed into its answer. A turn
+  the dashboard gave up on after a minute of silence was enough to cause it. Each turn now keeps its
+  own reply. History stored before this is not repaired.
+- **The dashboard no longer waits forever on a server that has stopped answering.** Every request
+  has a timeout now: most give up after 15 seconds, a reset after two minutes and an upload after
+  five. A change that timed out is shown as unconfirmed, not failed, since the server may be
+  finishing it, and the Models page reads the model again to show what happened. Speech that takes
+  over a minute is said in the browser's voice for that reply only. Refusals show the
+  server's own words instead of a status code.
+- **One of two agents of a name can be reset.** A reset of `tally@pi` was refused while `tally`
+  also ran elsewhere. Now it clears that agent alone, in every scope; a bare `tally` is still
+  refused, with the addresses to choose from.
+- **The planner sees both agents of a shared name.** It kept one contract per name, so with
+  `tally` on main and on a node it saw whichever was heard last, and one stopping took the
+  other's contract with it. Each is now kept by its id and shown as `tally@main` and
+  `tally@pi`; `/bus` lists both.
+- **The catalog asks before starting an agent that already runs on a node.** `@catalog spawn x`
+  started a second `x` on main without a word. It now says where `x` runs and spawns nothing;
+  `@catalog spawn x replace` moves it to main, and `@catalog spawn x alongside` adds a second.
+- **No empty space at the bottom of the dashboard on a phone.** The message box sits at
+  the bottom of the screen, with the phone bar right above it; on an iPhone, the room
+  kept for the home indicator is under the message box only.
+- **An agent is moved once at a time.** From the moment a move is asked for until the agent is
+  confirmed where it went, or put back where it was, another `/migrate` of it is refused, saying
+  where it is going, including one asked at the same moment: the agent may already run there
+  while main still places it where it left, and a second move would start from the wrong one.
+  An agent of the same name on another host moves freely, unless it would arrive where the
+  first is leaving or going.
+
+- **A node shows on the dashboard from the first heartbeat main takes.** After a start, the first
+  heartbeat could reach main before the dashboard was listening for what main took from it, so
+  a node appeared one heartbeat later than it should, and one heard before the dashboard began
+  listening was not shown until its next. The dashboard now listens from the moment it connects
+  to the broker, and shows the nodes main already knows when it begins.
+
+- **Moving an agent that runs on main moves it.** When the agent had once run on a node, `/migrate`
+  could take that node's old record for where it is now: it asked the node to hand back an agent
+  it no longer had and reported the move as under way, while the agent stayed on main and never
+  reached the target. Main now goes by its own record of where the agent runs. `/migrate <agent>
+  local` for an agent already on main is refused as such, rather than taken as a move to a node
+  named `local`.
+
+- **A link into the dashboard leads there after signing in.** A link such as
+  `#/models/imu-detector`, opened in a browser that is not signed in, now opens that view once
+  the key is accepted, rather than the dashboard's start. The sign-in page is served with the
+  dashboard's Content-Security-Policy.
+
+- **Two package checks at once no longer fail with a `KeyError`.** Checking or installing packages for two agents at the same time could fail inside Python's import system, which is not safe to refresh from two threads at once; Wactorz now refreshes it from one thread at a time.
+
+- **Reachy cannot promote forwarded text to operator authority.** Main processes actor-forwarded interface turns through its existing restricted entry point. Package approval, node administration, executable spawn/delete actions, plan approval, and unrestricted delegation remain on the existing operator interfaces; payload labels and the robot microphone do not authenticate a person. Conversation, everyday device control and bounded delegation remain available.
+
+- **A required package restart cannot be bypassed by retrying a spawn.** Replacements of loaded packages remain recorded for the lifetime of the Python process, including when catalogue or installer actors are recreated. Strict recipes check this state even when all packages are installed; a fresh process clears it. Ordinary recipes retain best-effort installation.
+
+- **Node-hosted dynamic agents honor their configured task timeout.** Reachy receives the same 140-second limit locally and on a node; agents without an override retain the 60-second default.
+
+- `stop` holds the head where it is instead of snapping it to neutral in a tenth of a second.
+- `REACHY_IDLE_LIFE=1`, `{"idle_life": true}` and `{"cmd": "life", "enabled": true}` now move the robot (the `alive` mood) instead of reporting motion on while it stays still.
+- `health` reports the IMU temperature with the pinned SDK.
+- Motion commands over MQTT while Reachy is offline say it is not connected, not `'NoneType' object has no attribute`.
+- Speech synthesis gives up after 20 s without data instead of hanging a reply or conversation; OpenAI transcription honours `REACHY_STT_TIMEOUT_S`; shutdown closes the robot link off the event loop.
+- **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
+  `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
+  occasional attract beats, and word-timed movement while speaking. Ambient motion remains off
+  until explicitly enabled so motor noise cannot interfere with microphone capture.
+
+- Structured delegations - keep agent fields and supply JSON text when no prompt is provided.
+- Home Assistant history - remove delegation blocks while preserving surrounding conversation and outcomes.
+
+- Fix Reachy Mini presenter deployments getting stuck after a transient motor-link failure: failed animations now trigger continuous automatic reconnection with backoff, use a fast motion-only recovery while preserving live WebRTC media, health no longer reports a stale motor connection as live, and common presenter-volume phrasing is handled locally.
+
+- **Reachy moves and speaks when Wactorz runs on Linux.** The robot SDK streams Reachy's camera and microphone over WebRTC through a GStreamer plugin that Linux distributions do not package, so on Linux every connection attempt failed and Reachy did nothing at all. The agent now connects without the camera and microphone when that plugin is what is missing, says so once, and speaks through the robot daemon's own HTTP API, which needs no GStreamer. Movement, speech, volume and health work, and waking plays its chime through the daemon too; listening, conversation and the camera are refused up front with what is missing, rather than a conversation that announces itself and then ends. Earlier hardware testing covered Ubuntu 26.04 with Python 3.13 and SDK 1.8.4; movement and media on SDK 1.12.0 still need hardware validation. The SDK itself needs Python 3.13 or older on Linux.
+
+- **Every Reachy command answers in a sentence.** Commands that returned no text, `go to sleep` among them, reached chat as a raw dictionary, and so did any command that failed. A dropped motor link now says Reachy is already reconnecting instead of asking for a reconnect, and a planned move that wakes the robot first no longer answers "I'm awake."
+
+- **`pip install 'wactorz[reachy]'` installs Reachy with Wactorz, and its first spawn needs no restart.** The Reachy Mini SDK requires an older `websockets` than the one Wactorz loads at startup, so installing its packages from a running Wactorz meant one restart before Reachy could start. The new `reachy` extra lists the same packages the catalogue installs, so they resolve together with Wactorz's own before it starts; the first spawn then finds nothing to install. It stays out of `all`, because the Docker image and the Home Assistant add-ons cannot build the robot SDK. A spawn that does install at runtime says how to avoid it next time, and the Reachy guide now installs this way.
+
+- **Agents can install packages into an environment made by `uv venv`.** Such an environment has no pip, so every install an agent asked for failed, once per package, with pip's own error. Wactorz now installs with `uv` when the environment has no pip and `uv` is on the `PATH`; with neither, it says once how to add pip.
+
+- **A reply to `@agent` in chat shows the answer, not the dictionary it came in.** Asked through main, as the REST API, Discord and Telegram do, an agent's reply was shown only when it put its text in `result` or `response`; the catalog and most built-in agents use `message`, so `@catalog spawn` answered with a Python dictionary. Main now reads the same fields in the same order as the dashboard. `@catalog list` names the agents in its text, and `@catalog info` gives the agent's description and, for Reachy, its setup steps. Reachy answers `wake up` with "I'm awake.", understands `start listening`, which its own ready message suggests, and no longer shows an internal reason code when a conversation stops.
+
+- **A package an agent installs in the Docker image can be imported straight away.** The image points pip at a user site-packages folder in the state directory, and Python adds that folder to its path at startup only if it already exists. On a new container it did not, so the first agent to install anything got a successful install it could not import until Wactorz restarted. The folder is now added once an install creates it. Where a package is installed both there and in the image, the copy Python imports is the one Wactorz reports.
+
+- **Reachy explains a quiet voice, and is louder without ffmpeg.** Reachy's loudness boost needs the `ffmpeg` program, and when it was missing the only sign was one line in the log. Reachy now says once in chat, the first time it speaks, that its voice is quieter and why, with the install command for the system Wactorz runs on, the reminder to restart, and on the Home Assistant add-on, which cannot install it, how to turn Reachy up instead. `health` reports whether the boost is on. Without `ffmpeg`, speech is also synthesized at the loudest level the speech service offers, so it is louder than before even without the boost.
+
+- **Opted-in trusted catalogue recipes pick up reviewed code after an update.** Reachy refreshes its code on restore while retaining saved settings, state and placement. A changed dependency list requires a fresh approved catalogue spawn. Other recipes and model-written programs retain their saved code.
+
+- **Reachy no longer stops talking when its motor link recovers.** An automatic recovery from a dropped motor link ended by waking the robot, and waking plays a sound on the robot; the robot stops whatever it is playing to start a new sound, so a recovery that landed mid-sentence cut Reachy off with a chime and a head jerk. Recovery now waits for the current speech to end and brings the head and antennas to rest without the sound. Saying `wake up` or `reconnect` still plays it.
+
+- **A first `@catalog spawn reachy-mini` no longer needs a mystery restart, and says what it is doing.** Spawning an agent that declares packages waited two minutes for the installer and then started the agent regardless, but the Reachy Mini SDK alone takes about 2.5 minutes to install on a fast connection with no pip cache, and the installer gave each package only 3 minutes. The agent started against a half-finished install and crashed, while the chat stayed silent and then reported that the catalog did not respond. Installing the SDK also downgrades `websockets` (it requires `<16`), which Wactorz has already loaded, so even a finished install left Deepgram voice input failing with `cannot import name 'Proxy' from 'websockets.uri'` until a restart. Now the catalog replies at once that it is installing, the installer posts each package to chat as it starts, and spawning waits for the installer's actual answer: a package that failed is named with pip's error, and an install that replaced a package this process had loaded asks for one restart and keeps the agent, so it starts by itself afterwards. Each package may take up to 15 minutes. Installed packages are recognised by their metadata, version pins and ranges included, so `reachy-mini==1.12.0` and `pillow` are no longer sent to pip on every spawn and restore. A trusted catalogue agent whose `setup()` fails because a module is not installed reports the missing module instead of asking the model to rewrite its reviewed code. Untrusted programs retain validated repair.
+
+- **The docs list the chat commands `/help` lists.** The reference's command table is now
+  written from the commands themselves, so it names every command main answers and no
+  others (it listed `/cost` and `/clear`, which no chat answers). The agents and interfaces
+  pages point at it instead of keeping shorter lists of their own.
+
+- **A question asked before the dashboard was open is no longer lost.** When the
+  dashboard connects it shows each question still waiting as its toast, with the buttons
+  to answer it, once per page: one closed unanswered stays closed through a reconnect, and
+  stays open in the Inbox and its thread. An agent's thread shows a question it asked earlier with its
+  buttons, or with the pick once answered. The thread no longer says "Reply with the
+  number." under a question: on the dashboard an answer is a button, and a typed reply
+  goes to the agent as a message. Discord and WhatsApp keep the hint.
+
+- **The Activity view keeps showing the server's log as it happens after you leave it and
+  come back.** It stopped taking pushed lines once left, and only its five-second refresh
+  brought new ones in.
+- **A message that could not be sent no longer leaves the chat box locked.** Send stayed
+  off and Stop stayed up for up to a minute after the dashboard reported it disconnected.
+- **A dashboard opened after its session ended asks you to sign in at once.** Its first
+  requests went out before it watched for a refused session, so the sign-in page waited
+  for a later poll.
+- **Heartbeats no longer push real events out of the Activity view.** They are held under a
+  cap of their own, so with a few agents running an event no longer disappears within
+  minutes; the newest beats are still there when heartbeats are shown.
+
+- **The chat keeps every thread whole and in order.** A question listed when the dashboard
+  connects goes where its time is in the agent's thread, not below everything since. A busy
+  agent no longer pushes another agent's restored history out of that agent's thread: each
+  thread keeps its own last 500 messages. A message delivered twice shows once.
+- **Questions settle when the dashboard reconnects.** One answered on another channel while
+  the dashboard was away shows its answer and loses its notice; one its agent no longer
+  lists goes from the thread and its notice with it.
+- **A notice being closed is no longer read out or reachable with Tab while it fades.**
+
+- **Speaking to an agent through a voice surface opens its conversation as typing to it does.**
+  The address names it and a reload opens there; before, the thread switched but the address
+  stayed on the previous agent, and outside the chat view so did the composer.
+- **The attachment tray's remove buttons say what they remove** ("Remove notes.txt") to a
+  screen reader, which read each one as "times".
+- **The activity feed shows a message to you as its words, the same from every channel.** The
+  `→ user:` prefix is gone from agents' own messages; one an agent sends to another still
+  says whom it was to.
+
+## [0.7.2] - 2026-10-25
+
+Wactorz 0.7.2 keeps the code a model writes away from what it should not reach: it runs on a sandbox node, a node can speak only for its own agents, and nothing is installed or run on a node unless you say so. It also keeps your models on main by name and version, sends them and library agents to nodes, and lets agents write to you first and wait for your answer.
+
+### Highlights
+
+- **A sandbox for the model's code.** Agents the model writes run on a `sandbox` node that holds none of main's credentials: `sudo wactorz-node setup-local` on Linux, a container in the compose stack, or `sandbox_node: true` in the Home Assistant add-ons.
+- **Nodes sign what they publish.** Main takes a reply, a manifest or a heartbeat only from the node it belongs to, and one node can no longer answer for, or delete, another's agents.
+- **You approve new packages.** A package not on the list waits for **Install** on the dashboard, and `/packages` manages the list.
+- **The assistant only reads on a node.** It checks a node by named operations; a command of your own is `/nodes run <node> <command>`.
+- **Agents talk to you first.** `notify_user` writes on Telegram, Discord, WhatsApp or the dashboard, with options to pick, and `ask_operator` waits for the answer across restarts.
+- **Models kept on main, by name and version.** `wactorz-artifacts add` stores a model; an agent names it with `models=` or `"artifacts"`, opens it with `load_model` or `artifact_path`, and a node fetches it once, checked by hash. Mark the `active` version agents serve and trial a `shadow` beside it, from the command, `/artifacts` or the API.
+- **Library agents on nodes.** An `@wactorz.agent` function or an `Actor` runs on a node and moves there and back with `/migrate`, its code sent with it.
+- **A dashboard you can link to.** The address names the open view, and the chat box completes slash commands.
+- **Fixes** for migrations, the chat, speech, the activity feed, the add-ons' embedded broker, and the sign-in page's redirect.
+
+### Before you upgrade
+
+- **Redeploy every edge node** with `/deploy <node>`. Until you do, a node stays online but is sent no tasks, spawns or migrations.
+- **Migrations change.** A `/migrate`, spawn or plan step sent to a node not yet redeployed is refused at once, saying so. An agent leaving a node starts from main's own copy of its program, never the one the node hands back. A move is completed only by the node it was sent to, and one whose agent never starts on the target is undone at once.
+- **Known security advisories.** The images and locked installs take certifi 2026.10.19, which drops the compromised emSign roots (GHSA-6q48-6c7w-9gw2), pip 26.2.2, Pillow 13.0.0, filelock 4.2.4 and setuptools 84.2.1. **On Python 3.10, Pillow stays at 12.3 and filelock at 4.0, which have advisories with no fix for 3.10.** Run on Python 3.11 or later if Wactorz opens images you did not make. filelock comes only with torch, an optional dependency.
+- **An agent that installs an uncommon package asks once**, on the dashboard, the next time it is spawned or moved.
+- **Compose: a client of your own with its own broker account** needs it listed in `WACTORZ_BROKER_ACCOUNTS`.
+- **The doc-to-pptx agent reads and writes only in your document folders** (`WACTORZ_DOCUMENT_DIRS`, by default Documents) and attached files.
+
+The full changelog has the rest, including the new settings for the sandbox, node signing and per-node rate limits.
+
+### Added
+
+- **The monitor's API moves a model's pointers and lists what agents are asking.** `GET /api/models` and `GET /api/models/{name}` give each model's versions, with what was said of each when it was stored, and where `active` and `shadow` stand. `POST /api/models/{name}/active` and `.../shadow` with `{"version": 3, "reason": "..."}`, `.../promote`, `.../rollback` (active back to the version it left) and `DELETE .../shadow` move them, recorded as made by `dashboard`; a move the pointers do not allow now answers `409`, in the store's words. `GET /api/questions` lists the questions every agent has put to a person, on main or on a node, open and lately answered, and `POST /api/questions/{agent_id}/{question_id}/answer` with `{"option": "..."}` answers one as the dashboard's button does, with an optional `note` in the person's own words that the agent keeps beside the answer as `answer_note`. Both that and the button now refuse an answer to a question already answered, or an option it did not offer, saying so; a message sent with `notify_user` alone, which keeps no book, is answered as before. For it each agent publishes its question book, retained, on `agents/{id}/questions`, when it asks, when it is answered and when it starts, so a question asked while the monitor was down is still listed when it comes back; deleting the agent clears it. The monitor also follows `models/+/+`, for the dashboard to show pointer moves as they happen. Nothing on the dashboard uses these yet.
+
+- **The dashboard's address names the open view.** `#/feed`, `#/chat/weather` and so on: a refresh returns to the view you were on rather than the overview, a link or a bookmark opens the view or the conversation it names, and Back and Forward step through the views you visited. Where the address has none (Home Assistant rebuilding its panel on a refresh, the page after signing in) the view last open in that browser opens. Nothing changes on the server.
+
+- **Code the model writes runs in the sandbox, once there is one.** With `WACTORZ_MODEL_CODE_NODE` unset, a node named `sandbox` (set up with `wactorz-node setup-local`, the compose stack's container, or the add-on's `sandbox_node`) now takes the model's code without another setting, and main keeps it only where there is no such node, as before. The model's agents already on main move there the first time it reports after a start; one that reads the history without `await`, or whose move is refused, stays, and the chat says which and why. `WACTORZ_MODEL_CODE_NODE=main` keeps the code on main.
+
+- **The Home Assistant add-ons can run a sandbox node.** With `sandbox_node: true`, an add-on runs a node of its own in its container, as a second user, `wactorz-sandbox`, and code the model writes runs there rather than beside the add-on's secrets. The node's environment holds only what `/deploy` gives any node, and the add-on's state, options and API key are closed to it; it keeps its own state and packages in `/data/sandbox`. It needs a broker account of its own: the embedded broker, or `node_accounts` on with its login pasted into the Mosquitto add-on. Without one the add-on says why and starts no node. Off by default, which changes nothing.
+
+- **The compose stack has a sandbox node.** A `wactorz-sandbox` container takes the code the model writes. A one-shot `sandbox-env` container writes it what `/deploy` writes any node, into a volume only the sandbox mounts. The sandbox mounts neither `.env` nor `./state`, shares a network with the broker alone, and installs its agents' packages into its own volume. It is limited by `WACTORZ_SANDBOX_MEM_LIMIT` and `WACTORZ_SANDBOX_PIDS_LIMIT`. The node `WACTORZ_MODEL_CODE_NODE` names now gets a broker account without being a deploy target, and model-written code may go to a node main has heard from even when it is not one.
+
+- **Code the model writes can run off main.** With `WACTORZ_MODEL_CODE_NODE=sandbox`, a spawn whose code the model wrote and that names no node runs on the sandbox node, which holds none of main's credentials, rather than in main's process; the chat says where it went. A spawn the model wrote that names main asks you on the dashboard first (`WACTORZ_MODEL_CODE_ON_MAIN=ask`, the default; `allow` and `never` decide without asking), and only the dashboard's button counts. A refusal, or no answer within two minutes, stands for ten minutes, so the model trying again does not ask again. The agents the planner spawns for a plan go the same way, and its steps reach one on the node through main. An agent that runs main's own classes (LLM, rule, schedule, catalogue, library) stays on main, and so do agents restored at start and moves made with `/migrate`. Unset, nothing changes. A spawn sent to a node now says so in the chat ("Spawned 'x' on node 'y'"), where before it said nothing.
+
+- **A node on main's own machine, for the code main should not run.** `sudo wactorz-node setup-local`, run once, makes a system user `wactorz-node` and a key main deploys it with, accepted from this machine only. It also lets that user restart its own unit and nothing else, installs a sandboxed systemd unit for it, and prints the `DEPLOY_SANDBOX_*` lines for main's `.env`; then `/deploy sandbox` deploys it like any node. It is called `sandbox` because `local` and `main` already mean main itself, and `/deploy` now refuses both as a node's name. Code running there can write only to its state directory, cannot see main's `.env` or state, and has no devices, capabilities or way to gain privilege. A deploy restarts that unit and never rewrites it. Setup stops while main's `.env` or state directory is readable by the node's user; `--fix-permissions` makes them readable by main's user alone. Linux with systemd only. Nothing sends model-written code there by itself yet: you place an agent on it as on any node, by naming `sandbox` as its node.
+
+- **An agent on a node can read main's history.** `agent.query_ts`, `query_detections`, `query_ha_states` and `ts_stats` returned nothing on a node, because the readings, detections and Home Assistant state changes are kept in main's database. On a node they now read it from main over the broker, signed like an LLM request and a page at a time, and must be awaited: write `rows = await agent.query_ts(hours=24, field="temp")`, and the same code runs on main and on a node. On main the call without `await` still works, so existing agents are unchanged; on a node that form fails when its result is used, saying to add `await`. Main answers only the queries the API offers, with the filters each takes. A broker whose access list was written by an older release drops these reads, and the node says so in its log; restarting main writes the list again. If you write a broker's access list yourself, give each node `topic write main/history_request`.
+
+- **An installed package can add a server extension.** A package that registers a module, or a `module:object`, under the `wactorz.extensions` entry point group is loaded like a module under `wactorz/ext/`, after the built-ins: its `setup(app)` adds routes, its `public_config(app)` values reach the dashboard on `/api/config` under the entry point's name, and `on_ready`, `__deps__` and `actor_decorator` work the same. A package that fails to import or has no `setup()` is logged and skipped, and one that takes a built-in extension's name is refused, so nothing installed can stand in for a built-in. This is the seam a separate package, free or commercial, plugs into without a change to Wactorz.
+
+- **An agent can ask the operator a question and wait for the answer.** `answer = await me.ask_operator("Did something change at 14:02?", options=[...], channel="telegram", user="123456789", timeout=3600)` sends the question as `notify_user` does and returns the option the person picks, on whichever channel they answer. The question is kept in the agent's state until it is answered, so a restart loses nothing: the agent listens again when it starts, and a pick that arrives while nothing waits for it reaches `on_operator_answer(question, option)` on an `Actor`, or `on_answer(agent, question, option)` in a generated agent's program; `open_questions()` lists what is still open and `wait_for_answer(id)` waits for one by id. When `timeout` passes on a question sent to a chat channel, the question is shown again on the dashboard, saying where it was asked, and waited for once more; then `asyncio.TimeoutError` is raised and the question stays open. A rule can ask without code: the `ask_operator` action takes `text` (with trigger fields in braces), `options`, `channel`, `user`, `timeout` and a `topic`, and publishes `{"question", "option", "index", "trigger"}` there, or on `answers/<rule name>`, when the person picks. Generated agents are told about the call.
+
+- **An agent can write to a person first, and offer a choice.** `await me.notify_user(text, options=[...], channel="telegram", user="123456789")` sends a message on Telegram, Discord or WhatsApp, or on the dashboard when no channel is named, from an agent on main or on a node, outside any chat turn. Telegram and the dashboard show the options as buttons; Discord and WhatsApp show them numbered, and the person replies with the number or the option's words. The pick comes back on the agent's own `agents/<id>/answer` topic as `{"id", "option", "index", "channel"}`, naming the id `notify_user` returns, from whichever channel the person answered on; every open dashboard marks the question answered and the activity feed records the pick. The message goes out on `agents/<id>/chat` as before, with `id`, `options`, `channel` and `user` beside the text, so the dashboard shows every one, and a channel that is not running logs the message's words rather than losing them. Each chat channel also has `send(user, text, options)` for a host program that holds one. Generated agents are told about the call. WhatsApp lets a business write first only within a day of the person's last message or through an approved template, and a numbered reply is matched to a question sent since the last restart; the dashboard card answers either way.
+- **A model has an `active` version, which agents serve, and a `shadow` version on trial beside it.** `wactorz-artifacts activate imu-detector:3 --reason "auc 0.95"` marks the version a spawn gets when it names the model without a version; until one is marked, the bare name means the newest, as before, so nothing changes for a store without pointers. A new version stored after that changes nothing until it is activated, and activating an earlier one is the rollback. `shadow imu-detector:4` marks one to run on the same input, acted on by nobody; `promote imu-detector` makes it active and clears `shadow`; `clear active|shadow NAME` unsets one. `NAME:active`, `NAME:shadow` and `NAME:latest` name those versions in any reference. Each move records who and why, and `list` and `show` say where the pointers stand; a move to where a pointer is, or a shadow on the active version, is refused, and a version a pointer names cannot be removed until the pointer is moved. The same verbs work in chat as `/artifacts activate|shadow|promote|clear`, from an admin channel. An agent that named the model, or `NAME:active`, follows the pointer and is pinned to where it stands when restarted; one that named a version keeps it. Main publishes where every pointer stands, retained, on `models/<name>/active` and `models/<name>/shadow`, at start and within seconds of a move made by the command beside it, at once for one made in chat, and each move is a line on the feed. The store's index is now format 2; format 1 is read as having no pointers and written back as 2. `docs/design/model-pointers.md` records the decision, and the rest of the model loop builds on it.
+
+- **The dashboard's chat box completes slash commands.** Typing `/` lists the commands the chat answers, each with how to type it and what it does, narrowed as you type; ↑ and ↓ move through the list, Tab or Enter completes the highlighted one (with a space when arguments follow), and Esc closes it. Enter on a command you have typed out in full sends it, as before. The list comes from the new `GET /api/commands`, which asks the orchestrator answering the chat, so it holds what will be answered: an orchestrator of your own can describe its commands with a `command_forms()` method. `/help` is now built from the same descriptions, so the two cannot drift; it lists `/packages`, `/nodes run`, `/agents restart` and the `/artifacts` verbs it used to leave out or put under another heading.
+
+- **A library agent's code goes with it to a node.** `/migrate imu-anomaly rpi-kitchen` no longer needs the agent's code copied to the node, `PYTHONPATH` or `WACTORZ_AGENTS` there: main sends the folder the agent's module is in (its `.py` files, or the package for a module inside one) inside the signed spawn, the node checks it against its SHA-256, writes it under `<state>/..bundles/` and builds the agent from it, after installing the packages the agent lists in `requires={"packages": [...]}`. The rule this rests on is stated in the library guide, and in what main and the planner are told about the code they write: **an agent's own code lives in its own folder**, and everything else it imports is the standard library, `wactorz` or a package pip installs. A folder that imports code of the main machine's from anywhere else is refused before anything stops, naming the import; so is one over 1 MiB of Python, or a module whose name another agent on the node already uses. Changed code sent again replaces the old on the node. A node with the agent installed itself is sent no code, and a node from before this release, whose manifest does not say `code_bundles`, is refused the move with the advice to deploy it again.
+
+- **Library agents run on nodes, and move there and back.** A function declared with `@wactorz.agent` or an `Actor` subclass registered with the system can be spawned on a node with a `type: "module"` spawn config naming its target, and `/migrate <agent> <node>` moves one that started with the system, with its state and its blobs — a model it persisted among them. The node builds it from the package installed there, so it needs the code on its path and the target named in `WACTORZ_AGENTS` in the runner's environment or as a `wactorz.agents` entry point; a node reports the targets it can build in its manifest (`agents`), and main places a library agent only on a node that names the target, refusing any other with what to install. On the node the agent subscribes, publishes, persists and answers tasks as on main, and has no model (`me.llm` is `None`). An agent the spawn registry places on a node is not started on main at a restart as well. `AgentPlugin.build(mixin=...)` and `AgentSpec.build(actor_class=...)` are how a host puts its own class in front of an agent's. The models a library agent names with `models=` or `MODELS` go with it as artifacts: main pins them when it sends the agent, and the node fetches them by hash before it builds the agent, so `examples/imu_anomaly/` moves with `imu-detector` and nothing is copied by hand. `persist_bytes` and `recall_bytes` keep raw bytes as text in an agent's state, for one that has nothing else to store them with.
+
+- **The IMU example keeps its model on main, and loads it by name.** `examples/imu_anomaly/train.py` now saves the model as two named arrays in `imu_model.npz` (`mean` and `inverse_covariance`) and stores it as `imu-detector` with the artifacts store, in the `state/` folder beside the scripts, which every script of the example now runs with wherever it is started from (`--state-dir` stores it elsewhere). The agent names it with `models={"model": "imu-detector"}` and reads it with `await me.load_model("model")`: no pickle and no model class to import, so loading it runs nothing from the file and a node can fetch it by name. An agent built with `spec.build()` and called as a function, outside a running system, now finds its declared models on its first `load_model` too, so the notebook and tests call the detector without starting it.
+
+- **Main knows which models are kept, and uses them in the agents it writes.** `/artifacts` lists the models kept with `wactorz-artifacts`, the newest version of each with its format, size and what was said of it, and `/artifacts <name>` every version of one. Main's model is given the same list before each turn, with how a spawn names one (`"artifacts": {"model": "imu-detector"}`) and reads it (`agent.artifact_path`, `await agent.load_model`), so asking for an agent that uses a model gets one that names a model that is there. Main's prompt also no longer says that numpy arrays are dropped when an agent moves: they go with it.
+
+- **A library agent names its models, and loads them safely.** `@wactorz.agent(..., models={"model": "imu-detector:3"})` and `MODELS = {...}` on an `Actor` name artifacts kept with `wactorz-artifacts`; each is found in main's store before `on_start`, and an agent whose model is not stored does not start. `me.artifact_path("model")` gives where the file is, `await me.load_model("model")` reads it once, off the event loop, the way that runs no code from the file (`npz` and `npy` with `allow_pickle=False`, `safetensors` as numpy arrays, a `state_dict` with `weights_only=True`, ONNX as an `onnxruntime.InferenceSession`, `raw` as bytes), and refuses a pickle, joblib file or whole torch module unless given `allow_code=True`. Generated agents have the same `await agent.load_model(...)`. Main's `ArtifactService` is now `main.artifact_service`, so every actor's `artifacts` reads the same.
+
+- **An agent opens the models its spawn names: `agent.artifact_path("model")`.** A generated or catalogue agent whose spawn config says `"artifacts": {"model": "imu-detector:3"}` gets the path of that model on the host it runs on, on main as on a node, and loads it with whatever reads it: `onnxruntime.InferenceSession(agent.artifact_path("model"))`, `np.load(...)`, `YOLO(...)`. A directory artifact, such as a model with its tokenizer, is unpacked once into `<state>/..unpacked-artifacts/`, taking only files and directories and nothing that would land outside it; `wactorz-state export` leaves the unpacked copy out. `agent.artifacts` lists what the spawn named. A spawn on main is pinned to the version it means and refused when an artifact is not stored, as one sent to a node already was.
+
+- **`wactorz-artifacts add` says which file it refused and how to store it anyway.** Adding a pickle, a joblib file or a whole torch module without `--allow-code` now names the file and ends with `Add --allow-code to store it anyway.`
+
+- **A node fetches the models its agents name, once, and keeps them.** An agent spawned on a node can name artifacts kept with `wactorz-artifacts` in its config, `"artifacts": {"model": "imu-detector:3"}`. Main pins each to the version and the bytes it means when the spawn goes out, and keeps that, so a restart or a move later runs the same model rather than whatever is newest by then. The node keeps what it fetches in `<state>/..artifact-cache/` across reboots, asks main on `nodes/<node>/artifact_request` only for what it lacks, and starts the agent once every file is there and matches the SHA-256 the signed spawn names; a cached file that no longer matches is fetched again. Main answers in chunks on `nodes/<node>/blob/<sha256>`, reading the file a chunk at a time, and only for artifacts an agent placed on that node names. A spawn naming an artifact that is not stored, or one over `WACTORZ_ARTIFACT_MAX_BYTES` (256 MiB), is refused before it is sent; one that never arrives leaves the agent unstarted, and a migration is put back where it was. `WACTORZ_NODE_ARTIFACT_CACHE_BYTES` (1 GiB) bounds what a node keeps of models no agent there names any more.
+
+- **Models kept on main, by name and version: `wactorz-artifacts`.** `wactorz-artifacts add detector.onnx imu-detector` keeps a model as `imu-detector:1`, the next add as `imu-detector:2`, and `imu-detector` or `imu-detector:latest` names the newest. Each file is kept once, under its SHA-256, in `<state>/..artifacts/`, which `wactorz-state export` includes; `list`, `show`, `remove` and `verify` look after them, and work while the server runs. The format comes from the file's ending (ONNX, safetensors, numpy, GGUF, TFLite, skops) or `--format` (`state_dict`, `raw`); a directory, such as a model with its tokenizer, is kept as one archive that hashes the same on every machine. A pickle, a joblib file or a whole torch module runs code when it loads and is refused unless `--allow-code` is given. `--meta key=value` records where a model came from and how good it is.
+
+### Changed
+
+- **One node's agents can no longer take main's model to themselves.** Main answered model calls and history reads from nodes one at a time, so an agent on a node calling in a loop, such as model-written code in the sandbox, spent main's budget as fast as the provider answered and held every other node's calls behind its own. Main now answers several at once, a few per node, with history reads beside model calls rather than behind them, and each node gets so many a minute: `WACTORZ_BRIDGE_CALLS_PER_MINUTE` (60) and `WACTORZ_BRIDGE_HISTORY_PAGES_PER_MINUTE` (600), `0` for no limit. Past the rate, or with too many already waiting, a request is refused at once: a model call comes back as `[LLM error: ...]` saying why, a history read fails and the node's log says so, and the dashboard says it the first time for each node, naming the setting.
+
+- **Main takes a node's word only from that node.** Every node may publish under any agent's topics, so the first reply on a task's reply topic answered the task, whichever node sent it, and a manifest published under any agent's name became what the planner read about that agent. Code on one node, the sandbox included, could answer for another node's agents and write what the planner was told. A node now signs everything it publishes with its node key, and main checks the signature against where its own records place the agent: a task's reply, an agent's manifest and the data samples recorded for the planner count only from that agent's node, and a node's heartbeat and reports only from that node. A reply from anything else is passed over, and main goes on waiting for the real one. Main now reads its own agents' manifests from the agents, never from the broker. A task goes to the node main placed the agent on, not to whichever node's heartbeat lists it. Each heartbeat is taken once. **After upgrading, deploy every node again: `/deploy <node>`.** With `WACTORZ_NODE_SIGNING=enforce`, the default, a node deployed before this is sent no tasks and has its manifests and replies refused until then, and a spawn, a plan's step or a `/migrate` to it is refused at once, saying so. Its heartbeats still keep it online, so its agents are not removed, and the chat says it needs deploying again; a notice still waiting when the node is deployed again is dropped. While main runs, the dashboard shows a node's agents as main took them from its heartbeat, not as the heartbeat claims. With `warn` everything is taken as before, and the chat and the log say so.
+
+- **The compose stack runs the sandbox node with the app.** `docker compose --profile python up -d` now also starts `sandbox-env` and `wactorz-sandbox`, and code the model writes runs there. With a node account on the broker, the broker's access list names who may use it: **a client of your own that connects to the compose broker with an account of its own, other than Wactorz's, needs it listed in `WACTORZ_BROKER_ACCOUNTS`**, or it loses access. `WACTORZ_MODEL_CODE_NODE=main` in `.env` keeps the code on main and leaves the sandbox idle, with no account.
+
+- **A package not on the list is installed only when you say yes.** The packages an agent installs are usually named by the model, and a plausible guess at a name is what a typosquat is published to catch; whatever it was, it was installed on main and on every node the agent went to. Now a package is installed at once only when it is on the list: what the catalogue and the examples install, the packages the installer knows by their import names, those in the new `WACTORZ_PIP_ALLOW`, and those you have allowed. For anything else the dashboard shows a notice naming the agent and the packages, with **Install** and **Refuse**, which stays until you answer; the question is also in the installer's thread in Chat, which opens while it asks. **Install** allows them from then on; **Refuse**, or no answer within two minutes, means the agent is not started or sent, and the dashboard says why, and a question nobody answered closes as "No answer in time". For ten minutes after either, the same package is refused without asking again, so a model retrying the spawn does not repeat the question; allowing it lifts that. Only a press on the dashboard counts, never an answer published on the broker. **`/packages`** shows the list, `/packages allow <name> …` adds to it and `/packages forget <name> …` takes off what you added, for agents placed from then on, since one already saved is restored with the packages it was placed with; `/deploy-pkg` in the terminal allows what it names. A move to a node with `/migrate` clears the agent's packages before it stops; an agent restored at start is not asked about again, so an unattended restart never waits on you or drops an agent. **An agent you already run that installs an uncommon package asks once, the next time it is spawned or moved somewhere new.** Any agent's question with options now stays up as a notice with its buttons until it is answered, and an agent that cannot be messaged opens in Chat while it is asking something; typing to it there is refused. Also: `WACTORZ_PIP_INDEX_URL` sends every install to one index, such as a private mirror, and an install on a node over SSH is refused, rather than made into the system Python, when the node has no virtualenv and none can be made.
+
+- **The assistant checks on a node by named operation, and a command for a node is yours to type.** Main's model could send any shell command to every configured node, so one crafted email, web page or device name it read could run commands there. It now asks for one of a fixed set of operations that only read — `uptime`, `disk`, `memory`, `temperature`, `os`, `network`, `python`, `packages` and `node-log` — and a request for a command of its own is refused with the way to run one. **To run a command on a node, type `/nodes run <node> <command>`**; it uses the node's deploy target as `/deploy` does, and logs the whole command. Only main may now send the installer to a node: another agent asking is refused, where before any agent in the process could. A command is no longer run when none is given, and one that does not finish within five minutes is no longer waited on for ever.
+
+- **The check on generated code reads names, not spellings.** Before a model-written agent runs, its code is now parsed and each name read through the code's own imports, so `os . system`, `import os as o; o.system`, `from os import system as run`, `getattr(os, "system")` and `f = os.system` are all refused as `os.system`, where a pattern over the text let each of them through. `exec()`, `compile()`, `importlib.import_module()` and `os.unlink()` join the blocked list; so do reaching into `os`, `builtins`, `importlib`, `shutil`, `socket` or `subprocess` by a name the check cannot read (`from os import *`, `getattr(os, name)`, `vars(os)`, `os.__dict__`) and the attributes that lead into the interpreter (`__builtins__`, `__globals__`, `__subclasses__`, `__code__` and their like). A blocked name inside a string no longer refuses anything. Catalogue agents, which skip the check, are unaffected.
+
+- **The doc-to-pptx agent builds its deck in Python and keeps to your documents.** The deck is assembled with `python-pptx`, installed with the agent, so Node.js, `npm` and `pptxgenjs` are no longer needed and nothing is fetched or run in a shell while converting. The file to convert and the deck written were any paths a request named, and requests are written by a model from whatever it was reading, so a crafted email or page could have a file's text sent to the model or a deck written over another file. The agent now reads only inside the *document folders*, those named in `WACTORZ_DOCUMENT_DIRS` (separated like `PATH`) or, when unset, your Documents folder, and files attached in the chat; and it writes only a `.pptx` file inside a document folder, or to a private temp folder when no `output_path` is given. Nothing under the state directory is reachable, symlinks are followed before the check, and a refusal says which folders are allowed. An attached file is passed on by its upload id (`file_id`): the model is now told each attachment's id beside its name, `[attachment: report.pdf (upload <id>)]`. A path outside the folders that used to work is refused: move the file into Documents, attach it, or name its folder in `WACTORZ_DOCUMENT_DIRS`.
+
+### Fixed
+
+- **A page opened on the chat shows the conversation it opens on.** Opening the dashboard on the chat -- a fresh run's sign-in link, or a refresh -- drew the chat before any agent had arrived, and when the agents did, the conversation it settled on was highlighted in the list but the chat itself kept showing nobody's, a bare `@` with no messages. It now shows that conversation, with its history.
+
+- **The stop button goes once a command typed in an agent's thread is answered.** A command such as `/agents` typed in the `catalog` thread is answered by main, under main's name, but the dashboard waited for a reply from `catalog`, so the stop button stayed up and Send stayed disabled for a minute after the answer had arrived. A command's turn now waits on main.
+
+- **Settings scrolls from the edge of the window.** The view was capped at a reading width and scrolled inside that width, so on a wide window its scrollbar sat in the middle of the page and the space beside it did not scroll. The cards keep their width; the view now spans the page.
+
+- **Server speech works again.** Microsoft's read-aloud service, which edge-tts speaks to, began refusing the edge-tts release the lock took, so every reply meant to be spoken failed with `403` and the browser fell back to its own voice. `wactorz[tts]` now needs edge-tts 7.3.1 or later, which it accepts, so an install that already had an older one is upgraded rather than kept.
+
+- **`/agents` with anything after it works in the dashboard's chat.** `/agents restart <name>`, `/agents stop <name>`, `/agents delete <name>` and `/agents <keyword>` were answered by the server's own list of running agents, so the agent was not restarted, stopped or deleted, and the list was not filtered. Main answers them now, as it does on the other channels; `/stop` and `/delete` already worked. Where nothing else answers `/agents` (the minimal profile, or an orchestrator of your own that does not), the dashboard still lists the running agents.
+
+- **A message in the feed can be copied.** A long or multi-line row opened or closed on every click, including the one that ends dragging to select its text, so selecting it closed it again. Selecting text no longer toggles the row, a click inside its opened text leaves it open, and an opened row has a Copy button for the whole message (where the browser allows the clipboard: over HTTPS, or on `localhost`). The row now opens from a ▸ toggle of its own, at the end of its line; a click elsewhere on it still opens it. A row too short to open shows all of its text, wrapping where the line is too narrow, instead of ending in an ellipsis that hid the rest. On a phone each row's text takes a line under its time and agent, and the feed's controls wrap onto a second line instead of running off the edge.
+
+- **A node's routine reports are heartbeats in the feed.** Every report from a remote node added a "node online · n agents" row. Only a node coming online, heard for the first time or again after going quiet, is shown that way now; its other reports are heartbeats, hidden with the agents' heartbeats unless "heartbeats" is switched on.
+
+- **The dashboard's small text is readable, and keyboard focus shows everywhere.** Times, hints, small labels and placeholders were white at as little as 18% opacity, below the 4.5:1 contrast WCAG asks of text; they are now at the dimmest that meets it, one colour for all of them. Every text field shows a ring when it has keyboard focus, as the buttons do, where some showed only a faint change of border. The chat's conversation and the feed take focus, so the keyboard can scroll them. Opening the audio or the "Clear stored state" popover moves focus into it, so the keyboard reaches its entries (it sits at the end of the page); Escape brings focus back. Shift+Tab from outside a dialog lands on its last control, as Tab lands on its first, where it could land on another; and a disabled button is no longer a stop in a dialog's Tab order. The host bar's CPU and memory bars and the spend-limit bar are no longer read out beside the values that say the same.
+
+- **The dashboard says more to screen readers.** An agent's card is an item of a list named "Agents", named after its agent, and its buttons say which agent they act on ("Stop weather", "History of weather"); the nodes panel is a list of nodes the same way. The view buttons are a navigation landmark, the open view is the page's main content, and the chat is a conversation log, so new messages are read out. The connection badge is read out when it changes, so losing the server is heard as well as seen. A toast that asks a question is a group named after the agent asking. The header's popovers no longer claim to be menus, which promised arrow-key navigation they do not have; they are named after the button that opens them. The confirm dialog reads out what it is about to do along with its question.
+
+- **Main's streamed replies no longer show the blocks it acts on.** When main's model starts, deletes or asks an agent, it writes a `<spawn>`, `<delete>` or `<delegate>` block holding JSON into its reply. Replies through the API had them removed, but a streamed reply, as the dashboard, the CLI and the chat stream route get it, showed each block as raw JSON before the line saying what was done. The stream now leaves them out as it goes, and the dashboard also removes them from replies recorded with them.
+
+- **The dashboard says "Disconnected…" when it has lost the server or the broker.** The header badge read "◎ Demo fallback" then, though the dashboard has no demo mode.
+
+- **The sign-in page no longer sends you to another site.** Its `next` address had to start with a single `/`, but a tab or newline after that slash got through: a browser drops those characters before reading an address, and so does the server's redirect, so a link to `/login?next=/%09/elsewhere.example` led whoever signed in, or was already signed in, to `elsewhere.example`. Any control character in `next` now sends you to the dashboard instead.
+
+- **Reading a reply to an agent's question takes time in proportion to the reply.** A choice sent on Telegram, Discord or WhatsApp is read as a number when it looks like one, and the pattern that checked took time in the square of the reply's length on a long run of spaces, while every agent waited. The channels' own limit on a message's length kept that short; it is now linear whatever the length.
+
+- **An agent described by a prompt alone is an LLM agent everywhere.** A spawn with a `system_prompt`, no `code` and no `type` ran as an LLM agent when main started it directly, but a spawn the model wrote in chat was skipped as "dynamic agent has no code", a spawn of one on a node or a move there was refused as having no program, and one named like a catalogue agent got the catalogue's agent instead. Each of them now reads it as an LLM agent, as if it said `"type": "llm"`: it runs, on main or on a node, and a plan's summary calls it one.
+
+- **An agent spawned under a catalogue agent's name runs as the kind it was asked to be.** A spawn named like a catalogue agent, such as `weather-agent`, started the catalogue's agent in its place whatever its `type`, so an LLM, rule, scheduled, Home Assistant or module agent of that name never ran. The catalogue's agent now stands in only for code the model wrote (`dynamic`, the default) and for a `native` spawn, so that a maintained agent is still not rewritten every time it is asked for; any other kind runs as written. `"replace": true` still spawns it as written, whatever its type.
+
+- **The images and locked installs take certifi 2026.10.19, pip 26.2.2 and Pillow 13.0.0.** certifi drops the emSign root certificates whose intermediate keys were compromised (GHSA-6q48-6c7w-9gw2), pip carries that certifi for its own downloads, and Pillow 13 fixes out-of-bounds reads and writes in its GIF, TIFF, JPEG, EPS and PDF handling. Pillow 13 needs Python 3.11, so an install on Python 3.10 keeps Pillow 12.3, for which no fix exists.
+
+- **The manual agent judges a link by its host.** A search result counted as ManualsLib's, or as one of the trusted manual sites, when the site's name appeared anywhere in its URL, so `https://elsewhere.example/?r=manualslib.com` was ranked as a trusted source and had `/download.pdf` added to it, and a link that merely mentioned a search engine was dropped. The agent now compares the link's host, or a subdomain of it, with each site. Every download was and still is checked to reach a public address only.
+
+- **The planner can put an agent on the node you name, and knows a machine measures itself.** Asked to "spawn a CPU monitor agent on raspberrypi", it looked only for an MQTT topic or a Home Assistant entity publishing the CPU, found none, planned an agent whose only job was to ask you for one, and placed it on the sandbox, since its step named no node. Both of its prompts now list the nodes: what each machine is, what it runs, which one takes code the model writes, and which cannot take an agent now and why. A step may name one of them as its `node`. They also say that an agent reads the machine it runs on with `psutil`, which every node has, so a request about a machine's own CPU, memory or disk is planned as an agent there; when the request names a node, Home Assistant is not searched for it. A plan that cannot be built now says what is missing, instead of spawning an agent to ask.
+
+- **The add-ons' embedded broker no longer locks the add-on out once a node has an account.** Its access list was generated before the add-on's own broker account was named, so it gave the whole broker only to clients with no account, and the add-on, which connects with one, could reach nothing on its own broker as soon as a deploy target was configured. The account is now named first.
+
+- **A message to an agent on a node is delivered just after the server restarts.** For the first few seconds, until the node next reported, `@agent` for an agent running on a node got "Agent @agent not found.", though the node had kept it running. Until a node reports after a start, main now routes to it the agents it placed there.
+
+- **Deeply nested generated code no longer takes the process down on Windows.** The safety check parses an agent's code before it runs, and CPython's parser recurses once per level of nesting, stopping itself with an error only if the stack lasts that long. A thread on Windows gets a megabyte, which code nested thousands of levels deep uses up first, and the overflow killed the whole process, every actor in it. The parse now runs on a thread with room enough to reach the parser's own guard, and whatever parses is measured: deeper than the tokenizer's own bracket limit, it is refused as nested too deeply, so the compile that would follow on the ordinary stack never sees it.
+
+- **A node whose heartbeat cannot be built or sent now says why.** The failure was retried silently, so a node missing from the dashboard was a silence with nothing to read; it is logged once per distinct reason.
+
+- **An agent on main can no longer type commands as you.** A task marked as coming from an interface, as the Reachy robot marks what it hears, is answered as your own message: slash commands run, and spawn and delegate blocks in the reply are acted on. Main took that mark from any agent in its process, so code the model wrote could send `/nodes run`, `/packages allow` or `/deploy` and have them run, getting round the checks that keep a command for a node and an unlisted package yours to decide. Main now takes it only from a catalogue agent still running the catalogue's own program, and answers anyone else with an error saying why; the Reachy agent running on main is unaffected unless it is running a repair of its program. (On a node it has no route to main's full path, before or after this: main does not take tasks from nodes.)
+
+- **A node can no longer make main forget another agent.** Every node may publish under `agents/#`, and an empty retained manifest there was taken as the agent saying it had gone: main removed it from its spawn registry and from its node's desired state, so a node could delete any agent, on main or on another node, and it would not come back at the next start. Now a withdrawal for an agent still running on main is ignored, and one for an agent on a node waits for that node's next heartbeat, which only that node can publish, and is taken only if the heartbeat no longer lists the agent; a node that has gone quiet holds it until it speaks again or main gives up on the node, which removes its agents anyway. Only for a node main does not know at all, such as one that was down when main started, is a withdrawal taken at once. An agent that ends itself is removed as before, a heartbeat later on a node.
+
+- **What the assistant asks the installer for reaches it.** A request the assistant wrote for the installer — to install or check a package, or to check on a node — was sent as text, which the installer read as an install with no packages, so every one failed with "No packages specified". The installer now receives the request as written.
+
+- **A repair is the model's code, wherever it runs.** When a crashing agent asked the model to repair it, a catalogue agent's repair was compiled past the safety validator, as the catalogue's own code is, and kept that trust in the spawn registry and in the Supervisor's restart, so the model's code ran unscanned on main from then on. A repair now always meets the validator, and an agent running one is no longer trusted, there or after a restart. A repair also may not import a module the agent's own program did not, beyond standard modules that only compute such as `json` or `math`: one that reaches for `subprocess`, a socket, an HTTP client or `asyncio`, which starts processes and opens connections of its own, is refused and counts as a failed round, and the model's next attempt is told why. And the error a repair is asked to fix, which can carry text the agent was processing, now reaches the model set apart and named as data, never instructions. **A catalogue agent whose repair needs what the validator refuses now fails instead, and says why;** respawning it from the catalogue restores its own code.
+
+- **An agent leaving a node runs main's program, not the node's.** When an agent came back from a node, or moved from one node to another, main started it from the config the node handed back, program included — generated code, or a library agent's bundle: a node that had been compromised only had to wait for one of its agents to be moved to have its own code run on main — past the safety scanner, for a catalogue agent, whose trust main restores from its own records — or on another node, signed by main. Main now takes only the agent's state from the node and places the agent from its spawn registry entry, or for a library agent from its own copy of the code; a program that differs is discarded, and the announcement of the move says so. A repair the node made reaches that entry through the existing code refresh, which now also drops a catalogue agent's trust, since the repaired program is the model's. An agent main holds no program for can no longer be moved off its node, and `/migrate` says so before anything stops. A move from one node to another is now checked before the source stops the agent, as a move from main is: a target that cannot take the agent or its models refuses it while it still runs.
+
+- **The dashboard reads one reply aloud at a time, and stops when asked.** A reply spoken by the server started over the one still playing, so two answers talked over each other; turning speech off silenced only the browser's own voice, and a reply already on its way began anyway; and Stop ended the turn while the page went on reading it. New speech now stops the old, audio that arrives after newer speech or a stop is dropped, and both the speech toggle and Stop silence either voice. The ambient sound stays down from one reply to the next instead of rising between them.
+
+- **A reset reaches the agents on nodes, and one agent's chat reset takes its files.** Resetting chat history, agent state or metrics cleared main's records and the agents in main's own process; an agent on a node kept its conversation, its state and its counters there, and its next turn or heartbeat put them back. Main now asks each node concerned to clear its own copies, over a signed command the node answers, and `POST /api/reset` says which nodes did (`nodes`: cleared, no answer, offline, or older release — a node from before this release needs deploying again). A chat reset for one agent also deletes the uploaded files only that agent's thread referred to, where it used to leave every upload in place. A state reset also restarts each agent it covers on a node, and each the supervisor runs on main, the system's own agents excepted: one that keeps working values in memory read them from the file at start, and went on with them, writing them straight back.
+- **Storing the same model twice at once keeps both versions on Windows.** Two `wactorz-artifacts add` of the same bytes at the same moment each wrote a copy and renamed it onto the same stored name; on Windows the second rename was refused while the first still held the file, and that add was lost. The second now finds the file in place and drops its own copy, as the bytes are the same.
+- **A migration that cannot send the agent's model refuses before the stop.** The models an agent names were pinned by the spawn, after main had stopped the agent, so a model removed from the store since the agent started left `/migrate` reporting "waiting for it to confirm" over an agent that was running nowhere. They are now pinned with the other checks, before anything stops, and a missing one refuses the move with the agent still running on main.
+- **A failed put-back is said, and does not stop the sweep.** When the target never confirmed and main could not start the agent on its source again, the error stayed in the log: the dashboard heard nothing, and every other agent due in the same sweep was skipped. The failure is now announced on the dashboard, with the reason and where the agent's state is kept, and the sweep goes on to the next agent.
+- **A library agent that came home is started once.** After a move to a node and back, main restored the agent from its record and the plugin's own supervision started it again a moment later, the first copy only to be stopped. A plugin with a record in the spawn registry is now left to that record.
+- **`publish_imu.py` publishes to the broker `MQTT_HOST` and `MQTT_PORT` name**, as the system does, instead of `localhost:1883` always.
+- **A node starts an agent once, however many messages ask for it.** Main sends a spawn and the node's desired state, which lists the agent, at the same moment. A start that installs packages or fetches a model takes a while, and the desired state arriving meanwhile started the agent a second time: the two waited on the same model, only one received it, and the other reported `Did not start '…': its artifacts did not arrive` a minute later, over an agent that was running. A spawn for an agent the node is already starting is now ignored.
+- **A pipeline reads a sensor by the fields it really sends, and a model by the arrays it really holds.** The planner sampled live payloads only from topics an agent declares, so a device or script publishing straight to the broker — `examples/imu_anomaly/publish_imu.py` on `sensors/imu/left-wrist` — was never sampled, and the agent it wrote read `accel_x` from payloads that carry `ax`: it ran, and did nothing. The planner now also samples, for a few seconds, the topics the request names (`sensors/imu/#` included) and shows their fields. `/artifacts`, main's prompt and the planner's list each model's arrays with their shapes, read from the file's header without loading it (npz, npy and safetensors: `imu-detector:1 (npz, 1.2 KB); arrays mean[3], inverse_covariance[3x3]`), and both are told to read a model by exactly those names. A generated agent whose fields were guessed logs a payload's keys the first time they do not match, rather than staying silent. And a step whose code loads its one model by a key other than the one its spawn names it under (`load_model("imu_model")` beside `"artifacts": {"model": ...}`) has the model named under both, rather than failing in `setup()`.
+- **A pipeline's agents can use the stored models too.** A request that becomes a pipeline is designed by the planner, whose prompt listed the only methods a generated agent has, and did not list the model ones: an agent asked to flag IMU readings with `imu-detector` came out without the model, and published nothing. The planner is now told about `await agent.load_model(...)`, `agent.artifact_path(...)` and the `artifacts` field, and is shown which models are kept, as main is. A step whose code reads a model its spawn does not name is reported with the plan.
+- **`wactorz-artifacts` says which store it used.** Its default is `./state` in the folder it runs from, so run from another folder it kept models where Wactorz never looks, and `/artifacts` listed none. `add` and `list` now print the store's path, and `add` warns when it had to make a new state directory, naming `--state-dir` and `WACTORZ_STATE_DIR`.
+- **A Wactorz command typed into chat is answered as one, and never said to have run.** `wactorz-artifacts add model.npz yolo-model` typed into chat reached main's model, which has no way to run it and answered that the model was now stored, though nothing was: the file did not even exist. Text that starts with `wactorz-artifacts`, `wactorz-state`, `wactorz-reset` or `wactorz-node` is now answered before any model sees it, on the dashboard, while streaming and on chat channels alike: it says the command is for a terminal on the machine Wactorz runs on, that nothing was run, and, for `wactorz-artifacts`, which models are kept now. Main's prompt also says it cannot add, remove or change a stored model and must never say one was.
+- **Dates, sets and tuples go with an agent, and come back as they were.** A node keeps an agent's state as JSON, and a migration carries it as JSON in both directions. A `datetime`, `date`, `time` or `timedelta`, and a `set` or `frozenset`, has no JSON form, so it was dropped from a node's state file with a warning, and a migration refused to move an agent holding one unless forced, then left it behind. A tuple and a dict keyed by numbers did travel, but came back as a list and as a dict keyed by strings, so an agent counting per hour found its keys changed after a move or a node restart. Each of these is now written in a marked form and read back into the value itself: on a node's state file, in the snapshot main sends a node, and in the one a node hands back. Plain JSON is written exactly as before, so existing state files read the same. A timezone travels as its offset from UTC, and a named tuple comes back as a plain tuple.
+- **A migration whose agent does not start on the target is undone at once.** A node confirmed an agent it was handed as soon as its process started, even when its program had not compiled, or its state could not be upgraded, and so never ran. Main took that as a finished move and deleted the source's copy, leaving the agent nowhere. When the program did not start, or the node refused the install list, did not receive the agent's models and other blobs, or could not start the agent at all, nothing was sent, and the agent stayed down until the migration timed out. The node now answers each of these with a refusal that says why, stops a program that never ran instead of restarting it, and main puts the agent back on its source straight away and says why the move failed. An agent that starts and crashes later is still a matter for supervision, as before; a spawn that is not a migration is unchanged.
+- **A migration is completed only by the node it was sent to.** Main took an agent back from a node, or counted a move as finished, on the strength of the migration's token alone. The token crosses the broker in the clear, so a node that could read it could hand back an agent main never asked it for, under another agent's name, or confirm a start on a node that had not started anything, after which the source's copy was deleted. The answer must now come on the topics of the node main asked, and name the agent it asked about; with each node on an account of its own, the broker lets a node write only to its own topics. An answer that does not match is logged and dropped without using up the token, so the real answer still completes the migration.
+
+## [0.7.1] - 2026-10-13
+
+Wactorz 0.7.1 makes Wactorz something you build on: bring your own agents, pipelines and orchestrator, run with or without a model or Home Assistant, and watch every agent and node over time.
+
+### Highlights
+
+- **Wactorz as a library.** Turn a function into a supervised agent with `@wactorz.agent`, declare pipelines in code, and start it all from a script, a notebook or a web app. Main and the planner build with your agents too.
+- **No model required.** `wactorz --minimal` runs your agents and the dashboard alone, and the chat still answers `@agent` messages.
+- **Your own orchestrator.** Swap what answers the chat for your own, a LangGraph graph for example.
+- **Models travel with their agent.** Arrays, tensors and trained models are saved beside its state and move with it, checked by hash.
+- **History on the dashboard.** Every agent and node card draws its trend, with the full history one click away.
+- **Follow one answer.** Each chat turn carries an id through every agent and node it touches, straight into the logs.
+- **Back up and move an install** with `wactorz-state export` and `wactorz-state import`.
+- **Fixes** for migrations, agent cards, *Wipe everything* and five catalogue agents.
+
+### Before you upgrade
+
+- **Redeploy your edge nodes** with `/deploy <node>` to bring them this release's node changes.
+- **0.7.0 cannot read the agent state 0.7.1 writes.** Keep a copy of your state directory if you might go back.
+
+Scripts and dashboards that read metrics or the agent heartbeat should check the full changelog: `cpu` is gone from agents, HTTP metrics gain a `server` label, and the compose stacks move to Prometheus 3.
 
 ### Added
 
@@ -37,6 +657,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The evaluation harness measures each profile, and the planner's real prompt.** `python -m wactorz.evalharness --profile minimal` assembles the prompts as an installation without Home Assistant sends them, where `--profile ha`, the default, is one with it; the `ha` and `actuator` call sites are skipped on `minimal`, since they exist only with Home Assistant, and a benchmark case may carry `expected_minimal` for a prompt whose right answer differs there, as the built-in intent cases now do. The `planner` category runs against the production pipeline-design preamble with the output format the planner appends at runtime, where it ran against a condensed stand-in, and its output budget is the planner's own, so a comparison between models, or between the two profiles, measures the prompt the system actually sends.
 
+- **How long a person waits in the chat.** Every chat turn from the dashboard is timed on the server, until the first words of its reply (`wactorz_chat_first_reply_seconds`) and until it is complete (`wactorz_chat_turn_duration_seconds`), labelled by where it went: a command, an agent in this process, one on a node, or a name nothing answers to. A turn the person stops is not counted.
+
 - **`/metrics` is served however Wactorz is started.** It was served only by the REST interface, which runs only with `INTERFACE=rest`: started from the CLI, from a library call or as the Home Assistant add-on, Wactorz had metrics and nowhere to read them. The dashboard's server, which always runs, now serves the same page at `/metrics` (port 8888 by default), behind the same key check as the rest of it; a scraper presents the key as `Authorization: Bearer`. The compose stacks keep scraping the REST port.
 
 - **The dashboard's server shows in `/metrics`.** Its requests, the chat among them, were not counted anywhere: only the REST interface recorded its own. Both now record into the same `wactorz_http_*` metrics, told apart by a new `server` label (`rest` or `dashboard`), and `wactorz_ws_connections` says how many dashboard WebSockets are open. A WebSocket is counted but not timed, since it lasts as long as the connection. A query or alert on `wactorz_http_*` that should cover only the REST interface adds `server="rest"`.
@@ -50,7 +672,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Room for a LangGraph graph, an AG2 conversation or a training job inside an agent.** `concurrency=N` on `@wactorz.agent` and on `Actor.subscribe` runs that many messages of a topic, and that many tasks, at once, for a function that waits on a model or a job rather than computes; the default stays one at a time, in order. `Actor.state_dir` is the agent's own directory for the files `persist()` is not for: weights, a checkpointer's database, an experiment store. a decorated function's calls through `me.llm` are counted on its card and against the cost limit as they return, `Actor.record_llm_cost(...)` does the same for a model call made outside the system's providers, and two helpers do it for the common cases: `wactorz.core.integrations.langchain.CostCallback` for a LangChain chain or LangGraph graph, `wactorz.core.integrations.ag2.record_reply` for an AG2 1.x reply, with `model_config` giving AG2's agents the system's model (`pip install 'wactorz[langgraph]'` / `'wactorz[ag2]'`). `examples/langgraph_triage/` and `examples/ag2_review/` run each as an agent.
 
 - **Pipelines declared in code, and a rule agent for the glue.** `wactorz.pipeline(name, steps=[...], schedule=..., rules=[...])` declares what the planner otherwise builds from a request: each step is an agent of its own, a schedule becomes a scheduled agent ticking `pipelines/<name>/tick`, and each rule becomes a rule agent. Wiring is checked when the pipeline is declared, so a step listening on a topic nothing publishes is refused before anything starts. A declared pipeline is found through `WACTORZ_PIPELINES`, a `wactorz.pipelines` entry point or `wactorz.run(pipelines_=[...])`, its agents are supervised at startup, and it is recorded beside the planner's pipelines so `/rules` lists it and `/rules delete` stops it. The new `rule` agent type acts when a message on a trigger topic satisfies its conditions: publish a message, send a task to an agent, or call a webhook, with a cooldown, and with the trigger's fields available to the action's payload. A Home Assistant service call stays with `ha_actuator`. `examples/imu_anomaly/pipeline.py` shows the detector as one stage with a notifier, a scheduled report and an alert rule. Rules are `wactorz.RuleConfig`, `RuleCondition` and `RuleAction` dataclasses the type checker sees, or the equivalent dicts. A new guide, *Using Wactorz as a library*, walks through all of it with examples and names the supported surface.
+
 ### Changed
+
+- **Agents no longer report a CPU figure of their own.** Every agent runs in the same process, so the per-agent `cpu` was that process's CPU, measured once per agent and shown under each agent's name. It is gone from the agent heartbeat (`agents/{id}/heartbeat`) and from `/api/actors`; the process's CPU is still published once, by the monitor, on `system/host`, which is what the dashboard's host bar shows. **A script that read `cpu` from either should read `system/host` instead.** Each agent also stops holding a process handle of its own.
 
 - **A plugin or pipeline that fails to load says where.** A module named in `WACTORZ_AGENTS` or `WACTORZ_PIPELINES`, or registered as an entry point, that is found but fails to import is now logged with its traceback, not only the exception's message, so the line in the module that failed is in the log.
 

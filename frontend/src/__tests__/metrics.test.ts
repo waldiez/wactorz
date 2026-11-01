@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
-import { MetricsController, type MetricsHost } from "../ui/dashboard/metrics";
-import type { View } from "../ui/dashboard/types";
+import { MetricsController, type MetricsHost } from "../ui/overview/metrics";
+import type { View } from "../ui/shell/types";
 
 function hostBarMarkup(): HTMLElement {
     const root = document.createElement("div");
@@ -79,7 +79,7 @@ describe("MetricsController", () => {
         const m = new MetricsController(host);
         m.startPolling();
         await vi.waitFor(() => expect(m.costLimitInfo).toEqual({ limit_usd: 5 }));
-        expect(fetch).toHaveBeenCalledWith("/api/cost");
+        expect(fetch).toHaveBeenCalledWith("/api/cost", expect.anything());
         m.stopPolling();
         vi.useRealTimers();
     });
@@ -132,7 +132,7 @@ describe("MetricsController", () => {
                 body: JSON.stringify({ limit_usd: 7, period: "weekly" }),
             }),
         );
-        expect(fetch).toHaveBeenCalledWith("/api/cost"); // refetch
+        expect(fetch).toHaveBeenCalledWith("/api/cost", expect.anything()); // refetch
     });
 
     it("resetting spend POSTs /api/cost/reset (after confirm) then refetches", async () => {
@@ -152,7 +152,7 @@ describe("MetricsController", () => {
             ),
         );
         // the refetch is a further await past the POST, so wait for it too
-        await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/cost"));
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/cost", expect.anything()));
     });
 
     describe("a rejected spend-limit change is not reported as success", () => {

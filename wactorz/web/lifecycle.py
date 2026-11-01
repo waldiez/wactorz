@@ -13,7 +13,9 @@ from collections.abc import Coroutine
 from typing import Any
 
 from ..agents.lookup import find_main_actor
+from ..agents.main.spawn_registry import SpawnRegistry, placed_on
 from ..core.node_signing import signed_publish_kwargs
+from ..core.topics import RETAINED_AGENT_LEAVES
 from . import events, runtime
 
 logger = logging.getLogger(__name__)
@@ -134,18 +136,7 @@ async def purge_agent_retained(agent_id: str) -> None:
     """
     if not runtime.mqtt_client_ref:
         return
-    for metric in (
-        "status",
-        "heartbeat",
-        "metrics",
-        "logs",
-        "spawned",
-        "manifest",
-        "errors",
-        "detections",
-        "results",
-        "completed",
-    ):
+    for metric in RETAINED_AGENT_LEAVES:
         topic = f"agents/{agent_id}/{metric}"
         try:
             # QoS 1: a lost purge leaves a stale retained message behind, and a
@@ -173,54 +164,52 @@ async def purge_node_desired_state(node: str) -> None:
 
 
 def _withdrawn_on_offline_nodes(
-    main_actor: Any, registry: dict[str, Any], agent: str | None
+    main_actor: Any, entries: list[dict[str, Any]]
 ) -> list[tuple[str, str]]:
-    """(agent, node) for each withdrawn agent whose node is not online right now."""
+    """(agent, node) for each of the withdrawn ``entries`` whose node is not online right now."""
     withdrawn: list[tuple[str, str]] = []
-    for name, cfg in registry.items():
-        if agent and name != agent:
-            continue
-        node = (cfg.get("node") or "").strip()
+    for cfg in entries:
+        node = placed_on(cfg)
         if node and not main_actor.nodes.is_online(node):
-            withdrawn.append((name, node))
+            withdrawn.append((cfg["name"], node))
     return withdrawn
 
 
-async def purge_spawn_reconcile(agent: str | None = None) -> None:
+async def purge_spawn_reconcile(agent: str | None = None, actor_id: str | None = None) -> None:
     """Tear down the agent-respawn state behind a spawn-registry clear.
 
     Shared by the "spawns" and "all" reset scopes so both behave identically:
       1. clear the kv-backed registry through the live main actor — an uncached
-         recall("_spawned_agents") then returns empty and a later checkpoint
+         recall of the registry then returns empty and a later checkpoint
          can't rewrite the cleared set back to disk; and
       2. fix the retained nodes/{node}/desired_state so a reconnecting runner
          can't reconcile cleared agents back.
 
     For a global clear (agent is None) every affected node's desired_state is
     blanked. For a single-agent clear it is REPUBLISHED from the reduced registry
-    so sibling agents still on that node survive.
+    so sibling agents still on that node survive. ``actor_id`` says which of the
+    agents called ``agent`` it is, where the name is in more than one place.
 
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
     main_actor = find_main_actor(runtime.registry)
-    reg = {}
-    if main_actor is not None:
-        reg = main_actor._get_spawn_registry() or {}
+    reg = main_actor._get_spawn_registry() if main_actor is not None else SpawnRegistry()
+    withdrawn = reg.named(agent) if agent else list(reg)
+    if actor_id:
+        withdrawn = [cfg for cfg in withdrawn if cfg["actor_id"] == actor_id]
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
     node_names: set[str] = set(runtime.state["nodes"].keys())
-    for name, cfg in reg.items():
-        if agent and name != agent:
-            continue
-        n = (cfg.get("node") or "").strip()
-        if n:
-            node_names.add(n)
+    node_names |= {n for cfg in withdrawn if (n := placed_on(cfg))}
 
     # Clear the live registry through the actor's own persistence.
-    if main_actor is not None and main_actor.recall("_spawned_agents", None) is not None:
-        kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
-        main_actor.persist("_spawned_agents", kept)
+    if main_actor is not None:
+        if agent:
+            for cfg in withdrawn:
+                main_actor._remove_from_spawn_registry(agent, actor_id=cfg["actor_id"])
+        else:
+            main_actor._clear_spawn_registry()
 
     if agent and main_actor is not None:
         # Republish from the reduced registry so siblings on the node survive.
@@ -243,10 +232,22 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
         await asyncio.gather(
             *[
                 main_actor._mqtt_publish(f"nodes/{node}/stop", {"name": name}, qos=1)
-                for name, node in _withdrawn_on_offline_nodes(main_actor, reg, agent)
+                for name, node in _withdrawn_on_offline_nodes(main_actor, withdrawn)
             ],
             return_exceptions=True,
         )
+
+
+def _node_of(main_actor: Any, agent_id: str, reported: str) -> str | None:
+    """Which agent of its name ``agent_id`` is, as `delete_spawned_agent` takes it.
+
+    The node main's spawn registry keeps it on, "" for main; for an agent the
+    registry does not keep, the node its heartbeats report, or None.
+    """
+    entry = main_actor._get_spawn_registry().by_id(agent_id)
+    if entry is not None:
+        return placed_on(entry)
+    return reported or None
 
 
 async def delete_agent(agent_id: str) -> str:
@@ -290,7 +291,7 @@ async def delete_agent(agent_id: str) -> str:
         main_actor = find_main_actor(runtime.registry)
         if main_actor is not None:
             try:
-                await main_actor.delete_spawned_agent(name)
+                await main_actor.delete_spawned_agent(name, _node_of(main_actor, agent_id, node))
                 routed = f"via main.delete_spawned_agent({name!r})"
             except Exception as e:
                 logger.warning(

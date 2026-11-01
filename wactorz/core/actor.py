@@ -5,6 +5,7 @@ Every agent IS an actor. Actors communicate via message passing only.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import functools
 import inspect
@@ -14,19 +15,36 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from ..monitoring import actor_metrics
 from ..monitoring.agent_metrics import RecentDurations
+from . import models
+from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .identity import derive_actor_id
+from .labels import Label, LabelError, Labels, LabelSpec
+from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .persistence.stores import get_db
+from .questions import (
+    CUT_SHORT,
+    QUESTIONS_KEY,
+    Question,
+    answered,
+    book_frame,
+    book_of,
+    context_text,
+    questions_in,
+    questions_topic,
+)
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
@@ -80,31 +98,45 @@ def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
     return (protected and command == "delete") or (essential and command == "stop")
 
 
-def derive_actor_id(name: str) -> str:
-    """The actor id a named actor gets, derived from its name and nothing else.
+def has_stable_id(actor: object) -> bool:
+    """Whether this actor's id survives a restart, and so can hold a broker session.
 
-    Deterministic on purpose: the same agent must come back as the same id
-    across restarts, because the broker keys a held session on it and the
-    registry keys everything else on it.
-
-    Exported because several places need to *recognise* a derived id rather than
-    mint one -- deciding whether an actor can hold a broker session, addressing
-    an agent by name. Spelled once so those cannot drift apart: if the formula
-    changed under a copy, nothing would raise, sessions would simply stop being
-    resumed and durability would quietly become clean.
+    An actor's id is stable when it was given one, as an agent main spawned is
+    given the id its spawn registry keeps, or when it derives one from its name.
+    Either way the same agent reconnects as the same client and resumes whatever
+    the broker held for it. An anonymous actor is given a fresh id every
+    incarnation, so a session kept under the old id is unreachable -- keeping
+    one is not harmful, it is pointless, and it costs the broker state until it
+    expires.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+    return bool(getattr(actor, "stable_id", False))
 
 
-def has_derived_id(name: str, actor_id: str) -> bool:
-    """Whether this identity comes from the name, and so survives a restart.
+def _takes_actor_id(actor_class: Callable[..., Any]) -> bool:
+    """Whether ``actor_class`` can be handed ``actor_id`` when it is called."""
+    try:
+        parameters = inspect.signature(actor_class).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "actor_id" or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
 
-    A named actor reconnects as the same client and resumes whatever the broker
-    held for it. An anonymous one is given a fresh id every incarnation, so a
-    session kept under the old id is unreachable -- keeping one is not harmful,
-    it is pointless, and it costs the broker state until it expires.
+
+def build_actor(
+    actor_class: Callable[..., Actor], actor_id: str | None, kwargs: Mapping[str, Any]
+) -> Actor:
+    """``actor_class(**kwargs)``, running under ``actor_id`` when one is given.
+
+    The id is handed to a constructor that takes it, and set on the actor once
+    built otherwise, before anything has started: a catalogue class or a
+    factory written without the parameter still runs under the id main keeps.
     """
-    return derive_actor_id(name) == str(actor_id)
+    if actor_id and _takes_actor_id(actor_class):
+        return actor_class(**kwargs, actor_id=actor_id)
+    actor = actor_class(**kwargs)
+    if actor_id:
+        actor.actor_id = actor_id
+        actor.stable_id = True
+    return actor
 
 
 class ActorState(str, Enum):
@@ -304,6 +336,68 @@ class ReplyError(RuntimeError):
         self.reply = reply
 
 
+class AskError(RuntimeError):
+    """An ask that could not be sent."""
+
+    @classmethod
+    def no_registry(cls, asker: str, target: str) -> AskError:
+        return cls(f"[{asker}] cannot ask {target!r}: no registry attached")
+
+    @classmethod
+    def mailbox_full(cls, target: str) -> AskError:
+        return cls(f"{target!r} is not taking messages: its mailbox is full")
+
+
+class NotFoundError(LookupError):
+    """An agent, or a question, that is not there to be asked or waited on."""
+
+    @classmethod
+    def agent(cls, target: str) -> NotFoundError:
+        return cls(f"no agent named {target!r} is running")
+
+    @classmethod
+    def question(cls, asker: str, question_id: str) -> NotFoundError:
+        return cls(f"[{asker}] no question with id {question_id!r}")
+
+
+class NoAnswerError(asyncio.TimeoutError):
+    """The time to wait for an answer passed.
+
+    An `asyncio.TimeoutError`, which is what callers catch: on Python 3.10 that
+    is not the builtin `TimeoutError`.
+    """
+
+    @classmethod
+    def from_agent(cls, target: str, timeout: float) -> NoAnswerError:
+        return cls(f"{target!r} did not answer within {timeout:g}s")
+
+    @classmethod
+    def to_question(cls, asker: str, text: str, timeout: float | None) -> NoAnswerError:
+        waited = "" if timeout is None else f" within {timeout:g}s"
+        return cls(f"[{asker}] no answer to {text[:60]!r}{waited}")
+
+
+class UnnamedModelError(KeyError):
+    """A model key the agent's ``models`` does not declare."""
+
+    def __init__(self, key: str, agent: str, named: str) -> None:
+        super().__init__(f"no model {key!r} for {agent} (it names: {named})")
+
+
+class NotBytesError(TypeError):
+    """A key read with `Actor.recall_bytes` that holds something persist_bytes did not write."""
+
+    def __init__(self, key: str, value: Any) -> None:
+        super().__init__(f"{key!r} holds a {type(value).__name__}, not what persist_bytes writes")
+
+
+class NotCallableError(TypeError):
+    """A subscription given something that cannot be called with a payload."""
+
+    def __init__(self, topic: str, callback: Any) -> None:
+        super().__init__(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
+
+
 class AskHost(Protocol):
     """What :func:`ask_through` needs of the actor asking: the actor surface
     every mixin host already declares.
@@ -327,10 +421,10 @@ async def ask_through(
     :meth:`Actor.ask` for the contract.
     """
     if host._registry is None:
-        raise RuntimeError(f"[{host.name}] cannot ask {target!r}: no registry attached")
+        raise AskError.no_registry(host.name, target)
     actor = host._registry.find_by_name(target)
     if actor is None:
-        raise LookupError(f"no agent named {target!r} is running")
+        raise NotFoundError.agent(target)
     task_id = f"ask_{uuid.uuid4().hex[:12]}"
     future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
     host._result_futures[task_id] = future
@@ -341,11 +435,11 @@ async def ask_through(
             ask_payload(payload, task_id=task_id, reply_to=host.actor_id),
         )
         if taken is False:
-            raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+            raise AskError.mailbox_full(target)
         try:
             reply = await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            raise asyncio.TimeoutError(f"{target!r} did not answer within {timeout:g}s") from None
+            raise NoAnswerError.from_agent(target, timeout) from None
     finally:
         host._result_futures.pop(task_id, None)
     return reply_value(reply, task_id=task_id, target=target)
@@ -391,6 +485,9 @@ class Actor(ABC):
             self.actor_id = derive_actor_id(name)
         else:
             self.actor_id = str(uuid.uuid4())
+        #: Whether the id outlives this incarnation: given, or derived from the
+        #: name. See `has_stable_id`.
+        self.stable_id: bool = bool(actor_id or name)
         self.name = name or f"actor-{self.actor_id[:8]}"
         self.state = ActorState.IDLE
         self.metrics = ActorMetrics()
@@ -471,6 +568,16 @@ class Actor(ABC):
         #: `_resolve_pending_result` as the RESULT is received, ahead of the
         #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
+        #: The manifest this actor last published, as it published it (see
+        #: `_send_manifest`). Main reads its own agents' manifests from here
+        #: rather than from the broker, where any node may publish one under
+        #: their names.
+        self._published_manifest: dict[str, Any] | None = None
+        #: Who waits for the person's answer to a question, by question id:
+        #: one future per question, and how many waiters share it.
+        self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
+        #: Whether this actor already listens on its own answer topic.
+        self._hearing_answers = False
         self._setup_default_handlers()
 
         # Background tasks
@@ -478,6 +585,15 @@ class Actor(ABC):
         #: Resolved once this run's stop has finished; see stop(). Created by the
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
+        #: The models this actor names, each with the path it is read at here.
+        #: Filled when it starts, from `declared_models`, unless whoever built it
+        #: -- a node, a spawn of generated code -- already did.
+        self._artifacts: dict[str, dict[str, Any]] = {}
+        #: What `load_model` has loaded, by key, so a model is read once.
+        self._loaded_models: dict[str, Any] = {}
+        #: Whether each loaded key was read with ``allow_code``, so a swap
+        #: reads the new version the way the program read the old one.
+        self._model_load_flags: dict[str, bool] = {}
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -491,6 +607,7 @@ class Actor(ABC):
         await asyncio.to_thread(self._persistence_dir.mkdir, parents=True, exist_ok=True)
         await self._load_persistent_state()
         await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
+        await self._resolve_models()
         # Restore the message count from a previous run — but only into a fresh
         # instance. The supervisor restarts by building a new actor, whose count
         # is zero; the start command restarts *this* object, whose count is
@@ -501,6 +618,18 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
+        # A question asked before a restart is still open: listen for its
+        # answer, which goes to `on_operator_answer` since nothing awaits it,
+        # and say again what the book holds, for a reader that missed it. A
+        # permission is closed instead: what waited for it did not survive.
+        still_open = self.open_questions()
+        for question in still_open:
+            if question.permission:
+                await self.close_permission(question.id, CUT_SHORT)
+        if any(not question.permission for question in still_open):
+            self._hear_answers()
+        if self.questions():
+            await self._publish_questions()
         # Outside whatever turn started this actor: each message brings its own.
         self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
         self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
@@ -607,7 +736,7 @@ class Actor(ABC):
 
             bus = get_topic_bus()
             if bus:
-                bus.unregister(self.name)
+                bus.unregister(self.name, self.actor_id, self._node)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
         actor_metrics.forget(self.name)
@@ -994,7 +1123,7 @@ class Actor(ABC):
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
-                    main._remove_from_spawn_registry(self.name)  # pyright: ignore[reportAttributeAccessIssue]
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)  # pyright: ignore[reportAttributeAccessIssue]
                 await self._registry.unregister(self.actor_id)
             await self.stop()
         else:
@@ -1028,7 +1157,7 @@ class Actor(ABC):
         # Same rule the subscription hub follows: only an identity that
         # survives a restart can resume a session, so an anonymous actor
         # connects clean rather than leaving one behind per incarnation.
-        durable = has_derived_id(self.name, self.actor_id)
+        durable = has_stable_id(self)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         # A `commands` purpose: SubscriptionHub already holds this agent's
         # unqualified id, and two connections sharing an id kick each other off
@@ -1184,8 +1313,10 @@ class Actor(ABC):
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
-    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
-        """Spawn a child actor. The child inherits:
+    async def spawn(
+        self, actor_class: type[Actor], *, actor_id: str | None = None, **kwargs: Any
+    ) -> Actor:
+        """Spawn a child actor, under ``actor_id`` when one is given. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
@@ -1198,7 +1329,7 @@ class Actor(ABC):
         # Default persistence to same root as parent
         kwargs.setdefault("persistence_dir", str(self._persistence_dir.parent))
 
-        child = actor_class(**kwargs)
+        child = build_actor(actor_class, actor_id, kwargs)
 
         # Inherit everything from parent
         child._mqtt_client = self._mqtt_client  # MQTT publish connection
@@ -1249,13 +1380,15 @@ class Actor(ABC):
                     # actor's settings have become since.
                     cls = actor_class
                     kw = dict(kwargs)
+                    # The id it runs under, not the one a rebuild would derive.
+                    kept_id = child.actor_id if child.stable_id else None
                     mc = self._mqtt_client
                     mb = self._mqtt_broker
                     mp = self._mqtt_port
                     papi = self._persistence_api
 
                     async def _child_factory() -> Actor:
-                        c = cls(**kw)
+                        c = build_actor(cls, kept_id, kw)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
                         c._mqtt_port = mp
@@ -1373,6 +1506,108 @@ class Actor(ABC):
                 self.name,
                 ", ".join(unpicklable),
             )
+
+    # ─── Models ───────────────────────────────────────────────────────────────
+
+    #: The models this agent loads, by the key it reads each under: references
+    #: to artifacts kept with ``wactorz-artifacts``, ``{"model": "imu-detector:3"}``.
+    #: Resolved before `on_start`, which can then read them; an agent whose
+    #: model is not there does not start. See `wactorz.core.models`.
+    MODELS: ClassVar[Mapping[str, Any]] = {}
+
+    def declared_models(self) -> Mapping[str, Any]:
+        """The models this agent names: `MODELS`, unless a subclass says otherwise."""
+        return self.MODELS
+
+    async def _resolve_models(self) -> None:
+        """Find each declared model in main's store, before the agent starts."""
+        declared = self.declared_models()
+        if not declared or self._artifacts:
+            return
+        try:
+            self._artifacts = await asyncio.to_thread(
+                models.resolve_in_store, declared, resolve_state_dir()
+            )
+        except ArtifactError as exc:
+            raise models.ModelError.cannot_start(self.name, exc) from exc
+
+    @property
+    def artifacts(self) -> dict[str, dict[str, Any]]:
+        """Each model this agent names: its name, version, format, size and path here."""
+        return {key: dict(entry) for key, entry in self._artifacts.items()}
+
+    def artifact_path(self, key: str) -> str:
+        """Where the model this agent names as ``key`` is, on this host.
+
+        A file, or for a directory artifact the directory it unpacks to, for
+        whatever library reads it: ``onnxruntime.InferenceSession(me.artifact_path("model"))``.
+        """
+        return str(self._artifact(key)["path"])
+
+    async def load_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """The model named ``key``, loaded once and kept, off the event loop.
+
+        Reads the formats `wactorz.core.models` has a loader for; open any
+        other through `artifact_path`. ``allow_code`` loads a pickle, a joblib
+        file or a whole torch module, which run code from the file.
+
+        An agent that was built but never started -- a function agent called
+        from a notebook or a test -- finds its declared models here, on the
+        first load, as `start` would have.
+        """
+        if key not in self._loaded_models:
+            await self._resolve_models()
+            entry = self._artifact(key)
+            self._loaded_models[key] = await asyncio.to_thread(
+                models.load, entry, allow_code=allow_code
+            )
+            self._model_load_flags[key] = allow_code
+        return self._loaded_models[key]
+
+    async def swap_model(self, key: str, entry: Mapping[str, Any]) -> Any:
+        """Serve the version ``entry`` names under ``key`` from now on, without a restart.
+
+        ``entry`` is a pinned artifact with the ``path`` it is read at on this
+        host, as `artifacts` holds them. A model the program loaded through
+        `load_model` is read again first, off the event loop and with the same
+        ``allow_code`` as before, so the old one is served until the new one is
+        in memory; then the path and the loaded object change together, in one
+        assignment, and `on_model_swapped` tells the program. One the program
+        opens itself through `artifact_path` changes path only, and the hook
+        says so with ``None``.
+
+        Returns what is now loaded, or None. Raises what the loader raises when
+        the new version cannot be read, and then nothing has changed: the agent
+        keeps serving what it served. Raises `UnnamedModelError` for a key this
+        agent does not name.
+        """
+        self._artifact(key)
+        loaded: Any = None
+        if key in self._loaded_models:
+            loaded = await asyncio.to_thread(
+                models.load, entry, allow_code=self._model_load_flags.get(key, False)
+            )
+        self._artifacts[key] = dict(entry)
+        if key in self._loaded_models:
+            self._loaded_models[key] = loaded
+        await self.on_model_swapped(key, loaded)
+        return loaded
+
+    async def on_model_swapped(self, key: str, model: Any) -> None:
+        """The version under ``key`` changed; ``model`` is the new one, or None. Override to react.
+
+        Called after `swap_model` has put the new version in place, so a
+        program that kept the old object somewhere replaces it here. The
+        default does nothing: a program that reads through `load_model` or
+        `artifact_path` on each call already sees the new version.
+        """
+
+    def _artifact(self, key: str) -> dict[str, Any]:
+        entry = self._artifacts.get(key)
+        if entry is None:
+            named = ", ".join(sorted(self._artifacts)) or "none"
+            raise UnnamedModelError(key, self.name, named)
+        return entry
 
     # ─── State versions ───────────────────────────────────────────────────────
 
@@ -1528,6 +1763,27 @@ class Actor(ABC):
             return default if result is None else result
         return self._persistent_state.get(key, default)
 
+    def persist_bytes(self, key: str, data: bytes) -> None:
+        """Persist raw bytes as text, so they go wherever the state goes.
+
+        A migration ships the state as JSON and a node keeps it as JSON, and
+        neither carries ``bytes``: a value that does not encode is left behind.
+        Stored as base64 text, a pickled estimator, a ``state_dict`` or an ONNX
+        file is a string like any other and travels with the agent.
+        :meth:`recall_bytes` turns it back. The whole state must still fit a
+        migration's size limit, so this is for a model, not a dataset.
+        """
+        self.persist(key, base64.b64encode(data).decode("ascii"))
+
+    def recall_bytes(self, key: str) -> bytes | None:
+        """What :meth:`persist_bytes` stored under ``key``, or None when nothing is there."""
+        text = self.recall(key)
+        if text is None:
+            return None
+        if not isinstance(text, str):
+            raise NotBytesError(key, text)
+        return base64.b64decode(text, validate=True)
+
     # ─── Subscriptions ────────────────────────────────────────────────────────
 
     def _make_hub(self) -> SubscriptionHub:
@@ -1559,29 +1815,34 @@ class Actor(ABC):
         failures in a row, which is the supervisor's cue to restart it.
         """
         if not callable(callback):
-            raise TypeError(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
+            raise NotCallableError(topic, callback)
         if self._sub_hub is None:
             self._sub_hub = self._make_hub()
         task = self._sub_hub.bind(topic, _as_coroutine_callback(callback), concurrency=concurrency)
         if task is not None:
             self._tasks.append(task)
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+    def window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> StreamWindow:
         """A rolling window over the last ``seconds`` of messages on ``topic``.
 
         Returns a :class:`~wactorz.core.topic_bus.StreamWindow`, with ``mean``,
         ``min``, ``max``, ``rising``, ``falling``, ``absent_for`` and the rest,
         fed from the broker from the moment it is made. One window per topic:
         asking again for the same topic returns the one that has been filling.
+        ``event_time`` times entries by what each payload says happened and
+        ends the window at the newest entry, for a replay or a source on its
+        own clock; off, the wall clock, as before.
         """
         existing = self._windows.get(topic)
         if existing is not None:
             return existing
         bus = get_topic_bus()
         if bus is not None:
-            made = bus.make_window(topic, seconds=seconds, max_size=max_size)
+            made = bus.make_window(topic, seconds=seconds, max_size=max_size, event_time=event_time)
         else:
-            made = StreamWindow(topic, seconds=seconds, max_size=max_size)
+            made = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
             made.start(self._mqtt_broker, self._mqtt_port)
         self._windows[topic] = made
         return made
@@ -1652,17 +1913,36 @@ class Actor(ABC):
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
 
-    async def notify_user(self, text: str, **extra):
-        """Push a user-facing chat message to the UI from this actor, OUTSIDE the
-        synchronous request/reply turn.
+    async def notify_user(
+        self,
+        text: str,
+        *,
+        options: Sequence[str] = (),
+        channel: str = DASHBOARD,
+        user: str = "",
+        **extra: Any,
+    ) -> str:
+        """Say ``text`` to a person, outside any turn, and return the message's id.
 
-        The monitor forwards agents/{id}/chat messages to the chat panel as live
-        chat frames, so use this for autonomous notifications the user should see
-        in chat without having just asked for them: a long delegated task
-        finishing after the reply already returned, sensor alerts, scheduled
-        output, reactive automations, etc.
+        The message goes on ``agents/{id}/chat``: the dashboard shows every such
+        frame, and the chat channels deliver the ones addressed to them. Use it
+        for what the person did not just ask for: a long delegated task
+        finishing after the reply already returned, a sensor alert, scheduled
+        output, a reactive automation.
+
+        ``options`` offers the person a choice: Telegram and the dashboard show
+        buttons, Discord and WhatsApp a numbered list. The pick comes back on
+        ``agents/{id}/answer`` naming the id this returns, which the agent reads
+        with ``subscribe``. ``channel`` is where to send it, ``dashboard`` when
+        unsaid; ``user`` is who to reach there, a Telegram or Discord user id or
+        a WhatsApp number, and is not needed for the dashboard. The frame is
+        published whether or not that channel is running: the dashboard shows
+        it either way, and the channel, if it runs, logs what it could not do.
+
+        Raises ``ValueError`` for options or a channel the channels cannot show.
         """
-        payload = {
+        payload: dict[str, Any] = {
+            "id": uuid.uuid4().hex,
             "from": self.name,
             "to": "user",
             "content": str(text),
@@ -1670,11 +1950,290 @@ class Actor(ABC):
         }
         if extra:
             payload.update(extra)
+        checked = check_options(options)
+        if checked:
+            payload["options"] = list(checked)
+        named = check_channel(channel)
+        if named != DASHBOARD or user:
+            payload["channel"] = named
+            payload["user"] = str(user).strip()
         # QoS 1: neither critical-prefixed nor telemetry-suffixed, so the
         # publisher would leave this at 0 -- and a frame emitted while the
         # monitor is reconnecting would simply be gone. The agent said
         # something; the user never sees it.
         await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
+        return payload["id"]
+
+    # ─── Questions to a person ────────────────────────────────────────────────
+
+    async def ask_operator(
+        self,
+        text: str,
+        *,
+        options: Sequence[str],
+        channel: str = DASHBOARD,
+        user: str = "",
+        timeout: float | None = None,
+        label: Mapping[str, Any] | None = None,
+        context: str = "",
+    ) -> str:
+        """Ask the person ``text``, offer ``options``, and return the one they pick.
+
+        The question goes out as :meth:`notify_user` sends it, on ``channel``
+        to ``user``, and is written into this actor's state until it is
+        answered, so a restart in between loses nothing: the actor listens
+        again when it starts, and the answer reaches
+        :meth:`on_operator_answer`, or :meth:`wait_for_answer` if the agent
+        asks for it by id. The first pick on any channel is the answer; the
+        dashboard shows every question and can answer it whatever channel it
+        went to.
+
+        ``timeout`` is seconds to wait, None to wait for as long as the actor
+        runs. When it passes on a question sent to a chat channel, the
+        question is shown again on the dashboard, saying where it was asked,
+        and waited for once more for the same time; then
+        ``asyncio.TimeoutError`` is raised. The question stays open, and a
+        later pick still reaches :meth:`on_operator_answer`.
+
+        ``label`` makes the answer a label of the provenance graph: the
+        ``source`` it is about, the window from ``start`` (and to ``end``, open
+        when unsaid) in event time, and ``values``, which option stands for
+        which label value; an option left out, such as "Not sure", makes none.
+        Main records the label once the answer is in the question book, for an
+        agent here or on a node. See docs/design/labels-and-provenance.md.
+
+        ``context`` says why this is being asked: what the agent saw, what the
+        answer will change. It is shown with the question in the dashboard's
+        Inbox, and is not sent to chat channels.
+
+        Raises ``ValueError`` for no options, options or a channel the channels
+        cannot show, or a ``label`` that cannot be used -- before anything is
+        sent.
+        """
+        if not options:
+            raise OptionsError.none()
+        checked = check_options(options)
+        spec = None if label is None else LabelSpec.parse(label, checked)
+        self._hear_answers()
+        question_id = await self.notify_user(text, options=options, channel=channel, user=user)
+        question = Question(
+            id=question_id,
+            text=str(text),
+            options=checked,
+            channel=check_channel(channel),
+            user=str(user).strip(),
+            asked_at=time.time(),
+            label=None if spec is None else spec.to_dict(),
+            context=context_text(context),
+        )
+        await self._write_question(question)
+        try:
+            return await self.wait_for_answer(question_id, timeout=timeout)
+        except asyncio.TimeoutError:
+            if timeout is None or question.channel == DASHBOARD:
+                raise
+        # Nothing came from the chat channel: the same question, the same id,
+        # on the dashboard, where the operator looks when a channel is quiet.
+        await self.notify_user(
+            f"Still waiting for an answer (asked on {question.channel}): {text}",
+            options=options,
+            id=question_id,
+        )
+        await self._write_question(
+            Question(**{**question.to_dict(), "options": question.options, "fallen_back": True})
+        )
+        return await self.wait_for_answer(question_id, timeout=timeout)
+
+    async def label(
+        self,
+        source: str,
+        value: str,
+        *,
+        start: Any,
+        end: Any = None,
+        note: str = "",
+        model: str = "",
+    ) -> Label:
+        """Record that ``source`` was ``value`` from ``start`` (to ``end``, open when unsaid).
+
+        Times are event times: Unix seconds, or ISO 8601 with an offset. The
+        label is recorded as this agent's, superseding the earlier labels it
+        overlaps on ``source`` (see :class:`wactorz.core.labels.Labels`).
+
+        Main keeps the labels, so an agent on a node cannot write one this way
+        yet; its questions' answers still become labels through
+        :meth:`ask_operator`. Raises :class:`~wactorz.core.labels.LabelError`
+        for a label that cannot be taken as written, or there.
+        """
+        db = get_db()
+        if getattr(self, "reads_history_from_main", False) or db is None:
+            raise LabelError.not_here()
+        return await asyncio.to_thread(
+            Labels(db).write,
+            source=source,
+            start=start,
+            end=end,
+            value=value,
+            actor=f"agent:{self.name}",
+            note=note,
+            model=model,
+        )
+
+    async def wait_for_answer(self, question_id: str, *, timeout: float | None = None) -> str:
+        """The option picked for the question ``question_id``, waiting up to ``timeout`` seconds.
+
+        Returns at once for a question already answered. ``LookupError`` for a
+        question this actor never asked, ``asyncio.TimeoutError`` when the time
+        passes; the question stays open either way.
+        """
+        question = self.questions().get(question_id)
+        if question is None:
+            raise NotFoundError.question(self.name, question_id)
+        if question.answer is not None:
+            return question.answer
+        self._hear_answers()
+        entry = self._answer_waiters.get(question_id)
+        future = entry[0] if entry is not None and not entry[0].done() else None
+        if future is None:
+            future = asyncio.get_running_loop().create_future()
+            entry = (future, 0)
+        self._answer_waiters[question_id] = (future, entry[1] + 1)  # pyright: ignore[reportOptionalSubscript]
+        try:
+            # Shielded: a waiter that gives up must not cancel the future a
+            # later answer, or another waiter, still needs.
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise NoAnswerError.to_question(self.name, question.text, timeout) from None
+        finally:
+            # The last waiter to leave takes the future with it, so a pick that
+            # comes later finds nobody waiting and goes to `on_operator_answer`.
+            left = self._answer_waiters.get(question_id)
+            if left is not None and left[0] is future:
+                if left[1] <= 1:
+                    self._answer_waiters.pop(question_id, None)
+                else:
+                    self._answer_waiters[question_id] = (future, left[1] - 1)
+
+    def questions(self) -> dict[str, Question]:
+        """Every question this actor has asked and still keeps, by id."""
+        return questions_in(self.recall(QUESTIONS_KEY, {}))
+
+    def open_questions(self) -> list[Question]:
+        """The questions still waiting for an answer, oldest first."""
+        return sorted((q for q in self.questions().values() if q.open), key=lambda q: q.asked_at)
+
+    async def ask_permission(self, text: str, options: Sequence[str]) -> str:
+        """Ask the person on the dashboard for leave to do something, and return the question's id.
+
+        The question is in the book, so it stays in the Inbox and survives a
+        reload, but unlike :meth:`ask_operator` nothing here listens for the
+        answer: the topic it would arrive on is open to anything on the broker,
+        which could then grant itself the permission. The caller waits for its
+        own ``dashboard_answer`` (see
+        :class:`~wactorz.core.outbound.TakesDashboardAnswers`), records the
+        pick with :meth:`permission_answered`, and ends a wait with no pick by
+        :meth:`close_permission`.
+        """
+        question_id = await self.notify_user(text, options=options)
+        await self._write_question(
+            Question(
+                id=question_id,
+                text=str(text),
+                options=check_options(options),
+                channel=DASHBOARD,
+                asked_at=time.time(),
+                permission=True,
+            )
+        )
+        return question_id
+
+    async def permission_answered(self, answer: Answer) -> None:
+        """Record ``answer`` in the book, for a question still open."""
+        question = self.questions().get(answer.id)
+        if question is not None and question.open:
+            await self._write_question(
+                answered(question, answer.option, answer.index, answer.channel, answer.note)
+            )
+
+    async def close_permission(self, question_id: str, option: str) -> None:
+        """End the question ``question_id`` with ``option``, in the book and on every dashboard."""
+        closing = Answer(
+            id=question_id,
+            agent_id=self.actor_id,
+            option=option,
+            index=-1,
+            channel=self.name,
+            timestamp=time.time(),
+        )
+        await self.permission_answered(closing)
+        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
+
+    async def on_operator_answer(self, question: Question, option: str) -> None:
+        """Called with the person's pick when nothing awaits it.
+
+        That is a question asked before a restart, one asked without waiting,
+        or one whose wait timed out. Override it to act on the answer; the
+        default only logs it. An answer :meth:`ask_operator` or
+        :meth:`wait_for_answer` is waiting for goes to them instead.
+        """
+        logger.info(
+            "[%s] %r was answered %r on %s",
+            self.name,
+            question.text[:60],
+            option,
+            question.answer_channel,
+        )
+
+    async def _write_question(self, question: Question) -> None:
+        """Put ``question`` in the book, replacing its earlier record, and say so."""
+        book = self.questions()
+        book[question.id] = question
+        self.persist(QUESTIONS_KEY, book_of(book))
+        await self._publish_questions()
+
+    async def _publish_questions(self) -> None:
+        """Publish the book, retained, for whoever shows a person what is waiting.
+
+        QoS 1: a lost frame leaves a question asked on no screen.
+        """
+        await self._mqtt_publish(
+            questions_topic(self.actor_id),
+            book_frame(self.name, self.questions()),
+            retain=True,
+            qos=1,
+        )
+
+    def _hear_answers(self) -> None:
+        """Listen on this actor's answer topic, once."""
+        if self._hearing_answers:
+            return
+        self._hearing_answers = True
+        self.subscribe(answer_topic(self.actor_id), self._on_answer_frame)
+
+    async def _on_answer_frame(self, payload: Any) -> None:
+        """One frame on the answer topic: the first pick for an open question settles it."""
+        answer = Answer.from_payload(self.actor_id, payload)
+        if answer is None:
+            return
+        question = self.questions().get(answer.id)
+        if question is None:
+            logger.debug("[%s] an answer to a question not asked here: %s", self.name, answer.id)
+            return
+        if question.permission:
+            logger.debug("[%s] a broker answer to a permission, ignored: %s", self.name, answer.id)
+            return
+        if question.answer is not None:
+            logger.debug(
+                "[%s] %r was already answered; ignoring %r", self.name, question.id, answer.option
+            )
+            return
+        settled = answered(question, answer.option, answer.index, answer.channel, answer.note)
+        await self._write_question(settled)
+        waiting = self._answer_waiters.pop(answer.id, None)
+        if waiting is not None and not waiting[0].done():
+            waiting[0].set_result(answer.option)
+            return
+        await self.on_operator_answer(settled, answer.option)
 
     # ─── Status ───────────────────────────────────────────────────────────────
 
@@ -1723,6 +2282,15 @@ class Actor(ABC):
             "output_schema": output_schema or {},
             "timestamp": time.time(),
         }
+        await self._send_manifest(manifest)
+
+    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+        """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
+
+        Every manifest goes out through here, so the copy main trusts for its
+        own agents is always the one last sent.
+        """
+        self._published_manifest = manifest
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:

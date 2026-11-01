@@ -15,6 +15,7 @@ from unittest import mock
 
 import pytest
 
+from tests.waiting import until
 from wactorz.core import mqtt as core_mqtt
 from wactorz.core import mqtt_publisher
 from wactorz.core.mqtt_publisher import MQTTPublisher
@@ -40,8 +41,8 @@ async def _fake_broker(client: "_Client", **_kwargs: Any) -> AsyncIterator["_Cli
     yield client
 
 
-async def _run_briefly(pub: MQTTPublisher, client: "_Client", seconds: float = 0.25) -> None:
-    """Drive `MQTTPublisher._run` against a fake broker for a moment.
+async def _run_until(pub: MQTTPublisher, client: "_Client", sent: int) -> None:
+    """Drive `MQTTPublisher._run` against a fake broker until ``sent`` messages have gone.
 
     The real loop, not a re-implementation of it. An earlier version of this
     file reproduced the retry logic in the test helper, so it passed against the
@@ -64,9 +65,11 @@ async def _run_briefly(pub: MQTTPublisher, client: "_Client", seconds: float = 0
 
         with mock.patch.object(mqtt_publisher.asyncio, "sleep", _no_backoff):
             task = asyncio.create_task(pub._run("localhost", 1883))
-            await real_sleep(seconds)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            try:
+                await until(lambda: len(client.published) >= sent, f"{sent} message(s) sent")
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.fixture(name="publisher")
@@ -80,7 +83,7 @@ class TestOrderAcrossAFailure:
             publisher._queue.put_nowait((topic, b"x", False, 0, -1, None))
         client = _Client(fail_once_on="first")
 
-        await _run_briefly(publisher, client)
+        await _run_until(publisher, client, 3)
 
         # "first" failed, then was retried ahead of the messages behind it.
         assert client.published == ["first", "second", "third"]
@@ -89,7 +92,7 @@ class TestOrderAcrossAFailure:
         publisher._queue.put_nowait(("only", b"x", False, 0, -1, None))
         client = _Client(fail_once_on="only")
 
-        await _run_briefly(publisher, client)
+        await _run_until(publisher, client, 1)
 
         assert client.published == ["only"]
 
@@ -98,7 +101,7 @@ class TestOrderAcrossAFailure:
             publisher._queue.put_nowait((topic, b"x", False, 0, -1, None))
         client = _Client()
 
-        await _run_briefly(publisher, client)
+        await _run_until(publisher, client, 3)
 
         # The order, not just the empty slot: asserting only `_retry is None`
         # would pass on shuffled delivery, which is the thing under test.
@@ -111,6 +114,8 @@ class TestOrderAcrossAFailure:
         # A slot left full would replay the same message on every reconnect.
         publisher._queue.put_nowait(("only", b"x", False, 0, -1, None))
 
-        await _run_briefly(publisher, _Client(fail_once_on="only"))
+        client = _Client(fail_once_on="only")
+
+        await _run_until(publisher, client, 1)
 
         assert publisher._retry is None

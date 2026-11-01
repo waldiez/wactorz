@@ -57,7 +57,9 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     value_str TEXT DEFAULT '',         -- string value for non-numeric fields (on/off, etc.)
     unit      TEXT DEFAULT '',         -- C, %, lux, W, etc.
     agent     TEXT DEFAULT '',         -- which agent published this
-    node      TEXT DEFAULT ''          -- which node the agent runs on
+    node      TEXT DEFAULT '',         -- which node the agent runs on
+    arrived   REAL,                    -- when the collector received it (wall clock); ts is the event time
+    time_source TEXT DEFAULT ''        -- 'payload' when ts came from the reading, 'arrival' when it is arrived
 );
 
 CREATE INDEX IF NOT EXISTS idx_sensor_ts       ON sensor_readings (ts);
@@ -119,6 +121,7 @@ CREATE TABLE IF NOT EXISTS chat_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ts         REAL    NOT NULL,             -- Unix timestamp of the turn
     agent_name TEXT    NOT NULL,             -- agent that produced/received the message
+    agent_id   TEXT    NOT NULL DEFAULT '',  -- that agent's actor id, which the history is kept by
     role       TEXT    NOT NULL,             -- 'user' | 'assistant'
     content    TEXT    NOT NULL,
     session_id TEXT    DEFAULT '',           -- optional grouping (actor_id or custom)
@@ -168,3 +171,47 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
 CREATE INDEX IF NOT EXISTS idx_node_history_ts      ON node_metrics_history (ts);
 CREATE INDEX IF NOT EXISTS idx_node_history_node_ts ON node_metrics_history (node, ts);
 """
+
+# The model loop's record of what it saw, was told, decided and did, and how it
+# turned out: one graph, nodes joined by edges from cause to effect. See
+# docs/design/labels-and-provenance.md. Kept as its own block because a
+# migration creates the same tables in a database made before them.
+PROVENANCE_SQL = """
+CREATE TABLE IF NOT EXISTS prov_nodes (
+    id        TEXT PRIMARY KEY,        -- minted by whoever writes the node
+    kind      TEXT NOT NULL,           -- label, question, decision, action, ...
+    ts        REAL NOT NULL,           -- the event time the node is about, or its start
+    ts_end    REAL,                    -- where it ends, NULL for a moment or an open window
+    recorded  REAL NOT NULL,           -- when it was written
+    status    TEXT NOT NULL,           -- valid, superseded, done, undone, ...
+    source    TEXT DEFAULT '',         -- the topic, entity or model it concerns
+    actor     TEXT DEFAULT '',         -- operator, dashboard, rule:<name>, agent:<name>
+    node      TEXT DEFAULT '',         -- the wactorz node that wrote it, empty for main
+    payload   TEXT NOT NULL DEFAULT '{}'  -- JSON: what the kind needs
+);
+
+CREATE INDEX IF NOT EXISTS idx_prov_kind_source_ts ON prov_nodes (kind, source, ts);
+CREATE INDEX IF NOT EXISTS idx_prov_recorded       ON prov_nodes (recorded);
+
+CREATE TABLE IF NOT EXISTS prov_edges (
+    src       TEXT NOT NULL,           -- the cause
+    dst       TEXT NOT NULL,           -- the effect
+    relation  TEXT NOT NULL,
+    recorded  REAL NOT NULL,
+    PRIMARY KEY (src, dst, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prov_edges_dst ON prov_edges (dst);
+"""
+
+SCHEMA_SQL += PROVENANCE_SQL
+
+#: Indexes on columns a migration adds, one statement each. ``SCHEMA_SQL`` runs
+#: on every open, before any migration, and on an existing database such a
+#: column is not there until its migration has run, so these are created by
+#: that migration, and for a new database right after the schema. Statements
+#: rather than a script: a script commits whatever transaction is open, and a
+#: migration runs inside one.
+ADDED_COLUMN_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_chatlog_agent_id_ts ON chat_log (agent_id, ts)",
+)

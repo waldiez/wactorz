@@ -24,7 +24,7 @@ import {
     type Point,
     type Sample,
     type Series,
-} from "../ui/dashboard/trend";
+} from "../ui/overview/trend";
 
 const at = (minute: number): number => 1_700_000_000 + minute * 60;
 

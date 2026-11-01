@@ -351,6 +351,26 @@ def _redirect(target: str) -> str:
     return f'<!DOCTYPE html><meta http-equiv="refresh" content="0; url={target}"><a href="{target}">{target}</a>\n'
 
 
+#: A 1x1 transparent ICO, for a checkout whose frontend has no icon.
+_PLACEHOLDER_ICO = bytes.fromhex(
+    "000001000100010100000100010030000000160000002800000001000000020000000100010000"
+    "000000080000000000000000000000020000000000000000000000ffffff000000000000000000"
+)
+
+
+def write_favicon(site_dir: Path, public: Path = ROOT / "frontend" / "public") -> None:
+    """Give the site the dashboard's icon, copied on every build so a changed one reaches it.
+
+    Where the frontend has no icon, a placeholder keeps the dev server free of 404s.
+    """
+    favicon = site_dir / "favicon.ico"
+    for candidate in (public / "icon.ico", public / "favicon.ico"):
+        if candidate.exists():
+            shutil.copy(candidate, favicon)
+            return
+    favicon.write_bytes(_PLACEHOLDER_ICO)
+
+
 def build(site_dir: Path = SITE) -> None:
     _ensure_markdown()
 
@@ -361,101 +381,7 @@ def build(site_dir: Path = SITE) -> None:
     if assets_src.is_dir():
         shutil.copytree(assets_src, site_dir / "assets", dirs_exist_ok=True)
 
-    # Favicon placeholder (1x1 transparent ICO — avoids 404 noise in dev server)
-    favicon = site_dir / "favicon.ico"
-    if not favicon.exists():
-        frontend_dir = ROOT / "frontend"
-        front_icon = frontend_dir / "public" / "icon.ico"
-        if not front_icon.exists():
-            front_icon = frontend_dir / "public" / "favicon.ico"
-        if not front_icon.exists():
-            # Minimal valid ICO file (1x1 transparent)
-            favicon.write_bytes(
-                bytes(
-                    [
-                        0,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        1,
-                        1,
-                        0,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        48,
-                        0,
-                        0,
-                        0,
-                        22,
-                        0,
-                        0,
-                        0,
-                        40,
-                        0,
-                        0,
-                        0,
-                        1,
-                        0,
-                        0,
-                        0,
-                        2,
-                        0,
-                        0,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        8,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        2,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        255,
-                        255,
-                        255,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                    ]
-                )
-            )
-        else:
-            shutil.copy(front_icon, favicon)
+    write_favicon(site_dir)
 
     # Copy landing page, stamping the current version into the badge
     version = _get_version()

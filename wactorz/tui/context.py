@@ -26,7 +26,7 @@ from ..core.turns import turn_scope
 from ..monitoring.log_redaction import redact
 from ..orchestration import TUI
 from ..web import uploads
-from ..web.chat import turn_attribution
+from ..web.chat import agent_id_of, turn_attribution
 from .attachments import Staged, store_staged
 from .snapshot import HostStats, Snapshot
 
@@ -438,6 +438,7 @@ async def _record(
             db.write_chat_log,
             ts=time.time(),
             agent_name=agent,
+            agent_id=agent_id_of(agent),
             role=role,
             content=redact(content),
             attachments=attachments or None,

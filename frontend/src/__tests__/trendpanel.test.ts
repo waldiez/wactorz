@@ -3,19 +3,18 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { HistoryRow } from "../ui/dashboard/history";
+import type { HistoryRow } from "../io/historyApi";
 import {
     AGENT_CHARTS,
     buildCharts,
     buildSampleTable,
     cellText,
     DEFAULT_HOURS,
-    keepFocusWithin,
     NODE_CHARTS,
     throttleSummary,
     TrendPanel,
     type HistoryReader,
-} from "../ui/dashboard/trendPanel";
+} from "../ui/overview/trendPanel";
 
 const T0 = 1_700_000_000;
 
@@ -260,9 +259,11 @@ describe("TrendPanel", () => {
 
     it("loads nothing once closed", async () => {
         await panel.open("agents", "a");
+        const window = document.querySelector<HTMLButtonElement>(".af-trend-window")!;
         panel.close();
         read.mockClear();
-        await (panel as unknown as { _load(): Promise<void> })._load();
+        window.click();
+        await Promise.resolve();
         expect(read).not.toHaveBeenCalled();
     });
 });
@@ -330,8 +331,9 @@ describe("focus in the panel", () => {
         expect(tab(true).defaultPrevented).toBe(true);
         expect(document.activeElement).toBe(last);
 
-        items[1]!.focus();
-        expect(tab().defaultPrevented).toBe(false);
+        items[0]!.focus();
+        tab();
+        expect(document.activeElement).toBe(items[1]);
     });
 
     it("brings focus that wandered outside back in", async () => {
@@ -342,12 +344,5 @@ describe("focus in the panel", () => {
         tab();
 
         expect(document.activeElement?.className).toContain("af-trend-close");
-    });
-
-    it("does nothing in a container with nothing to focus", () => {
-        const empty = document.createElement("div");
-        const e = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
-        keepFocusWithin(empty, e);
-        expect(e.defaultPrevented).toBe(false);
     });
 });

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.2
+
+- Changed: **redeploy your edge nodes.** Each node now signs what it publishes, and the add-on takes a node's replies, manifests and heartbeats only from the node they belong to. Until a node is deployed again with `/deploy <node>` it stays online but is sent no tasks, spawns or migrations, and the chat says it needs deploying.
+- Added: `sandbox_node` option. With it on, the add-on runs a node of its own, as a second user, and code the model writes runs there rather than beside the add-on's secrets. It needs a broker account of its own: the embedded broker, or `node_accounts` with its login pasted into the Mosquitto add-on. Off by default, which changes nothing.
+- Changed: a package not on the list is installed only once you press **Install** on the dashboard. An agent you already run that installs an uncommon package asks once, the next time it is spawned or moved. `/packages` shows and changes the list.
+- Changed: the assistant checks on a node only by named operations that read, such as disk, memory and the node's log. To run a command of your own on a node, type `/nodes run <node> <command>`.
+- Changed: the doc-to-pptx agent reads and writes only in your document folders and files attached in the chat.
+- Added: agents can write to you first, on Telegram, Discord, WhatsApp or the dashboard, with options to pick, and can wait for your answer.
+- Added: the dashboard's address names the open view, so a refresh or a bookmark returns to it, and the chat box completes slash commands as you type.
+- Fixed: the embedded broker no longer locks the add-on out of its own broker once a deploy target is configured.
+- Fixed: server speech works again, and the dashboard reads one reply aloud at a time.
+- Fixed: `/agents restart`, `/agents stop`, `/agents delete` and `/agents <keyword>` typed in the dashboard's chat act as they do on the other channels.
+- Fixed: a message in the activity feed can be selected and copied, and a node's routine reports are heartbeats rather than "node online" rows.
+- Fixed: the sign-in page no longer follows a crafted link to another site after you sign in.
+
+## 0.7.1
+
+- Changed: **redeploy your edge nodes.** A node on 0.7.0 keeps working with this version, but most of this release's node changes ship in what the node runs, and a 0.7.0 node does not understand the models, arrays and bytes a migration now carries, so an agent holding any comes up there without them. Run `/deploy <node>` for each.
+- Changed: **0.7.0 cannot read the agent state this version writes.** Each value an agent keeps is now stored on its own, so one that no longer loads after an update costs only that value rather than the agent's whole state. Going back to 0.7.0 afterwards starts each agent's own values afresh; restoring the backup Home Assistant offers to take before the update brings back both.
+- Added: trends on the dashboard. Each agent card draws its messages per minute over the last hour, and its History button opens its messages, errors, waits, state size and spend over the last hour, day or week. Remote nodes are cards that say what the machine is, its devices and how close it is to running out, with their own history. The history is kept in the add-on's database for 7 days.
+- Added: each row of the activity feed shows the chat turn it belongs to and the agent at work, and clicking either shows only its rows.
+- Added: `/metrics` is served on port `8888` once you publish it, behind `api_key`, which a scraper sends as `Authorization: Bearer`.
+- Changed: agent cards no longer show a CPU figure. Every agent runs in the add-on's one process, so it was the add-on's CPU, which the host bar still shows.
+- Fixed: *Wipe everything* no longer shuts your nodes down until their next `/deploy`. Each node deletes its agents and stays connected.
+- Fixed: agent cards no longer disappear and come back. A card stays until its agent is deleted, and its dot turns yellow, then red, when the agent goes quiet.
+- Fixed: `/deploy` and `/migrate` typed in the dashboard answer in one message, with `/deploy`'s progress shown as it goes, and say when an install or move fails.
+- Fixed: a slash command typed in an agent's thread is answered as a command instead of being sent to the agent as text.
+- Fixed: migrations. What an agent writes as it stops goes with it; a rolled-back migration no longer loses the agent; an agent moved home no longer keeps running on its node too, and is started again there if it cannot start here; two copies of one agent no longer knock each other off the broker; and an agent a node cannot run, such as `flic`, is refused before anything stops.
+- Fixed: a planner that reached its time limit no longer leaves its card behind, and an agent moved home from a node is listed under `local` again.
+- Fixed: a chat agent built on `agent.llm.converse()` remembers its conversation across a restart and a migration.
+- Fixed: the anomaly detector, time-series collector, smart-energy, manual and doc-to-pptx catalogue agents. Rate-of-change anomalies are detected, a failed database write no longer duplicates rows, a plug named "the hall lamp" no longer selects every plug, and the doc-to-pptx agent starts without Node.js.
+
 ## 0.7.0
 
 - Changed: `/share/wactorz/mosquitto-logins.yaml` is written readable by its owner alone. It holds password hashes.

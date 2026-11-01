@@ -80,6 +80,8 @@ SYNC_METHODS = (
     "window",
     "persist",
     "recall",
+    "persist_bytes",
+    "recall_bytes",
     "declare_contract",
     "agents",
     "nodes",
@@ -87,6 +89,7 @@ SYNC_METHODS = (
     "capabilities",
     "increment_processed",
     "increment_errors",
+    "artifact_path",
 )
 _SYNC_AWAIT_RE = re.compile(r"\bawait\s+(agent\.(?:" + "|".join(SYNC_METHODS) + r")\s*\()")
 
@@ -144,6 +147,45 @@ def _flag_direct_ha_api(code: str, log_name: str, step_name: str) -> str | None:
     return None
 
 
+#: A model read by key in generated code: `agent.load_model("model")`, `agent.artifact_path('model')`.
+_MODEL_KEY_RE = re.compile(r"""\bagent\.(?:load_model|artifact_path)\(\s*["']([^"']+)["']""")
+
+
+def _repair_model_key(spawn_config: dict[str, Any]) -> str | None:
+    """Read the one model a spawn names by the key its code uses for it.
+
+    The model writes ``"artifacts": {"model": "imu-detector"}`` and then
+    ``agent.load_model("imu_model")``. When the code reads one key, and the
+    spawn names one model under another, there is only one thing it can mean:
+    the model is named under the key the code reads, too.
+    """
+    read = set(_MODEL_KEY_RE.findall(spawn_config["code"]))
+    named = spawn_config.get("artifacts")
+    if len(read) != 1 or not isinstance(named, dict) or len(named) != 1:
+        return None
+    (key,) = read
+    ((named_key, model),) = named.items()
+    if key == named_key:
+        return None
+    spawn_config["artifacts"] = {**named, key: model}
+    return f"reads model {key!r}, named in 'artifacts' as {named_key!r}: named under both"
+
+
+def _flag_unnamed_models(spawn_config: dict[str, Any]) -> str | None:
+    """Name the model keys the code reads that its spawn does not name in ``artifacts``.
+
+    Such an agent starts and then fails in ``setup()``, where nobody is watching:
+    said here, it is in the log beside the plan that made it.
+    """
+    read = set(_MODEL_KEY_RE.findall(spawn_config["code"]))
+    named = spawn_config.get("artifacts")
+    named_keys = set(named) if isinstance(named, dict) else set()
+    missing = sorted(read - named_keys)
+    if not missing:
+        return None
+    return f"reads model(s) {', '.join(missing)} that its spawn does not name in 'artifacts'"
+
+
 def validate_pipeline_code(plan: list[dict[str, Any]], log_name: str) -> list[dict[str, Any]]:
     """Repair the mistakes an LLM commonly makes in generated agent code.
 
@@ -163,6 +205,8 @@ def validate_pipeline_code(plan: list[dict[str, Any]], log_name: str) -> list[di
                 _strip_spurious_awaits(spawn_config),
                 _replace_raw_aiomqtt(spawn_config, log_name, step_name),
                 _flag_direct_ha_api(spawn_config["code"], log_name, step_name),
+                _repair_model_key(spawn_config),
+                _flag_unnamed_models(spawn_config),
             )
             if note
         ]

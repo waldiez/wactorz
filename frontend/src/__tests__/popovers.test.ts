@@ -24,14 +24,17 @@ vi.mock("../io/AmbientManager", () => ({
 }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
-import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/dashboard/popovers";
-import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
+import { buildAudioPopover, buildResetPopover, type AudioPopover } from "../ui/shell/popovers";
+import { buildHeader, releaseHeaderPopovers } from "../ui/shell/header";
 import { tts } from "../ext/tts";
+import { provideVoiceControls } from "../io/voiceControls";
 import { ambient } from "../io/AmbientManager";
+import { RESET_TIMEOUT_MS } from "../io/resetApi";
 import { toast } from "../ui/ToastManager";
 
 describe("buildAudioPopover", () => {
     beforeEach(() => {
+        provideVoiceControls(tts as never);
         document.body.innerHTML = "";
         vi.clearAllMocks();
     });
@@ -106,10 +109,10 @@ describe("buildAudioPopover", () => {
         expect(ambient.setVolume).toHaveBeenCalledWith(0.8);
     });
 
-    it("exposes a _release hook that removes its tts-voices-loaded listener", () => {
+    it("exposes a release hook that removes its tts-voices-loaded listener", () => {
         const removed = vi.spyOn(document, "removeEventListener");
         const pop = buildAudioPopover();
-        (pop as AudioPopover)._release();
+        (pop as AudioPopover).release();
         expect(removed.mock.calls.some(c => c[0] === "tts-voices-loaded")).toBe(true);
         removed.mockRestore();
     });
@@ -157,7 +160,10 @@ describe("buildResetPopover", () => {
     });
 
     it("requires two clicks to fire, then POSTs the reset and toasts", async () => {
-        globalThis.fetch = vi.fn(async () => ({ ok: true })) as unknown as typeof fetch;
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ nodes: {} }),
+        })) as unknown as typeof fetch;
         const pop = buildResetPopover();
         const btn = pop.querySelector<HTMLButtonElement>("button")!; // first = chat
         btn.click(); // arm
@@ -165,7 +171,9 @@ describe("buildResetPopover", () => {
         expect(fetch).not.toHaveBeenCalled();
         btn.click(); // fire
         await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/reset", expect.anything()));
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Reset" }));
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Reset" })),
+        );
     });
 
     it("arming one button disarms the others", () => {
@@ -206,6 +214,25 @@ describe("buildResetPopover", () => {
         );
     });
 
+    it("does not call a reset that timed out failed: the server may be finishing it", async () => {
+        vi.useFakeTimers();
+        globalThis.fetch = vi.fn(
+            (_url: string, init?: RequestInit) =>
+                new Promise((_resolve, reject) =>
+                    init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+                ),
+        ) as unknown as typeof fetch;
+        const pop = buildResetPopover();
+        const btn = pop.querySelector<HTMLButtonElement>("button")!;
+        btn.click(); // arm
+        btn.click(); // fire
+        await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+
+        expect(toast.show).toHaveBeenCalledWith(
+            expect.objectContaining({ type: "alert-warning", title: "Reset unconfirmed" }),
+        );
+    });
+
     it("falls back to the status code when the error body is unparseable", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: false,
@@ -220,7 +247,7 @@ describe("buildResetPopover", () => {
         btn.click(); // fire
         await vi.waitFor(() =>
             expect(toast.show).toHaveBeenCalledWith(
-                expect.objectContaining({ title: "Reset failed", message: "503" }),
+                expect.objectContaining({ title: "Reset failed", message: "HTTP 503" }),
             ),
         );
     });

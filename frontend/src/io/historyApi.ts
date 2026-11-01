@@ -1,0 +1,57 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
+ * Reading the metrics history and the node listing from the server.
+ *
+ * Every reader answers null when the server cannot say — not running yet, no
+ * database to keep a history in, a node manager absent — so a caller draws
+ * nothing rather than an error where a trend would be.
+ */
+import type { NodeListing, Sample } from "../types/agent";
+import { apiUrl, requestJson } from "./api";
+
+/** One stored sample of an agent or a node: its time and whatever fields were kept. */
+export type HistoryRow = Record<string, unknown> & { ts: number };
+
+async function getJson(path: string): Promise<Record<string, unknown> | null> {
+    const got = await requestJson<unknown>(apiUrl(path));
+    return got.ok && got.value && typeof got.value === "object"
+        ? (got.value as Record<string, unknown>)
+        : null;
+}
+
+/** One agent's or node's samples over the last ``hours``, oldest first. */
+export async function fetchHistory(
+    kind: "agents" | "nodes",
+    name: string,
+    hours: number,
+): Promise<HistoryRow[] | null> {
+    const body = await getJson(`/api/history/${kind}/${encodeURIComponent(name)}?hours=${hours}`);
+    const samples = body?.["samples"];
+    return Array.isArray(samples) ? (samples as HistoryRow[]) : null;
+}
+
+/** One field of every agent's samples over the last ``hours``, by agent name. */
+export async function fetchAgentsField(field: string, hours: number): Promise<Map<string, Sample[]> | null> {
+    const body = await getJson(`/api/history/agents?field=${encodeURIComponent(field)}&hours=${hours}`);
+    const agents = body?.["agents"];
+    if (!agents || typeof agents !== "object") {
+        return null;
+    }
+    const found = new Map<string, Sample[]>();
+    for (const [name, rows] of Object.entries(agents as Record<string, unknown>)) {
+        if (Array.isArray(rows)) {
+            found.set(name, rows as Sample[]);
+        }
+    }
+    return found;
+}
+
+/** Every node main knows, with its readings and its manifest. */
+export async function fetchNodes(): Promise<NodeListing[] | null> {
+    const body = await getJson("/api/nodes");
+    const nodes = body?.["nodes"];
+    return Array.isArray(nodes) ? (nodes as NodeListing[]) : null;
+}

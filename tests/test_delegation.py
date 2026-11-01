@@ -25,8 +25,12 @@ import pytest
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.delegation import DelegationManager
 from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
-from wactorz.core.actor import MessageType
+from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core.actor import ActorMetrics, MessageType
+
+from .node_messages import SignedMessage
 
 _SUBSCRIBE_FAILED = "broker refused the subscription"
 
@@ -45,17 +49,19 @@ class _Registry:
         return self._by.get(name)
 
 
-class _Message:
-    def __init__(self, payload: bytes) -> None:
-        self.topic = "main/reply/x"
-        self.payload = payload
+class _Message(SignedMessage):
+    """A reply from ``node``, delivered on whichever topic the caller subscribed."""
+
+    def __init__(self, payload: bytes, node: str = "rpi", *, signed: bool = True) -> None:
+        super().__init__("main/reply/x", payload, node=node, signed=signed)
 
 
 class _Replies:
     """The `client.messages` stream: whatever the node sent back."""
 
-    def __init__(self, replies: list[_Message]) -> None:
+    def __init__(self, replies: list[_Message], client: "_Client") -> None:
         self._replies = replies
+        self._client = client
 
     def __aiter__(self) -> "_Replies":
         return self
@@ -65,7 +71,10 @@ class _Replies:
             # Nothing more is coming, but the listener must not fall out of its
             # loop and tear the subscription down while the caller still waits.
             await asyncio.sleep(3600)
-        return self._replies.pop(0)
+        reply = self._replies.pop(0)
+        # On the topic it was sent to, which the signature covers.
+        reply.topic = self._client.subscribed[-1]
+        return reply
 
 
 class _Client:
@@ -78,7 +87,7 @@ class _Client:
 
     def __init__(self, replies: list[_Message], subscribe_delay: float = 0.0) -> None:
         self.subscribed: list[str] = []
-        self.messages = _Replies(replies)
+        self.messages = _Replies(replies, self)
         self._delay = subscribe_delay
 
     async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
@@ -135,12 +144,16 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        # Started long ago: the spawn registry no longer stands in for a node unheard from.
+        main.metrics = ActorMetrics(start_time=0.0)
+        main.migration = Migration(main, main.nodes)
         main.delegation = DelegationManager(main)
         main._known_nodes = dict(known_nodes or {})
         main._mqtt_broker = "localhost"
         main._mqtt_port = 1883
         main._result_futures = {}
         setattr(main, "_registry", _Registry(running) if registry else None)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
 
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
         self.published: list[tuple[str, Any]] = []
@@ -189,6 +202,29 @@ class TestChoosingWhereTheTaskGoes:
 
         assert main.sent[0][1] == MessageType.TASK
 
+    async def test_a_structured_task_stays_structured(self) -> None:
+        main = _Main(running=("weather",))
+
+        await main.actor.delegation.delegate_task("weather", {"city": "Athens"})
+
+        payload = main.sent[0][2]
+        assert payload["city"] == "Athens"
+        assert json.loads(payload["text"]) == {"city": "Athens"}
+        assert payload["text"] != payload["_task_id"]
+
+    @pytest.mark.parametrize("text", ["Turn on the light", ""])
+    async def test_a_local_structured_task_keeps_its_text(self, text: str) -> None:
+        main = _Main(running=("home-assistant-agent",))
+        task = {"entity_id": "light.x", "service": "turn_on", "text": text}
+
+        await main.actor.delegation.delegate_task("home-assistant-agent", task)
+
+        payload = main.sent[0][2]
+        assert payload["text"] == text
+        assert payload["entity_id"] == "light.x"
+        assert payload["service"] == "turn_on"
+        assert task == {"entity_id": "light.x", "service": "turn_on", "text": text}
+
     async def test_the_target_is_told_where_to_answer(self) -> None:
         main = _Main(running=("weather",))
 
@@ -208,6 +244,34 @@ class TestChoosingWhereTheTaskGoes:
         assert topic == "agents/by-name/sensor/task"
         assert payload["_remote_task"] is True
 
+    async def test_a_remote_structured_task_stays_structured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main(known_nodes={"rpi": {"agents": ["weather"]}})
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.actor.delegation.delegate_task("weather", {"city": "Athens"}, timeout=0.05)
+
+        _topic, payload = main.published[0]
+        assert payload["city"] == "Athens"
+        assert json.loads(payload["text"]) == {"city": "Athens"}
+
+    @pytest.mark.parametrize("text", ["Turn on the light", ""])
+    async def test_a_remote_structured_task_keeps_its_text(
+        self, monkeypatch: pytest.MonkeyPatch, text: str
+    ) -> None:
+        main = _Main(known_nodes={"rpi": {"agents": ["home-assistant-agent"]}})
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+        task = {"entity_id": "light.x", "service": "turn_on", "text": text}
+
+        await main.actor.delegation.delegate_task("home-assistant-agent", task, timeout=0.05)
+
+        _topic, payload = main.published[0]
+        assert payload["text"] == text
+        assert payload["entity_id"] == "light.x"
+        assert payload["service"] == "turn_on"
+        assert task == {"entity_id": "light.x", "service": "turn_on", "text": text}
+
     async def test_a_local_agent_is_preferred_over_the_same_name_on_a_node(self) -> None:
         # The in-process mailbox is immediate and needs no broker.
         main = _Main(running=("sensor",), known_nodes={"rpi": {"agents": ["sensor"]}})
@@ -216,6 +280,50 @@ class TestChoosingWhereTheTaskGoes:
 
         assert main.sent
         assert not main.published
+
+    async def test_a_name_two_nodes_report_is_refused_with_the_addresses(self) -> None:
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+
+        answer = await main.delegate("sensor")
+
+        assert answer is not None
+        assert "`sensor@rpi` or `sensor@pc`" in answer["error"]
+        assert not main.published
+        assert not main.sent
+
+    async def test_the_full_address_of_one_of_them_is_refused_too(self) -> None:
+        # The task would go on the name's topic, which both nodes run.
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+
+        answer = await main.delegate("sensor@pc")
+
+        assert answer is not None
+        assert "takes a task only by name" in answer["error"]
+        assert not main.published
+
+    async def test_the_full_address_of_the_only_one_reaches_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main(known_nodes={"pc": {"agents": ["sensor"]}})
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.delegate("sensor@pc", timeout=0.05)
+
+        topic, _payload = main.published[0]
+        assert topic == "agents/by-name/sensor/task"
+
+    async def test_a_node_that_takes_tasks_on_its_own_topic_is_sent_there(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two nodes run the name, and pc is reached alone on its own topic.
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}, "pc": {"agents": ["sensor"]}})
+        main.actor.nodes.node_manifests = {"pc": {"tasks_by_node": True}}
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.delegate("sensor@pc", timeout=0.05)
+
+        topic, _payload = main.published[0]
+        assert topic == "agents/at/pc/sensor/task"
 
     async def test_an_agent_nobody_knows_answers_nothing(self) -> None:
         main = _Main()
@@ -351,7 +459,7 @@ class TestTheReplyTopic:
         broker = _Broker(subscribe_delay=0.05)
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", broker)
 
-        async with main.actor.delegation._reply_topic() as (topic, _future):
+        async with main.actor.delegation._reply_topic("rpi") as (topic, _future):
             # Checked the instant the topic is handed over, with no chance for
             # the listener to catch up: the subscription must already exist.
             assert broker.client is not None
@@ -363,7 +471,7 @@ class TestTheReplyTopic:
         main = _Main()
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
 
-        async with main.actor.delegation._reply_topic() as (topic, future):
+        async with main.actor.delegation._reply_topic("rpi") as (topic, future):
             assert main.actor._result_futures[topic] is future
 
     async def test_the_topic_is_forgotten_on_the_way_out(
@@ -372,7 +480,7 @@ class TestTheReplyTopic:
         main = _Main()
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
 
-        async with main.actor.delegation._reply_topic() as (_topic, _future):
+        async with main.actor.delegation._reply_topic("rpi") as (_topic, _future):
             pass
 
         assert not main.actor._result_futures
@@ -382,7 +490,7 @@ class TestTheReplyTopic:
         broker = _Broker(replies=[_Message(json.dumps({"answer": 42}).encode())])
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", broker)
 
-        async with main.actor.delegation._reply_topic() as (_topic, future):
+        async with main.actor.delegation._reply_topic("rpi") as (_topic, future):
             assert await asyncio.wait_for(future, timeout=1) == {"answer": 42}
 
     async def test_the_caller_still_gets_a_topic_when_the_broker_refuses(
@@ -394,7 +502,7 @@ class TestTheReplyTopic:
         main = _Main()
         monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker(fails=True))
 
-        async with main.actor.delegation._reply_topic() as (topic, future):
+        async with main.actor.delegation._reply_topic("rpi") as (topic, future):
             assert topic.startswith("main/reply/main-id/")
             # The failure is carried on the future rather than raised here, so
             # the caller still has somewhere to publish. Retrieved because an
@@ -409,10 +517,66 @@ class TestTheReplyTopic:
         seen = []
 
         for _ in range(3):
-            async with main.actor.delegation._reply_topic() as (topic, _f):
+            async with main.actor.delegation._reply_topic("rpi") as (topic, _f):
                 seen.append(topic)
 
         assert len(set(seen)) == 3
+
+
+class TestWhoseReplyIsTheAnswer:
+    """Every node reads the task, and any can publish on its reply topic."""
+
+    async def test_a_reply_from_another_node_is_passed_over(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The sandbox answering the Pi's agent before the Pi does.
+        broker = _Broker(
+            replies=[
+                _Message(json.dumps({"result": "forged"}).encode(), node="sandbox"),
+                _Message(json.dumps({"result": "real"}).encode()),
+            ]
+        )
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", broker)
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}})
+
+        assert await main.delegate("sensor", timeout=1) == {"result": "real"}
+
+    async def test_an_unsigned_reply_is_passed_over_under_enforce(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.core.node_publications.NODE_SIGNING", "enforce")
+        unsigned = _Message(json.dumps({"result": "forged"}).encode(), signed=False)
+        broker = _Broker(replies=[unsigned, _Message(json.dumps({"result": "real"}).encode())])
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", broker)
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}})
+
+        assert await main.delegate("sensor", timeout=1) == {"result": "real"}
+
+    async def test_a_node_whose_replies_would_be_refused_is_not_sent_the_task(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.nodes.NODE_SIGNING", "enforce")
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+        main = _Main(known_nodes={"rpi": {"agents": ["sensor"], "signed": False}})
+
+        result = await main.delegate("sensor", timeout=1)
+
+        assert result is not None and "/deploy rpi" in result["error"]
+        assert not main.published
+
+    async def test_a_node_listing_an_agent_main_places_elsewhere_is_not_sent_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+        main = _Main(known_nodes={"sandbox": {"agents": ["sensor"]}})
+        setattr(
+            main.actor,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names({"sensor": {"node": "rpi"}}),
+        )
+
+        assert await main.delegate("sensor", timeout=0.05) is None
+        assert not main.published
 
 
 class TestAnAgentThatCannotTakeTheTask:

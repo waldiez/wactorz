@@ -113,6 +113,85 @@ _MAX_SLEEP_S = 300.0
 _ONESHOT_CATCHUP_S = 300.0
 
 
+class ScheduleError(ValueError):
+    """A schedule that cannot be run, and why.
+
+    A `ValueError`, because a spawner reports a ValueError as rejected input
+    rather than as a failure to start.
+    """
+
+    @classmethod
+    def not_a_dict(cls, schedule: Any) -> "ScheduleError":
+        return cls(f"ScheduledAgent requires a 'schedule' dict, got {type(schedule).__name__}")
+
+    @classmethod
+    def invalid(cls, name: str, exc: Exception) -> "ScheduleError":
+        return cls(f"Invalid schedule for {name}: {exc}")
+
+    @classmethod
+    def unknown_type(cls, stype: Any) -> "ScheduleError":
+        return cls(
+            f"Unknown schedule type: {stype!r}. Use one of: daily, weekly, interval, once, cron."
+        )
+
+    @classmethod
+    def daily_without_at(cls) -> "ScheduleError":
+        return cls("daily schedule requires 'at' (e.g. '17:00')")
+
+    @classmethod
+    def weekly_without_at(cls) -> "ScheduleError":
+        return cls("weekly schedule requires 'at'")
+
+    @classmethod
+    def weekly_without_days(cls) -> "ScheduleError":
+        return cls("weekly schedule requires non-empty 'days' list")
+
+    @classmethod
+    def once_without_at(cls) -> "ScheduleError":
+        return cls("once schedule requires 'at' (ISO-8601 datetime)")
+
+    @classmethod
+    def cron_without_expr(cls) -> "ScheduleError":
+        return cls("cron schedule requires 'expr' (e.g. '0 17 * * *')")
+
+    @classmethod
+    def not_hhmm(cls, at: str) -> "ScheduleError":
+        return cls(f"Time string must be HH:MM, got {at!r}")
+
+    @classmethod
+    def time_out_of_range(cls, at: str) -> "ScheduleError":
+        return cls(f"Time out of range: {at!r}")
+
+    @classmethod
+    def unknown_day(cls, day: str) -> "ScheduleError":
+        return cls(f"Unknown day: {day!r} (use mon|tue|wed|thu|fri|sat|sun)")
+
+    @classmethod
+    def interval_not_positive(cls, seconds: int) -> "ScheduleError":
+        return cls(f"interval seconds must be positive, got {seconds}")
+
+    @classmethod
+    def interval_not_a_number(cls, seconds: Any) -> "ScheduleError":
+        return cls(f"interval schedule requires 'seconds' (int), got {seconds!r}")
+
+    @classmethod
+    def once_not_iso(cls, at: str) -> "ScheduleError":
+        return cls(f"once schedule 'at' must be ISO-8601 (YYYY-MM-DDTHH:MM:SS), got {at!r}")
+
+    @classmethod
+    def no_croniter(cls) -> "ScheduleError":
+        return cls(
+            "Cron schedules require the 'croniter' package. Install with "
+            "`pip install 'wactorz[cron]'`, OR use a structured schedule "
+            "({'type': 'daily', 'at': '17:00'}) instead — the structured "
+            "form covers most cases and is preferred."
+        )
+
+    @classmethod
+    def bad_cron(cls, expr: str, exc: Exception) -> "ScheduleError":
+        return cls(f"Invalid cron expression {expr!r}: {exc}")
+
+
 def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
     """Resolve the schedule's effective timezone.
 
@@ -142,11 +221,11 @@ def _parse_hhmm(at: str) -> tuple[int, int]:
     """Parse 'HH:MM' (or 'HH:MM:SS' — seconds dropped). Raises ValueError."""
     parts = at.strip().split(":")
     if len(parts) < 2:
-        raise ValueError(f"Time string must be HH:MM, got {at!r}")
+        raise ScheduleError.not_hhmm(at)
     h = int(parts[0])
     m = int(parts[1])
     if not (0 <= h <= 23 and 0 <= m <= 59):
-        raise ValueError(f"Time out of range: {at!r}")
+        raise ScheduleError.time_out_of_range(at)
     return h, m
 
 
@@ -164,24 +243,28 @@ def _next_fire_weekly(now_local: datetime, at: str, days: list[str]) -> datetime
     Picks the soonest matching weekday at or after `at` time.
     """
     if not days:
-        raise ValueError("weekly schedule requires non-empty 'days' list")
+        raise ScheduleError.weekly_without_days()
     h, m = _parse_hhmm(at)
     day_nums = set()
     for d in days:
         key = d.strip().lower()
         if key not in _DAY_NAMES:
-            raise ValueError(f"Unknown day: {d!r} (use mon|tue|wed|thu|fri|sat|sun)")
+            raise ScheduleError.unknown_day(d)
         day_nums.add(_DAY_NAMES[key])
 
-    # Look up to 7 days ahead. The first match wins.
-    for offset in range(8):
-        candidate = (now_local + timedelta(days=offset)).replace(
-            hour=h, minute=m, second=0, microsecond=0
-        )
-        if candidate.weekday() in day_nums and candidate > now_local:
-            return candidate
-    # Cannot happen unless `days` is empty (already raised above)
-    raise RuntimeError("weekly schedule produced no candidate — internal error")
+    # Each named day's next time after now; the soonest wins.
+    return min(_next_on_weekday(now_local, day, h, m) for day in day_nums)
+
+
+def _next_on_weekday(now_local: datetime, weekday: int, h: int, m: int) -> datetime:
+    """The next ``h:m`` on ``weekday`` after ``now_local``: this week's, or next week's."""
+    ahead = (weekday - now_local.weekday()) % 7
+    candidate = (now_local + timedelta(days=ahead)).replace(
+        hour=h, minute=m, second=0, microsecond=0
+    )
+    if candidate <= now_local:
+        candidate += timedelta(days=7)
+    return candidate
 
 
 def _next_fire_interval(now_local: datetime, seconds: int, last_fire: datetime | None) -> datetime:
@@ -190,7 +273,7 @@ def _next_fire_interval(now_local: datetime, seconds: int, last_fire: datetime |
     Otherwise, fire `seconds` from now.
     """
     if seconds <= 0:
-        raise ValueError(f"interval seconds must be positive, got {seconds}")
+        raise ScheduleError.interval_not_positive(seconds)
     if last_fire is not None:
         cand = last_fire + timedelta(seconds=seconds)
         if cand > now_local:
@@ -206,9 +289,7 @@ def _next_fire_once(at: str, tzinfo: Any) -> datetime:
     try:
         dt = datetime.fromisoformat(at.strip())
     except ValueError as e:
-        raise ValueError(
-            f"once schedule 'at' must be ISO-8601 (YYYY-MM-DDTHH:MM:SS), got {at!r}"
-        ) from e
+        raise ScheduleError.once_not_iso(at) from e
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=tzinfo)
     return dt
@@ -221,17 +302,12 @@ def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
     try:
         from croniter import croniter
     except ImportError as e:
-        raise ValueError(
-            "Cron schedules require the 'croniter' package. Install with "
-            "`pip install 'wactorz[cron]'`, OR use a structured schedule "
-            "({'type': 'daily', 'at': '17:00'}) instead — the structured "
-            "form covers most cases and is preferred."
-        ) from e
+        raise ScheduleError.no_croniter() from e
     try:
         it = croniter(expr, now_local)
         return it.get_next(datetime)
     except Exception as e:
-        raise ValueError(f"Invalid cron expression {expr!r}: {e}") from e
+        raise ScheduleError.bad_cron(expr, e) from e
 
 
 @dataclass
@@ -265,9 +341,7 @@ class ScheduledAgent(Actor):
         kwargs.setdefault("name", "scheduled")
         super().__init__(**kwargs)
         if not isinstance(schedule, dict):
-            raise ValueError(
-                f"ScheduledAgent requires a 'schedule' dict, got {type(schedule).__name__}"
-            )
+            raise ScheduleError.not_a_dict(schedule)
         self._schedule: dict = dict(schedule)  # defensive copy
         self._user_tz: str | None = timezone
         self._tz = _resolve_timezone(self._schedule.get("tz"), timezone)
@@ -283,7 +357,7 @@ class ScheduledAgent(Actor):
             now = datetime.now(self._tz)
             self._compute_next_fire(now, last_fire=None)
         except Exception as e:
-            raise ValueError(f"Invalid schedule for {self.name}: {e}") from e
+            raise ScheduleError.invalid(self.name, e) from e
 
         # Background loop handle
         self._loop_task: asyncio.Task | None = None
@@ -443,14 +517,14 @@ class ScheduledAgent(Actor):
         if stype == "daily":
             at = spec.get("at")
             if not at:
-                raise ValueError("daily schedule requires 'at' (e.g. '17:00')")
+                raise ScheduleError.daily_without_at()
             return _next_fire_daily(now_local, at)
 
         if stype == "weekly":
             at = spec.get("at")
             days = spec.get("days") or []
             if not at:
-                raise ValueError("weekly schedule requires 'at'")
+                raise ScheduleError.weekly_without_at()
             return _next_fire_weekly(now_local, at, days)
 
         if stype == "interval":
@@ -460,24 +534,22 @@ class ScheduledAgent(Actor):
                 every = spec.get("every", "")
                 secs = _parse_duration(every) if every else None
             if not isinstance(secs, (int, float)):
-                raise ValueError(f"interval schedule requires 'seconds' (int), got {secs!r}")
+                raise ScheduleError.interval_not_a_number(secs)
             return _next_fire_interval(now_local, int(secs), last_fire)
 
         if stype == "once":
             at = spec.get("at")
             if not at:
-                raise ValueError("once schedule requires 'at' (ISO-8601 datetime)")
+                raise ScheduleError.once_without_at()
             return _next_fire_once(at, self._tz)
 
         if stype == "cron":
             expr = spec.get("expr") or spec.get("expression")
             if not expr:
-                raise ValueError("cron schedule requires 'expr' (e.g. '0 17 * * *')")
+                raise ScheduleError.cron_without_expr()
             return _next_fire_cron(now_local, expr)
 
-        raise ValueError(
-            f"Unknown schedule type: {stype!r}. Use one of: daily, weekly, interval, once, cron."
-        )
+        raise ScheduleError.unknown_type(stype)
 
     # ── Firing ─────────────────────────────────────────────────────────────
 
@@ -520,7 +592,7 @@ class ScheduledAgent(Actor):
             main = find_main_actor(self._registry)
             if main:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                     pass
         await self.stop()

@@ -10,8 +10,8 @@
  * first is invisible until the request rate doubles.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AppLogFeed, FOLLOW_INTERVAL_MS, MAX_ENTRIES } from "../ui/dashboard/appLogFeed";
-import { DEFAULT_FILTERS } from "../ui/dashboard/feedView";
+import { AppLogFeed, FOLLOW_INTERVAL_MS, MAX_ENTRIES } from "../ui/feed/appLogFeed";
+import { DEFAULT_FILTERS } from "../ui/feed/feedEntries";
 
 const record = (text: string, ts = 1_700_000_000) => ({
     source: "app",

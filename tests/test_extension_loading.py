@@ -153,3 +153,162 @@ class TestWhatBelongsInExt:
             if module.name.startswith("_"):
                 continue
             importlib.import_module(f"wactorz.ext.{module.name}")
+
+
+class _EntryPoint:
+    """One ``wactorz.extensions`` entry point, as importlib.metadata hands them out."""
+
+    def __init__(self, name: str, value: str, loaded: Any = None, error: Exception | None = None):
+        self.name = name
+        self.value = value
+        self._loaded = loaded
+        self._error = error
+
+    def load(self) -> Any:
+        if self._error is not None:
+            raise self._error
+        return self._loaded
+
+
+class _Panel:
+    """An extension that is an object rather than a module: ``module:object`` in the entry point."""
+
+    def __init__(self) -> None:
+        self.set_up = False
+
+    def setup(self, app: web.Application) -> None:
+        self.set_up = True
+
+    def public_config(self, _app: web.Application) -> dict[str, Any]:
+        return {"panel": True}
+
+
+def _external(name: str, **attrs: Any) -> Any:
+    module = types.ModuleType(name)
+    module.__dict__.update(attrs)
+    return module
+
+
+def _entry_points(monkeypatch: pytest.MonkeyPatch, *entries: _EntryPoint) -> None:
+    monkeypatch.setattr(ext, "_entry_points", lambda: list(entries))
+    monkeypatch.setattr(ext, "_external", None)
+    monkeypatch.setattr(ext, "_entry_point_names", {})
+
+
+class TestExtensionsFromOtherPackages:
+    def test_an_installed_package_is_loaded_after_the_built_ins_under_its_entry_point_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mlops = _external(
+            "wactorz_mlops.ext", setup=_setup_ok, public_config=lambda _app: {"designer": 1}
+        )
+        _entry_points(monkeypatch, _EntryPoint("mlops", "wactorz_mlops.ext", mlops))
+
+        found = ext.discover(refresh=True)
+
+        assert found[-1] is mlops
+        assert [ext._short_name(m) for m in found[:-1]] == ["tts"]
+        assert ext._short_name(mlops) == "mlops"
+        app = web.Application()
+        ext.setup_all(app)
+        assert app[LOADED] is True
+        assert ext.collect_public_config(app)["mlops"] == {"designer": 1}
+
+    def test_an_object_with_setup_works_as_well_as_a_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        panel = _Panel()
+        _entry_points(monkeypatch, _EntryPoint("panel", "wactorz_mlops.ext:panel", panel))
+
+        found = ext.discover(refresh=True)
+
+        assert found[-1] is panel
+        app = web.Application()
+        ext.setup_all(app)
+        assert panel.set_up
+        assert ext.collect_public_config(app)["panel"] == {"panel": True}
+
+    def test_a_broken_or_hookless_entry_point_is_skipped_and_said(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        _entry_points(
+            monkeypatch,
+            _EntryPoint("broken", "nope.ext", error=ImportError("no module named nope")),
+            _EntryPoint("mute", "quiet.ext", _external("quiet.ext")),
+            _EntryPoint("fine", "fine.ext", _external("fine.ext", setup=_setup_ok)),
+        )
+
+        with caplog.at_level("WARNING"):
+            found = ext.discover(refresh=True)
+
+        assert [ext._short_name(m) for m in found] == ["tts", "fine"]
+        assert "broken = nope.ext: no module named nope" in caplog.text
+        assert "mute = quiet.ext: it has no setup(app)" in caplog.text
+
+    def test_a_name_a_built_in_uses_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A package must not stand in for a built-in by taking its name."""
+        impostor = _external("evil.ext", setup=_setup_ok)
+        _entry_points(monkeypatch, _EntryPoint("tts", "evil.ext", impostor))
+
+        with caplog.at_level("WARNING"):
+            found = ext.discover(refresh=True)
+
+        assert impostor not in found
+        assert "an extension called 'tts' is already loaded" in caplog.text
+
+    def test_two_packages_with_one_name_keep_the_first(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        first = _external("one.ext", setup=_setup_ok)
+        second = _external("two.ext", setup=_setup_ok)
+        _entry_points(
+            monkeypatch,
+            _EntryPoint("mlops", "one.ext", first),
+            _EntryPoint("mlops", "two.ext", second),
+        )
+
+        with caplog.at_level("WARNING"):
+            found = ext.discover(refresh=True)
+
+        assert first in found
+        assert second not in found
+        assert "two.ext" in caplog.text
+
+    def test_the_entry_points_are_read_once_unless_asked_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reads: list[int] = []
+        mlops = _external("wactorz_mlops.ext", setup=_setup_ok)
+
+        def _read() -> list[_EntryPoint]:
+            reads.append(1)
+            return [_EntryPoint("mlops", "wactorz_mlops.ext", mlops)]
+
+        monkeypatch.setattr(ext, "_entry_points", _read)
+        monkeypatch.setattr(ext, "_external", None)
+        monkeypatch.setattr(ext, "_entry_point_names", {})
+
+        ext.discover()
+        ext.discover()
+        assert len(reads) == 1
+        ext.discover(refresh=True)
+        assert len(reads) == 2
+
+    def test_deps_may_name_a_packaged_extension(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``__deps__`` refers to the entry point's name, as it does to a built-in's."""
+
+        async def first(_app: web.Application) -> None: ...
+        async def second(_app: web.Application) -> None: ...
+
+        store = _external("wactorz_mlops.store", setup=_setup_ok, on_ready=first)
+        ui = _external("wactorz_mlops.ui", setup=_setup_ok, on_ready=second, __deps__=["store"])
+        _entry_points(
+            monkeypatch,
+            _EntryPoint("ui", "wactorz_mlops.ui", ui),
+            _EntryPoint("store", "wactorz_mlops.store", store),
+        )
+        ext.discover(refresh=True)
+
+        assert ext._topo_sort_on_ready([ui, store]) == [ui, store]

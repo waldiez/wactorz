@@ -55,6 +55,24 @@ class UndescribedCommand(ValueError):
 
 
 @dataclass(frozen=True)
+class Form:
+    """One way to type a command, as `/help` and the dashboard's completion show it.
+
+    ``usage`` is what is typed, with the arguments in angle brackets and the
+    optional ones in square brackets: ``/plans approve <id>``.
+    """
+
+    usage: str
+    summary: str
+
+    @property
+    def typed(self) -> str:
+        """What a person types before the first argument: ``/plans approve``."""
+        cut = min((i for i in (self.usage.find(" <"), self.usage.find(" [")) if i >= 0), default=-1)
+        return self.usage if cut < 0 else self.usage[:cut]
+
+
+@dataclass(frozen=True)
 class Command:
     """One command, and every spelling that reaches it.
 
@@ -79,6 +97,11 @@ class Command:
     #: something. On means the handler answers with usage, which is what the
     #: lifecycle verbs did before and the only reason this is settable.
     bare_ok: bool = False
+    #: The heading `/help` lists it under; see `wactorz.agents.main.commands.info`.
+    group: str = ""
+    #: The ways to type it, each with what it does. One form, the name and the
+    #: summary, when the command takes no argument worth showing.
+    forms: tuple[Form, ...] = ()
 
     def match(self, stripped: str) -> str | None:
         """The argument this command was given, or None if it was not called.
@@ -181,11 +204,16 @@ def command(
     summary: str = "",
     restricted_ok: bool = False,
     bare_ok: bool = False,
+    group: str = "",
+    forms: tuple[tuple[str, str], ...] = (),
 ) -> Callable[
     [Callable[[CommandContext, str], Awaitable[str]]],
     Callable[[CommandContext, str], Awaitable[str]],
 ]:
     """Attach command metadata to a handler.
+
+    ``forms`` are ``(usage, summary)`` pairs, the ways to type the command;
+    without them it has one, its name and ``summary``.
 
     Describing a command does not register it: the package's `__init__` does
     that, in an order it states. Keeping the two apart means importing a
@@ -208,6 +236,8 @@ def command(
             summary=summary,
             restricted_ok=restricted_ok,
             bare_ok=bare_ok,
+            group=group,
+            forms=tuple(Form(u, s) for u, s in forms) or (Form(name, summary),),
         )
         return handler
 

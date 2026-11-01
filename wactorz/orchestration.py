@@ -15,6 +15,11 @@ Three things cross the seam, and nothing else:
 * ``commands()`` names the slash commands the orchestrator answers, so a
   surface can say "unknown command" for the rest instead of forwarding it.
 
+An orchestrator may also offer ``command_forms()``: each way to type one of
+those commands, with what it does, for a surface that completes them as they
+are typed (`command_forms`). Optional, so an orchestrator written without it
+still fits the seam; its commands are then offered by name alone.
+
 The ``channel`` says where the message came from, which is a matter of trust
 rather than of transport: the dashboard, the terminal and the REST API are the
 operator's own, while a social channel is a public endpoint that anyone who
@@ -34,7 +39,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from .agents.lookup import MAIN_ACTOR_NAME
 from .agents.main.commands import registry as main_command_registry
-from .agents.main.commands.dispatch import REWRITES
+from .agents.main.commands.dispatch import REWRITES, Form
 from .core.actor import Actor, ActorState
 from .core.task_text import reply_text, task_payload
 from .core.turns import acting_as
@@ -100,6 +105,20 @@ class Orchestrator(Protocol):
         ...
 
 
+def command_forms(orchestrator: Orchestrator) -> list[Form]:
+    """The ways to type the commands ``orchestrator`` answers, with what each does.
+
+    Its own ``command_forms()`` where it has one; otherwise each command by its
+    name, with nothing said of it.
+    """
+    offered = getattr(orchestrator, "command_forms", None)
+    if callable(offered):
+        # An orchestrator of anyone's: whatever it gives that is not a Form is
+        # left out rather than shown in a shape the surface cannot read.
+        return [form for form in cast("Iterable[Any]", offered()) if isinstance(form, Form)]
+    return [Form(name, "") for name in sorted(orchestrator.commands())]
+
+
 def _first_words(spellings: tuple[str, ...]) -> set[str]:
     """The slash commands among ``spellings``, each cut to its first word."""
     return {s.split()[0] for s in spellings if s.startswith("/") and s.split()}
@@ -137,6 +156,47 @@ _UNAVAILABLE = {
 }
 
 
+class MainUnavailableError(LookupError):
+    """Main is not there to take a turn."""
+
+    @classmethod
+    def not_running(cls) -> "MainUnavailableError":
+        return cls(f"{MAIN_ACTOR_NAME} is not running")
+
+    @classmethod
+    def because(cls, reason: str) -> "MainUnavailableError":
+        return cls(f"{MAIN_ACTOR_NAME} {reason}")
+
+
+class OrchestratorError(StartupError):
+    """The orchestrator named in `ENV_VAR` could not be loaded or built, or is not an orchestrator."""
+
+    @classmethod
+    def not_built(cls, what: str, exc: Exception) -> "OrchestratorError":
+        return cls(f"orchestrator {what} could not be built: {exc}")
+
+    @classmethod
+    def built_wrong(cls, what: str, built: Any) -> "OrchestratorError":
+        return cls(
+            f"orchestrator {what} built {type(built).__name__}, which is not an Orchestrator "
+            "(handle_turn, handle_turn_stream and commands)"
+        )
+
+    @classmethod
+    def not_one(cls, what: str, obj: Any) -> "OrchestratorError":
+        return cls(
+            f"orchestrator {what} is {type(obj).__name__}, which is neither an Orchestrator "
+            "nor something that builds one"
+        )
+
+    @classmethod
+    def not_loaded(cls, target: str, exc: Exception) -> "OrchestratorError":
+        return cls(
+            f"{ENV_VAR} names {target!r}, which could not be loaded: {exc}. The module must "
+            "be importable from where wactorz starts; set PYTHONPATH or install the package."
+        )
+
+
 class MainOrchestrator:
     """Main, the model-driven orchestrator, behind the seam.
 
@@ -154,7 +214,7 @@ class MainOrchestrator:
     def _main(self) -> "MainActor":
         actor = self._registry.find_by_name(MAIN_ACTOR_NAME)
         if actor is None:
-            raise LookupError(f"{MAIN_ACTOR_NAME} is not running")
+            raise MainUnavailableError.not_running()
         # The entry points below reach into main directly rather than through
         # its mailbox, so a state that ends the mailbox is checked here, or a
         # failed main would go on answering until its replacement registers.
@@ -162,7 +222,7 @@ class MainOrchestrator:
         state = getattr(getattr(actor, "state", None), "value", "")
         reason = _UNAVAILABLE.get(str(state))
         if reason is not None:
-            raise LookupError(f"{MAIN_ACTOR_NAME} {reason}")
+            raise MainUnavailableError.because(reason)
         # Whatever is registered under main's name is main: the name is reserved
         # for it, and the three entry points used here are what define it.
         return cast("MainActor", actor)
@@ -196,6 +256,15 @@ class MainOrchestrator:
     def commands(self) -> frozenset[str]:
         return main_commands()
 
+    def command_forms(self) -> list[Form]:
+        """Main's commands as `/help` lists them, the ones that start with a slash."""
+        return [
+            form
+            for described in main_command_registry
+            for form in described.forms
+            if form.usage.startswith("/")
+        ]
+
 
 #: How long the model-free orchestrator waits for an agent's reply. Generous on
 #: purpose: an agent that scores a reading answers at once, one that trains or
@@ -203,16 +272,23 @@ class MainOrchestrator:
 DIRECT_ASK_TIMEOUT_S = 150.0
 
 #: The slash commands the model-free orchestrator answers.
-DIRECT_COMMANDS = frozenset({"/agents", "/topics", "/nodes", "/help"})
+DIRECT_FORMS = (
+    Form("/agents", "the running agents and their state"),
+    Form("/topics", "the topics they publish and listen to"),
+    Form("/nodes", "this process is the one node"),
+    Form("/help", "this help"),
+)
 
-DIRECT_HELP = """\
-No model runs in this profile, so chat reaches the agents directly.
-  @<agent> {json}   send the JSON to an agent as its task; the reply is its return value
-  @<agent> <text>   send text, which the agent receives as {"text": ...}
-  /agents           the running agents and their state
-  /topics           the topics they publish and listen to
-  /nodes            this process is the one node
-  /help             this help"""
+DIRECT_COMMANDS = frozenset(form.usage for form in DIRECT_FORMS)
+
+DIRECT_HELP = "\n".join(
+    [
+        "No model runs in this profile, so chat reaches the agents directly.",
+        "  @<agent> {json}   send the JSON to an agent as its task; the reply is its return value",
+        '  @<agent> <text>   send text, which the agent receives as {"text": ...}',
+        *(f"  {form.usage:<17} {form.summary}" for form in DIRECT_FORMS),
+    ]
+)
 
 
 def _names(actors: Iterable[Actor]) -> str:
@@ -294,6 +370,9 @@ class DirectOrchestrator:
     def commands(self) -> frozenset[str]:
         return DIRECT_COMMANDS
 
+    def command_forms(self) -> list[Form]:
+        return list(DIRECT_FORMS)
+
     async def _ask(self, name: str, rest: str) -> str:
         if not rest:
             return f"[usage] @{name} <text or {{json}}>"
@@ -357,17 +436,11 @@ def as_orchestrator(obj: Any, registry: "ActorRegistry", *, named: str = "") -> 
         try:
             built = obj(registry)
         except Exception as exc:
-            raise StartupError(f"orchestrator {what} could not be built: {exc}") from exc
+            raise OrchestratorError.not_built(what, exc) from exc
         if isinstance(built, Orchestrator):
             return built
-        raise StartupError(
-            f"orchestrator {what} built {type(built).__name__}, which is not an Orchestrator "
-            "(handle_turn, handle_turn_stream and commands)"
-        )
-    raise StartupError(
-        f"orchestrator {what} is {type(obj).__name__}, which is neither an Orchestrator "
-        "nor something that builds one"
-    )
+        raise OrchestratorError.built_wrong(what, built)
+    raise OrchestratorError.not_one(what, obj)
 
 
 def resolve_orchestrator(target: str, registry: "ActorRegistry") -> Orchestrator:
@@ -380,10 +453,7 @@ def resolve_orchestrator(target: str, registry: "ActorRegistry") -> Orchestrator
     try:
         obj = resolve_target(target)
     except Exception as exc:
-        raise StartupError(
-            f"{ENV_VAR} names {target!r}, which could not be loaded: {exc}. The module must "
-            "be importable from where wactorz starts; set PYTHONPATH or install the package."
-        ) from exc
+        raise OrchestratorError.not_loaded(target, exc) from exc
     return as_orchestrator(obj, registry, named=repr(target))
 
 
@@ -391,15 +461,18 @@ __all__ = [
     "CLI",
     "DASHBOARD",
     "DIRECT_COMMANDS",
+    "DIRECT_FORMS",
     "ENV_VAR",
     "REST",
     "SOCIAL",
     "TRUSTED_CHANNELS",
     "TUI",
     "DirectOrchestrator",
+    "Form",
     "MainOrchestrator",
     "Orchestrator",
     "as_orchestrator",
+    "command_forms",
     "is_trusted",
     "main_commands",
     "resolve_orchestrator",

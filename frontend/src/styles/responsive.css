@@ -4,15 +4,17 @@
  */
 /* ── Responsive: tablet (640-1023px) ─────────────────────────────────── */
 @media (max-width: 1023px) {
-  .cd-grid {
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
-    padding: 14px 16px;
-  }
 }
 
 /* ── Responsive: mobile (< 640px) ────────────────────────────────────── */
 @media (max-width: 639px) {
+  /* ── A thumb's reach: the composer's buttons ── */
+  .af-send-btn,
+  .af-stop-btn {
+    width: 44px;
+    height: 44px;
+  }
+
   /* ── CardDashboard header: logo + conn + 🔊 only ── */
   .af-header {
     padding: 6px 10px;
@@ -93,51 +95,23 @@
     display: none;
   }
 
-  /* Card dashboard: clear of IO bar + safe area */
-  .cd-root {
-    bottom: max(64px, calc(58px + env(safe-area-inset-bottom, 6px)));
+  /* Feed rows: no room for the text beside the time and the agent, so it takes
+     a line of its own under them; the turn chip and the toggle stay on the
+     first line, at its end. */
+  .af-feed-item {
+    flex-wrap: wrap;
   }
-  .cd-topbar {
-    padding: 8px 12px;
+  .af-feed-item .af-feed-text {
+    order: 1;
+    flex-basis: 100%;
+    padding-left: 22px;
   }
-  .cd-subtitle {
-    display: none;
+  .af-feed-full,
+  .af-feed-copy {
+    order: 2;
   }
-  .cd-grid {
-    grid-template-columns: 1fr;
-    padding: 10px;
-    gap: 10px;
+  .af-feed-turn,
+  .af-feed-item:not(:has(.af-feed-turn)) .af-feed-toggle {
+    margin-left: auto;
   }
-  .cd-body {
-    padding: 12px 12px 10px;
-    gap: 8px;
-  }
-  .cd-avatar {
-    width: 30px;
-    height: 30px;
-  }
-  .cd-name {
-    font-size: 13px;
-  }
-  .cd-mono {
-    font-size: 10px;
-  }
-
-  /* IO bar: compact + iOS safe-area */
-  #io-bar {
-    padding: 8px 12px;
-    padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
-    gap: 8px;
-    min-height: 58px;
-  }
-  /* 44px touch targets — minimum recommended by Apple HIG */
-  #wake-btn,
-  #mic-btn,
-  #send-btn {
-    width: 44px;
-    height: 44px;
-  }
-  #text-input {
-    font-size: 16px;
-  } /* 16px prevents iOS auto-zoom on focus */
 }

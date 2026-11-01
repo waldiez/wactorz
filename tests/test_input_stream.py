@@ -145,8 +145,10 @@ class _Main:
         async def _spawn_blocks(response: str) -> tuple[str, list[Any]]:
             return response, list(spawned)
 
-        async def _delete_blocks(response: str) -> tuple[str, list[str], list[str]]:
-            return response, list(deleted), list(missing)
+        async def _delete_blocks(
+            response: str,
+        ) -> tuple[str, list[str], list[str], list[str]]:
+            return response, list(deleted), list(missing), []
 
         async def _delegate_blocks(response: str, restricted: bool = False) -> Any:
             return response, list(delegate_results)

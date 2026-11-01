@@ -19,10 +19,34 @@ import json
 import logging
 import re
 import time
+import uuid
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import ReplyError, ask_through
+from ...core.actor import ReplyError, ask_through, derive_actor_id
+from ...core.addresses import MAIN_NODE, Address, agent_name_error
+from ...core.artifacts import ArtifactError
+from ...core.bundles import BundleError, bundle_for
+from ...core.identity import given_actor_id
+from ...core.packages import (
+    APPROVAL_TIMEOUT_S,
+    DEFAULT_ALLOWED,
+    allowed_by_env,
+    unlisted,
+)
 from ...core.topics import topic_name_error
+from ...plugins import MODULE_TYPE, for_target, is_module_config
+from ..catalog_agent import current_recipe_config
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type
+from .alongside import Settled, put_back, settle
+from .spawn_registry import (
+    NAME_KEYED_REGISTRY_KEY,
+    SPAWN_REGISTRY_KEY,
+    SpawnRegistry,
+    address_of,
+    placed_on,
+    without_transient_keys,
+)
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -31,56 +55,136 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Persistence key for what main remembers about the agents it spawned.
-#:
-#: Public because it is the restart contract: this service writes it and the
-#: dashboard, migration and `/agents restart` all read the same store.
-SPAWN_REGISTRY_KEY = "_spawned_agents"
 
-#: Config keys that instruct the one spawn carrying them, rather than describing
-#: what the agent is.
-#:
-#: `_initial_state` is a state snapshot handed over at migration time. The runner
-#: treats it as ground truth and deletes the agent's state file to apply it, which
-#: is right once — the source was authoritative at that moment — and wrong every
-#: time after, because the agent has been living on the target since. Kept in a
-#: standing record it is re-applied on every reconcile, so a node reboot would
-#: roll the agent back to the moment it arrived.
-TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
-
-
-def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
+def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] = ()) -> str | None:
     """Why a node could not run the agent ``config`` describes, or None if it can.
 
-    A node runs every agent as generated code: what the config's ``code`` holds,
-    or, for an agent of type ``llm``, the bridge code main writes for it. Every
-    other kind of agent is a class built into this server -- a native catalogue
-    agent, a Home Assistant actuator, a scheduled or rule agent, a registered
-    module -- and its config carries no program. Sent to a node, it starts as an
-    agent with nothing to run, answers every message with an error, and is
-    reported as started all the same.
+    A node runs an agent as generated code: what the config's ``code`` holds,
+    or, for an agent of type ``llm``, the bridge code main writes for it. A
+    module agent it builds from a package installed there, so one is placed
+    only on a node whose manifest names the target among ``node_targets``.
+    Every other kind of agent is a class built into this server -- a native
+    catalogue agent, a Home Assistant actuator, a scheduled or rule agent --
+    and its config carries no program. Sent to a node, it starts as an agent
+    with nothing to run, answers every message with an error, and is reported
+    as started all the same.
     """
     if (config.get("code") or "").strip():
         return None
-    agent_type = (config.get("type") or "dynamic").strip().lower()
-    if agent_type == "llm":
+    kind = agent_type(config)
+    if kind == "llm":
         return None
-    if agent_type == "dynamic":
+    if kind == "dynamic":
         return "it has no program to send there"
+    if kind == MODULE_TYPE:
+        target = str(config.get("target") or "").strip()
+        if target and (target in node_targets or isinstance(config.get("bundle"), dict)):
+            return None
+        return (
+            f"it is built from {target or 'a target it does not name'}, which that node has "
+            f"not said it has, and its code could not be sent with it. Redeploy the node so it "
+            f"takes the code from main, or install the package there and name the agent in "
+            f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point of a package named in "
+            f"that node's WACTORZ_EXTENSIONS"
+        )
     return (
-        f"it is a {agent_type} agent, built into this server, and a node runs only an "
-        f"agent whose program goes with it: generated code, or an LLM agent"
+        f"it is a {kind} agent, built into this server, and a node runs only an "
+        f"agent whose program goes with it: generated code, an LLM agent, or a library "
+        f"agent from a package installed there"
     )
 
 
-def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
-    """`config` without the keys that must not outlive the spawn they were sent with.
+def catalogue_may_stand_in(config: dict[str, Any]) -> bool:
+    """Whether the catalogue's agent of the same name may run in place of ``config``.
 
-    Applied where a config is *recorded* — the spawn registry and a node's
-    desired state — never to the spawn message itself, which is the hand-off
-    those keys exist for and is retain-cleared by the runner once consumed.
+    The catalogue stands in for code the model wrote, so a recipe it maintains
+    is not rewritten, unreviewed, every time it is asked for; and for a native
+    agent, which only the catalogue builds. A spawn of any other kind -- an LLM,
+    rule, scheduled, Home Assistant or module agent -- describes a different
+    agent that happens to share the name, and runs as asked.
     """
-    return {k: v for k, v in config.items() if k not in TRANSIENT_CONFIG_KEYS}
+    return agent_type(config) in ("dynamic", "native")
+
+
+def with_models_of(config: dict[str, Any]) -> dict[str, Any]:
+    """``config`` naming, as ``artifacts``, the models a library agent declares in its code.
+
+    A spawn that names artifacts itself keeps them. The agent's own
+    declaration -- ``models=`` on the decorator, ``MODELS`` on a class -- is
+    what main has and the node does not, so it goes with the spawn.
+    """
+    if not is_module_config(config) or config.get("artifacts"):
+        return config
+    plugin = for_target(str(config.get("target") or ""))
+    if plugin is None or not plugin.models:
+        return config
+    return {**config, "artifacts": plugin.models}
+
+
+async def with_code_for(
+    config: dict[str, Any], node_targets: Collection[str], takes_bundles: bool
+) -> tuple[dict[str, Any], str | None]:
+    """``config`` as a node can build it, and why its code cannot go, or None.
+
+    A library agent whose target the node has installed is built from that.
+    Otherwise, on a node that takes them, its code goes with the spawn as a
+    bundle -- the folder its module is in, see `wactorz.core.bundles` -- made
+    again from the code here each time, so the node runs what main runs, with
+    the packages the agent requires to be installed there. A config that is
+    not a library agent's is returned as it is.
+    """
+    if not is_module_config(config):
+        return config, None
+    target = str(config.get("target") or "").strip()
+    if not target or target in node_targets or not takes_bundles:
+        return config, None
+    plugin = for_target(target)
+    if plugin is None:
+        # Not built here, so there is nothing to send: a bundle the config
+        # already carries is the one it was placed with.
+        return config, None
+    try:
+        # It reads and parses every file in the folder: off the loop.
+        bundle = await asyncio.to_thread(bundle_for, target)
+    except BundleError as exc:
+        return config, str(exc)
+    bundled = {**config, "bundle": bundle}
+    packages = plugin.requires.get("packages")
+    if packages and not config.get("install"):
+        bundled["install"] = [str(p) for p in packages]
+    return bundled, None
+
+
+def id_on_node(name: str, kept: str | None, takes_ids: bool | None) -> str:
+    """The id an agent sent to a node runs under there.
+
+    ``kept`` is the id the agent already has, if any; it goes with it. ``takes_ids``
+    is whether the node runs an agent under the id its spawn names, as its
+    manifest says: None before the manifest has arrived. A new agent is given a
+    fresh id only on a node that says it honours one; elsewhere it gets its
+    name's derived id, which every node arrives at by itself.
+    """
+    if kept is not None:
+        return kept
+    return str(uuid.uuid4()) if takes_ids else derive_actor_id(name)
+
+
+def ids_refused(name: str, kept: str | None, takes_ids: bool | None) -> bool:
+    """Whether a node would run the agent under another id than the one it has.
+
+    So for an agent with an id of its own, minted rather than derived, on a node
+    whose manifest says it does not honour one. A node not heard from yet is
+    not refused: at a restart, main restores before every manifest arrives.
+    """
+    return kept is not None and kept != derive_actor_id(name) and takes_ids is False
+
+
+def ids_not_honoured(node: str) -> str:
+    """Why an agent with an id of its own is not sent to ``node``, and what to do."""
+    return (
+        f"{node} runs from a release that gives an agent an id derived from its name, so it "
+        f"would run this one under another id. Redeploy it with `/deploy {node}` first."
+    )
 
 
 def _parse_spawn_config(raw: str) -> dict:
@@ -173,8 +277,9 @@ def _parse_spawn_config(raw: str) -> dict:
     return config
 
 
-#: How long to wait for a node's packages before spawning without them.
-INSTALL_TIMEOUT_S = 180.0
+#: How long to wait for a node's packages before spawning without them: the
+#: operator's answer about a package not on the list, then pip over SSH.
+INSTALL_TIMEOUT_S = APPROVAL_TIMEOUT_S + 180.0
 
 #: How long a catalogue spawn is given to appear in the registry.
 CATALOGUE_SETTLE_S = 0.5
@@ -275,31 +380,92 @@ class SpawnService:
     def __init__(self, host: SpawnHost) -> None:
         self.host = host
 
-    def _get_spawn_registry(self) -> dict[str, Any]:
-        """What main remembers about the agents it spawned.
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        """What main remembers about the agents it spawned: see `SpawnRegistry`."""
+        return SpawnRegistry.stored(
+            self.host.recall(SPAWN_REGISTRY_KEY), self.host.recall(NAME_KEYED_REGISTRY_KEY)
+        )
 
-        Cleaned on the way out as well as on the way in. An entry recorded
-        before the arrival snapshot was recognised as a one-time instruction
-        still carries one, and every reader here hands it back to a runner that
-        treats it as ground truth — the desired state a node reconciles from, a
-        recovery re-spawn. Cleaning on read heals those entries wherever they
-        are read, and the next write stores the cleaned form.
+    def _registered_actor_id(self, name: str, node: str | None = None) -> str | None:
+        """The id the registry keeps for ``name`` -- on ``node``, or its only entry -- or None."""
+        reg = self._get_spawn_registry()
+        entry = reg.only(name) if node is None else reg.at(name, node)
+        return entry["actor_id"] if entry else None
+
+    def _entry_saved_over(
+        self, reg: SpawnRegistry, config: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """The entry a save of ``config`` rewrites, or None when it adds one.
+
+        The entry of the id the config carries; then the one of its name on its
+        node; then, unless the config asks for a second agent beside it, the
+        only one of its name, which a move rewrites with the node it went to.
         """
-        reg = self.host.recall(SPAWN_REGISTRY_KEY) or {}
-        return {name: without_transient_keys(cfg) for name, cfg in reg.items()}
+        name = config["name"]
+        entry = reg.by_id(given_actor_id(config.get("actor_id")))
+        if entry is not None and entry["name"] == name:
+            return entry
+        entry = reg.at(name, str(config.get("node") or ""))
+        if entry is not None or config.get("alongside"):
+            return entry
+        return reg.only(name)
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
-        reg = self._get_spawn_registry()
-        reg[config["name"]] = without_transient_keys(config)
-        self.host.persist(SPAWN_REGISTRY_KEY, reg)
-        logger.info("[%s] Spawn registry: %s", self.host.name, list(reg.keys()))
+        """Record ``config``, keeping the id of the entry it rewrites.
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+        Many places save an entry -- a spawn, a move, a code or model update --
+        and most hand over a config with no id, or one read before the agent had
+        one. The id is settled here instead: the one the entry it rewrites keeps
+        (see `_entry_saved_over`); for a new entry, the agent of that name
+        running here, then the id the spawn gave it, then the name's derived id.
+        """
         reg = self._get_spawn_registry()
-        if name in reg:
-            del reg[name]
-            self.host.persist(SPAWN_REGISTRY_KEY, reg)
-            logger.info("[%s] Removed %r from spawn registry.", self.host.name, name)
+        name = config["name"]
+        kept = self._entry_saved_over(reg, config)
+        running = self.host._registry.find_by_name(name) if self.host._registry else None
+        if placed_on(config):
+            running = None
+        actor_id = (
+            (kept["actor_id"] if kept is not None else None)
+            or (running.actor_id if running is not None else None)
+            or given_actor_id(config.get("actor_id"))
+            or derive_actor_id(name)
+        )
+        if kept is None and reg.by_id(actor_id) is not None:
+            # A new entry under another agent's id would overwrite that agent's:
+            # a second agent of the name, with no id of its own yet, gets one.
+            actor_id = str(uuid.uuid4())
+        reg = reg.with_entry({**without_transient_keys(config), "actor_id": actor_id})
+        self.host.persist(SPAWN_REGISTRY_KEY, reg.stored_form())
+        logger.info("[%s] Spawn registry: %s", self.host.name, sorted(reg.names()))
+
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
+        """Forget the agent ``name``: the one ``actor_id`` is, the one on ``node``, or its only one.
+
+        A bare name kept in more than one place names none of them, and
+        nothing is removed.
+        """
+        reg = self._get_spawn_registry()
+        entry = reg.by_id(actor_id) if actor_id else None
+        if entry is None or entry["name"] != name:
+            entry = reg.only(name) if node is None else reg.at(name, node)
+        if entry is None:
+            if len(reg.named(name)) > 1:
+                logger.warning(
+                    "[%s] Not removing %r from the spawn registry: it is kept on %s",
+                    self.host.name,
+                    name,
+                    ", ".join(str(address_of(e)) for e in reg.named(name)),
+                )
+            return
+        self.host.persist(SPAWN_REGISTRY_KEY, reg.without(entry["actor_id"]).stored_form())
+        logger.info("[%s] Removed %s from spawn registry.", self.host.name, address_of(entry))
+
+    def _clear_spawn_registry(self) -> None:
+        """Forget every agent main spawned."""
+        self.host.persist(SPAWN_REGISTRY_KEY, {})
 
     def _supervised_names(self) -> set[str]:
         """The agents the Supervisor has already brought up.
@@ -320,16 +486,18 @@ class SpawnService:
             if spec.actor is not None and not spec.retired
         }
 
-    async def _restore_one(self, name: str, config: dict[str, Any]) -> None:
+    async def _restore_one(self, config: dict[str, Any]) -> None:
         """Bring one agent back, wherever it was running.
 
         Never saves: this is reading the registry to rebuild from it, and
         writing as it goes would rewrite every entry on every startup.
         """
-        node = config.get("node", "").strip()
+        name = config["name"]
+        config = current_recipe_config(config)
+        node = placed_on(config)
         if node:
             logger.info("[%s] Re-spawning remote agent %r on node %r", self.host.name, name, node)
-            await self._spawn_remote(config, node, save=False)
+            await self._spawn_remote(config, node, save=False, restoring=True)
             return
         if self.host._registry and self.host._registry.find_by_name(name):
             logger.info("[%s] %r already running, skipping.", self.host.name, name)
@@ -343,8 +511,10 @@ class SpawnService:
         if not registry:
             return
 
+        # Only main's own: the Supervisor starts nothing on a node.
         supervised = self._supervised_names()
-        skipped = sorted(n for n in registry if n in supervised)
+        here = [e for e in registry if not placed_on(e)]
+        skipped = sorted(e["name"] for e in here if e["name"] in supervised)
         if skipped:
             logger.info(
                 "[%s] Supervisor already restarted %s agent(s); skipping restore for: %s",
@@ -353,17 +523,18 @@ class SpawnService:
                 skipped,
             )
 
-        pending = {n: c for n, c in registry.items() if n not in supervised}
+        pending = [e for e in registry if placed_on(e) or e["name"] not in supervised]
         if not pending:
             return
 
-        logger.info("[%s] Restoring %s agent(s): %s", self.host.name, len(pending), list(pending))
-        for name, config in pending.items():
+        listed = [str(address_of(e)) for e in pending]
+        logger.info("[%s] Restoring %s agent(s): %s", self.host.name, len(pending), listed)
+        for config in pending:
             try:
-                await self._restore_one(name, config)
+                await self._restore_one(config)
             except Exception:
                 # One agent that will not start must not strand the rest.
-                logger.exception("[%s] Failed to restore %r", self.host.name, name)
+                logger.exception("[%s] Failed to restore %s", self.host.name, address_of(config))
 
     async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]:
         """Resolve an agent by name, auto-spawning it from a catalog recipe if it
@@ -454,6 +625,8 @@ class SpawnService:
             recipe,
         )
         result = await catalogue._action_spawn(recipe, {})  # pyright: ignore[reportAttributeAccessIssue]
+        if result and result.get("elsewhere"):
+            return KeptHere(recipe, MAIN_NODE, tuple(result["elsewhere"]))
         if result and result.get("ok"):
             await asyncio.sleep(CATALOGUE_SETTLE_S)
             spawned = registry.find_by_name(recipe)
@@ -471,14 +644,16 @@ class SpawnService:
         """Whether this config describes something that could actually start.
 
         A dynamic agent with no code is a model that stopped mid-sentence, not
-        an agent. An LLM agent without a prompt gets a default, because one that
-        answers generically is more use than one that never arrives.
+        an agent; one with a prompt and no code is an LLM agent (see
+        :func:`agent_type`). An LLM agent without a prompt gets a default,
+        because one that answers generically is more use than one that never
+        arrives.
         """
-        agent_type = config.get("type", "dynamic")
-        if agent_type == "dynamic" and not (config.get("code", "") or "").strip():
+        kind = agent_type(config)
+        if kind == "dynamic" and not (config.get("code", "") or "").strip():
             logger.error("[%s] Dynamic agent has no code: %s", self.host.name, config.get("name"))
             return False
-        if agent_type == "llm" and not (config.get("system_prompt", "") or "").strip():
+        if kind == "llm" and not (config.get("system_prompt", "") or "").strip():
             logger.warning(
                 "[%s] LLM agent has no system_prompt, using default: %s",
                 self.host.name,
@@ -494,16 +669,17 @@ class SpawnService:
         for match in re.findall(pattern, response, re.DOTALL):
             try:
                 config = _parse_spawn_config(match.strip())
-                if not config.get("replace"):
+                asked_for_one = config.get("replace") or config.get("alongside")
+                if not asked_for_one and catalogue_may_stand_in(config):
                     substitute = await self._catalogue_substitute(config.get("name", ""))
                     if substitute is not None:
                         spawned.append(substitute)
                         continue
                 if not self._is_runnable(config):
                     continue
-                actor = await self._spawn_from_config(config, save=True)
-                if actor:
-                    spawned.append(actor)
+                result = await self.spawn_placed(config)
+                if result:
+                    spawned.append(result)
             except Exception:
                 # One bad block must not cost the user the rest of the reply.
                 logger.exception("[%s] Spawn failed\nRaw block:\n%s", self.host.name, match[:500])
@@ -511,9 +687,36 @@ class SpawnService:
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, spawned
 
+    async def settle_spawn(self, config: dict[str, Any]) -> Settled:
+        """Decide a spawn made outside this service, by the catalog; see `alongside.settle`."""
+        return await settle(self.host, config)
+
+    async def put_back_spawn(self, source: Address) -> None:
+        """Start the agent a settled spawn stopped at ``source``; see `alongside.put_back`."""
+        await put_back(self.host, source)
+
+    async def spawn_placed(self, config: dict[str, Any]) -> Any:
+        """Place ``config``, settle it against where its name already runs, and spawn it.
+
+        What the turn reports: the agent, where it was placed, or why it was
+        not spawned (see `alongside.settle`). A move whose spawn does not
+        happen puts the agent back where it was.
+        """
+        placed = await self.host.placement.place(config)
+        if isinstance(placed, NotSpawned):
+            logger.warning("[%s] Not spawning %r: %s", self.host.name, placed.name, placed.reason)
+            return placed
+        settled = await settle(self.host, placed)
+        if settled.refused is not None:
+            return settled.refused
+        actor = await self._spawn_from_config(placed, save=True)
+        if not actor and settled.moved_from is not None:
+            await put_back(self.host, settled.moved_from)
+        return actor
+
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
-    ) -> Actor | SpawnPlaceholder | None:
+    ) -> Actor | SpawnPlaceholder | PlacedOnNode | None:
         """Spawn one agent from a config dict.
 
         Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
@@ -526,7 +729,11 @@ class SpawnService:
         """
         node = config.get("node", "").strip()
         if node:
-            return await self._spawn_remote(config, node, save)
+            if not await self._spawn_remote(config, node, save, restoring=from_registry):
+                return None
+            return PlacedOnNode(
+                str(config.get("name", "remote-agent")), node, node in self.host._known_nodes
+            )
         return await self.host._spawn_local_from_config(
             config, register=save, from_registry=from_registry
         )
@@ -548,7 +755,7 @@ class SpawnService:
             return config
         if (config.get("code") or "").strip():
             return config
-        if (config.get("type") or "").strip().lower() != "llm":
+        if agent_type(config) != "llm":
             return config
 
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
@@ -560,6 +767,9 @@ class SpawnService:
 
         out = dict(config)
         out["code"] = bridge
+        # Named, so the config still reads as an LLM agent now it carries code:
+        # a move home takes the bridge code out again by this.
+        out["type"] = "llm"
         # description and capabilities are commonly already set by the LLM
         # at spawn time; fill in sensible defaults if not so list_capabilities
         # still works on the remote side.
@@ -591,8 +801,8 @@ class SpawnService:
         host = self.host._known_nodes.get(node, {}).get("host")
         if host:
             return host
-        for cfg in self._get_spawn_registry().values():
-            if cfg.get("node") == node and cfg.get("host"):
+        for cfg in self._get_spawn_registry().on_node(node):
+            if cfg.get("host"):
                 return cfg["host"]
         if self.host._registry:
             installer = self.host._registry.find_by_name("installer")
@@ -600,7 +810,53 @@ class SpawnService:
                 return installer.recall(f"node_host_{node}")
         return None
 
-    async def _install_packages(self, node: str, agent_name: str, packages: list[str]) -> None:
+    async def _packages_cleared(self, agent_name: str, packages: list[str]) -> str | None:
+        """Why ``packages`` may not be installed for ``agent_name``, or None when they may.
+
+        The installer decides, asking the operator about a package not on the
+        list. With no installer running, only what is on the list without
+        asking is cleared.
+        """
+        if self.host._registry is None or self.host._registry.find_by_name("installer") is None:
+            refused = unlisted(packages, DEFAULT_ALLOWED | allowed_by_env())
+            if refused:
+                return (
+                    f"no installer is running to ask about {', '.join(refused)}, "
+                    "which the list of packages installed without asking does not hold"
+                )
+            return None
+        request = {"action": "packages_clear", "packages": packages, "agent": agent_name}
+        try:
+            await ask_through(self.host, "installer", request, timeout=APPROVAL_TIMEOUT_S + 30)
+        except ReplyError as exc:
+            return str(exc.reply.get("error", "the installer refused its packages"))
+        except (asyncio.TimeoutError, RuntimeError) as exc:
+            return f"its packages could not be cleared: {exc}"
+        return None
+
+    async def _packages_placed(
+        self, config: dict[str, Any], node: str, packages: list[str], restoring: bool
+    ) -> bool:
+        """Clear ``packages`` for the agent in ``config`` and install them on ``node``.
+
+        False when they are refused; the refusal is then on the dashboard and
+        in the log. Cleared first: the node installs what the spawn lists, whether or
+        not it could be installed from here. An agent put back where it ran
+        (``restoring``) is not asked about again: its packages were cleared
+        when it was first placed, and main saves no other.
+        """
+        name = str(config.get("name", "remote-agent"))
+        if not restoring:
+            refusal = await self._packages_cleared(name, packages)
+            if refusal:
+                await self._refuse_remote_spawn(config, node, refusal)
+                return False
+        await self._install_packages(node, name, packages, restoring=restoring)
+        return True
+
+    async def _install_packages(
+        self, node: str, agent_name: str, packages: list[str], *, restoring: bool = False
+    ) -> None:
         """Install `packages` on `node` before its agent is spawned.
 
         Best-effort by design. An agent that starts without its packages fails
@@ -642,10 +898,12 @@ class SpawnService:
         # The node's name rather than its credentials: the installer already
         # holds those, and putting them in a message would spread them.
         request = {
-            "action": "node_install",
+            # A restore installs without asking, as on main: see `_packages_placed`.
+            "action": "node_install_restored" if restoring else "node_install",
             "host": address,
             "packages": packages,
             "node_name": node,
+            "agent": agent_name,
         }
         try:
             result = await ask_through(self.host, "installer", request, timeout=INSTALL_TIMEOUT_S)
@@ -663,6 +921,47 @@ class SpawnService:
             else:
                 logger.warning("[%s] Remote install issue: %s", self.host.name, result)
 
+    async def pinned_for(
+        self, config: dict[str, Any], node: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """``config`` with every model it names pinned for ``node``, or why one cannot be.
+
+        A library agent's own models are named first. What is saved and what
+        is sent then name the same versions, so an agent restarted from its
+        record runs the model it ran. A copy: the caller's dict may be written
+        elsewhere too. A migration runs this before it stops the agent: an
+        artifact that is not stored would otherwise be found only after the
+        stop, with the agent running nowhere.
+        """
+        config = with_models_of(config)
+        if not config.get("artifacts"):
+            return config, None
+        try:
+            pinned = await self.host.artifact_service.pin_for_node(config["artifacts"], node)
+        except ArtifactError as exc:
+            return config, f"its artifacts cannot be sent: {exc}"
+        return {**config, "artifacts": pinned}, None
+
+    def _kept_actor_id(self, name: str, node: str, *, alongside: bool = False) -> str | None:
+        """The id the agent ``name`` spawned onto ``node`` already has, or None for a new one.
+
+        The registry's entry for it on that node; unless the spawn adds a second
+        agent of the name (``alongside``), then the only entry of the name,
+        which a move keeps; then the agent of that name running here. Never the
+        spawn config's own, which a model may have written.
+        """
+        reg = self._get_spawn_registry()
+        entry = reg.at(name, node)
+        if entry is not None:
+            return entry["actor_id"]
+        if alongside:
+            return None
+        entry = reg.only(name)
+        if entry is not None:
+            return entry["actor_id"]
+        running = self.host._registry.find_by_name(name) if self.host._registry else None
+        return running.actor_id if running is not None else None
+
     async def _refuse_remote_spawn(self, config: dict[str, Any], node: str, reason: str) -> None:
         """Say in the log and on the dashboard why an agent was not sent to ``node``."""
         name = config.get("name")
@@ -678,36 +977,8 @@ class SpawnService:
             },
         )
 
-    async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
-        """Publish a spawn command to a node, which runs the agent there.
-
-        A remote agent appears in the dashboard like a local one, because both
-        talk to the same broker.
-
-        Two configs leave here. The wire carries synthesized bridge code, since
-        the runner only knows DynamicAgent-shaped source. The registry keeps the
-        clean one, so the bridge is regenerated per spawn rather than
-        accumulating there and riding home on a migrate-back.
-
-        The node's desired state is retained, so a node that reboots reconciles
-        itself back to running this agent without being told again. The spawn
-        message deliberately is not: see the note on the publish itself.
-        """
-        problem = topic_name_error(str(config.get("name", "remote-agent")))
-        if problem:
-            # As for a local spawn: the name is a level of the agent's topics.
-            logger.error(
-                "[%s] Cannot spawn %r on %s: %s",
-                self.host.name,
-                config.get("name"),
-                node,
-                problem,
-            )
-            return
-        unrunnable = why_a_node_cannot_run(config)
-        if unrunnable:
-            await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
-            return
+    async def _node_cannot_take(self, config: dict[str, Any], node: str, restoring: bool) -> bool:
+        """Whether ``node`` itself rules the agent out, said where the user looks if so."""
         mismatch = self.host._node_version_mismatch(node)
         if mismatch:
             # Before the install, the spawn and the desired state: a node on
@@ -724,7 +995,81 @@ class SpawnService:
                     "timestamp": time.time(),
                 },
             )
-            return
+            return True
+        name = str(config.get("name", ""))
+        kept = self._kept_actor_id(name, node, alongside=bool(config.get("alongside")))
+        if ids_refused(name, kept, self.host._node_takes_actor_ids(node)):
+            await self._refuse_remote_spawn(config, node, ids_not_honoured(node))
+            return True
+        unheard = None if restoring else self.host._node_refuses_tasks(node)
+        if unheard:
+            # Sent anyway, the agent would run while main ignored everything it
+            # said, and whoever spawned it would wait for it to appear until
+            # they gave up. Restoring is let through: the node's retained
+            # desired state already names the agent, and it is heard from once
+            # the node is deployed again.
+            await self._refuse_remote_spawn(config, node, f"{unheard}.")
+            return True
+        return False
+
+    async def _spawn_remote(
+        self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+    ) -> bool:
+        """Publish a spawn command to a node, which runs the agent there; False if refused.
+
+        A remote agent appears in the dashboard like a local one, because both
+        talk to the same broker.
+
+        Two configs leave here. The wire carries synthesized bridge code, since
+        the runner only knows DynamicAgent-shaped source. The registry keeps the
+        clean one, so the bridge is regenerated per spawn rather than
+        accumulating there and riding home on a migrate-back.
+
+        The node's desired state is retained, so a node that reboots reconciles
+        itself back to running this agent without being told again. The spawn
+        message deliberately is not: see the note on the publish itself.
+        """
+        name_check = topic_name_error if restoring or config.get("replace") else agent_name_error
+        problem = name_check(str(config.get("name", "remote-agent")))
+        if problem:
+            # As for a local spawn: the name is a level of the agent's topics,
+            # and a new one may not hold the address separator.
+            logger.error(
+                "[%s] Cannot spawn %r on %s: %s",
+                self.host.name,
+                config.get("name"),
+                node,
+                problem,
+            )
+            return False
+        # The node's targets are asked for only when they decide: a host that
+        # cannot say -- a test's stand-in -- places code and LLM agents as before.
+        targets: Collection[str] = ()
+        if is_module_config(config):
+            targets = self.host._node_targets(node)
+            config, problem = await with_code_for(
+                config, targets, self.host._node_takes_bundles(node)
+            )
+            if problem:
+                await self._refuse_remote_spawn(config, node, f"{problem}.")
+                return False
+        unrunnable = why_a_node_cannot_run(config, targets)
+        if unrunnable:
+            await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
+            return False
+        if await self._node_cannot_take(config, node, restoring):
+            return False
+        config, problem = await self.pinned_for(config, node)
+        if problem:
+            await self._refuse_remote_spawn(config, node, f"{problem}.")
+            return False
+        name = str(config.get("name", "remote-agent"))
+        actor_id = id_on_node(
+            name,
+            self._kept_actor_id(name, node, alongside=bool(config.get("alongside"))),
+            self.host._node_takes_actor_ids(node),
+        )
+        config = {**config, "actor_id": actor_id}
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 
@@ -733,8 +1078,8 @@ class SpawnService:
             packages = [p.strip() for p in packages.replace(",", " ").split()]
 
         logger.info("[%s] Spawning %r on remote node %r", self.host.name, name, node)
-        if packages:
-            await self._install_packages(node, name, packages)
+        if packages and not await self._packages_placed(config, node, packages, restoring):
+            return False
 
         # Not retained, and that is the whole point. A retained spawn is handed
         # to the node again on every reconnect, so an agent withdrawn after this
@@ -765,4 +1110,7 @@ class SpawnService:
         )
 
         if save:
-            self._save_to_spawn_registry(config)
+            # Under the node it went to, whatever the config said: the entry is
+            # what main checks the node's word about this agent against.
+            self._save_to_spawn_registry({**config, "node": node})
+        return True

@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { fetchAgentsField, fetchHistory, fetchNodes } from "../ui/dashboard/history";
+import { fetchAgentsField, fetchHistory, fetchNodes } from "../io/historyApi";
 
 function answer(body: unknown, ok = true): void {
     globalThis.fetch = vi.fn(async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
@@ -20,7 +20,10 @@ describe("fetchHistory", () => {
         answer({ samples: [{ ts: 1 }] });
 
         expect(await fetchHistory("agents", "a b/c", 24)).toEqual([{ ts: 1 }]);
-        expect(fetch).toHaveBeenCalledWith("/ingress/api/history/agents/a%20b%2Fc?hours=24");
+        expect(fetch).toHaveBeenCalledWith(
+            "/ingress/api/history/agents/a%20b%2Fc?hours=24",
+            expect.anything(),
+        );
     });
 
     it("is null when the server refuses or answers with no samples", async () => {
@@ -46,7 +49,10 @@ describe("fetchAgentsField", () => {
 
         const found = await fetchAgentsField("messages_processed", 1);
 
-        expect(fetch).toHaveBeenCalledWith("/api/history/agents?field=messages_processed&hours=1");
+        expect(fetch).toHaveBeenCalledWith(
+            "/api/history/agents?field=messages_processed&hours=1",
+            expect.anything(),
+        );
         expect([...(found ?? [])]).toEqual([["weather", [[1, 2]]]]);
     });
 

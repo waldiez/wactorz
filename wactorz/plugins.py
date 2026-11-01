@@ -3,8 +3,8 @@
 A developer with their own actor class or a function declared with
 :func:`wactorz.agent` makes it part of the system without forking ``app.py``:
 
-- as a ``wactorz.agents`` entry point in their package, so ``pip install``
-  is the whole of the registration;
+- as a ``wactorz.agents`` entry point in their package, loaded once the package
+  is named in ``WACTORZ_EXTENSIONS`` (see :mod:`wactorz.installed`);
 - named in ``WACTORZ_AGENTS``, a comma-separated list of ``package.module:attr``
   targets, for a deployment configured rather than packaged;
 - passed to :func:`wactorz.run`, for a script.
@@ -19,7 +19,6 @@ path from it would run whatever that path reached.
 from __future__ import annotations
 
 import importlib
-import importlib.metadata
 import inspect
 import logging
 from collections.abc import Iterable, Iterator
@@ -27,7 +26,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from .agents.function_agent import AgentSpec, agent_name_from, spec_of
+from . import installed
+from .agents.function_agent import AgentSpec, FunctionAgent, agent_name_from, spec_of
 from .config import CONFIG
 from .core.actor import Actor
 
@@ -35,8 +35,15 @@ logger = logging.getLogger(__name__)
 
 #: The entry-point group a package lists its agents under.
 ENTRY_POINT_GROUP = "wactorz.agents"
+#: The spawn config ``type`` of an agent built from a plugin, by its ``target``.
+MODULE_TYPE = "module"
 #: The environment variable naming targets to load, comma or space separated.
 ENV_VAR = "WACTORZ_AGENTS"
+
+#: The library agents the package itself brings, found on main and on every
+#: node alike, so a spawn naming one by target is built wherever it lands.
+#: None starts with the system: each waits in the catalogue to be asked for.
+BUILT_IN_TARGETS = ("wactorz.agents.recorder_agent:RecorderAgent",)
 
 
 @dataclass
@@ -68,6 +75,8 @@ class AgentPlugin:
         persistence_dir: str | None = None,
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
+        mixin: type | None = None,
+        actor_id: str | None = None,
         **_ignored: Any,
     ) -> Actor:
         """The actor, built the way the catalogue builds a native one.
@@ -75,16 +84,27 @@ class AgentPlugin:
         Keyword-only and tolerant of extras, because every caller that spawns
         by factory -- ``Actor.spawn``, the supervisor, the catalogue -- passes
         what it has, and an actor class is told only what it accepts.
+
+        ``mixin`` is put in front of the actor's own class, for a host that
+        adds something to every agent it runs -- a node, which routes its
+        commands and keeps its state its own way -- without the agent's author
+        knowing where it will run.
+
+        ``actor_id`` is the id the spawn registry keeps for the agent. A class
+        whose own ``__init__`` does not take one is given it once built, so the
+        agent runs under the id main keeps whatever its author wrote.
         """
         if self.kind == "function":
             spec: AgentSpec = self.obj
             return spec.build(
+                actor_id=actor_id,
                 name=name,
                 persistence_dir=persistence_dir,
                 llm_provider=llm_provider,
                 options=options,
+                actor_class=hosted_by(mixin, FunctionAgent),
             )
-        cls: type[Actor] = self.obj
+        cls: type[Actor] = hosted_by(mixin, self.obj)
         kwargs: dict[str, Any] = {"name": name or self.name}
         if persistence_dir is not None:
             kwargs["persistence_dir"] = persistence_dir
@@ -94,7 +114,24 @@ class AgentPlugin:
         for key, value in (options or {}).items():
             if accepted is None or key in accepted:
                 kwargs[key] = value
-        return cls(**kwargs)
+        if actor_id and (accepted is None or "actor_id" in accepted):
+            kwargs["actor_id"] = actor_id
+        actor = cls(**kwargs)
+        if actor_id and actor.actor_id != actor_id:
+            actor.actor_id = actor_id
+            actor.stable_id = True
+        return actor
+
+    @property
+    def models(self) -> dict[str, Any]:
+        """The models the agent names, by its own keys: ``models=``, or ``MODELS`` on a class.
+
+        What a spawn on a node sends as its ``artifacts``, so the node has
+        them before it builds the agent.
+        """
+        if self.kind == "function":
+            return dict(self.obj.models)
+        return dict(getattr(self.obj, "MODELS", None) or {})
 
     def recipe(self) -> dict[str, Any]:
         """This plugin as a catalogue entry, so ``@catalog`` lists and spawns it."""
@@ -109,6 +146,38 @@ class AgentPlugin:
             "requires": dict(self.requires),
             "plugin": self.target,
         }
+
+
+def is_module_config(config: dict[str, Any]) -> bool:
+    """Whether a spawn config names a plugin to build rather than code to run."""
+    return (config.get("type") or "").strip().lower() == MODULE_TYPE
+
+
+def targets_in(value: str) -> list[str]:
+    """The targets named in a ``WACTORZ_AGENTS`` value, in order, once each."""
+    found: list[str] = []
+    for raw in value.replace(",", " ").split():
+        if raw and raw not in found:
+            found.append(raw)
+    return found
+
+
+def hosted_by(mixin: type | None, cls: Any) -> Any:
+    """``cls`` with ``mixin`` in front of it, or ``cls`` itself when there is none."""
+    if mixin is None:
+        return cls
+    return type(f"{mixin.__name__}{cls.__name__}", (mixin, cls), {})
+
+
+def targets() -> list[str]:
+    """The import paths of every plugin this machine can build, sorted.
+
+    What a node reports in its manifest, so main can tell which library agents
+    it may place there. A plugin registered in code under no path is left out:
+    nothing elsewhere could name it.
+    """
+    found = [*discover().values(), *built_in().values()]
+    return sorted({plugin.target for plugin in found if plugin.target})
 
 
 def _accepted_parameters(cls: type) -> set[str] | None:
@@ -133,6 +202,22 @@ def _topics(value: Any) -> tuple[str, ...]:
 
 def _first_line(text: str | None) -> str:
     return (text or "").strip().split("\n")[0].strip()
+
+
+class NotAnAgentError(TypeError):
+    """A plugin target that is neither a declared function nor an Actor subclass."""
+
+    def __init__(self, named: Any) -> None:
+        super().__init__(
+            f"{named!r} is neither a function declared with @wactorz.agent nor an Actor subclass"
+        )
+
+
+class NotATargetError(ValueError):
+    """A plugin target not written as package.module:attr."""
+
+    def __init__(self, target: str) -> None:
+        super().__init__(f"{target!r} is not of the form package.module:attr")
 
 
 def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
@@ -173,30 +258,18 @@ def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
             subscribes=_topics(getattr(obj, "SUBSCRIBES", ())),
             publishes=_topics(getattr(obj, "PUBLISHES", ())),
         )
-    raise TypeError(
-        f"{target or obj!r} is neither a function declared with @wactorz.agent "
-        "nor an Actor subclass"
-    )
+    raise NotAnAgentError(target or obj)
 
 
 def resolve_target(target: str) -> Any:
     """The object ``package.module:attr`` names. Raises what the import raises."""
     module_name, sep, attr = target.strip().partition(":")
     if not module_name or not sep or not attr:
-        raise ValueError(f"{target!r} is not of the form package.module:attr")
+        raise NotATargetError(target)
     obj: Any = importlib.import_module(module_name)
     for part in attr.split("."):
         obj = getattr(obj, part)
     return obj
-
-
-def targets_in(value: str) -> list[str]:
-    """The targets named in a ``WACTORZ_AGENTS`` value, in order, once each."""
-    found: list[str] = []
-    for raw in value.replace(",", " ").split():
-        if raw and raw not in found:
-            found.append(raw)
-    return found
 
 
 #: What has been found or registered, by agent name. None until first asked.
@@ -276,7 +349,7 @@ def clear() -> None:
 
 
 def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, AgentPlugin]:
-    """Every plugin, by name: entry points, then ``WACTORZ_AGENTS``, then registered.
+    """Every plugin a deployment brings, by name: entry points, then ``WACTORZ_AGENTS``, then registered.
 
     Found once and kept; ``refresh`` looks again. A target that cannot be
     imported or is not an agent is logged and left out, so one bad entry does
@@ -320,23 +393,49 @@ def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, Agen
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         logger.warning("[plugins] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []
 
 
+_built_in: dict[str, AgentPlugin] | None = None
+
+
+def built_in() -> dict[str, AgentPlugin]:
+    """The library agents the package itself brings, by name.
+
+    Apart from `discover`, which is what a deployment brings and is shown as
+    its own: these are in the catalogue like the packaged recipes, are built on
+    any node, and start only when asked for.
+    """
+    global _built_in
+    if _built_in is not None:
+        return dict(_built_in)
+    found: dict[str, AgentPlugin] = {}
+    for target in BUILT_IN_TARGETS:
+        try:
+            plugin = plugin_from(resolve_target(target), target)
+        except Exception:  # pragma: no cover - the package's own module
+            logger.exception("[plugins] %s, the package's own, could not be loaded", target)
+            continue
+        plugin.autostart = False
+        found[plugin.name] = plugin
+    _built_in = found
+    return dict(found)
+
+
 def for_name(name: str) -> AgentPlugin | None:
-    """The plugin called ``name``, or None."""
-    return discover().get(name)
+    """The plugin called ``name``, the deployment's or the package's own, or None."""
+    return discover().get(name) or built_in().get(name)
 
 
 def for_target(target: str) -> AgentPlugin | None:
-    """The plugin registered for ``target``, or None: only these may be spawned by path."""
+    """The plugin for ``target``, or None: only these may be spawned by path."""
     wanted = target.strip()
     if not wanted:
         return None
-    for plugin in discover().values():
+    for plugin in [*discover().values(), *built_in().values()]:
         if plugin.target == wanted:
             return plugin
     return None

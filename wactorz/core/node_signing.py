@@ -69,6 +69,9 @@ CONTROL_LEAVES = frozenset(
         "restart_agent",
         "migrate",
         "code_request",
+        "reset",
+        "swap_model",
+        "data_ack",
     }
 )
 

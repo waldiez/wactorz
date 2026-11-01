@@ -15,7 +15,7 @@
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 .af-feed-empty {
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--af-text-dim);
   text-align: center;
   margin-top: 40px;
   font-size: 13px;
@@ -28,8 +28,10 @@
 .af-feed-toolbar {
   flex-shrink: 0;
   display: flex;
+  /* On a narrow screen the controls go onto a second line rather than off the edge. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   padding: 9px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -101,7 +103,7 @@
 }
 .af-feed-time {
   flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--af-text-dim);
   font-size: 11px;
   font-family: monospace;
 }
@@ -196,11 +198,41 @@
   /* The expanded <pre> is a flex child; wrapping puts it on its own line. */
   flex-wrap: wrap;
 }
-.af-feed-expandable:focus-visible {
-  outline: 1px solid #38bdf8;
+.af-feed-toggle {
+  flex-shrink: 0;
+  /* As wide as the empty place below keeps for it. */
+  width: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--af-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+.af-feed-toggle:focus-visible {
+  outline: 2px solid var(--af-focus);
   outline-offset: 1px;
 }
+/* A row that does not open has nowhere else to show the rest of its text, so
+   it wraps where the line is too narrow for it (a phone), rather than ending in
+   an ellipsis. One that opens keeps its one line and shows the rest opened. */
+.af-feed-item:not(.af-feed-expandable) .af-feed-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* A row that does not open keeps the toggle's place empty, so a turn chip
+   sits in the same column whether or not its row opens. */
+.af-feed-item:not(.af-feed-expandable)::after {
+  content: "";
+  flex-shrink: 0;
+  width: 18px;
+}
+.af-feed-copy {
+  margin-left: auto;
+}
 .af-feed-full {
+  /* Its text is there to be selected; a click inside it leaves the row open. */
+  cursor: text;
   flex-basis: 100%;
   margin: 6px 0 2px;
   padding: 8px;
@@ -232,7 +264,7 @@
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--af-text-dim);
 }
 .af-feed-select,
 .af-feed-search {
@@ -270,12 +302,11 @@
   width: 130px;
 }
 .af-feed-search::placeholder {
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--af-text-dim);
 }
 .af-feed-search:focus,
 .af-feed-select:focus {
-  outline: none;
-  border-color: #38bdf8;
+  border-color: var(--af-focus);
   background: rgba(56, 189, 248, 0.08);
 }
 /* A control the current source has no use for: still in place, visibly inert. */

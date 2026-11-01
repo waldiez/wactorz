@@ -34,3 +34,29 @@ a natural companion to the [Anomaly Detector](catalogue-anomaly-detector.html).
 | `prune_interval_hours` | hours between prune passes (default 6.0) |
 
 Returns `total_received`, `total_written`, `buffer_sizes`, `table_rows`, and `retention_days`.
+
+## Recording to Parquet, for the model loop
+
+The collector keeps the dashboard's live window in SQLite. Readings the model loop
+trains on and watches for drift go to Parquet instead, one file per source and hour
+under the state directory's `data/`, written by the `recorder` library agent
+(`docs/design/data-storage.md`):
+
+```text
+@catalog spawn recorder {"topics": ["sensors/imu/#"], "source_field": "device"}
+```
+
+Or on a node, where it records what that node sees and the node ships each closed
+file to main:
+
+```json
+{"type": "module", "target": "wactorz.agents.recorder_agent:RecorderAgent",
+ "name": "recorder", "node": "pi-kitchen",
+ "options": {"topics": ["sensors/imu/#"], "source_field": "device"}}
+```
+
+Each reading is a row of its source, the payload's `source` or `device` field, or the
+topic without its wildcards when it names none, filed under its event time with the
+arrival beside it. `wactorz-data sources`, `wactorz-data profile <source>` and
+`GET /api/data/{source}/profile` say what was recorded; `wactorz-data export` writes a
+window as one file for a notebook. The recorder needs the `data` extra (pyarrow).

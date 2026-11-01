@@ -3,8 +3,9 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { buildFeedView, DEFAULT_FILTERS, type FeedFilters } from "../ui/dashboard/feedView";
-import { toEntry } from "../ui/dashboard/appLogs";
+import { DEFAULT_FILTERS, type FeedFilters } from "../ui/feed/feedEntries";
+import { buildFeedView } from "../ui/feed/feedView";
+import { toEntry } from "../io/appLogs";
 import { logFeedItem } from "../agents/mapping";
 import { ServerEventRouter } from "../io/ServerEventRouter";
 import type { AppLogItem, FeedItem } from "../types/feed";
@@ -88,21 +89,19 @@ describe("narrowing the feed", () => {
         expect(root.querySelector<HTMLSelectElement>("select")!.value).toBe("all");
     });
 
-    it("without opening the row it was picked from, by mouse or by keyboard", () => {
+    it("without opening the row it was picked from", () => {
         // A multi-line message: the row opens in place when clicked.
         const { root } = view([agentRow({ label: "line one\nline two", turn: "t1" })]);
         const row = root.querySelector<HTMLElement>(".af-feed-item")!;
-        const chip = row.querySelector<HTMLButtonElement>(".af-feed-turn")!;
-        expect(row.getAttribute("aria-expanded")).toBe("false");
+        const toggle = row.querySelector<HTMLButtonElement>(".af-feed-toggle")!;
+        expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
-        chip.click();
-        chip.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-        chip.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+        row.querySelector<HTMLButtonElement>(".af-feed-turn")!.click();
 
-        expect(row.getAttribute("aria-expanded")).toBe("false");
+        expect(toggle.getAttribute("aria-expanded")).toBe("false");
         // The row itself still opens.
         row.click();
-        expect(row.getAttribute("aria-expanded")).toBe("true");
+        expect(toggle.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("to one agent from its name", () => {
@@ -135,19 +134,6 @@ describe("narrowing the feed", () => {
 
         expect(shown()).toEqual(["a", "b"]);
         expect(changes.at(-1)).toMatchObject({ turn: "t1", agent: "" });
-    });
-
-    it("other keys on a chip still reach the row", () => {
-        const { root } = view([agentRow({ turn: "t1" })]);
-        const row = root.querySelector<HTMLElement>(".af-feed-item")!;
-        const seen: string[] = [];
-        row.addEventListener("keydown", e => seen.push(e.key));
-
-        const chip = row.querySelector<HTMLButtonElement>(".af-feed-turn")!;
-        chip.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-        chip.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-
-        expect(seen).toEqual(["Tab"]);
     });
 
     it("by turn and agent together", () => {

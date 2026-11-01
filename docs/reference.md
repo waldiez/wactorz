@@ -152,6 +152,7 @@ async def handle_task(agent, payload):
 | `await agent.log(msg)` | Publish a log event |
 | `await agent.publish(topic, data)` | Publish to an MQTT topic |
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
+| `agent.artifact_path(key)` | Where a model the spawn names in `artifacts` is, on main or on a node |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
 | `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
@@ -440,6 +441,16 @@ Webhook URLs for Discord, Slack, and Telegram are stored separately and automati
 
 You can also paste a webhook URL directly into any message — it is detected automatically and saved.
 
+### Packages installed without asking
+
+A package an agent asks for is installed at once only when it is on the list: what the catalogue and the examples install, the packages the installer knows by their import names, those in `WACTORZ_PIP_ALLOW`, and those you have allowed. Anything else is asked about on the dashboard, and the agent is not started if you refuse.
+
+| Command | Description |
+|---------|-------------|
+| `/packages` | Show the list: what you allowed, what `WACTORZ_PIP_ALLOW` adds, and what is built in |
+| `/packages allow <name> …` | Allow packages from now on |
+| `/packages forget <name> …` | Take packages you allowed off the list, for agents placed from then on; an agent already saved keeps the packages it was placed with |
+
 ---
 
 ## 9. Reactive Pipelines
@@ -654,20 +665,29 @@ Each layer catches what the previous one missed:
 | **4. Callback wrapper** (`_safe_invoke`) | Subscribe listener | Catches `TypeError` from `await None` inside callbacks, logs once, suppresses for all subsequent messages | Prevents infinite error spam |
 | **5. LLM self-correction** (`_run_setup`) | Setup phase | If `setup()` raises a runtime error, the traceback + API docs are sent to the LLM, code is fixed, recompiled, and retried (up to 2 attempts) | Last resort — works for most fixable errors |
  
+### What a repair may do
+
+A repair is code the model wrote, whatever program it repairs, and the error it is asked to fix comes from the failing run, which can carry text the agent was processing. So, at start, in `setup()` and in `process()` alike:
+
+- **It always meets the sanitizer and the safety validator**, a catalogue agent's included. An agent running a repair is no longer trusted, and neither is its spawn registry entry or the Supervisor's restart of it.
+- **It imports nothing the agent's own program did not**, beyond standard modules that only compute (`json`, `math`, `datetime`, `re`, `collections` and their like). A repair that reaches for `subprocess`, `socket`, an HTTP client or any other new module is refused and counts as a failed round; when the rounds run out the agent falls to the Supervisor. The comparison is with the program the agent was given, never an earlier repair.
+- **The failing run's report reaches the model as data.** The error, its traceback and what earlier repairs failed with are set between markers and named as data that is never to be followed, each error cut to a few hundred characters. The markers carry a token drawn for each prompt, so neither that text nor the program shown after it can end the block early.
+
 ### Pre-Exec Safety Validator
  
-`_validate_code_safety()` runs after sanitization but before `exec()`. It scans for dangerous patterns in two tiers:
+`_validate_code_safety()` runs after sanitization but before `exec()`. It parses the code and reads each name through the code's own imports, so `os . system`, `import os as o; o.system`, `from os import system as run` and `getattr(os, "system")` are all `os.system`, and a blocked name is refused whether it is called or only referenced. Two tiers:
  
 **Blocked (code won't run):**
  
-| Pattern | Reason |
+| Name | Reason |
 | --- | --- |
 | `os.system()`, `os.popen()`, `os.exec*()` | Shell execution |
-| `os.remove()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
-| `subprocess` with `rm` | Destructive shell commands |
-| `eval()`, `__import__()` | Arbitrary code execution |
-| `open()` in write mode | Use `agent.persist()` instead |
+| `os.remove()`, `os.unlink()`, `os.rmdir()`, `shutil.rmtree()` | File/directory deletion |
+| `subprocess` running `rm` | Destructive shell commands |
+| `eval()`, `exec()`, `compile()`, `__import__()`, `importlib.import_module()` | Arbitrary code execution |
 | Raw `socket.socket()` | Use httpx or `agent.publish` |
+| `from os import *`, `getattr(os, name)`, `vars(os)`, `os.__dict__` (and the same for `builtins`, `importlib`, `shutil`, `socket`, `subprocess`) | Hides which function is used |
+| `__builtins__`, `__globals__`, `__subclasses__`, `__code__` and similar | Reaches the interpreter's internals |
  
 **Warned (runs but logged):**
  
@@ -678,7 +698,7 @@ Each layer catches what the previous one missed:
 | `pickle.loads` | Deserialization risk if data is untrusted |
 | `while True:` without `await` | May block event loop |
  
-This is a best-effort blocklist, not a sandbox. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
+This is a best-effort blocklist, not a sandbox. A name the parser cannot follow — held in a variable, looked up in `sys.modules`, a subscript of `globals()` — passes, and so does anything a permitted module can do, such as deleting through `pathlib`. Writing a file is not refused at all: from the code alone a data export and an overwritten state file look the same. For true isolation in multi-tenant scenarios, run DynamicAgents in a subprocess with seccomp or Docker.
  
 ### Planner Code Validator
  
@@ -734,27 +754,109 @@ python -m wactorz --llm gemini --gemini-model gemini-2.5-pro
 python -m wactorz --interface discord --discord-token YOUR_TOKEN
 ```
 
-**CLI commands:**
+**Chat commands.** What main answers, as its `/help` lists them; the terminal chat passes
+them to main too. A social channel such as Discord runs only the everyday ones
+([Interfaces](interfaces.md)).
 
-| Command | Description |
-|---------|-------------|
-| `/agents` | List all running agents with type and status |
-| `/nodes` | List remote nodes with online/offline status and their agents |
-| `/rules` | List all active pipeline rules |
-| `/rules delete <id>` | Stop and delete a pipeline rule by its ID |
+<!-- commands:start: written by scripts/sync_command_docs.py from the commands' forms -->
+
+#### Agents
+
+| Command | What it does |
+|---|---|
+| `/agents` | List all known agents with descriptions and schemas |
+| `/agents <keyword>` | Filter agents by capability keyword |
+| `/agents copy <agent> <node>` | Run a second agent of that name, from its config, on another node (alongside) |
+| `/agents delete <agent>` | The same as /delete |
+| `/agents remove <agent>` | The same as /delete |
+| `/agents restart <agent>` | Restart an agent, local or remote, state preserved |
+| `/agents stop <agent>` | The same as /stop |
+| `/capabilities` | The same as /agents |
+| `/delete <agent>` | Stop an agent and remove it from the spawn registry |
+| `/packages` | List the packages agents may install without asking |
+| `/packages allow <package> …` | Add packages to that list |
+| `/packages forget <package> …` | Take off packages you added |
+| `/start <agent>` | Start a stopped agent back up |
+| `/stop <agent>` | Stop an agent, keeping its state (reversible) |
+| `@agent-name <msg>` | Send a message directly to a named agent |
+| `@catalog list` | List available catalog recipes |
+| `@catalog spawn <name>` | Spawn a catalog agent |
+
+#### Nodes
+
+| Command | What it does |
+|---|---|
+| `/deploy <node>` | Deploy a node from DEPLOY_TARGETS; bare, list them (SSH credentials come from the environment, not chat) |
+| `/migrate <agent> <node> [--force]` | Move an agent to a different node (state preserved) |
+| `/nodes` | List local + remote nodes and their agents |
+| `/nodes remove <node>` | Stop all agents on a node and remove it |
+| `/nodes restart <node>` | Restart the runner process on a node |
+| `/nodes run <node> <command>` | Run a shell command on a node over SSH, as typed |
+| `/nodes shutdown <node>` | Stop all agents and shut down a node |
+
+#### Models
+
+| Command | What it does |
+|---|---|
+| `/artifacts` | List the models kept on main (wactorz-artifacts) |
+| `/artifacts <name>` | Every version of one model |
+| `/artifacts activate <name:version> [reason]` | Make a version the one agents serve |
+| `/artifacts clear active\|shadow <name> [reason]` | Unset a pointer |
+| `/artifacts promote <name> [reason]` | Make the shadow version active |
+| `/artifacts shadow <name:version> [reason]` | Try a version beside the active one |
+
+#### Pipelines & Plans
+
+| Command | What it does |
+|---|---|
+| `/clear-plans` | Clear the plan cache |
+| `/plans` | List pending pipeline proposals (dry-run) |
+| `/plans approve <id>` | Execute a proposed pipeline |
+| `/plans reject <id>` | Discard a proposed pipeline |
+| `/plans show <id>` | Inspect a proposal's full code |
+| `/rules` | List active pipeline rules |
+| `/rules delete <id>` | Stop agents and remove a rule |
+| `pipeline! <task>` | Bypass approval and execute immediately (power users) |
+
+#### Memory
+
+| Command | What it does |
+|---|---|
 | `/memory` | Show stored user facts and conversation summary |
-| `/memory clear` | Wipe all stored memory |
-| `/memory forget <key>` | Remove a specific stored fact |
-| `/webhook <service> <url>` | Store a notification webhook URL |
-| `/topics` | List known MQTT topics and their publishing agents |
-| `/cost` | Show per-agent token usage and cost breakdown |
-| `/clear` | Clear the main agent's conversation history |
-| `/clear-plans` | Wipe the planner's plan cache |
-| `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
-| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
-| `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
-| `/help` | Show all available commands |
-| `@agent-name` | Route your next message directly to a specific agent |
+| `/memory clear` | Wipe all memory |
+| `/memory forget <key>` | Remove one stored fact |
+
+#### Notifications
+
+| Command | What it does |
+|---|---|
+| `/webhook` | List stored webhook URLs |
+| `/webhook <service> <url>` | Store a webhook URL for a service, such as discord or telegram |
+
+#### System & diagnostics
+
+| Command | What it does |
+|---|---|
+| `/bus` | TopicBus registry: contracts, data flows, wiring pairs |
+| `/help` | Show this help |
+| `/mqtt` | MQTT publisher status (connected, queue depth, outbox) |
+| `/registry` | Diagnostic: compare live registry, spawn registry, manifest cache |
+| `/topics` | List MQTT topics published by known agents |
+| `/topics <keyword>` | Filter topics by keyword |
+
+<!-- commands:end -->
+
+Beside the table:
+
+- `/artifacts` names the models kept on main with `wactorz-artifacts`; main's model is told
+  the same list, so an agent it writes names a model that is there. `activate` sets what a
+  spawn naming the model without a version gets, and activating an earlier version is the
+  rollback. `shadow` is refused for the active version itself. With `active` cleared, the
+  bare name means the newest version again.
+- `/migrate` is refused when an agent's state cannot travel as JSON; `--force` moves it
+  without those keys.
+- The terminal chat also takes `/deploy-pkg <node> <package> …`, which installs packages on
+  a configured node, allowing them first, and `quit` or `exit`.
 
 ### REST API
 
@@ -856,7 +958,8 @@ The dashboard starts alongside wactorz by default at `http://localhost:8888`; us
 | `agents/{id}/metrics` | Token usage, cost, tasks completed after each LLM call |
 | `agents/{id}/completed` | Task completion notification with result preview |
 | `agents/{id}/actuations` | Fired by `HomeAssistantActuatorAgent` on each HA service call |
-| `agents/by-name/{name}/task` | Address a task to an agent by name (used by remote agents) |
+| `agents/at/{node}/{name}/task` | A task for the agent called `name` on `node`; only that node subscribes |
+| `agents/by-name/{name}/task` | A task for an agent by name alone, for a node from before tasks went by node; every node subscribes |
 | `agents/{id}/manifest` | Retained capability manifest — publishes, subscribes, schemas, observed samples |
 | `agents/{name}/data/{key}` | Agent-published world state (retained, via SharedStateHub) |
 | `system/health` | Global health snapshot every 15s — running/stopped/failed counts |
@@ -1037,10 +1140,10 @@ No changes to `cli.py` or any other file needed. On next restart the recipe is a
 
 Converts a PDF or TXT document into a polished PowerPoint presentation in four steps:
 
-1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT)
+1. **Read** — extracts text via `pdfplumber` (PDF) or plain read (TXT), from a document folder or a chat upload (see [Doc → PPTX agent](catalogue-doc-to-pptx.md))
 2. **Extract images** — pulls real embedded images from the PDF using PyMuPDF; filters out small decorations (configurable minimum size); assigns images to slides by source-page proximity
 3. **LLM outline** — calls the LLM to produce a structured JSON outline: slide titles, bullets, theme colors, and per-slide image prompts
-4. **Build** — generates and runs a `pptxgenjs` Node.js script that assembles the final `.pptx` with two-column layouts (text left, image right) for content slides
+4. **Build** — assembles the `.pptx` with `python-pptx`, with two-column layouts (text left, image right) for content slides
 
 Slides that received a real PDF image skip NIM generation. Slides without one fall back to `image-gen-agent` (if running) or remain text-only.
 
@@ -1214,15 +1317,18 @@ For LLM reasoning from a remote agent, use `agent.send_to('main', {'text': promp
 
 ### Installer Agent — Remote Actions
 
-The installer agent handles three actions for node management:
+The installer agent handles these actions for node management:
 
 | Action | Description |
 |--------|-------------|
 | `node_deploy` | Full bootstrap: upload runner + install aiomqtt + start process |
 | `node_install` | Install pip packages on a running node via SSH |
-| `node_run` | Run any shell command on a remote node via SSH |
+| `node_op` | Run a named, read-only operation on a node (`uptime`, `disk`, `memory`, `temperature`, `os`, `network`, `python`, `packages`, `node-log`; see `wactorz.core.node_operations`) |
+| `node_run` | Run a shell command on a node — sent only for `/nodes run`, typed by the operator; refused from a model's `<delegate>` |
 
-All three take `host` and, where relevant, `node_name`. **None of them accept SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
+`node_install` installs only packages on the list of packages installed without asking, or allowed by the operator when asked on the dashboard; the `packages_allow`, `packages_forget`, `packages_list` and `packages_clear` actions keep that list, and only main may send them. An agent main restores, on main or on a node, is installed with `install_restored` or `node_install_restored`, which ask nothing: its packages were cleared when it was placed. Neither is among the actions the model may send.
+
+Each takes `node_name` or `host`. Only main may ask for any of them: another agent's request is refused, though any agent may ask for a local `install`. **None of them accepts SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
 
 ---
 
@@ -1355,11 +1461,13 @@ wactorz/
 ├── node/                                      Edge node runtime — `wactorz-node --node <name>`
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
+├── artifacts_cli.py                           `wactorz-artifacts` CLI — models kept on main, by name and version
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
 │   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │   ├── topic_bus.py                           TopicBus — TopicContract / TopicRegistry, schema introspection
+│   ├── artifacts.py                           ArtifactStore — files kept once by SHA-256, named by version
 │   └── persistence/                           SQLite + memory + Pickle three-tier persistence
 │
 ├── agents/

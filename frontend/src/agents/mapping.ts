@@ -15,17 +15,20 @@
 import type {
     AgentInfo,
     AgentState,
-    HeartbeatPayload,
-    SpawnPayload,
     AlertPayload,
-    LogPayload,
-    NodeHeartbeatPayload,
+    AnswerPayload,
     ChatMessage,
+    HeartbeatPayload,
+    LogPayload,
     MetricsPayload,
+    NodeHeartbeatPayload,
     QaFlagPayload,
+    SpawnPayload,
 } from "../types/agent";
 import type { StatePatchAgent, LogFeedItem } from "../types/ws";
 import type { FeedItem } from "../types/feed";
+import type { ChatHandler } from "../io/WSClient";
+import { uid } from "../ids";
 import { nameFromWid, resolveAgentName } from "./naming";
 
 // --- untrusted-payload field coercers (raw MQTT JSON) -------------------------
@@ -157,6 +160,10 @@ const FEED_MAPPERS: Record<string, (item: LogFeedItem, ctx: FeedCtx) => FeedItem
         agentName: item.name ?? agentName,
         timestamp: ts,
     }),
+    answer: (item, { agentName, ts }) =>
+        item.option
+            ? { type: "chat", label: `✓ ${item.option}`, agentName, timestamp: ts, role: "user" }
+            : null,
 };
 
 /**
@@ -298,13 +305,24 @@ export function feedSeedItem(raw: {
     };
 }
 
-/** Feed row for a chat message (agent→user or any). */
+/** Feed row for a chat message: its words, and whom it was to when that is not the person. */
 export function chatFeedItem(msg: ChatMessage): FeedItem {
     return {
         type: "chat",
-        label: `→ ${msg.to}: ${msg.content}`,
+        label: msg.to && msg.to !== "user" ? `→ ${msg.to}: ${msg.content}` : msg.content,
         agentName: msg.from,
         timestamp: msg.timestampMs,
+    };
+}
+
+/** Feed row for a person's answer to a question an agent asked. */
+export function answerFeedItem(answer: AnswerPayload): FeedItem {
+    return {
+        type: "chat",
+        label: `✓ ${answer.option} (${answer.channel})`,
+        agentName: answer.agentId,
+        timestamp: answer.timestampMs,
+        role: "user",
     };
 }
 
@@ -348,12 +366,23 @@ export function completedFeedItem(p: { agentName: string }, now = Date.now()): F
     return { type: "spawn", label: "task completed", agentName: p.agentName, timestamp: now };
 }
 
-/** Feed row for a remote node phoning home (agent count pluralised). */
-export function nodeHeartbeatFeedItem(p: NodeHeartbeatPayload, now = Date.now()): FeedItem {
+/**
+ * Feed row for a remote node phoning home (agent count pluralised).
+ *
+ * A node coming online is news; every report after that is a heartbeat, hidden
+ * with the others unless they are asked for. `cameOnline` is the caller's to
+ * judge (see `NodePresence`).
+ */
+export function nodeHeartbeatFeedItem(
+    p: NodeHeartbeatPayload,
+    cameOnline: boolean,
+    now = Date.now(),
+): FeedItem {
     const n = p.agents.length;
+    const agents = `${n} agent${n !== 1 ? "s" : ""}`;
     return {
-        type: "health",
-        label: `node online · ${n} agent${n !== 1 ? "s" : ""}`,
+        type: cameOnline ? "health" : "heartbeat",
+        label: cameOnline ? `node online · ${agents}` : `heartbeat · ${agents}`,
         agentName: p.node,
         timestamp: now,
     };
@@ -433,4 +462,23 @@ export function rawFeedItem(
     const agentId = m[1]!;
     const agentName = resolveName?.(agentId) ?? (nameFromWid(agentId) || agentId.slice(0, 8) || "system");
     return mapper(agentName, asObj(payload), now);
+}
+
+/** A chat frame from the socket, as a message. */
+export function socketMessage(...frame: Parameters<ChatHandler>): ChatMessage {
+    const [content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId, addressChoice] =
+        frame;
+    return {
+        id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
+        from,
+        to,
+        threadId,
+        content,
+        timestampMs,
+        ...(source ? { source } : {}),
+        ...(surface ? { surface } : {}),
+        ...(surfaceLabel ? { surfaceLabel } : {}),
+        ...(brain ? { brain } : {}),
+        ...(addressChoice ? { addressChoice } : {}),
+    };
 }

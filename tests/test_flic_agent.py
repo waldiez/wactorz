@@ -832,19 +832,30 @@ class TestReachingTheButtons:
             button("porch", "77:88:99:AA:BB:CC"),
         ]
         await agent._listen()
+        happened: list[str] = []
 
-        async def never() -> None:
-            await asyncio.sleep(3600)
+        def never_for(name: str) -> Any:
+            async def never() -> None:
+                happened.append(f"{name} started")
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    happened.append(f"{name} given up on")
+                    raise
+
+            return never
 
         for name in ("kitchen", "hall", "porch"):
-            monkeypatch.setattr(_client(agent, name), "stop", never)
+            monkeypatch.setattr(_client(agent, name), "stop", never_for(name))
         monkeypatch.setattr(flic_agent, "STOP_TIMEOUT_S", 0.2)
-        loop = asyncio.get_running_loop()
-        started = loop.time()
 
         await agent._stop(remember=False)
 
-        assert loop.time() - started < 0.4
+        # By order rather than by the clock, which a loaded runner stretches:
+        # waited for together, every stop has begun before the first is given
+        # up on; one after another, each is given up on before the next begins.
+        assert sorted(happened[:3]) == ["hall started", "kitchen started", "porch started"]
+        assert len(happened) == 6
         assert agent._clients == {}
         disconnected = [
             topic

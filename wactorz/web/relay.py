@@ -2,7 +2,7 @@
 
 The server subscribes to whole subtrees — `agents/#`, `system/#`, `nodes/#` and
 the Home Assistant state-change topic — because agents publish freely within
-them. The dashboard, though, consumes a fixed and knowable set. Forwarding the
+them, and to `models/+/+`, where main says where each model's pointers stand. The dashboard, though, consumes a fixed and knowable set. Forwarding the
 remainder puts whatever any agent happens to publish onto every open browser's
 socket, and that surface grows with each new agent rather than with this file.
 
@@ -18,22 +18,27 @@ Matching the *subscribed* Home Assistant prefix is deliberate — a topic the
 server never subscribed to cannot arrive, so there is nothing to relay.
 """
 
-#: `agents/{id}/<leaf>` topics the dashboard acts on. The last two are consumed
-#: not by `ServerEventRouter` but by the raw-fallback feed mappers in
-#: `frontend/src/agents/mapping.ts` (actuation audit trail, anomaly alerts) —
-#: the other place a topic addition must mirror.
+from ..core.artifacts import POINTERS
+
+#: `agents/{id}/<leaf>` topics the dashboard acts on. `actuations` and `anomaly`
+#: are consumed not by `ServerEventRouter` but by the raw-fallback feed mappers
+#: in `frontend/src/agents/mapping.ts` (actuation audit trail, anomaly alerts) —
+#: the other place a topic addition must mirror. `questions` is each agent's
+#: question book, relayed so the Inbox follows it live.
 _AGENT_LEAVES = frozenset(
     {
         "heartbeat",
         "status",
         "alert",
         "chat",
+        "answer",
         "spawn",
         "metrics",
         "logs",
         "completed",
         "actuations",
         "anomaly",
+        "questions",
     }
 )
 
@@ -42,6 +47,10 @@ _SYSTEM_TOPICS = frozenset({"system/qa-flag", "system/spawn", "system/health", "
 
 #: The only `nodes/{id}/<leaf>` the dashboard reads.
 _NODE_LEAF = "heartbeat"
+
+#: `models/{name}/<pointer>`: the pointers main publishes, retained, relayed so the dashboard
+#: can follow pointer moves live; no view reads them yet.
+_MODEL_POINTERS = frozenset(POINTERS)
 
 #: Home Assistant state changes, consumed wholesale by the activity feed. Kept as
 #: a prefix because the bridge publishes one topic per entity beneath it.
@@ -62,4 +71,6 @@ def is_relayed(topic: str) -> bool:
         return leaf in _AGENT_LEAVES
     if root == "nodes":
         return leaf == _NODE_LEAF
+    if root == "models":
+        return leaf in _MODEL_POINTERS
     return False

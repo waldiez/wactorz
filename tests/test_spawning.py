@@ -19,19 +19,30 @@ from typing import cast
 
 import pytest
 
+from tests.waiting import until
 from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
+from wactorz.agents.dependency_install import outcome_from_result
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
-from wactorz.core.actor import ActorState
+from wactorz.core.actor import ActorState, ReplyError
+from wactorz.core.packages import APPROVAL_TIMEOUT_S
 from wactorz.core.persistence import PickleStore, WactorzDB
+from wactorz.core.pip import PIP_TIMEOUT_S
 
 
 def run(coro):
     """Drive a coroutine to completion without pytest-asyncio."""
     return asyncio.run(coro)
+
+
+def _available_off_loop(requirements: list[str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirements == ["numpy"]
+    return []
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
@@ -92,6 +103,8 @@ class _BaseHost(SpawnMixin):
         self.published = []  # mqtt dashboard echoes
         self.state = ActorState.RUNNING
         self.detached: list[asyncio.Task] = []  # background work the host was handed
+        self.install_result: dict = {"message": "installed ok"}  # what the installer answers
+        self.told: list[str] = []  # chat notices
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
@@ -104,7 +117,10 @@ class _BaseHost(SpawnMixin):
         # Resolve the install future immediately, standing in for the installer.
         fut = self._result_futures.get(payload.get("_task_id"))
         if fut is not None and not fut.done():
-            fut.set_result({"message": "installed ok"})
+            fut.set_result(self.install_result)
+
+    async def notify_user(self, text, **_extra):
+        self.told.append(text)
 
     async def _mqtt_publish(self, topic, payload, **_kw):
         self.published.append((topic, payload))
@@ -131,6 +147,9 @@ class MainHost(_BaseHost):
 
     def _save_to_spawn_registry(self, config):
         self.registered.append(config)
+
+    def _remove_from_spawn_registry(self, name, node=None, *, actor_id=None):
+        self.registered = [c for c in self.registered if c.get("name") != name]
 
     def get_user_facts(self):
         return {"pref_timezone": "Europe/Athens"}
@@ -340,6 +359,24 @@ def test_present_packages_spawn_directly(main_host):
     assert not main_host.sent  # installer never contacted
 
 
+@pytest.mark.parametrize("action", ["spawn", "install"])
+def test_requirement_scans_run_off_the_event_loop(
+    main_host: MainHost, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    monkeypatch.setattr(spawning, "missing_requirements", _available_off_loop)
+    if action == "spawn":
+        actor = run(
+            main_host._spawn_local_from_config(
+                {"name": "d", "type": "dynamic", "code": "x", "install": ["numpy"]}
+            )
+        )
+        assert actor is not None
+        assert not isinstance(actor, SpawnPlaceholder)
+    else:
+        assert run(main_host._install_packages(["numpy"])).ok
+    assert not main_host.sent
+
+
 def test_blocking_install(main_host):
     main_host._registry.add(FakeActor("installer"))
     actor = run(
@@ -353,6 +390,84 @@ def test_blocking_install(main_host):
     assert main_host.spawn_calls
 
 
+def test_a_failed_install_is_reported_and_not_spawned(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    main_host.install_result = {
+        "failed": ["totally_missing_pkg_zzz"],
+        "results": {"totally_missing_pkg_zzz": "failed: ERROR: no matching distribution"},
+    }
+    actor = run(
+        main_host._spawn_local_from_config(
+            {
+                "name": "d6",
+                "type": "dynamic",
+                "code": "x",
+                "require_install_success": True,
+                "install": ["totally_missing_pkg_zzz"],
+            },
+            blocking_install=True,
+        )
+    )
+    assert actor is None
+    assert main_host.spawn_calls == []
+    assert main_host.registered == []
+    (told,) = main_host.told
+    assert "totally_missing_pkg_zzz: ERROR: no matching distribution" in told
+
+
+def test_an_install_needing_a_restart_keeps_the_agent_for_after_it(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    main_host.install_result = {"failed": [], "restart_required": ["websockets 17.1 -> 15.0.1"]}
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {
+                "name": "d7",
+                "type": "dynamic",
+                "code": "x",
+                "require_install_success": True,
+                "install": ["totally_missing_pkg_zzz"],
+            },
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+    assert main_host.spawn_calls == []
+    # Kept (the real registry is keyed by name), so the restart brings it up.
+    assert {cfg["name"] for cfg in main_host.registered} == {"d7"}
+    (told,) = main_host.told
+    assert "restart Wactorz" in told
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_installed_packages_cannot_bypass_a_strict_restart(main_host, monkeypatch, strict):
+    outcome_from_result({"restart_required": ["websockets 16.1.1 -> 15.0.1"]})
+    monkeypatch.setattr(spawning, "missing_requirements", lambda _packages: [])
+    config = {
+        "name": "retry",
+        "type": "dynamic",
+        "code": "x",
+        "install": ["numpy"],
+        "require_install_success": strict,
+    }
+
+    result = run(main_host._spawn_local_from_config(config, blocking_install=True))
+
+    assert (result is None) is strict
+    assert bool(main_host.spawn_calls) is not strict
+    if strict:
+        assert "restart Wactorz" in main_host.told[0]
+
+
+def test_the_install_request_asks_for_chat_progress(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d8"))
+    (request,) = main_host.sent
+    assert request["notify"] is False
+    assert request["for_agent"] == "d8"
+
+
 def test_background_install_returns_placeholder(main_host):
     main_host._registry.add(FakeActor("installer"))
 
@@ -362,7 +477,9 @@ def test_background_install_returns_placeholder(main_host):
             blocking_install=False,
         )
         assert isinstance(actor, SpawnPlaceholder)
-        await asyncio.sleep(0.1)  # let the background task finish
+        # The install runs in the background; wait for it rather than for a
+        # fixed time, which a busy runner outlasts.
+        await until(lambda: main_host.spawn_calls, "the background install spawning the agent")
 
     run(scenario())
     assert main_host.spawn_calls
@@ -417,6 +534,126 @@ def test_packages_the_installer_could_not_install_are_named(main_host, caplog):
         run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d"))
 
     assert "Failed to install: ['totally_missing_pkg_zzz']" in caplog.text
+
+
+def _refusing_installer(monkeypatch, main_host):
+    """The installer answering that the operator did not allow the package."""
+    main_host._registry.add(FakeActor("installer"))
+
+    async def _refused(*_args, **_kwargs):
+        raise ReplyError(
+            "installer",
+            {
+                "error": "Not installed: wactorz-unlisted-probe is not allowed",
+                "refused": ["wactorz-unlisted-probe"],
+            },
+        )
+
+    monkeypatch.setattr(spawning, "ask_through", _refused)
+
+
+def test_a_package_the_operator_did_not_allow_stops_a_blocking_spawn(monkeypatch, main_host):
+    _refusing_installer(monkeypatch, main_host)
+
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "d6", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
+            blocking_install=True,
+        )
+    )
+
+    assert actor is None
+    assert main_host.spawn_calls == []
+
+
+def test_a_package_the_operator_did_not_allow_stops_a_background_spawn(monkeypatch, main_host):
+    _refusing_installer(monkeypatch, main_host)
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d7", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+    assert main_host.spawn_calls == []
+    assert not main_host.registered
+    errors = [p["message"] for _, p in main_host.published if p.get("type") == "error"]
+    assert errors and "wactorz-unlisted-probe is not allowed" in errors[0]
+
+
+def test_a_restore_installs_without_asking(monkeypatch, main_host):
+    # Its packages were cleared when it was first placed; nobody may be there to answer.
+    main_host._registry.add(FakeActor("installer"))
+    asked: list[str] = []
+
+    async def _ask(_host, _target, request, **_kwargs):
+        asked.append(request["action"])
+        return {"success": True}
+
+    monkeypatch.setattr(spawning, "ask_through", _ask)
+
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "d8", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]},
+            register=False,
+            from_registry=True,
+            blocking_install=True,
+        )
+    )
+
+    assert asked == ["install_restored"]
+
+
+def test_a_restore_waits_for_pip_only(monkeypatch, main_host):
+    # Nothing is asked on that path, so there is no answer to wait for.
+    main_host._registry.add(FakeActor("installer"))
+    waited: list[float] = []
+
+    async def _ask(*_args, timeout, **_kwargs):
+        waited.append(timeout)
+        return {"success": True}
+
+    monkeypatch.setattr(spawning, "ask_through", _ask)
+
+    run(main_host._install_packages(["missing_a_zzz"], agent_name="d", restoring=True))
+
+    assert waited[0] < APPROVAL_TIMEOUT_S + 2 * PIP_TIMEOUT_S
+
+
+def test_a_refused_spawn_it_did_not_save_leaves_the_registry_alone(monkeypatch, main_host):
+    _refusing_installer(monkeypatch, main_host)
+    saved = {"name": "d9", "type": "dynamic", "code": "x", "install": ["wactorz-unlisted-probe"]}
+    main_host.registered.append(saved)
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            dict(saved), register=False, blocking_install=False
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+    assert main_host.registered == [saved]
+
+
+def test_the_wait_outlasts_every_pip_run_the_installer_may_make(monkeypatch, main_host):
+    # A shorter wait would give up on a large download still being made, and
+    # spawn the agent without it.
+    main_host._registry.add(FakeActor("installer"))
+    waited: list[float] = []
+
+    async def _ask(*_args, timeout, **_kwargs):
+        waited.append(timeout)
+        return {"success": True}
+
+    monkeypatch.setattr(spawning, "ask_through", _ask)
+
+    run(main_host._install_packages(["missing_a_zzz", "missing_b_zzz"], agent_name="d"))
+
+    assert waited[0] > APPROVAL_TIMEOUT_S + 2 * 2 * PIP_TIMEOUT_S
 
 
 # ── Flags / wiring ───────────────────────────────────────────────────────────
@@ -630,6 +867,36 @@ def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
     assert published == []
 
 
+def test_a_new_name_holding_the_address_separator_is_refused_locally(main_host):
+    # `counter@pi` must split one way only: counter, on pi.
+    assert run(main_host._spawn_local_from_config({"name": "counter@pi"})) is None
+    assert main_host.spawn_calls == []
+
+
+def test_an_agent_already_kept_under_such_a_name_still_starts(main_host):
+    # Named before the separator was refused in a name, and read back from the
+    # spawn registry: it keeps running under the name it has.
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "counter@old", "type": "dynamic", "code": "x"}, from_registry=True
+        )
+    )
+
+    assert [kwargs["name"] for _cls, kwargs in main_host.spawn_calls] == ["counter@old"]
+
+
+def test_a_new_name_holding_the_address_separator_is_not_sent_to_a_node():
+    published: list[str] = []
+
+    async def _publish(topic, payload, **_kw):
+        published.append(topic)
+
+    host = SimpleNamespace(name="main", _mqtt_publish=_publish)
+    run(SpawnService(host)._spawn_remote({"name": "counter@pi"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
+
+    assert published == []
+
+
 def test_a_background_install_is_owned_by_the_host(main_host):
     # Kept by the host, so its stop cancels the install rather than leaving it
     # running against a system that has shut down.
@@ -650,9 +917,10 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
     main_host._registry.add(FakeActor("installer"))
     real_install = main_host._install_packages
 
-    async def install_then_stop(packages, agent_name):
-        await real_install(packages, agent_name=agent_name)
+    async def install_then_stop(packages, agent_name, restoring=False, **kwargs):
+        outcome = await real_install(packages, agent_name=agent_name, restoring=restoring, **kwargs)
         main_host.state = ActorState.STOPPED
+        return outcome
 
     main_host._install_packages = install_then_stop
 
@@ -665,6 +933,49 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
 
     run(scenario())
     assert main_host.spawn_calls == []
+
+
+def test_no_packages_means_nothing_to_install(main_host):
+    outcome = run(main_host._install_packages([], agent_name="d9"))
+    assert outcome.ok
+    assert main_host.sent == []
+
+
+def test_without_an_installer_the_install_is_reported_unavailable(main_host):
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d10"))
+    assert outcome.unavailable
+
+
+def test_an_installer_that_never_answers_times_out(main_host, monkeypatch):
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 0.05)
+    monkeypatch.setattr(spawning, "APPROVAL_TIMEOUT_S", 0)
+
+    async def silent_send(target_id, msg_type, payload):
+        main_host.sent.append(payload)  # taken in, never answered
+
+    main_host.send = silent_send
+    outcome = run(
+        main_host._install_packages(
+            ["totally_missing_pkg_zzz"], agent_name="d11", require_install_success=True
+        )
+    )
+    assert outcome.timed_out
+    assert main_host._result_futures == {}
+
+
+def test_an_installer_with_no_room_is_not_waited_for(main_host, monkeypatch):
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 600.0)
+
+    async def refused_send(target_id, msg_type, payload):
+        return False  # its mailbox was full
+
+    main_host.send = refused_send
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d12"))
+    assert outcome.busy
+    assert not outcome.ok
+    assert main_host._result_futures == {}
 
 
 # ── A name the state directory refuses ───────────────────────────────────────

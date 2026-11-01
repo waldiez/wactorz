@@ -127,12 +127,29 @@ class TestBuild:
         assert callable(recipe["factory"])
 
 
+#: What the package brings of its own, found whatever a deployment names.
+BUILT_IN = {"recorder"}
+
+
 class TestDiscover:
     def test_targets_named_in_the_environment_are_loaded(self) -> None:
         found = plugins.discover(env="tests.test_plugins:Probe, tests.test_plugins:decorated")
 
         assert set(found) == {"probe", "decorated"}
         assert found["probe"].target == "tests.test_plugins:Probe"
+
+    def test_the_packages_own_agents_are_apart_from_the_deployments(self) -> None:
+        assert set(plugins.discover(env="")) == set()
+        own = plugins.built_in()
+
+        assert set(own) == BUILT_IN
+        recorder = own["recorder"]
+        assert recorder.target == "wactorz.agents.recorder_agent:RecorderAgent"
+        assert recorder.autostart is False
+        assert recorder.recipe()["type"] == "native"
+        assert plugins.for_name("recorder") is not None
+        assert plugins.for_target(recorder.target) is not None
+        assert recorder.target in plugins.targets()
 
     def test_a_bad_target_is_skipped_not_fatal(self, caplog: pytest.LogCaptureFixture) -> None:
         found = plugins.discover(env="no.such.module:Thing json:dumps tests.test_plugins:Probe")
@@ -205,3 +222,42 @@ class TestTheCatalogue:
 
         assert "plugin" not in catalog[packaged]
         assert "shadowed" in caplog.text
+
+
+class TestBuildingUnderAMixin:
+    """A host puts its own class in front of the agent's, without the author knowing."""
+
+    def test_a_decorated_function_carries_it(self, tmp_path: Path) -> None:
+        class Hosted:
+            pass
+
+        @agent(subscribes="in/x")
+        def hosted_fn(reading: dict) -> dict:
+            return reading
+
+        actor = plugins.plugin_from(hosted_fn).build(persistence_dir=str(tmp_path), mixin=Hosted)
+
+        assert isinstance(actor, Hosted)
+        assert isinstance(actor, FunctionAgent)
+
+    def test_an_actor_subclass_carries_it_too(self, tmp_path: Path) -> None:
+        class Hosted:
+            pass
+
+        class Own(Actor):
+            async def handle_message(self, message: Message) -> None:
+                return None
+
+        actor = plugins.plugin_from(Own).build(persistence_dir=str(tmp_path), mixin=Hosted)
+
+        assert isinstance(actor, Hosted)
+        assert isinstance(actor, Own)
+
+    def test_without_one_the_class_is_the_agents_own(self, tmp_path: Path) -> None:
+        @agent(subscribes="in/x")
+        def plain(reading: dict) -> dict:
+            return reading
+
+        assert (
+            type(plugins.plugin_from(plain).build(persistence_dir=str(tmp_path))) is FunctionAgent
+        )

@@ -7,150 +7,148 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
-import { CardDashboard } from "../ui/CardDashboard";
+import type { AgentStore } from "../agents/AgentStore";
+import type { CardDashboard } from "../ui/CardDashboard";
+import { emit } from "../events";
 import type { AgentInfo } from "../types/agent";
+import { addressee, agent, composer, goTo, openDashboard, settled, shownView } from "./dashboard";
+import { byRole, byTestId } from "./queries";
 
-// The chat-target <select> must never render blank. If the stored target
-// matches no option — main absent, or an agent that itself is named "main" —
-// `select.value` selects nothing and the control comes up empty, so
-// _populateSelect re-syncs to a messageable agent and falls back to the first
-// option.
+// Who the chat talks to: the person's choice, kept through churn, moved only
+// when the agent is really gone, and named the same everywhere on screen.
 
-function agent(name: string, protectedFlag = false): AgentInfo {
-    return { id: name, name, state: "running", protected: protectedFlag };
+let store: AgentStore;
+let cd: CardDashboard;
+
+function open(agents: AgentInfo[]): void {
+    ({ store, dashboard: cd } = openDashboard(agents));
 }
 
-describe("CardDashboard chat-target selection", () => {
-    let cd: any;
+/** The chat's target dropdown. */
+const dropdown = (): HTMLSelectElement =>
+    byRole(document, "combobox", "Chat target agent") as HTMLSelectElement;
 
-    beforeEach(() => {
-        document.body.innerHTML = "";
-        cd = new CardDashboard() as any;
-        cd.agents.clear();
+/** Pick `name` in the dropdown, as a person does. */
+function pick(name: string): void {
+    dropdown().value = name;
+    dropdown().dispatchEvent(new Event("change"));
+}
+
+/** Open `name`'s conversation from the chat's agent list. */
+function select(name: string): void {
+    byRole(byTestId(document, "chat-agent-list"), "button", name).click();
+}
+
+const paneTitle = (): string => byTestId(document, "chat-title").textContent ?? "";
+
+/** Type `text` and press Send; the send events that went out. */
+function send(text: string): ReturnType<typeof vi.fn> {
+    composer().value = text;
+    const sent = vi.fn();
+    document.addEventListener("af-send-message", sent);
+    byRole(document, "button", "Send message").click();
+    document.removeEventListener("af-send-message", sent);
+    return sent;
+}
+
+const sentTo = (sent: ReturnType<typeof vi.fn>): string =>
+    (sent.mock.calls[0]![0] as CustomEvent<{ target: string }>).detail.target;
+
+beforeEach(() => {
+    document.body.replaceChildren();
+    localStorage.clear();
+    history.replaceState(null, "", "#");
+    vi.mocked(toast.show).mockClear();
+});
+
+afterEach(() => {
+    cd?.destroy();
+});
+
+describe("the chat-target dropdown never shows blank", () => {
+    // If the target matches no option -- main absent, or an agent that cannot
+    // be messaged -- the control would come up empty, so it shows a messageable
+    // agent instead, without changing whom the person is talking to.
+
+    it("shows main, the default, and offers no system agent", () => {
+        open([agent("main", { protected: true }), agent("monitor-agent", { protected: true })]);
+        goTo("chat", "main");
+
+        expect(dropdown().value).toBe("main");
+        expect(addressee()).toBe("main");
+        expect([...dropdown().options].map(o => o.value)).not.toContain("monitor-agent");
     });
 
-    it("falls back to 'main' when chatTarget default ('main') is absent", () => {
-        cd.agents.set("1", agent("main", true)); // protected, but always messageable
-        cd.agents.set("2", agent("monitor-agent", true)); // system → not messageable
-        cd._chat.chatTarget = "main";
+    it("shows the first messageable agent when there is no main, keeping the target", () => {
+        open([agent("catalog"), agent("monitor-agent", { protected: true })]);
+        goTo("chat", "main");
 
-        const select = document.createElement("select");
-        cd._chat._populateSelect(select);
-
-        expect(select.value).toBe("main"); // never blank
-        expect(cd._chat.chatTarget).toBe("main");
-        // the system agent is not an option
-        expect([...select.options].map(o => o.value)).not.toContain("monitor-agent");
-    });
-
-    it("falls back to the first messageable agent when no main exists", () => {
-        cd.agents.set("1", agent("catalog"));
-        cd.agents.set("2", agent("monitor-agent", true)); // system → excluded
-        cd._chat.chatTarget = "main";
-
-        const select = document.createElement("select");
-        cd._chat._populateSelect(select);
-
-        // The *select* falls back so the control shows something real. The
+        // The *dropdown* falls back so the control shows something real. The
         // target is the user's choice and drawing a dropdown must not change it
-        // — that is what let a reset hand the conversation to another agent.
-        expect(select.value).toBe("catalog");
-        expect(cd._chat.chatTarget).toBe("main");
+        // -- that is what let a reset hand the conversation to another agent.
+        expect(dropdown().value).toBe("catalog");
+        expect(addressee()).toBe("main");
     });
 
-    it("keeps a user-picked chatTarget unchanged", () => {
-        cd.agents.set("1", agent("main"));
-        cd.agents.set("2", agent("home-assistant-agent"));
-        cd._chat.setTarget("home-assistant-agent"); // explicit user pick → sticky
+    it("shows an agent the person picked", () => {
+        open([agent("main"), agent("home-assistant-agent")]);
+        goTo("chat", "home-assistant-agent");
 
-        const select = document.createElement("select");
-        cd._chat._populateSelect(select);
-
-        expect(select.value).toBe("home-assistant-agent");
+        expect(dropdown().value).toBe("home-assistant-agent");
     });
 });
 
 describe("a reset does not hand the conversation to another agent", () => {
-    let cd: any;
-
     beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        cd = new CardDashboard() as any;
-        cd.show([agent("main"), agent("catalog")]);
-        cd._setView("chat");
-        cd._chat._selectAgent("catalog");
+        open([agent("main"), agent("catalog")]);
+        goTo("chat");
+        select("catalog");
     });
 
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
-    });
-
-    const paneTitle = () => cd.root.querySelector(".af-chat-pane-title")?.textContent;
-
-    it("keeps the chosen agent while the list churns", () => {
+    it("keeps the chosen agent while the list churns", async () => {
         // A reset removes agents one at a time. Once catalog is gone but main
         // remains, the old code fell through to main and never came back.
-        cd.removeAgent("catalog");
+        store.removeAgent("catalog");
+        await settled();
 
-        expect(cd._chat.chatTarget).toBe("catalog");
+        expect(addressee()).toBe("catalog");
     });
 
-    it("keeps every part of the screen naming the same agent", () => {
+    it("keeps every part of the screen naming the same agent", async () => {
         // The screenshot that started this: sidebar, select and placeholder said
-        // main while the header and thread said catalog — and the message would
+        // main while the header and thread said catalog -- and the message would
         // have gone to main.
-        cd.removeAgent("catalog");
+        store.removeAgent("catalog");
+        await settled();
 
-        expect(paneTitle()).toBe(`@${cd._chat.chatTarget}`);
-        expect(cd.root.querySelector("#af-iobar-input")?.placeholder).toContain(cd._chat.chatTarget);
+        expect(paneTitle()).toBe("@catalog");
+        expect(addressee()).toBe("catalog");
     });
 
-    it("still shows the choice after the agents come back", () => {
-        cd.removeAgent("catalog");
-        cd.addAgent(agent("catalog"));
+    it("still shows the choice after the agents come back", async () => {
+        store.removeAgent("catalog");
+        await settled();
+        store.addOrUpdateAgent(agent("catalog"));
+        await settled();
 
-        expect(cd._chat.chatTarget).toBe("catalog");
+        expect(addressee()).toBe("catalog");
         expect(paneTitle()).toBe("@catalog");
     });
 });
 
 describe("choosing a different agent", () => {
     // Every way of choosing must move the whole screen, not just the part the
-    // caller happened to remember. `setTarget` used to set the field and stop,
-    // so the dropdown and the @mention panel updated the composer placeholder
-    // inline and left the pane header and thread on the previous conversation.
-    let cd: any;
-
+    // caller happened to remember.
     beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        cd = new CardDashboard() as any;
-        cd.show([agent("main"), agent("catalog")]);
-        cd._setView("chat");
-        cd._chat._selectAgent("main");
+        open([agent("main"), agent("catalog")]);
+        goTo("chat");
+        select("main");
     });
-
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
-    });
-
-    const paneTitle = () => cd.root.querySelector(".af-chat-pane-title")?.textContent;
 
     it("switches the visible conversation, from the dropdown", () => {
-        const select = cd.root.querySelector("#af-target-select") as HTMLSelectElement;
-        select.value = "catalog";
-        select.dispatchEvent(new Event("change"));
+        pick("catalog");
 
-        expect(cd._chat.chatTarget).toBe("catalog");
+        expect(addressee()).toBe("catalog");
         expect(paneTitle()).toBe("@catalog");
     });
 
@@ -158,76 +156,38 @@ describe("choosing a different agent", () => {
         // The dropdown's value is set programmatically whenever the options are
         // redrawn, and it falls back to the first option when the choice is not
         // among them. Reading the send target from there made drawing a control
-        // decide where a message went — the same conflation, one layer down.
-        cd._chat._selectAgent("catalog");
-        const select = cd.root.querySelector("#af-target-select") as HTMLSelectElement;
-        select.value = "main"; // programmatic: no change event, so no choice was made
-        const input = cd.root.querySelector("#af-iobar-input") as HTMLTextAreaElement;
-        input.value = "hello";
+        // decide where a message went.
+        select("catalog");
+        dropdown().value = "main"; // programmatic: no change event, so no choice was made
 
-        const sent = vi.fn();
-        document.addEventListener("af-send-message", sent);
-        cd._chat._sendMessage(input, select);
-        document.removeEventListener("af-send-message", sent);
-
-        expect((sent.mock.calls[0]![0] as CustomEvent).detail.target).toBe("catalog");
+        expect(sentTo(send("hello"))).toBe("catalog");
     });
 
-    it("switches the visible conversation, from any caller of setTarget", () => {
-        // The @mention panel and the wactor-card Chat button go through here too.
-        cd._chat.setTarget("catalog");
+    it("switches the visible conversation, from a link to it", () => {
+        // The @mention panel and the wactor-card Chat button land on the same move.
+        goTo("chat", "catalog");
 
         expect(paneTitle()).toBe("@catalog");
-        expect(cd.root.querySelector("#af-iobar-input")?.placeholder).toContain("catalog");
+        expect(addressee()).toBe("catalog");
     });
 });
 
 describe("sending to an agent that cannot answer", () => {
-    // The choice survives a stop — that is the point of holding it separately
-    // from reachability. The send is what has to be honest about it, and saying
-    // so beats the old behaviour of quietly routing to main.
-    let cd: any;
-
+    // The choice survives a stop -- that is the point of holding it separately
+    // from reachability. The send is what has to be honest about it.
     beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        vi.mocked(toast.show).mockClear();
-        cd = new CardDashboard() as any;
-        cd.show([agent("main"), agent("worker")]);
-        cd._setView("chat");
-        cd._chat._selectAgent("worker");
+        open([agent("main"), agent("worker")]);
+        goTo("chat");
+        select("worker");
     });
 
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
-    });
-
-    /** Replace `worker` with a version in `state`, as a status frame would. */
-    const workerBecomes = (state: AgentInfo["state"]) => {
-        cd.agents.set("worker", { ...agent("worker"), state });
-    };
-
-    const send = (text: string) => {
-        const input = cd.root.querySelector("#af-iobar-input") as HTMLTextAreaElement;
-        const select = cd.root.querySelector("#af-target-select") as HTMLSelectElement;
-        input.value = text;
-        const sent = vi.fn();
-        document.addEventListener("af-send-message", sent);
-        cd._chat._sendMessage(input, select);
-        document.removeEventListener("af-send-message", sent);
-        return { sent, input };
-    };
+    /** `worker` is now in `state`, as a status frame would say. */
+    const workerBecomes = (state: AgentInfo["state"]) => store.addOrUpdateAgent(agent("worker", { state }));
 
     it("blocks the send and says why", () => {
         workerBecomes("stopped");
 
-        const { sent } = send("are you there");
-
-        expect(sent).not.toHaveBeenCalled();
+        expect(send("are you there")).not.toHaveBeenCalled();
         expect(toast.show).toHaveBeenCalledTimes(1);
         expect(vi.mocked(toast.show).mock.calls[0]![0].message).toContain("worker");
     });
@@ -235,72 +195,55 @@ describe("sending to an agent that cannot answer", () => {
     it("keeps what the user typed, so it can be sent once the agent is back", () => {
         workerBecomes("stopped");
 
-        const { input } = send("are you there");
+        send("are you there");
 
-        expect(input.value).toBe("are you there");
+        expect(composer().value).toBe("are you there");
     });
 
     it("keeps the choice, and just works when the agent restarts", () => {
-        // The respawn proof: a stop is not a deletion, so nothing moves.
         workerBecomes("stopped");
         send("are you there");
-        expect(cd._chat.chatTarget).toBe("worker");
+        expect(addressee()).toBe("worker");
 
         workerBecomes("running");
-        const { sent } = send("are you there");
 
-        expect((sent.mock.calls[0]![0] as CustomEvent).detail.target).toBe("worker");
+        expect(sentTo(send("are you there"))).toBe("worker");
     });
 
     it("blocks a failed agent too", () => {
         workerBecomes({ failed: "boom" });
 
-        const { sent } = send("hello");
-
-        expect(sent).not.toHaveBeenCalled();
+        expect(send("hello")).not.toHaveBeenCalled();
     });
 
     it("lets an initializing agent through", () => {
         // Transient. A false block during normal startup would be worse than
         // the problem the check solves.
         workerBecomes("initializing");
-        expect(send("hello").sent).toHaveBeenCalledTimes(1);
+
+        expect(send("hello")).toHaveBeenCalledTimes(1);
     });
 });
 
 describe("an agent that does not survive a reset", () => {
-    let cd: any;
-
     beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        vi.mocked(toast.show).mockClear();
-        cd = new CardDashboard() as any;
-        cd.show([agent("main"), agent("weather-agent")]);
-        cd._setView("chat");
-        cd._chat._selectAgent("weather-agent");
-    });
-
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
+        open([agent("main"), agent("weather-agent")]);
+        goTo("chat");
+        select("weather-agent");
     });
 
     /** A reset: the survivors replace the list, then the settled signal fires. */
     const resetTo = (names: string[]) => {
-        cd.agents.clear();
-        names.forEach(n => cd.agents.set(n, agent(n)));
-        cd._chat.dropTargetIfGone("reset");
+        store.clearAll();
+        names.forEach(n => store.addOrUpdateAgent(agent(n)));
+        emit("af-agents-settled", { reason: "reset" });
     };
 
     it("moves to main, because a spawned agent is destroyed by the reset", () => {
         resetTo(["main", "catalog"]);
 
-        expect(cd._chat.chatTarget).toBe("main");
-        expect(cd.root.querySelector(".af-chat-pane-title")?.textContent).toBe("@main");
+        expect(addressee()).toBe("main");
+        expect(paneTitle()).toBe("@main");
     });
 
     it("says so rather than moving silently", () => {
@@ -316,7 +259,7 @@ describe("an agent that does not survive a reset", () => {
         // System agents come back; the choice must not be disturbed.
         resetTo(["main", "weather-agent"]);
 
-        expect(cd._chat.chatTarget).toBe("weather-agent");
+        expect(addressee()).toBe("weather-agent");
         expect(toast.show).not.toHaveBeenCalled();
     });
 
@@ -324,127 +267,95 @@ describe("an agent that does not survive a reset", () => {
         // Mid-churn, "no agents" means "not back yet", never "yours is gone".
         resetTo([]);
 
-        expect(cd._chat.chatTarget).toBe("weather-agent");
+        expect(addressee()).toBe("weather-agent");
         expect(toast.show).not.toHaveBeenCalled();
     });
 });
 
 describe("the target once something has been chosen, by the user or for them", () => {
-    // `_userPicked` was a half-built version of the choice/reachability split: a
-    // single flag standing in for "has a choice been made". A fallback chosen
-    // *for* the user is still a choice — they were told about it — so nothing may
-    // silently move them off it afterwards.
-    let cd: any;
-
-    beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        vi.mocked(toast.show).mockClear();
-        cd = new CardDashboard() as any;
-    });
-
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
-    });
+    // A fallback chosen *for* the user is still a choice -- they were told
+    // about it -- so nothing may silently move them off it afterwards.
 
     it("opens on main when there is one", () => {
-        cd.show([agent("main"), agent("catalog")]);
-        cd._setView("chat");
+        open([agent("main"), agent("catalog")]);
+        goTo("chat");
 
-        expect(cd._chat.chatTarget).toBe("main");
+        expect(addressee()).toBe("main");
     });
 
-    it("opens on the only agent there is when main is absent, and keeps it", () => {
+    it("opens on the only agent there is when main is absent, and keeps it", async () => {
         // First resolution sticks. Main arriving later does not displace a
         // target the user has already seen named on screen.
-        cd.show([agent("catalog")]);
-        cd._setView("chat");
-        expect(cd._chat.chatTarget).toBe("catalog");
+        open([agent("catalog")]);
+        goTo("chat");
+        expect(addressee()).toBe("catalog");
 
-        cd.addAgent(agent("main"));
-        cd._setView("overview");
-        cd._setView("chat");
+        store.addOrUpdateAgent(agent("main"));
+        await settled();
+        goTo("overview");
+        goTo("chat");
 
-        expect(cd._chat.chatTarget).toBe("catalog");
+        expect(addressee()).toBe("catalog");
     });
 
-    it("takes main back when it arrives before the chat has been opened", () => {
+    it("takes main back when it arrives before the chat has been opened", async () => {
         // Agents register one at a time, so the first resolution runs against a
         // partial list and can land on whatever sorts first. Nothing has been
         // shown yet, so main claiming the target it would have had is not a move
         // under the user.
-        cd.show([]);
-        cd.addAgent(agent("catalog"));
-        expect(cd._chat.chatTarget).toBe("catalog");
+        open([]);
+        store.addOrUpdateAgent(agent("catalog"));
+        await settled();
+        expect(addressee()).toBe("catalog");
 
-        cd.addAgent(agent("main"));
-        cd._setView("chat");
+        store.addOrUpdateAgent(agent("main"));
+        await settled();
+        goTo("chat");
 
-        expect(cd._chat.chatTarget).toBe("main");
+        expect(addressee()).toBe("main");
     });
 
-    it("does not move you again once a fallback has been chosen for you", () => {
+    it("does not move you again once a fallback has been chosen for you", async () => {
         // No main: pick weather-agent, lose it to a reset, get moved to catalog
-        // and told so. Main registering afterwards must not quietly take over —
-        // that is the snap-back, arriving through the one path still open to it.
-        cd.show([agent("weather-agent"), agent("catalog")]);
-        cd._setView("chat");
-        cd._chat._selectAgent("weather-agent");
+        // and told so. Main registering afterwards must not quietly take over.
+        open([agent("weather-agent"), agent("catalog")]);
+        goTo("chat");
+        select("weather-agent");
 
-        cd.agents.delete("weather-agent");
-        cd._chat.dropTargetIfGone("reset");
-        expect(cd._chat.chatTarget).toBe("catalog");
+        store.removeAgent("weather-agent");
+        emit("af-agents-settled", { reason: "reset" });
+        expect(addressee()).toBe("catalog");
 
-        cd.addAgent(agent("main"));
-        cd._setView("overview");
-        cd._setView("chat");
+        store.addOrUpdateAgent(agent("main"));
+        await settled();
+        goTo("overview");
+        goTo("chat");
 
-        expect(cd._chat.chatTarget).toBe("catalog");
+        expect(addressee()).toBe("catalog");
     });
 });
 
 describe("deleting the agent you are chatting with", () => {
-    // A deletion is more clear-cut than a reset — no churn, no ambiguity — but
-    // it had none of the handling, because the fallback was wired to the reset
-    // signal alone. The rule is the same: the target left the list for good, so
-    // move, rather than leaving the user parked on a conversation that cannot
-    // resume. (A *stopped* agent is the other branch: it stays, and the send
-    // blocks — see "sending to an agent that cannot answer".)
-    let cd: any;
-
+    // The target left the list for good, so move, rather than leaving the user
+    // parked on a conversation that cannot resume. (A *stopped* agent is the
+    // other branch: it stays, and the send blocks.)
     beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-        vi.mocked(toast.show).mockClear();
-        cd = new CardDashboard() as any;
-        cd.show([agent("main"), agent("weather-agent")]);
-        cd._setView("chat");
-        cd._chat._selectAgent("weather-agent");
-    });
-
-    afterEach(() => {
-        try {
-            cd.destroy();
-        } catch {
-            /* ignore */
-        }
+        open([agent("main"), agent("weather-agent")]);
+        goTo("chat");
+        select("weather-agent");
     });
 
     /** What the `delete_agent` frame drives: remove, then judge. */
     const deleteAgent = (name: string) => {
-        cd.removeAgent(name);
-        cd._chat.dropTargetIfGone("deleted");
+        store.removeAgent(name);
+        emit("af-agents-settled", { reason: "deleted" });
     };
 
     it("moves the conversation off the deleted agent", () => {
         deleteAgent("weather-agent");
 
-        expect(cd._chat.chatTarget).toBe("main");
-        expect(cd.root.querySelector(".af-chat-pane-title")?.textContent).toBe("@main");
+        expect(addressee()).toBe("main");
+        expect(paneTitle()).toBe("@main");
     });
 
     it("says it was deleted, not that it failed to survive a reset", () => {
@@ -458,129 +369,95 @@ describe("deleting the agent you are chatting with", () => {
 
     it("moves silently when the chat view is not open", () => {
         // The toast explains a change the user can see. On another view there is
-        // nothing on screen to explain, and the chat will simply be correct when
-        // they next open it — but the move itself still has to happen.
-        cd._setView("overview");
+        // nothing on screen to explain -- but the move itself still has to happen.
+        goTo("overview");
 
         deleteAgent("weather-agent");
 
-        expect(cd._chat.chatTarget).toBe("main");
+        expect(addressee()).toBe("main");
         expect(toast.show).not.toHaveBeenCalled();
     });
 
     it("leaves the conversation alone when a different agent is deleted", () => {
-        cd.agents.set("other", agent("other"));
+        store.addOrUpdateAgent(agent("other"));
         deleteAgent("other");
 
-        expect(cd._chat.chatTarget).toBe("weather-agent");
+        expect(addressee()).toBe("weather-agent");
         expect(toast.show).not.toHaveBeenCalled();
     });
 });
 
 describe("the composer names the target on a fresh tab", () => {
-    // Through the whole dashboard, not DashboardChat alone: the bug this covers
-    // lived in the seam between them. The composer is built in the constructor,
-    // before any chat view exists and so before there is a target, and only the
-    // chat view's mount can tell it what that target turned out to be.
-    beforeEach(() => {
-        document.body.innerHTML = "";
-        localStorage.clear();
-    });
+    // The composer is built before any chat view exists and so before there is
+    // a target, and only something that runs later can tell it what that target
+    // turned out to be.
+    // Kept by the agent's id, which is its name in these tests.
+    beforeEach(() => localStorage.setItem("wactorz-chat-agent-id", "home-assistant-agent"));
 
-    it("names it when the agents arrive over the socket, on the overview", () => {
-        // The reported path, and the one every earlier attempt missed: agents
-        // land through addAgent, not a view render. That already refreshed the
-        // composer — with the empty target nothing had resolved yet, so it
-        // rewrote "Message…" and stayed there until chat was opened by hand.
-        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
-        const cd = new CardDashboard() as any;
-        cd.agents.clear();
-        cd.show([]); // fresh tab: visible, on the overview, nobody here yet
+    it("names it when the agents arrive over the socket, on the overview", async () => {
+        open([]); // fresh tab: visible, on the overview, nobody here yet
 
-        cd.addAgent(agent("main"));
-        cd.addAgent(agent("home-assistant-agent"));
+        store.addOrUpdateAgent(agent("main"));
+        store.addOrUpdateAgent(agent("home-assistant-agent"));
+        await settled();
 
-        expect(cd.view).not.toBe("chat");
-        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+        expect(shownView()).toBe("overview");
+        expect(addressee()).toBe("home-assistant-agent");
     });
 
     it("names it on the overview, where chat was never opened", () => {
-        // Where this was caught. The composer is outside the view body, so it
-        // is on screen from the first paint — and nothing on the overview
-        // builds a chat view, so a fix that runs on that mount never fires.
-        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
-        const cd = new CardDashboard() as any;
-        cd.agents.clear();
-        cd.agents.set("1", agent("main"));
-        cd.agents.set("2", agent("home-assistant-agent"));
+        open([agent("main"), agent("home-assistant-agent")]);
 
-        cd._renderView(); // still on the overview
-
-        expect(cd.view).not.toBe("chat");
-        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+        expect(shownView()).toBe("overview");
+        expect(addressee()).toBe("home-assistant-agent");
     });
 
     it("names the remembered agent when the list is already loaded", () => {
-        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
-        const cd = new CardDashboard() as any;
-        cd.agents.clear();
-        cd.agents.set("1", agent("main"));
-        cd.agents.set("2", agent("home-assistant-agent"));
+        open([agent("main"), agent("home-assistant-agent")]);
+        goTo("chat");
 
-        cd._setView("chat");
-
-        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+        expect(addressee()).toBe("home-assistant-agent");
     });
 
-    it("names it even when the agents arrive after the view is open", () => {
+    it("names it even when the agents arrive after the view is open", async () => {
         // The fresh-tab order: the socket has not delivered anyone yet when the
         // user lands on chat, so the first resolve has nothing to work with.
-        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
-        const cd = new CardDashboard() as any;
-        cd.agents.clear();
+        open([]);
+        goTo("chat");
 
-        cd._setView("chat");
-        cd.agents.set("1", agent("main"));
-        cd.agents.set("2", agent("home-assistant-agent"));
-        cd._renderView();
+        store.addOrUpdateAgent(agent("main"));
+        store.addOrUpdateAgent(agent("home-assistant-agent"));
+        await settled();
 
-        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
-    });
-    it("remembers an agent reached by @mention, not the one left behind", () => {
-        // Sending is a choice: `@catalog …` routes the message there and the
-        // view follows, so reopening on main contradicts what was last shown.
-        const cd = new CardDashboard() as any;
-        cd.agents.clear();
-        cd.show([agent("main"), agent("catalog")]);
-        cd._setView("chat");
-        const input = cd.root.querySelector("#af-iobar-input") as HTMLTextAreaElement;
-        input.value = "@catalog spawn weather-agent";
-
-        cd._chat._sendMessage(input);
-
-        expect(cd._chat.chatTarget).toBe("catalog");
-        expect(localStorage.getItem("wactorz-chat-target")).toBe("catalog");
+        expect(addressee()).toBe("home-assistant-agent");
     });
 
-    it("does not move the conversation under someone already reading it", () => {
-        // The cost of the load-window exception, kept in bounds: once the chat
-        // view has shown a real target, a remembered agent registering late is
-        // just another agent. Moving the conversation then is the bug the
-        // target split removed.
-        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
-        const cd = new CardDashboard() as any;
-        cd.agents.clear();
-        cd.show([agent("main")]);
-        cd._setView("chat"); // opens on main, and they are looking at it
+    it("does not move the conversation under someone already reading it", async () => {
+        // Once the chat view has shown a real target, a remembered agent
+        // registering late is just another agent.
+        open([agent("main")]);
+        goTo("chat"); // opens on main, and they are looking at it
 
-        cd.addAgent(agent("home-assistant-agent")); // registers late
+        store.addOrUpdateAgent(agent("home-assistant-agent")); // registers late
+        await settled();
 
-        expect(cd._chat.chatTarget).toBe("main");
-        expect(_placeholder(cd)).toBe("Message @main…");
+        expect(addressee()).toBe("main");
     });
 });
 
-function _placeholder(cd: any): string {
-    const input = cd.root.querySelector("#af-iobar-input") as HTMLTextAreaElement;
-    return input.placeholder;
-}
+describe("an @mention", () => {
+    it("is remembered as the agent reached, not the one left behind", () => {
+        // Sending is a choice: `@catalog …` routes the message there and the
+        // view follows, so reopening on main contradicts what was last shown.
+        open([agent("main"), agent("catalog")]);
+        goTo("chat");
+
+        const sent = send("@catalog spawn weather-agent");
+        // The server routes the mention, and says which agent it reached.
+        const { id } = (sent.mock.calls[0]![0] as CustomEvent<{ id: string }>).detail;
+        emit("af-turn-reached", { id, agentId: "catalog", name: "catalog" });
+
+        expect(addressee()).toBe("catalog");
+        expect(localStorage.getItem("wactorz-chat-agent-id")).toBe("catalog");
+    });
+});

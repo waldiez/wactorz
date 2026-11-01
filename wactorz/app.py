@@ -18,6 +18,12 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import config, pipelines, plugins, retention
 from wactorz.agents.lookup import find_main_actor
+from wactorz.agents.main.spawn_registry import (
+    NAME_KEYED_REGISTRY_KEY,
+    SPAWN_REGISTRY_KEY,
+    SpawnRegistry,
+    placed_on,
+)
 from wactorz.agents.prompts.assemble import PromptFragment
 from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
@@ -90,6 +96,39 @@ BUILT_IN_AGENT_NAMES = frozenset(
         runtime.IO_GATEWAY_ID,
     }
 )
+
+
+def placed_on_nodes(registry: SpawnRegistry) -> dict[str, str]:
+    """Agent name to node, for every name the spawn registry keeps only on nodes.
+
+    A library agent moved to a node is recorded there like any other. Started
+    here as well, it would run twice, answering beside the copy the node
+    reconciles from its own retained state.
+    """
+    return {name: node for name, node in placed_by(registry).items() if node}
+
+
+def placed_by(registry: SpawnRegistry) -> dict[str, str]:
+    """Agent name to where the spawn registry places it: "" when one of the name is on main, else a node.
+
+    Every entry is main's to restore when it starts, wherever it places the
+    agent: one that came back from a node is restored here, from its record.
+    A library agent with an entry is therefore not supervised from its plugin
+    as well, which would start it twice, the first copy only to be stopped by
+    the restore a moment later.
+    """
+    placed: dict[str, str] = {}
+    for entry in sorted(registry, key=placed_on):
+        placed.setdefault(entry["name"], placed_on(entry))
+    return placed
+
+
+def stored_spawn_registry(db: Any) -> SpawnRegistry:
+    """Main's spawn registry as ``db`` holds it, read before main is running."""
+    return SpawnRegistry.stored(
+        db.kv_get("main", SPAWN_REGISTRY_KEY, None),
+        db.kv_get("main", NAME_KEYED_REGISTRY_KEY, None),
+    )
 
 
 def startable_plugins(found: Iterable[plugins.AgentPlugin]) -> list[plugins.AgentPlugin]:
@@ -369,6 +408,32 @@ async def _build_provider(args: argparse.Namespace, minimal: bool) -> "LLMProvid
     return provider
 
 
+class MainDidNotStartError(StartupError):
+    """Main failed on start; what it logged says why."""
+
+    def __init__(self) -> None:
+        super().__init__("the main actor did not start; see the log above for why")
+
+
+class InterfaceError(StartupError):
+    """A chat interface that cannot be run as asked."""
+
+    @classmethod
+    def no_token(cls, variable: str) -> "InterfaceError":
+        return cls(f"{variable} not set.")
+
+    @classmethod
+    def unknown(cls, interface: str) -> "InterfaceError":
+        return cls(
+            f"unknown interface {interface!r}: use cli, tui, rest, discord, whatsapp, "
+            f"telegram or {HEADLESS}"
+        )
+
+    @classmethod
+    def needs_the_tui_extra(cls) -> "InterfaceError":
+        return cls("the tui interface needs the 'tui' extra: pip install 'wactorz[tui]'")
+
+
 async def build_system(
     args: argparse.Namespace, on_system: "Callable[[ActorSystem], object] | None" = None
 ):
@@ -613,10 +678,25 @@ async def build_system(
         )
 
     # The agents this deployment brings -- WACTORZ_AGENTS, wactorz.agents entry
-    # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
+    # points of listed packages, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
+    recorded = placed_by(stored_spawn_registry(_db))
+    elsewhere = {name: node for name, node in recorded.items() if node}
     for plugin in startable_plugins(plugins.discover().values()):
+        if plugin.name in elsewhere:
+            logger.info(
+                "Not starting %r here: it was moved to node %r, which runs it.",
+                plugin.name,
+                elsewhere[plugin.name],
+            )
+            continue
+        if plugin.name in recorded:
+            logger.info(
+                "Not supervising %r from its plugin: main restores it from its record.",
+                plugin.name,
+            )
+            continue
         system.supervisor.supervise(
             plugin.name,
             make_plugin_factory(plugin),
@@ -631,6 +711,13 @@ async def build_system(
     started_pipelines = startable_pipelines(pipelines.discover().values())
     for pipe in started_pipelines:
         for agent_name, factory in pipeline_factories(pipe):
+            if agent_name in elsewhere:
+                logger.info(
+                    "Not starting %r here: it was moved to node %r, which runs it.",
+                    agent_name,
+                    elsewhere[agent_name],
+                )
+                continue
             system.supervisor.supervise(
                 agent_name,
                 factory,
@@ -670,7 +757,7 @@ async def build_system(
 
     main_actor = find_main_actor(system.registry)
     if not main_actor and not minimal:
-        raise StartupError("the main actor did not start; see the log above for why")
+        raise MainDidNotStartError()
     orchestrator = install_orchestrator(
         system, main_actor, requested=getattr(args, "orchestrator", None)
     )
@@ -932,9 +1019,7 @@ async def _run_tui(
     except ImportError as exc:
         for run in companion_runs:
             run.close()  # never started, so never awaited
-        raise StartupError(
-            "the tui interface needs the 'tui' extra: pip install 'wactorz[tui]'"
-        ) from exc
+        raise InterfaceError.needs_the_tui_extra() from exc
     bots = [asyncio.create_task(run) for run in companion_runs]
     try:
         await run_async(TUIContext(main_actor=main_actor, system=system, orchestrator=orchestrator))
@@ -950,11 +1035,13 @@ async def _run_interface(
     orchestrator: "Orchestrator | None",
     interface: str,
     companions: list[Any],
+    outbox: Any = None,
 ) -> None:
     """Run ``interface``, the system and ``companions`` until one of them ends.
 
     ``orchestrator`` answers the chat turns; ``main_actor`` is for what still
-    needs main itself. Both are None in the minimal profile.
+    needs main itself. Both are None in the minimal profile. ``outbox`` carries
+    agents' messages to a chat channel run as the primary interface.
     """
     from wactorz.interfaces.chat_interfaces import (
         CLIInterface,
@@ -1001,11 +1088,12 @@ async def _run_interface(
     elif interface == "discord":
         discord_token = args.discord_token or CONFIG.discord_token
         if not discord_token:
-            raise StartupError("DISCORD_BOT_TOKEN not set.")
+            raise InterfaceError.no_token("DISCORD_BOT_TOKEN")
         iface = DiscordInterface(
             orchestrator,
             token=discord_token,
             allowed_user_ids=CONFIG.discord_allowed_user_ids,
+            outbox=outbox,
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "whatsapp":
@@ -1017,24 +1105,23 @@ async def _run_interface(
             from_number=CONFIG.twilio_whatsapp_number,
             port=port,
             allowed_numbers=CONFIG.whatsapp_allowed_numbers,
+            outbox=outbox,
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "telegram":
         telegram_token = args.telegram_token or CONFIG.telegram_token
         if not telegram_token:
-            raise StartupError("TELEGRAM_BOT_TOKEN not set.")
+            raise InterfaceError.no_token("TELEGRAM_BOT_TOKEN")
         iface = TelegramInterface(
             orchestrator,
             token=telegram_token,
             allowed_user_id=args.telegram_allowed_user_id or None,
             allowed_user_ids=CONFIG.telegram_allowed_user_ids,
+            outbox=outbox,
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     else:
-        raise StartupError(
-            f"unknown interface {interface!r}: use cli, tui, rest, discord, whatsapp, "
-            f"telegram or {HEADLESS}"
-        )
+        raise InterfaceError.unknown(interface)
 
 
 async def _run(
@@ -1050,16 +1137,27 @@ async def _run(
     # NOTE: the monitor web UI is now started inside build_system(), before the
     # supervisor, so it binds even if the broker stalls agent startup.
 
-    from wactorz.interfaces.chat_interfaces import build_social_companions
+    from wactorz.interfaces.chat_interfaces import (
+        SOCIAL_INTERFACES,
+        Outbox,
+        build_social_companions,
+    )
 
     interface = args.interface or CONFIG.interface
 
     # Configured social channels run alongside the primary interface, not
-    # instead of it (the dashboard stays primary; the bots ride along).
-    companions = build_social_companions(orchestrator, interface) if orchestrator else []
+    # instead of it (the dashboard stays primary; the bots ride along). The
+    # outbox carries agents' messages to them, and runs only when there is a
+    # channel for it to serve.
+    outbox = Outbox(args.mqtt_broker or CONFIG.mqtt_host, args.mqtt_port or CONFIG.mqtt_port)
+    companions = (
+        build_social_companions(orchestrator, interface, outbox=outbox) if orchestrator else []
+    )
+    if orchestrator is not None and (companions or interface in SOCIAL_INTERFACES):
+        companions = [*companions, outbox]
 
     try:
-        await _run_interface(args, system, main_actor, orchestrator, interface, companions)
+        await _run_interface(args, system, main_actor, orchestrator, interface, companions, outbox)
     except StartupError:
         # The caller's to report: the command exits on it, a host program
         # catches it. Shutdown below still runs.

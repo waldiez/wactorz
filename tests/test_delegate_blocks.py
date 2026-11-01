@@ -20,10 +20,13 @@ delegation. That is enforced on the name before anything is resolved.
 import json
 from typing import Any
 
-from wactorz.agents.main.actor import MainActor
+import pytest
+
+from wactorz.agents.main.actor import MainActor, _response_delegates_to, _strip_delegate_blocks
 from wactorz.agents.main.delegation import (
     RESTRICTED_DELEGATION_ALLOW,
     DelegationManager,
+    _readable,
 )
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
@@ -83,14 +86,22 @@ class _Main:
                 return _Agent(name), True
             return (_Agent(real) if real else None), name in spawnable
 
-        async def _delegate(name: str, task: str, timeout: float = 60.0) -> Any:
-            self.dispatched.append((name, json.loads(task)))
+        async def _delegate(name: str, task: Any, timeout: float = 60.0) -> Any:
+            # Payloads travel as the structure the model wrote, not as JSON text.
+            assert isinstance(task, dict), f"payload for {name} arrived as {type(task).__name__}"
+            self.dispatched.append((name, task))
             if delegate_raises:
                 raise RuntimeError(_MAILBOX_CLOSED)
             return result if result is not None else {"text": "done"}
 
+        async def _ask_installer(payload: dict[str, Any], timeout: float = 300.0) -> Any:
+            self.installer_asks.append(payload)
+            return result if result is not None else {"output": "done"}
+
+        self.installer_asks: list[dict[str, Any]] = []
         setattr(main, "_resolve_or_spawn", _resolve)
         setattr(main.delegation, "delegate_task", _delegate)
+        setattr(main.delegation, "delegate_to_installer", _ask_installer)
         self.actor = main
 
     async def blocks(self, response: str, restricted: bool = False) -> tuple[str, list[str]]:
@@ -113,6 +124,18 @@ class _Main:
 
 def delegate(**cfg: Any) -> str:
     return f"<delegate>{json.dumps(cfg)}</delegate>"
+
+
+def test_detects_structured_home_assistant_delegation_for_voice_guard() -> None:
+    response = delegate(agent="home-assistant-agent", task="turn off all lights")
+    assert _response_delegates_to(response, "home-assistant-agent")
+    assert not _response_delegates_to(response, "weather-agent")
+
+
+def test_detects_loose_home_assistant_delegation_for_voice_guard() -> None:
+    assert _response_delegates_to(
+        "@home-assistant-agent turn off all lights", "home-assistant-agent"
+    )
 
 
 class TestReadingADelegateBlock:
@@ -415,3 +438,125 @@ class TestReportingWhatCameBack:
 
         assert "error" in answer
         assert _MAILBOX_CLOSED in answer
+
+
+class TestShowingADirectReply:
+    """What `@agent …` shows in chat: the answer, not the dict it came in."""
+
+    def test_a_message_field_is_shown_as_the_answer(self) -> None:
+        # The catalog answers in `message`.
+        reply = {"ok": True, "installing": True, "message": "Installing 6 package(s)"}
+
+        assert _readable(reply) == "Installing 6 package(s)"
+
+    def test_result_and_response_come_before_message(self) -> None:
+        assert _readable({"result": "done", "message": "working"}) == "done"
+        assert _readable({"response": "hi", "message": "working"}) == "hi"
+
+    def test_a_reply_with_no_known_field_is_shown_whole(self) -> None:
+        assert _readable({"ok": True}) == "{'ok': True}"
+
+
+def test_a_malformed_or_non_object_block_names_no_agent() -> None:
+    assert not _response_delegates_to("<delegate>{not json</delegate>", "home-assistant-agent")
+    assert not _response_delegates_to('<delegate>["a", "b"]</delegate>', "home-assistant-agent")
+
+
+class TestStoredHistoryLosesItsBlocks:
+    """A block left in history reads to the model as an example to repeat."""
+
+    def test_a_home_assistant_action_keeps_the_surrounding_words(self) -> None:
+        history = [
+            {"role": "user", "content": "lights off"},
+            {
+                "role": "assistant",
+                "content": 'Turning them off. <delegate>{"agent": "home-assistant-agent"}</delegate> Done.',
+            },
+        ]
+
+        assert _strip_delegate_blocks(history) is True
+        assert history[1]["content"] == "Turning them off.  Done."
+        assert history[0]["content"] == "lights off"
+
+    @pytest.mark.parametrize("agent", ["home-assistant-agent", "weather"])
+    def test_a_block_without_surrounding_words_gets_a_neutral_placeholder(self, agent: str) -> None:
+        history = [{"role": "assistant", "content": f'<delegate>{{"agent": "{agent}"}}</delegate>'}]
+
+        assert _strip_delegate_blocks(history) is True
+        assert history[0]["content"] == "[Delegated task]"
+        assert _strip_delegate_blocks(history) is False
+
+    def test_another_agents_block_is_cut_and_the_words_kept(self) -> None:
+        history = [
+            {
+                "role": "assistant",
+                "content": 'Asking the weather. <delegate>{"agent": "weather"}</delegate>',
+            }
+        ]
+
+        assert _strip_delegate_blocks(history) is True
+        assert history[0]["content"] == "Asking the weather."
+
+    def test_history_without_blocks_is_left_alone(self) -> None:
+        history = [
+            {"role": "user", "content": '<delegate>{"agent": "x"}</delegate>'},
+            {"role": "assistant", "content": "Just words."},
+        ]
+
+        assert _strip_delegate_blocks(history) is False
+        assert history[1]["content"] == "Just words."
+
+    @pytest.mark.parametrize(
+        "text", ["@weather check now", 'Ask @weather {"text":"now"}', "Done. @ha turn off"]
+    )
+    def test_executable_mentions_lose_their_transport_marker(self, text: str) -> None:
+        history = [{"role": "assistant", "content": text}]
+        assert _strip_delegate_blocks(history)
+        assert "@" not in history[0]["content"]
+
+    def test_a_prose_mention_is_preserved(self) -> None:
+        history = [{"role": "assistant", "content": "You can use @weather for forecasts."}]
+        assert not _strip_delegate_blocks(history)
+
+
+class TestAskingTheInstaller:
+    """The model reaches a node by named operation; a command is the operator's to type."""
+
+    async def test_a_command_for_a_node_is_refused_with_the_way_to_run_it(self) -> None:
+        main = _Main(running=("installer",))
+
+        text, _ = await main.blocks(
+            delegate(agent="installer", payload={"action": "node_run", "command": "reboot"})
+        )
+
+        assert main.dispatched == []
+        assert "/nodes run" in text
+
+    async def test_a_mention_cannot_send_one_either(self) -> None:
+        main = _Main(running=("installer",))
+
+        result = await main.run_one("installer", {"action": "node_run", "command": "reboot"})
+
+        assert main.dispatched == []
+        assert "/nodes run" in result
+
+    async def test_a_named_operation_reaches_it_as_the_payload_itself(self) -> None:
+        # The installer reads `action` from the payload it is sent; wrapped as
+        # task text, every request would read as an install of nothing.
+        main = _Main(running=("installer",))
+        payload = {"action": "node_op", "node_name": "rpi", "operation": "disk"}
+
+        text, _ = await main.blocks(delegate(agent="installer", payload=payload))
+
+        assert main.installer_asks == [payload]
+        assert main.dispatched == []
+        assert "output=done" in text
+
+    async def test_its_refusal_is_reported(self) -> None:
+        main = _Main(running=("installer",), result={"error": "no deploy target 'rpi'"})
+
+        result = await main.run_one(
+            "installer", {"action": "node_op", "node_name": "rpi", "operation": "disk"}
+        )
+
+        assert result == "❌ installer failed: no deploy target 'rpi'"

@@ -29,7 +29,6 @@ the outside world without saying so; that is what a first step is for.
 
 from __future__ import annotations
 
-import importlib.metadata
 import logging
 import time
 from collections.abc import Iterable, Iterator
@@ -37,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import plugins
+from . import installed, plugins
 from .agents.rule_agent import RuleConfig
 from .config import CONFIG
 from .core.topic_bus import topic_matches
@@ -179,6 +178,30 @@ def _step_plugin(step: Any, pipeline_name: str) -> AgentPlugin:
     return plugin
 
 
+class PipelineError(ValueError):
+    """A pipeline declared without what it needs."""
+
+    @classmethod
+    def no_name(cls) -> PipelineError:
+        return cls("a pipeline needs a name")
+
+    @classmethod
+    def empty(cls, name: str) -> PipelineError:
+        return cls(f"pipeline {name!r} has neither steps nor rules")
+
+
+class NotAPipelineError(TypeError):
+    """An entry point that holds something other than pipelines."""
+
+    @classmethod
+    def holds(cls, target: str, item: Any) -> NotAPipelineError:
+        return cls(f"{target} holds {item!r}, which is not a Pipeline")
+
+    @classmethod
+    def is_not(cls, target: str) -> NotAPipelineError:
+        return cls(f"{target} is not a Pipeline")
+
+
 def pipeline(
     name: str,
     steps: Iterable[Any] = (),
@@ -198,11 +221,11 @@ def pipeline(
     pipeline that cannot work, saying what is wrong.
     """
     if not name or not name.strip():
-        raise ValueError("a pipeline needs a name")
+        raise PipelineError.no_name()
     step_plugins = tuple(_step_plugin(step, name) for step in steps)
     rule_configs = tuple(r if isinstance(r, RuleConfig) else RuleConfig.from_dict(r) for r in rules)
     if not step_plugins and not rule_configs:
-        raise ValueError(f"pipeline {name!r} has neither steps nor rules")
+        raise PipelineError.empty(name)
     rule_names = tuple(
         f"{name}-rule-{index + 1}" if len(rule_configs) > 1 else f"{name}-rule"
         for index in range(len(rule_configs))
@@ -312,10 +335,10 @@ def _from_object(obj: Any, target: str) -> dict[str, Pipeline]:
         found = {}
         for item in obj:
             if not isinstance(item, Pipeline):
-                raise TypeError(f"{target} holds {item!r}, which is not a Pipeline")
+                raise NotAPipelineError.holds(target, item)
             found[item.name] = item
     else:
-        raise TypeError(f"{target} is not a Pipeline")
+        raise NotAPipelineError.is_not(target)
     for pipe in found.values():
         if not pipe.target:
             object.__setattr__(pipe, "target", target)
@@ -324,7 +347,7 @@ def _from_object(obj: Any, target: str) -> dict[str, Pipeline]:
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         logger.warning("[pipelines] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []

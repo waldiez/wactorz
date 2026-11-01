@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from ..config import CONFIG
 from .chat.cli import CLIInterface, resolve_host
 from .chat.discord import DiscordInterface
+from .chat.outbound import Outbox
 from .chat.rest import RESTInterface
 from .chat.social import SocialRateLimiter, missing_dependency, social_channel_blocked
 from .chat.telegram import TelegramInterface
@@ -22,7 +23,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def build_social_companions(orchestrator: "Orchestrator", primary: str) -> list:
+#: The interfaces that are chat channels a person is reached on, as the
+#: ``--interface`` flag names them. Each registers with the outbox when it runs.
+SOCIAL_INTERFACES = frozenset({"discord", "telegram", "whatsapp"})
+
+
+def build_social_companions(
+    orchestrator: "Orchestrator", primary: str, *, outbox: Outbox | None = None
+) -> list:
     """Discord/Telegram interfaces to run alongside the primary interface.
 
     These talk to the orchestrator as a social channel (no spawn/delete/code), so
@@ -30,7 +38,8 @@ def build_social_companions(orchestrator: "Orchestrator", primary: str) -> list:
     exposes them. Skips a channel that's already the primary (no duplicate login),
     one whose library is missing, and one with no sender allow-list — each with a
     log line saying why. Returns interface objects, not coroutines, so the
-    selection is easy to unit-test.
+    selection is easy to unit-test. ``outbox`` is what carries agents' messages
+    to them; each channel registers with it as it comes up.
     """
     companions: list = []
     if CONFIG.discord_token and primary != "discord":
@@ -45,6 +54,7 @@ def build_social_companions(orchestrator: "Orchestrator", primary: str) -> list:
                     orchestrator,
                     token=CONFIG.discord_token,
                     allowed_user_ids=CONFIG.discord_allowed_user_ids,
+                    outbox=outbox,
                 )
             )
             logger.info("Discord companion interface enabled (alongside '%s').", primary)
@@ -60,6 +70,7 @@ def build_social_companions(orchestrator: "Orchestrator", primary: str) -> list:
                     orchestrator,
                     token=CONFIG.telegram_token,
                     allowed_user_ids=CONFIG.telegram_allowed_user_ids,
+                    outbox=outbox,
                 )
             )
             logger.info("Telegram companion interface enabled (alongside '%s').", primary)
@@ -67,13 +78,19 @@ def build_social_companions(orchestrator: "Orchestrator", primary: str) -> list:
 
 
 def run_all_interfaces(interfaces: list) -> list:
-    """Turn companion interface objects into their ``.run()`` coroutines for gather."""
+    """Turn companion interface objects into their ``.run()`` coroutines for gather.
+
+    The outbox goes in the same list: it has a ``run`` of the same shape, and
+    runs for as long as the channels it serves.
+    """
     return [iface.run() for iface in interfaces]
 
 
 __all__ = [
+    "SOCIAL_INTERFACES",
     "CLIInterface",
     "DiscordInterface",
+    "Outbox",
     "RESTInterface",
     "SocialRateLimiter",
     "TelegramInterface",

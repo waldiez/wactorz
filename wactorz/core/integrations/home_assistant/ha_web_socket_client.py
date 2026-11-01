@@ -29,6 +29,50 @@ T = TypeVar("T")
 _RESPONSE_TIMEOUT = 60
 
 
+class HAWebSocketError(RuntimeError):
+    """Home Assistant's websocket refused, or answered with a failure."""
+
+    @classmethod
+    def not_connected(cls) -> "HAWebSocketError":
+        return cls("No WS client")
+
+    @classmethod
+    def unexpected_hello(cls, hello: Any) -> "HAWebSocketError":
+        return cls(f"Unexpected hello: {hello}")
+
+    @classmethod
+    def auth_failed(cls, resp: Any) -> "HAWebSocketError":
+        return cls(f"Auth failed: {resp}")
+
+    @classmethod
+    def call_failed(cls, resp: Any) -> "HAWebSocketError":
+        return cls(f"WS call failed: {resp}")
+
+    @classmethod
+    def subscribe_failed(cls, resp: Any) -> "HAWebSocketError":
+        return cls(f"WS subscribe failed: {resp}")
+
+
+class HAWebSocketTimeoutError(TimeoutError):
+    """Home Assistant did not answer a request within `_RESPONSE_TIMEOUT`."""
+
+    @classmethod
+    def no_answer(cls, ws_type: str) -> "HAWebSocketTimeoutError":
+        return cls(f"Home Assistant did not answer {ws_type!r} within {_RESPONSE_TIMEOUT}s")
+
+    @classmethod
+    def no_confirmation(cls) -> "HAWebSocketTimeoutError":
+        return cls(f"Home Assistant did not confirm the subscription within {_RESPONSE_TIMEOUT}s")
+
+
+class HAPayloadError(TypeError):
+    """A websocket frame that is not the JSON object every Home Assistant message is."""
+
+    @classmethod
+    def not_an_object(cls, payload: Any) -> "HAPayloadError":
+        return cls(f"Unexpected websocket payload: {payload!r}")
+
+
 async def _measured(command: str, request: Awaitable[T]) -> T:
     """Await one request to Home Assistant, counting and timing it by ``command``.
 
@@ -86,7 +130,7 @@ class HAWebSocketClient:
     async def _recv(self, timeout: float | None) -> Any:
         """Receive one frame, optionally bounded. `None` waits indefinitely."""
         if self._ws is None:
-            raise RuntimeError("No WS client")
+            raise HAWebSocketError.not_connected()
         raw = self._ws.recv()
         if timeout is not None:
             raw = asyncio.wait_for(raw, timeout=timeout)
@@ -94,15 +138,15 @@ class HAWebSocketClient:
 
     async def _authenticate(self):
         if self._ws is None:
-            raise RuntimeError("No WS client")
+            raise HAWebSocketError.not_connected()
         hello = await self._recv(_RESPONSE_TIMEOUT)
         if hello.get("type") != "auth_required":
-            raise RuntimeError(f"Unexpected hello: {hello}")
+            raise HAWebSocketError.unexpected_hello(hello)
 
         await self._ws.send(json.dumps({"type": "auth", "access_token": self.token}))
         resp = await self._recv(_RESPONSE_TIMEOUT)
         if resp.get("type") != "auth_ok":
-            raise RuntimeError(f"Auth failed: {resp}")
+            raise HAWebSocketError.auth_failed(resp)
 
     async def call(self, ws_type: str, **kwargs) -> Any:
         """Call a Home Assistant WebSocket command and return result payload.
@@ -114,7 +158,7 @@ class HAWebSocketClient:
     async def _call(self, ws_type: str, **kwargs) -> Any:
         """The exchange itself: send the command, read until its answer arrives."""
         if self._ws is None:
-            raise RuntimeError("No WS client")
+            raise HAWebSocketError.not_connected()
         self._msg_id += 1
         msg_id = self._msg_id
 
@@ -129,13 +173,11 @@ class HAWebSocketClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
-                    f"Home Assistant did not answer {ws_type!r} within {_RESPONSE_TIMEOUT}s"
-                )
+                raise HAWebSocketTimeoutError.no_answer(ws_type)
             resp = await self._recv(remaining)
             if resp.get("id") == msg_id:
                 if not resp.get("success"):
-                    raise RuntimeError(f"WS call failed: {resp}")
+                    raise HAWebSocketError.call_failed(resp)
                 return resp.get("result")
 
     async def receive_json(self, timeout: float | None = None) -> dict[str, Any]:
@@ -147,7 +189,7 @@ class HAWebSocketClient:
         """
         payload = await self._recv(timeout)
         if not isinstance(payload, dict):
-            raise TypeError(f"Unexpected websocket payload: {payload!r}")
+            raise HAPayloadError.not_an_object(payload)
         return payload
 
     async def subscribe_events(self, event_type: str | None = None) -> int:
@@ -161,7 +203,7 @@ class HAWebSocketClient:
     async def _subscribe(self, event_type: str | None) -> int:
         """The exchange itself: ask for the events, read until it is confirmed."""
         if self._ws is None:
-            raise RuntimeError("No WS client")
+            raise HAWebSocketError.not_connected()
         self._msg_id += 1
         msg_id = self._msg_id
 
@@ -174,14 +216,12 @@ class HAWebSocketClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
-                    f"Home Assistant did not confirm the subscription within {_RESPONSE_TIMEOUT}s"
-                )
+                raise HAWebSocketTimeoutError.no_confirmation()
             resp = await self.receive_json(remaining)
             if resp.get("id") != msg_id:
                 continue
             if not resp.get("success"):
-                raise RuntimeError(f"WS subscribe failed: {resp}")
+                raise HAWebSocketError.subscribe_failed(resp)
             return msg_id
 
     async def receive_event(self, subscription_id: int) -> dict[str, Any]:

@@ -8,15 +8,6 @@
   height: 100%;
   overflow: hidden;
 }
-.af-chat-pane-via {
-  margin-left: auto;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-family: monospace;
-}
 .af-chat-thread {
   flex: 1;
   overflow-y: auto;
@@ -37,27 +28,28 @@
   color: rgba(255, 255, 255, 0.6);
   text-align: center;
 }
-.af-stream-caret {
-  margin-left: 2px;
-  opacity: 0.75;
-  animation: af-caret-blink 0.7s ease-in-out infinite;
+.af-chat-choices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-@keyframes af-caret-blink {
-  0%,
-  100% {
-    opacity: 0.75;
-  }
-  50% {
-    opacity: 0.2;
-  }
+.af-chat-choices a {
+  color: #8ab4ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
-
 /* ── IO Bar (embedded in af-root) ── */
+/* The last row of the dashboard, so it alone meets the screen's bottom edge and
+   keeps the home indicator's room below its controls. */
 .af-iobar {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   padding: 8px 12px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   border-top: 1px solid rgba(37, 99, 235, 0.15);
   background: rgba(4, 8, 16, 0.9);
   flex-shrink: 0;
@@ -140,7 +132,7 @@
 }
 .af-input-hint {
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.18);
+  color: var(--af-text-dim);
   padding: 0 2px;
   display: none;
   user-select: none;
@@ -187,6 +179,52 @@
   background: rgba(37, 99, 235, 0.28);
   border-color: #3b82f6;
   color: #fff;
+}
+/* The `/` command list: one row per way to type a command, above the box. */
+.af-command-list {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  background: rgba(9, 18, 40, 0.97);
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  border-radius: 10px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  z-index: 200;
+}
+.af-command-list[hidden] {
+  display: none;
+}
+.af-command-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.af-command-option:hover,
+.af-command-option.active {
+  background: rgba(37, 99, 235, 0.28);
+}
+.af-command-usage {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  color: #fff;
+  white-space: nowrap;
+}
+.af-command-summary {
+  font-size: 12px;
+  color: var(--af-text-dim);
+}
+.af-command-option.active .af-command-summary {
+  color: rgba(255, 255, 255, 0.85);
 }
 .af-send-btn {
   width: 32px;
@@ -235,39 +273,6 @@
   background: #f59e0b;
   transform: scale(1.05);
 }
-.af-voice-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(37, 99, 235, 0.12);
-  border: 1px solid rgba(37, 99, 235, 0.3);
-  color: #93c5fd;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.af-voice-btn:hover {
-  background: rgba(37, 99, 235, 0.22);
-}
-.af-voice-btn.recording {
-  background: rgba(239, 68, 68, 0.2);
-  border-color: rgba(239, 68, 68, 0.5);
-  animation: mic-pulse 1s ease-in-out infinite;
-}
-.af-voice-btn.ambient {
-  background: rgba(34, 197, 94, 0.15);
-  border-color: rgba(34, 197, 94, 0.4);
-  animation: wake-pulse 2s ease-in-out infinite;
-}
-.af-voice-btn.triggered {
-  background: rgba(251, 191, 36, 0.2);
-  border-color: rgba(251, 191, 36, 0.5);
-  animation: none;
-}
-
 @media (max-width: 1100px) {
   .af-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -275,29 +280,6 @@
   .af-overview-panels {
     grid-template-columns: 1fr;
   }
-}
-
-.cd-topbar {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 14px 24px 10px;
-  border-bottom: 1px solid rgba(61, 214, 140, 0.12);
-  background: rgba(8, 15, 30, 0.95);
-  flex-shrink: 0;
-}
-.cd-title {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: #3dd68c;
-  text-transform: uppercase;
-}
-.cd-subtitle {
-  font-size: 11px;
-  color: #475569;
-  letter-spacing: 0.08em;
 }
 
 /* Flash animations */

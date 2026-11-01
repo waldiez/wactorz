@@ -45,6 +45,10 @@
   gap: 4px;
   align-items: center;
 }
+/* A landmark for assistive technology only: its buttons lay out as the header's own. */
+.af-view-nav {
+  display: contents;
+}
 .af-title {
   font-size: 14px;
   font-weight: 600;
@@ -57,7 +61,7 @@
 .af-version {
   font-size: 10px;
   font-weight: 500;
-  color: #64748b;
+  color: var(--af-text-dim);
   letter-spacing: 0.02em;
   align-self: flex-start;
   margin-top: 1px;
@@ -81,7 +85,7 @@
   background: rgba(96, 165, 250, 0.08);
   animation: af-connecting-blink 1s ease-in-out infinite;
 }
-.af-conn-demo {
+.af-conn-disconnected {
   color: #a78bfa;
   border-color: rgba(167, 139, 250, 0.35);
   background: rgba(167, 139, 250, 0.08);
@@ -267,13 +271,14 @@
 }
 
 /* ── Bottom nav (mobile only — hidden on desktop) ───────────────────── */
+/* No safe-area padding: the message box below it is what meets the screen's
+   edge, and it keeps the inset (`.af-iobar`, dashboard-chat.css). */
 .af-bottom-nav {
   display: none; /* shown via @media below */
   flex-shrink: 0;
   position: relative;
   background: rgba(4, 8, 20, 0.97);
   border-top: 1px solid rgba(37, 99, 235, 0.2);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 .af-bottom-tab {
   flex: 1;
@@ -350,7 +355,7 @@
   min-height: 0;
 }
 
-/* ── Confirmation dialog (see ui/dashboard/confirmDialog.ts) ────────── */
+/* ── Confirmation dialog (see ui/shell/confirmDialog.ts) ────────── */
 .af-confirm-backdrop {
   position: fixed;
   inset: 0;

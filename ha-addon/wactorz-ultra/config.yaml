@@ -1,5 +1,5 @@
 name: Wactorz Ultra
-version: "0.7.0"
+version: "0.7.2"
 slug: wactorz-ultra
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime. Also run machine learning models for data analysis, like image recognition.
 url: https://github.com/waldiez/wactorz
@@ -117,6 +117,11 @@ options:
   # "Remote edge nodes" in the documentation before adding entries.
   deploy_targets: []
 
+  # Installed packages whose extensions, agents and pipelines are loaded: their
+  # distribution names, comma separated, or `*` for all. Leave blank and none
+  # are; what the add-on itself ships always loads.
+  extensions: ""
+
   # What a deployed node does with a control message that is not signed for it.
   # enforce (default): refuses it -- this add-on signs everything it sends a node,
   # so an unsigned command came from something else on the broker. warn: acts on
@@ -132,6 +137,13 @@ options:
   # configuration; until you do, its broker knows no such accounts. A node picks
   # its account up on its next /deploy.
   node_accounts: false
+
+  # A node in this add-on, under a user of its own, where code the model writes
+  # runs instead of beside the add-on's secrets: the model's API key, Home
+  # Assistant's token, your nodes' SSH keys. It needs node_accounts on (or the
+  # embedded broker), so that it has a broker account of its own. Agents that
+  # need main's credentials or devices stay in the add-on.
+  sandbox_node: false
 
   # With the embedded broker and at least one deployed node, a node's account may
   # use its own topics, the agent traffic every host shares, and the data topics
@@ -212,8 +224,10 @@ schema:
   retention_chat_days: int
   retention_timeseries_days: int
   retention_outbox_days: int
+  extensions: str?
   node_signing: list(warn|enforce)?
   node_accounts: bool?
+  sandbox_node: bool?
   node_topics: str?
   broker_accounts: str?
   deploy_targets:
@@ -228,6 +242,7 @@ schema:
       broker_password: password?
       broker_tls: list(auto|on|off)?
       broker_tls_port: port?
+      extensions: str?
       ssh_port: port?
 
 # ── Environment variables injected into the container ─────────────────────────

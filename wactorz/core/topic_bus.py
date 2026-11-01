@@ -56,6 +56,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .addresses import MAIN_NODE, Address, node_of
+from .labels import event_time
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,6 +164,11 @@ class TopicContract:
         self.publishes = [t for t in self.publishes if t not in _BOGUS]
         self.subscribes = [t for t in self.subscribes if t not in _BOGUS]
 
+    @property
+    def place(self) -> str:
+        """The host the agent runs on: its node, or `MAIN_NODE`."""
+        return node_of(self.node or MAIN_NODE)
+
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
         return any(topic_matches(pattern, topic) for pattern in self.subscribes)
@@ -230,6 +238,7 @@ class TopicContract:
             produces_schema=config.get("produces_schema", config.get("output_schema", {})),
             consumes_schema=config.get("consumes_schema", config.get("input_schema", {})),
             node=config.get("node"),
+            actor_id=config.get("actor_id"),
         )
 
 
@@ -281,10 +290,15 @@ class TopicRegistry:
     """
 
     def __init__(self):
-        self._contracts: dict[str, TopicContract] = {}  # name → contract
+        #: By the agent's id, since two agents on two hosts may share a name. A
+        #: contract written before its agent's id was known is under the name,
+        #: until the contract with the id replaces it.
+        self._contracts: dict[str, TopicContract] = {}
 
     def register(self, contract: TopicContract):
-        self._contracts[contract.name] = contract
+        if contract.actor_id and self._is_unidentified(contract.name, contract.place):
+            del self._contracts[contract.name]
+        self._contracts[contract.actor_id or contract.name] = contract
         logger.debug(
             "[TopicRegistry] Registered '%s' | pub=%s sub=%s",
             contract.name,
@@ -292,37 +306,92 @@ class TopicRegistry:
             contract.subscribes,
         )
 
-    def unregister(self, name: str):
-        removed = self._contracts.pop(name, None)
-        if removed:
-            logger.info(
-                "[TopicRegistry] Unregistered '%s' | pub=%s sub=%s",
-                name,
-                removed.publishes,
-                removed.subscribes,
-            )
+    def unregister(self, name: str, actor_id: str | None = None, node: str | None = None):
+        """Forget the agent ``actor_id``, on ``node``; with no id, every agent called ``name``.
 
-    def prune_stale(self, live_agent_names: set[str]) -> list[str]:
+        A contract written before the agent's id was known goes with it, when
+        it is for the same host: one for another host is another agent's.
+        """
+        if actor_id:
+            held = self._contracts.get(actor_id)
+            place = held.place if held is not None else node_of(node or MAIN_NODE)
+            keys = [actor_id]
+            if self._is_unidentified(name, place):
+                keys.append(name)
+        else:
+            keys = [key for key, c in self._contracts.items() if c.name == name]
+        for key in keys:
+            removed = self._contracts.pop(key, None)
+            if removed:
+                logger.info(
+                    "[TopicRegistry] Unregistered '%s' | pub=%s sub=%s",
+                    removed.name,
+                    removed.publishes,
+                    removed.subscribes,
+                )
+
+    def _is_unidentified(self, name: str, place: str) -> bool:
+        """Whether ``place``'s agent called ``name`` has a contract that holds no id yet."""
+        held = self._contracts.get(name)
+        return held is not None and held.place == place
+
+    def prune_stale(self, live: set[Address]) -> list[str]:
         """Remove contracts for agents that are no longer running.
 
         Call this before plan generation to ensure the planner doesn't wire
-        against topics from stopped/deleted/replaced agents. Returns the
-        list of pruned agent names.
+        against topics from stopped/deleted/replaced agents. ``live`` says
+        where each running agent is, so the copy of a name on a node that went
+        away goes while another of that name stays; a contract that names no
+        node is kept while its name runs anywhere. Returns the names pruned.
 
         Usage:
             if registry:
-                live = {a.name for a in registry.all_actors()}
+                live = {Address(a.name, MAIN_NODE) for a in registry.all_actors()}
                 pruned = bus.registry.prune_stale(live)
         """
-        stale = [name for name in self._contracts if name not in live_agent_names]
-        for name in stale:
-            self.unregister(name)
-        if stale:
-            logger.info("[TopicRegistry] Pruned %s stale contract(s): %s", len(stale), stale)
-        return stale
+        names = {address.name for address in live}
+        stale = [
+            (key, c)
+            for key, c in self._contracts.items()
+            if not (Address(c.name, c.place) in live or (not c.node and c.name in names))
+        ]
+        for key, contract in stale:
+            self.unregister(contract.name, key)
+        pruned = [contract.name for _, contract in stale]
+        if pruned:
+            logger.info("[TopicRegistry] Pruned %s stale contract(s): %s", len(pruned), pruned)
+        return pruned
 
-    def get(self, name: str) -> TopicContract | None:
-        return self._contracts.get(name)
+    def named(self, name: str) -> list[TopicContract]:
+        """Every contract of ``name``, main's first."""
+        found = [c for c in self._contracts.values() if c.name == name]
+        return sorted(found, key=lambda c: (c.place != MAIN_NODE, c.place))
+
+    def get(
+        self, name: str, actor_id: str | None = None, node: str | None = None
+    ) -> TopicContract | None:
+        """The contract of the agent ``actor_id``, called ``name``, on ``node``; never another's.
+
+        With no id, that of the agent called ``name``: main's, if two share it.
+        """
+        if actor_id:
+            held = self._contracts.get(actor_id)
+            if held is None and self._is_unidentified(name, node_of(node or MAIN_NODE)):
+                held = self._contracts.get(name)
+            return held
+        found = self.named(name)
+        return found[0] if found else None
+
+    def at(self, name: str, node: str) -> TopicContract | None:
+        """The contract of the agent ``name`` on ``node``."""
+        place = node_of(node)
+        return next((c for c in self.named(name) if c.place == place), None)
+
+    def label(self, contract: TopicContract) -> str:
+        """What the planner calls the agent: its name, with its node where the name is shared."""
+        if len(self.named(contract.name)) > 1:
+            return str(Address(contract.name, contract.place))
+        return contract.name
 
     def all_contracts(self) -> list[TopicContract]:
         return list(self._contracts.values())
@@ -354,7 +423,7 @@ class TopicRegistry:
         for producer in contracts:
             for pub_topic in producer.publishes:
                 for consumer in contracts:
-                    if consumer.name == producer.name:
+                    if consumer is producer:
                         continue
                     if consumer.matches_topic(pub_topic):
                         opportunities.append((producer, consumer, pub_topic))
@@ -379,8 +448,8 @@ class TopicRegistry:
             return "No topic contracts registered yet."
 
         lines = ["LIVE DATA FLOWS (topic contracts):"]
-        for c in sorted(self._contracts.values(), key=lambda x: x.name):
-            lines.append(f"\n  [{c.name}]" + (f" on {c.node}" if c.node else ""))
+        for c in sorted(self._contracts.values(), key=lambda x: (x.name, x.place)):
+            lines.append(f"\n  [{self.label(c)}]" + (f" on {c.node}" if c.node else ""))
             if c.description:
                 lines.append(f"    about     : {planner_description(c.description)}")
             if c.publishes:
@@ -402,7 +471,7 @@ class TopicRegistry:
         if pairs:
             lines.append("\nAUTO-WIREABLE PAIRS (producer → consumer via topic):")
             for prod, cons, topic in pairs[:10]:  # limit for prompt size
-                lines.append(f"  {prod.name} → {cons.name}  via {topic}")
+                lines.append(f"  {self.label(prod)} → {self.label(cons)}  via {topic}")
 
         return "\n".join(lines)
 
@@ -517,22 +586,37 @@ class StreamWindow:
             avg = w.mean('value')
     """
 
-    def __init__(self, topic: str, seconds: float = 300, max_size: int = 1000):
+    def __init__(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ):
         self.topic = topic
         self.seconds = seconds
         self.max_size = max_size
+        #: Whether entries are timed by what the payload says (``ts``, then
+        #: ``timestamp``) rather than by when they arrived, and the window's
+        #: end is the newest entry rather than the wall clock: for a replay,
+        #: or a source whose clock is not this machine's. Off, as every agent
+        #: written before it expects (docs/design/event-time.md).
+        self.event_time = event_time
         self._buffer: deque = deque(maxlen=max_size)
         self._task: asyncio.Task | None = None
 
+    def _now(self) -> float:
+        """Where the window ends: now, or the newest entry's time in event time."""
+        if self.event_time and self._buffer:
+            return self._buffer[-1]["_ts"]
+        return time.time()
+
     def _trim(self):
         """Remove entries older than the window duration."""
-        cutoff = time.time() - self.seconds
+        cutoff = self._now() - self.seconds
         while self._buffer and self._buffer[0]["_ts"] < cutoff:
             self._buffer.popleft()
 
     def push(self, payload: Any):
         """Add a new data point to the window."""
-        entry = {"_ts": time.time()}
+        arrived = time.time()
+        entry = {"_ts": event_time(payload, default=arrived) if self.event_time else arrived}
         if isinstance(payload, dict):
             entry.update(payload)
         else:
@@ -605,14 +689,14 @@ class StreamWindow:
         latest = self.latest()
         if latest is None:
             return True
-        return (time.time() - latest["_ts"]) >= seconds
+        return (self._now() - latest["_ts"]) >= seconds
 
     def event_count(
         self, key: str | None = None, value: Any = None, seconds: float | None = None
     ) -> int:
         """Count events matching optional key=value in the last N seconds."""
         self._trim()
-        cutoff = time.time() - (seconds or self.seconds)
+        cutoff = self._now() - (seconds or self.seconds)
         count = 0
         for e in self._buffer:
             if e["_ts"] < cutoff:
@@ -696,13 +780,15 @@ class TopicBus:
         self.registry.register(contract)
         self._log_wiring_opportunities(contract)
 
-    def unregister(self, agent_name: str):
+    def unregister(self, agent_name: str, actor_id: str | None = None, node: str | None = None):
         """Remove an agent's contract when it stops."""
-        self.registry.unregister(agent_name)
+        self.registry.unregister(agent_name, actor_id, node)
 
-    def make_window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+    def make_window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> StreamWindow:
         """Create and start a StreamWindow for an agent."""
-        window = StreamWindow(topic, seconds=seconds, max_size=max_size)
+        window = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
         window.start(self._mqtt_broker, self._mqtt_port)
         return window
 

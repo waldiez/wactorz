@@ -6,17 +6,24 @@ choosing the weakest privilege the node actually supports and reporting which
 one it got: a node that quietly fell back to `nohup` is otherwise
 indistinguishable from a supervised one.
 
-The ladder is root, then a user unit, then passwordless sudo, then `nohup`.
-A user unit sits ahead of sudo deliberately — it needs no privilege at all —
-but it only counts when lingering is on, because without it the unit dies with
-the last session and fails the very thing this module is for.
+The ladder is root, then a unit set up beforehand by `wactorz-node
+setup-local`, then a user unit, then passwordless sudo, then `nohup`. A user
+unit sits ahead of sudo deliberately — it needs no privilege at all — but it
+only counts when lingering is on, because without it the unit dies with the
+last session and fails the very thing this module is for.
+
+The unit set up beforehand is the local node's: a sandboxed system unit for an
+unprivileged user, written once by root (see :mod:`wactorz.node.local_setup`).
+A deploy may restart it and nothing more, so the sandbox is root's to change,
+never the deploy's -- and never the code running inside it.
 
 Commands run through an injected callable rather than an SSH connection, so the
 ladder is testable without a node.
 """
 
 import logging
-from collections.abc import Awaitable, Callable
+import shlex
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -48,6 +55,7 @@ class Rung:
 
 
 ROOT = Rung("root", "systemd (system)", True)
+MANAGED = Rung("managed", "systemd (system, sandboxed, set up by setup-local)", True)
 USER = Rung("user", "systemd (user)", False)
 SUDO = Rung("sudo", "systemd (system, sudo)", True)
 NOHUP = Rung("nohup", "nohup — unsupervised", False)
@@ -112,6 +120,80 @@ def unit_file(home: str, user: str, *, system: bool) -> str:
     return "\n".join(lines)
 
 
+#: The first line of a unit `wactorz-node setup-local` wrote, which is how a
+#: deploy knows to restart it rather than write its own.
+MANAGED_MARKER = (
+    "# Set up by `wactorz-node setup-local`. A deploy restarts this unit, never rewrites it."
+)
+
+
+def sandboxed_unit_file(home: str, user: str, hidden: Sequence[str] = ()) -> str:
+    """The local node's system unit: ``unit_file``'s, inside a sandbox.
+
+    The code this node runs is written by a model, possibly from text someone
+    else wrote, so the unit holds it to the node's own state directory: the rest
+    of the file system read-only, homes and ``hidden`` (main's settings and
+    state) not there at all, no devices, no capabilities, no way to gain
+    privilege, other users' processes invisible. The venv is read-only too, so
+    code here cannot change what the next start runs.
+
+    Libraries that cache under ``~/.cache`` are pointed into the state
+    directory, the one place they can write.
+    """
+    body = unit_file(home, user, system=True)
+    state = f"{home}/wactorz/state"
+    sandbox = [
+        "# Model-written code runs here: the sandbox is the point of this node.",
+        "NoNewPrivileges=yes",
+        "CapabilityBoundingSet=",
+        "AmbientCapabilities=",
+        # Strict is what holds the node's own home read-only: it is under
+        # /var/lib, not /home, so ProtectHome does not reach it. `full` would
+        # leave /var writable, home and venv with it.
+        "ProtectSystem=strict",
+        "ProtectHome=yes",
+        f"ReadWritePaths={_unit_path_value(state)}",
+        *(f"InaccessiblePaths=-{_unit_path_value(path)}" for path in hidden),
+        "PrivateTmp=yes",
+        "PrivateDevices=yes",
+        "ProtectKernelTunables=yes",
+        "ProtectKernelModules=yes",
+        "ProtectKernelLogs=yes",
+        "ProtectControlGroups=yes",
+        "ProtectClock=yes",
+        "ProtectHostname=yes",
+        "ProtectProc=invisible",
+        "RestrictNamespaces=yes",
+        "RestrictRealtime=yes",
+        "RestrictSUIDSGID=yes",
+        "LockPersonality=yes",
+        "SystemCallArchitectures=native",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+        "UMask=0077",
+        f"Environment=XDG_CACHE_HOME={_unit_path_value(state)}/.cache",
+        "",
+    ]
+    head, install = body.split("[Install]", 1)
+    return (
+        MANAGED_MARKER
+        + "\n"
+        + head.rstrip("\n")
+        + "\n"
+        + "\n".join(sandbox)
+        + "\n[Install]"
+        + install
+    )
+
+
+def _unit_path_value(path: str) -> str:
+    """``path`` as a unit file value: ``%`` starts a specifier there, so it is doubled.
+
+    Whitespace and quotes would split or end the value; the caller refuses such
+    paths before they reach a unit (see :func:`wactorz.node.local_setup.unit_safe`).
+    """
+    return path.replace("%", "%%")
+
+
 def user_unit_path(home: str) -> str:
     return f"{home}/.config/systemd/user/{UNIT_NAME}"
 
@@ -124,7 +206,7 @@ def systemctl(rung: Rung) -> str:
     """The `systemctl` invocation that reaches this rung's manager."""
     if rung is USER:
         return f"{USER_ENV}systemctl --user"
-    if rung is SUDO:
+    if rung is SUDO or rung is MANAGED:
         return "sudo -n systemctl"
     return "systemctl"
 
@@ -156,12 +238,40 @@ async def choose_rung(run: Runner) -> Rung:
     """The weakest rung this node can actually hold."""
     if (await run("id -u"))[1].strip() == "0":
         return ROOT
+    if await managed_unit_here(run):
+        return MANAGED
     user_manager, _ = await run(f"{USER_ENV}systemctl --user show --property=Version")
     if user_manager and await linger_enabled(run):
         return USER
     if (await run("sudo -n true"))[0]:
         return SUDO
     return NOHUP
+
+
+async def managed_unit_here(run: Runner) -> bool:
+    """Whether root set this node's unit up beforehand, and lets this user restart it.
+
+    Both, read from the node: the marker on the unit's first line, and sudo
+    saying -- without asking for a password -- that the restart is allowed.
+
+    A marked unit sudo will not restart is said at warning: the deploy then
+    takes a weaker rung, and without the line that would look like the setup
+    had been undone. The usual cause is the sudoers rule naming a different
+    ``systemctl`` from the one sudo's ``secure_path`` finds, on a system whose
+    ``/bin`` and ``/usr/bin`` are not merged.
+    """
+    marked = f"head -n 1 {SYSTEM_UNIT_PATH} 2>/dev/null | grep -qxF {shlex.quote(MANAGED_MARKER)}"
+    if not (await run(marked))[0]:
+        return False
+    if (await run(f"sudo -n -l systemctl restart {UNIT_NAME} >/dev/null 2>&1"))[0]:
+        return True
+    logger.warning(
+        "This node's unit was set up by setup-local, but sudo will not let this user restart "
+        "it, so the deploy installs a unit of its own. Check the rule in /etc/sudoers.d/"
+        "wactorz-node names the systemctl that `sudo -n -l systemctl` finds, and run "
+        "setup-local again."
+    )
+    return False
 
 
 async def install(run: Runner, *, user: str, home: str) -> Rung:
@@ -188,6 +298,9 @@ async def install(run: Runner, *, user: str, home: str) -> Rung:
 
 
 async def _write_and_enable(run: Runner, rung: Rung, *, user: str, home: str) -> bool:
+    if rung is MANAGED:
+        # Written and enabled by root already; this user may only restart it.
+        return (await run(f"sudo -n systemctl restart {UNIT_NAME}"))[0]
     path = unit_path(rung, home)
     directory = path.rsplit("/", 1)[0]
     body = unit_file(home, user, system=rung.system)

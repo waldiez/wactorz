@@ -5,70 +5,61 @@ handler that cannot do damage is one whose move can be judged on whether the
 text still matches.
 """
 
+import asyncio
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from ...._version import __version__
+from ....core.artifacts import ArtifactError, ArtifactStore, human_size, summary
 from ....core.compatibility import compatible
-from .dispatch import CommandContext, command
+from ....core.paths import resolve_state_dir
+from ..spawn_registry import SpawnRegistry, placed_on
+from .dispatch import Command, CommandContext, Form, command, registry
+from .groups import AGENTS, MODELS, NODES, ORDER, PIPELINES, SYSTEM
 
-#: Every command, as the help text lists them. Kept as data rather than one
-#: long string so a command that is added without a line here reads as an
-#: omission rather than as prose someone forgot to edit.
-HELP_LINES: tuple[str, ...] = (
-    "**Wactorz commands**",
-    "",
-    "**Agents**",
-    "  /agents                 — list all known agents with descriptions and schemas",
-    "  /agents <keyword>       — filter agents by capability keyword",
-    "  /capabilities           — alias for /agents",
-    "  /delete <agent>         — stop an agent and remove it from the spawn registry",
-    "  /stop <agent>           — stop an agent, keeping its state (reversible)",
-    "  /start <agent>          — start a stopped agent back up",
-    "  @agent-name <msg>       — send a message directly to a named agent",
-    "  @catalog list           — list available catalog recipes",
-    "  @catalog spawn <n>      — spawn a catalog agent",
-    "",
-    "**Nodes**",
-    "  /nodes                  — list local + remote nodes and their agents",
-    "  /nodes restart <node>   — restart the runner process on a node",
-    "  /nodes shutdown <node>  — stop all agents and shut down a node",
-    "  /nodes remove <node>    — stop all agents on a node and remove it",
-    "  /deploy <node>          — deploy a remote Wactorz node",
-    "                            (a target configured via DEPLOY_TARGETS;",
-    "                             run bare to list them. SSH credentials",
-    "                             come from the environment, not chat)",
-    "  /migrate <agent> <node> [--force] — move an agent to a different node (state preserved)",
-    "  /agents restart <name>  — restart an agent (local or remote, state preserved)",
-    "",
-    "**Pipelines & Plans**",
-    "  /plans                  — list pending pipeline proposals (dry-run)",
-    "  /plans show <id>        — inspect a proposal's full code",
-    "  /plans approve <id>     — execute a proposed pipeline",
-    "  /plans reject <id>      — discard a proposed pipeline",
-    "  /clear-plans            — clear the plan cache",
-    "  /rules                  — list active pipeline rules",
-    "  /rules delete <id>      — stop agents and remove a rule",
-    "  pipeline! <task>        — bypass approval and execute immediately (power users)",
-    "",
-    "**Memory**",
-    "  /memory                 — show stored user facts and conversation summary",
-    "  /memory clear           — wipe all memory",
-    "  /memory forget <key>    — remove one stored fact",
-    "",
-    "**Notifications**",
-    "  /webhook                — list stored webhook URLs",
-    "  /webhook discord <url>  — store a Discord webhook URL",
-    "  /webhook telegram <url> — store a Telegram webhook URL",
-    "",
-    "**System & diagnostics**",
-    "  /topics                 — list MQTT topics published by known agents",
-    "  /topics <keyword>       — filter topics by keyword",
-    "  /bus                    — TopicBus registry: contracts, data flows, wiring pairs",
-    "  /mqtt                   — MQTT publisher status (connected, queue depth, outbox)",
-    "  /registry               — diagnostic: compare live registry, spawn registry, manifest cache",
-    "  /help                   — show this help",
-)
+#: What `/help` lists that is not a command: the ways to address an agent, and
+#: the prefix that skips a plan's approval.
+HELP_NOTES: dict[str, tuple[Form, ...]] = {
+    AGENTS: (
+        Form("@agent-name <msg>", "send a message directly to a named agent"),
+        Form("@catalog list", "list available catalog recipes"),
+        Form("@catalog spawn <name>", "spawn a catalog agent"),
+    ),
+    PIPELINES: (Form("pipeline! <task>", "bypass approval and execute immediately (power users)"),),
+}
+
+
+def help_line(form: Form) -> str:
+    """One line of `/help`: the usage, padded so most summaries line up."""
+    return f"  {form.usage:<23} — {form.summary}"
+
+
+def help_sections(commands: Iterable[Command]) -> list[tuple[str, list[Form]]]:
+    """What `/help` lists: each heading, in `groups.ORDER`, with its forms.
+
+    Within a heading, alphabetical by what is typed, so a reader scanning for a
+    command finds it where they expect; the notes that are not commands follow.
+    A heading with nothing under it is left out. The docs' command table is
+    written from this too, so the two cannot disagree.
+    """
+    grouped: dict[str, list[Form]] = {group: [] for group in ORDER}
+    for described in commands:
+        grouped.setdefault(described.group or SYSTEM, []).extend(described.forms)
+    sections: list[tuple[str, list[Form]]] = []
+    for group, forms in grouped.items():
+        listed = sorted(forms, key=lambda form: form.usage) + list(HELP_NOTES.get(group, ()))
+        if listed:
+            sections.append((group, listed))
+    return sections
+
+
+def help_lines(commands: Iterable[Command]) -> list[str]:
+    """`/help`, from the commands' own forms, as `help_sections` orders them."""
+    lines = ["**Wactorz commands**"]
+    for group, forms in help_sections(commands):
+        lines += ["", f"**{group}**", *(help_line(form) for form in forms)]
+    return lines
 
 
 @command(
@@ -76,10 +67,12 @@ HELP_LINES: tuple[str, ...] = (
     exact=("/help", "help", "/?"),
     summary="show this help",
     restricted_ok=False,
+    group=SYSTEM,
+    forms=(("/help", "show this help"),),
 )
 async def show_help(_ctx: CommandContext, _argument: str) -> str:
     """List every command, grouped by what it acts on."""
-    return "\n".join(HELP_LINES)
+    return "\n".join(help_lines(registry))
 
 
 def _node_version_label(node: dict[str, Any]) -> str:
@@ -155,6 +148,8 @@ def _megabytes(value: float) -> str:
     "/nodes",
     exact=("main.list_nodes", "list_nodes", "/nodes"),
     summary="list local + remote nodes and their agents",
+    group=NODES,
+    forms=(("/nodes", "list local + remote nodes and their agents"),),
 )
 async def show_nodes(ctx: CommandContext, _argument: str) -> str:
     """List local + remote nodes and their agents."""
@@ -200,6 +195,11 @@ async def show_nodes(ctx: CommandContext, _argument: str) -> str:
     exact=("/topics",),
     prefixes=("/topics",),
     summary="list MQTT topics published by known agents",
+    group=SYSTEM,
+    forms=(
+        ("/topics", "list MQTT topics published by known agents"),
+        ("/topics <keyword>", "filter topics by keyword"),
+    ),
 )
 async def show_topics(ctx: CommandContext, argument: str) -> str:
     """List MQTT topics published by known agents."""
@@ -221,9 +221,82 @@ async def show_topics(ctx: CommandContext, argument: str) -> str:
 
 
 @command(
+    "/artifacts",
+    exact=("/artifacts",),
+    prefixes=("/artifacts ",),
+    summary="list the models kept on main",
+    group=MODELS,
+    forms=(
+        ("/artifacts", "list the models kept on main (wactorz-artifacts)"),
+        ("/artifacts <name>", "every version of one model"),
+    ),
+)
+async def show_artifacts(_ctx: CommandContext, argument: str) -> str:
+    """The models kept on main, or every version of one."""
+    return await stored_models_text(argument)
+
+
+async def stored_models_text(name: str = "") -> str:
+    """The models kept on main, or every version of ``name``, as `/artifacts` shows them."""
+    store = ArtifactStore.in_state_dir(resolve_state_dir())
+    try:
+        if name:
+            return await asyncio.to_thread(_versions_of, store, name)
+        lines = await asyncio.to_thread(summary, store)
+    except ArtifactError as exc:
+        return f"Cannot list models: {exc}"
+    if not lines:
+        return "No models are kept here. Add one with `wactorz-artifacts add <file> <name>`."
+    return "Models kept on main:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+def _versions_of(store: ArtifactStore, name: str) -> str:
+    versions = store.versions(name)
+    if not versions:
+        return f"No model named '{name}'. /artifacts lists them."
+    lines = [f"Versions of '{name}':"]
+    for artifact in versions:
+        code = ", runs code when it loads" if artifact.runs_code else ""
+        lines.append(
+            f"  {artifact.reference:28s} {artifact.format:12s} {human_size(artifact.size):>10s}{code}"
+        )
+    return "\n".join(lines)
+
+
+#: Wactorz's own programs. Each runs in a terminal on the machine it acts on,
+#: and nothing in chat can run one. Typed into chat, one is answered by
+#: `terminal_command_reply` before any model sees it: a model asked to run a
+#: command it has no way to run tends to say that it did.
+TERMINAL_COMMANDS = ("wactorz-artifacts", "wactorz-state", "wactorz-reset", "wactorz-node")
+
+
+def terminal_command(text: str) -> str | None:
+    """The Wactorz program ``text`` runs, if it is a terminal command; else None."""
+    words = text.split(maxsplit=1)
+    return words[0] if words and words[0] in TERMINAL_COMMANDS else None
+
+
+async def terminal_command_reply(text: str) -> str | None:
+    """What main says to a terminal command typed into chat, or None for anything else."""
+    program = terminal_command(text)
+    if program is None:
+        return None
+    reply = (
+        f"`{program}` is a command for a terminal on the machine Wactorz runs on, not for chat, "
+        "so nothing was run. Open a terminal there, in the environment Wactorz is installed "
+        f"in, and run it as typed:\n\n    {text.strip()}"
+    )
+    if program == "wactorz-artifacts":
+        reply += "\n\nWhat is kept now:\n" + await stored_models_text()
+    return reply
+
+
+@command(
     "/mqtt",
     exact=("/mqtt",),
     summary="MQTT publisher status",
+    group=SYSTEM,
+    forms=(("/mqtt", "MQTT publisher status (connected, queue depth, outbox)"),),
 )
 async def show_mqtt_status(ctx: CommandContext, _argument: str) -> str:
     """MQTT publisher status."""
@@ -241,7 +314,7 @@ async def show_mqtt_status(ctx: CommandContext, _argument: str) -> str:
         f"  client_id   : {client_id}",
         f"  queue_depth : {queue_depth} message(s) pending",
         f"  outbox_db   : {db_path}",
-        "  QoS 1 topics: nodes/*, agents/by-name/*",
+        "  QoS 1 topics: nodes/*, agents/at/*, agents/by-name/*",
         "  QoS 0 topics: */logs, */metrics, */status, */heartbeat",
     ]
     if queue_depth > 0:
@@ -253,6 +326,8 @@ async def show_mqtt_status(ctx: CommandContext, _argument: str) -> str:
     "/bus",
     exact=("/bus",),
     summary="TopicBus registry: contracts, data flows, wiring pairs",
+    group=SYSTEM,
+    forms=(("/bus", "TopicBus registry: contracts, data flows, wiring pairs"),),
 )
 async def show_bus(ctx: CommandContext, _argument: str) -> str:
     """TopicBus registry: contracts, data flows, wiring pairs."""
@@ -283,7 +358,9 @@ async def show_bus(ctx: CommandContext, _argument: str) -> str:
         if pairs:
             lines.append("\nAuto-wiring opportunities:")
             for prod, cons, topic in pairs:
-                lines.append(f"  {prod.name} → {cons.name}  via {topic}")
+                lines.append(
+                    f"  {bus.registry.label(prod)} → {bus.registry.label(cons)}  via {topic}"
+                )
         return "\n".join(lines)
     except Exception as e:
         return f"TopicBus error: {e}"
@@ -293,6 +370,8 @@ async def show_bus(ctx: CommandContext, _argument: str) -> str:
     "/registry",
     exact=("/registry",),
     summary="diagnostic: compare live registry, spawn registry, manifest cache",
+    group=SYSTEM,
+    forms=(("/registry", "diagnostic: compare live registry, spawn registry, manifest cache"),),
 )
 async def show_registry(ctx: CommandContext, _argument: str) -> str:
     """Diagnostic: compare live registry, spawn registry, manifest cache."""
@@ -313,7 +392,7 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
 
     # 2. Spawn registry — what main intends to have running (persisted)
     spawn_reg = ctx.actor._get_spawn_registry()
-    spawn_names = set(spawn_reg.keys())
+    spawn_names = spawn_reg.names()
 
     # 3. Manifest cache — every agent that has ever announced itself,
     #    including remote ones on other nodes
@@ -339,7 +418,7 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
 def _registry_sections(
     ctx: CommandContext,
     live_user: set[str],
-    spawn_reg: dict[str, Any],
+    spawn_reg: SpawnRegistry,
     spawn_names: set[str],
     manifest_names: set[str],
 ) -> list[str]:
@@ -360,10 +439,8 @@ def _registry_sections(
     lines.append("")
     lines.append("\U0001f4be **Spawn registry** (auto-restore on restart, persisted to disk):")
     if spawn_names:
-        for name in sorted(spawn_names):
-            cfg = spawn_reg.get(name, {})
-            node = cfg.get("node", "").strip() or "local"
-            lines.append(f"    {name}  on {node}")
+        for cfg in sorted(spawn_reg, key=lambda e: (e["name"], placed_on(e))):
+            lines.append(f"    {cfg['name']}  on {placed_on(cfg) or 'local'}")
     else:
         lines.append("    (none)")
 
@@ -384,7 +461,7 @@ def _registry_discrepancies(
     ctx: CommandContext,
     live_names: set[str],
     live_user: set[str],
-    spawn_reg: dict[str, Any],
+    spawn_reg: SpawnRegistry,
     spawn_names: set[str],
     manifest_names: set[str],
     heartbeat_names: set[str],
@@ -399,8 +476,7 @@ def _registry_discrepancies(
         )
     # Spawn registry says local but not live → main thinks it should be running
     for name in sorted(spawn_names - live_names):
-        cfg = spawn_reg.get(name, {})
-        if not cfg.get("node", "").strip():  # local-only check
+        if spawn_reg.at(name, "") is not None:  # local-only check
             issues.append(
                 f"\u26a0\ufe0f  '{name}' is in spawn registry but NOT running locally — start failed or was stopped without cleanup"
             )
@@ -412,8 +488,8 @@ def _registry_discrepancies(
         )
     # In spawn registry as remote, but the node is offline / not heartbeating
     online_nodes = set(ctx.actor.nodes.online_names())
-    for name, cfg in spawn_reg.items():
-        node = cfg.get("node", "").strip()
+    for cfg in spawn_reg:
+        name, node = cfg["name"], placed_on(cfg)
         if node and node not in online_nodes:
             issues.append(
                 f"\u26a0\ufe0f  '{name}' assigned to node '{node}' which is OFFLINE — agent unreachable"

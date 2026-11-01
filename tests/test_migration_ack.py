@@ -5,6 +5,8 @@ the agent still exists exactly where it was. That is what makes a failed
 migration recoverable: rollback is a re-spawn on the source, not a repair.
 """
 
+import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import SWEEP_INTERVAL_S, TOKEN_TTL_S, Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 
 
 class _Main:
@@ -35,13 +38,19 @@ class _Main:
         async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
             self.published.append((topic, payload))
 
-        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        async def _spawn_remote(
+            cfg: dict[str, Any], node: str, save: bool = False, *, restoring: bool = False
+        ) -> None:
             self.spawned.append((cfg, node, save))
 
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_spawn_remote", _spawn_remote)
         setattr(main, "_save_to_spawn_registry", self.saved.append)
-        setattr(main, "_get_spawn_registry", lambda: {"collector": {"name": "collector"}})
+        setattr(
+            main,
+            "_get_spawn_registry",
+            lambda: SpawnRegistry.from_names({"collector": {"name": "collector"}}),
+        )
         setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
         setattr(main, "_queue_notification", self.notifications.append)
         self.actor = main
@@ -59,10 +68,8 @@ class _Main:
         return token
 
 
-def ack(token: str = "tok") -> bytes:
-    import json
-
-    return json.dumps({"agent": "collector", "migration_token": token, "node": "nuc"}).encode()
+def ack(token: str = "tok", agent: str = "collector") -> bytes:
+    return json.dumps({"agent": agent, "migration_token": token, "node": "nuc"}).encode()
 
 
 @pytest.fixture(name="main")
@@ -159,6 +166,52 @@ class TestTheAck:
         await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack(token))
 
         assert len(main.saved) == 1
+
+
+class TestWhoMayConfirm:
+    """Only the target, about the agent it was handed, completes a migration.
+
+    The token travels in the spawn, in the clear. The topic is what a node
+    cannot choose: with an account of its own it writes under its own
+    `nodes/<node>/` alone.
+    """
+
+    async def test_an_ack_from_another_node_changes_nothing(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", ack(token))
+
+        assert not main.saved
+        assert not main.published
+
+    async def test_an_ack_naming_another_agent_changes_nothing(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack(token, agent="other"))
+
+        assert not main.saved
+        assert not main.published
+
+    async def test_a_misaddressed_ack_leaves_the_migration_waiting(self, main: _Main) -> None:
+        # Spent on the wrong answer, the token would turn the real one away.
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", ack(token))
+        assert token in main.migration.pending_spawns
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", ack(token))
+        assert token not in main.migration.pending_spawns
+        assert len(main.saved) == 1
+
+    async def test_a_misaddressed_ack_is_logged(
+        self, main: _Main, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        token = main.pending()
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.migration"):
+            await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", ack(token))
+
+        assert "'rpi'" in caplog.text and "'nuc'" in caplog.text
 
 
 class TestTheSweepHasATrigger:
@@ -292,3 +345,72 @@ class TestWhenTheTargetNeverConfirms:
         await main.migration.expire_pending_spawns()
 
         assert any("failed" in str(n.get("message", "")).lower() for n in main.notifications)
+
+
+def refusal(token: str = "tok", reason: str = "its program did not start (compile)") -> bytes:
+    return json.dumps(
+        {"agent": "collector", "migration_token": token, "node": "nuc", "refused": reason}
+    ).encode()
+
+
+class TestWhenTheTargetRefuses:
+    """A target that says the agent did not start is believed at once.
+
+    Waiting out the token instead leaves the agent down for nothing: the
+    answer is already in.
+    """
+
+    async def test_the_agent_goes_back_to_the_source_now(self, main: _Main) -> None:
+        token = main.pending(age_s=1.0)
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+
+        ((config, node, _save),) = main.spawned
+        assert node == "rpi" and config["node"] == "rpi"
+        assert "_migration_token" not in config
+        assert token not in main.migration.pending_spawns
+
+    async def test_nothing_is_committed(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+
+        assert not main.saved
+        assert "nodes/rpi/stop" not in [t for t, _ in main.published]
+
+    async def test_the_targets_copy_is_cleared(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+
+        assert (
+            "nodes/nuc/stop",
+            {"name": "collector", "delete": True, "keep_topics": True},
+        ) in main.published
+
+    async def test_the_reason_is_announced(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack", refusal(token, reason="its program did not start (compile)")
+        )
+
+        (note,) = main.notifications
+        assert "did not start (compile)" in note["message"]
+        assert "back on 'rpi'" in note["message"]
+
+    async def test_a_refusal_from_another_node_changes_nothing(self, main: _Main) -> None:
+        token = main.pending()
+
+        await main.migration.receive_spawn_ack("nodes/rpi/spawn_ack", refusal(token))
+
+        assert not main.spawned
+        assert token in main.migration.pending_spawns
+
+    async def test_the_sweep_does_not_put_it_back_twice(self, main: _Main) -> None:
+        token = main.pending(age_s=TOKEN_TTL_S + 1)
+
+        await main.migration.receive_spawn_ack("nodes/nuc/spawn_ack", refusal(token))
+        await main.migration.expire_pending_spawns()
+
+        assert len(main.spawned) == 1

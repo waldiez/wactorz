@@ -9,27 +9,37 @@ language model.
 
 | File | Role |
 | ---- | ---- |
-| `model.py` | The model class, in a module of its own so its pickle loads from any process. |
-| `train.py` | Fits it on synthetic "normal" motion and writes `imu_model.pkl`. Stands in for your own training. |
+| `model.py` | The model: fitting it to normal motion, as two named arrays, and scoring a reading with them. |
+| `train.py` | Fits it on synthetic "normal" motion, writes `imu_model.npz` and keeps it on main as a new version of `imu-detector`, with its score on held-out readings; `--set active` or `--set shadow` points at it. Stands in for your own training. |
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
-| `run.py` | Starts Wactorz with that agent, in the minimal profile; `--with-main` starts main, the planner and the catalogue around it. |
+| `triage.py` | Asks a person whether a strong anomaly was maintenance or a real problem; the answer becomes a label of the device. |
+| `run.py` | Starts Wactorz with the detector and triage, in the minimal profile; `--with-main` starts main, the planner and the catalogue around them. |
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
 | `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
 | `fastapi_app.py` | The same, inside a FastAPI app: the system on the web app's loop, started and stopped by its lifespan, with routes that reach the running agent. |
-| `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal. |
+| `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal, each with its device and time, to the broker Wactorz is configured for (`localhost:1883` by default). |
 | `ask.py` | Starts the detector and asks it two questions with `wactorz.ask`, then stops. |
 
 ## Run it
 
 You need a broker on `localhost:1883` (`docker compose up mosquitto` from the
-repository root works) and the package installed (`pip install wactorz`).
+repository root works) and the package installed (`pip install wactorz`). A
+broker with a password, as the repository's is, needs the same `MQTT_USERNAME`
+and `MQTT_PASSWORD` for Wactorz and `publish_imu.py`: in the environment, or in
+the repository's `.env` when you run from a checkout.
 
 ```bash
 cd examples/imu_anomaly
-python train.py          # writes imu_model.pkl
+python train.py          # writes imu_model.npz, stores it as imu-detector
 python run.py            # dashboard on http://localhost:8888/
 python publish_imu.py    # in another terminal
 ```
+
+`train.py` keeps the model where Wactorz keeps models, in the `state/` folder
+beside these scripts, which is the state directory they all run with. Each run
+stores a new version, and the agent loads the one set active, or the newest
+while none is. Without one stored, the agent does not start, and the error
+names the model it looked for.
 
 The agent card on the dashboard shows the detector running and its message
 counter climbing. The feed shows a `Listening on sensors/imu/#` line at start and
@@ -41,10 +51,48 @@ anomalies themselves go out on `anomalies/imu`:
 mosquitto_sub -t 'anomalies/imu'
 ```
 
+## Versions and questions
+
+Train two more versions and point at them, then start again:
+
+```bash
+python train.py --seed 1 --samples 10 --set shadow   # catches more, false alarms too
+python train.py --seed 11 --samples 5000 --set active
+python run.py
+```
+
+Each version keeps how it did on the same held-out readings: `caught` (jolts
+flagged) and `false_alarms` (normal readings flagged). The dashboard's API lists
+them with the pointers, and moves a pointer; a running agent serves the version
+it moved to from the next reading, without a restart, and the feed says so.
+`API_KEY` is the one in `.env`, if you set one:
+
+```bash
+curl -s localhost:8888/api/models/imu-detector -H "X-API-Key: $API_KEY"
+curl -s -X POST localhost:8888/api/models/imu-detector/active -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" -d '{"version": 1, "reason": "back to the first"}'
+```
+
+With two versions stored and `publish_imu.py` running, `--set shadow` on the newer
+one, or the Models tab's "Try as shadow", starts a trial: the detector keeps serving
+the active version and scores every reading with the shadow version too, publishing
+its anomalies on `shadow/anomalies/imu`, and the feed says `trying imu-detector:2
+beside imu-detector:1 as model`. `GET /api/models/imu-detector/trial` shows how often
+the two agree and how their scores differ so far; with `?source=sensors/imu/left-wrist
+&positive=fault` it scores both against the labels `triage` collected. Promote or
+clear the shadow and the trial's outcome is kept, listed by `GET
+/api/models/imu-detector/trials`.
+
+With `publish_imu.py` running, the first strong jolt makes `triage` ask on the
+dashboard: maintenance, or a real problem? With main running (`python run.py
+--with-main --llm fake`) the answer is kept as a label of `sensors/imu/left-wrist`
+from the jolt's time on, which `GET /api/labels` lists. The device is asked about
+again only after `COOLDOWN_S`.
+
 ## Ask it from chat
 
 **Without a model.** `python run.py` alone is the minimal profile: the monitor,
-the dashboard and the detector, no main and no model. The dashboard chat at
+the dashboard, the detector and triage, no main and no model. The dashboard chat at
 `http://localhost:8888/` still reaches the agent. Type a reading as JSON after
 its name and the function's return value is the reply:
 
@@ -165,14 +213,42 @@ the call is the same on the actor, `await me.ask("imu-anomaly", {...})`.
     publishes="anomalies/imu",
     description="Flags IMU readings the trained model calls abnormal.",
     requires={"ram_mb": 128},
+    models={"model": "imu-detector"},
 )
-def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None: ...
+async def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None:
+    model = await me.load_model("model")
+    ...
 ```
 
-The function is called once per reading, on a worker thread so a slow model
-never holds the event loop. Returning `None` publishes nothing. The second
-parameter is the actor, used here to load the model once and keep a count
-across restarts with `persist`/`recall`.
+The function is called once per reading. Returning `None` publishes nothing.
+The second parameter is the actor, used here to load the model and to keep a
+count across restarts with `persist`/`recall`.
+
+`models=` names the model by the name it is stored under, and the agent reads
+it by its own key, `"model"`. Before the agent starts, Wactorz finds the newest
+`imu-detector` among the models kept on main; `me.load_model("model")` loads it
+once, off the event loop, and keeps it. An `.npz` loads as a dict of its
+arrays, with pickles refused, so loading the model runs nothing from the file.
+`imu-detector:2` instead names one version. On a node, the node fetches the
+model by name before the agent starts, so nothing is copied there by hand.
+
+## The model
+
+The model is two arrays, the mean of normal motion and the inverse of its
+covariance, and a reading's score is its distance from that mean in units of
+the spread. `/artifacts` in chat, or `wactorz-artifacts list --state-dir state`
+in a terminal, lists what is kept, with the arrays each model holds:
+
+```text
+imu-detector — newest imu-detector:1 (npz, 626 B); arrays mean[3], inverse_covariance[3x3]
+```
+
+To use your own, save the arrays your scoring reads and store the file under the
+name the agent gives:
+
+```bash
+wactorz-artifacts add my_model.npz imu-detector --state-dir state
+```
 
 `run.py` hands the function to `wactorz.run()`, which supervises it beside the
 monitor, restarts it if it crashes, and serves the dashboard. Inside a program
@@ -207,7 +283,7 @@ cancels:
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir="./state"))
+    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir=STATE_DIR))
     await asyncio.sleep(0)
     if task.done():
         task.result()  # a refused start fails the app now, not at shutdown
@@ -270,13 +346,18 @@ Keep `run.py` out of it and name the agent in the environment of a normal
 folder has to be on the Python path; a `wactorz` start does not add the current
 directory the way `python run.py` adds the script's:
 
+The model has to be kept in that installation's state directory, which is
+`WACTORZ_STATE_DIR` or `./state` where `wactorz` starts:
+
 ```bash
+python examples/imu_anomaly/train.py --state-dir state
 PYTHONPATH=examples/imu_anomaly WACTORZ_AGENTS=agent:detect wactorz
 ```
 
 In PowerShell:
 
 ```powershell
+python examples\imu_anomaly\train.py --state-dir state
 $env:PYTHONPATH = "examples\imu_anomaly"
 $env:WACTORZ_AGENTS = "agent:detect"
 wactorz
@@ -295,3 +376,21 @@ imu-anomaly = "imu_anomaly.agent:detect"
 
 Either way the agent is supervised at startup, listed by `@catalog list`, and
 chat can ask it for a verdict on a reading: `@imu-anomaly {"ax": 9.0, "ay": 0, "az": 1}`.
+
+## On a node
+
+The detector runs on a [node](../../docs/remote-nodes.md) too, and moves there
+and back with its model. Deploy the node (`/deploy rpi-kitchen`), and from chat:
+
+```text
+/migrate imu-anomaly rpi-kitchen
+/migrate imu-anomaly local
+```
+
+Nothing is copied by hand. Main sends this folder's Python files with the
+agent, and the node installs numpy, which the decorator lists in `requires`,
+and fetches `imu-detector` before it builds the agent; the counter goes with
+the agent each way. That works because everything `agent.py` imports is in
+this folder (`model.py`), in the standard library, `wactorz`, or numpy: an agent
+whose own code lives in its folder can move. On the node the agent has no model
+API: `me.llm` is `None` there, which this detector never uses.

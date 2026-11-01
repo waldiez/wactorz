@@ -9,10 +9,15 @@ What is covered here is the other half — the command built around those names.
 It is ordered by how little of the host it disturbs, and nothing else says so.
 """
 
+import ast
+import importlib
 import sys
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
+import wactorz
 from wactorz.core import pip
 
 
@@ -104,6 +109,26 @@ class TestTheCommandItself:
         cmd, _env = pip.install_command(["requests"])
 
         assert "--no-input" in cmd
+
+
+class TestTheIndex:
+    """`WACTORZ_PIP_INDEX_URL` sends every install to one index, a private mirror."""
+
+    def test_unset_pip_uses_its_own(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(pip.INDEX_URL_ENV, raising=False)
+
+        cmd, _env = pip.install_command(["requests"])
+
+        assert "--index-url" not in cmd
+
+    def test_set_it_is_the_one_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(pip.INDEX_URL_ENV, "https://mirror.example/simple")
+
+        cmd, _env = pip.install_command(["requests"])
+
+        at = cmd.index("--index-url")
+        assert cmd[at + 1] == "https://mirror.example/simple"
+        assert at < cmd.index("requests")
 
 
 class TestSayingWhereItWent:
@@ -208,3 +233,52 @@ class TestWhoWeAre:
         monkeypatch.setattr(ctypes, "windll", type("W", (), {"shell32": _Broken}), raising=False)
 
         assert pip.is_root() is False
+
+
+def _calls_invalidate_caches(source: str) -> bool:
+    return any(
+        isinstance(node, ast.Attribute)
+        and node.attr == "invalidate_caches"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "importlib"
+        for node in ast.walk(ast.parse(source))
+    )
+
+
+class TestRefreshingTheImportCaches:
+    """The standard library's refresh deletes from ``sys.path_importer_cache`` as
+    it walks it, so two threads refreshing at once delete the same entry and one
+    raises KeyError. The checks here run in worker threads, several at a time."""
+
+    @pytest.mark.parametrize(
+        "check",
+        [
+            pytest.param(lambda: pip.requirement_is_satisfied("pytest"), id="requirement"),
+            pytest.param(
+                lambda: pip.stale_loaded_distributions({"x": "1"}, {"x": "2"}), id="stale"
+            ),
+            pytest.param(pip.refresh_import_caches, id="refresh"),
+        ],
+    )
+    def test_each_refresh_holds_the_lock(
+        self, monkeypatch: pytest.MonkeyPatch, check: Callable[[], object]
+    ) -> None:
+        held: list[bool] = []
+        monkeypatch.setattr(
+            importlib, "invalidate_caches", lambda: held.append(pip._IMPORT_CACHES_LOCK.locked())
+        )
+
+        check()
+
+        assert held
+        assert all(held)
+
+    def test_nothing_else_in_wactorz_refreshes_them_directly(self) -> None:
+        package = Path(wactorz.__file__).parent
+        direct = [
+            path.relative_to(package).as_posix()
+            for path in sorted(package.rglob("*.py"))
+            if path.name != "pip.py" and _calls_invalidate_caches(path.read_text(encoding="utf-8"))
+        ]
+
+        assert direct == []

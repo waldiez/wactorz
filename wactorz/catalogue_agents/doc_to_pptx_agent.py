@@ -17,16 +17,20 @@ This is a DEMO agent — do NOT modify the core framework files when refurnishin
 DEPENDENCIES
 ────────────
 Python (pip install):
+    python-pptx      → import pptx   (builds the deck)
     pymupdf          → import fitz   (PDF image extraction + text)
     pdfplumber                        (PDF text extraction — more accurate for text)
     Pillow           → import PIL     (image resize / convert)
 
-Node.js (npm install -g):
-    pptxgenjs
-
 Optional (for NIM fallback):
     image-gen-agent must be spawned and running
     NIM API key persisted:  @main remember nim_api_key = nvapi-...
+
+FILES
+─────
+Read from, and written to, only where wactorz.documents allows: a folder named
+in WACTORZ_DOCUMENT_DIRS (by default the user's Documents folder), or a chat
+upload by its id. Never anything under the state directory.
 
 
 SPAWN CONFIG
@@ -37,8 +41,9 @@ SPAWN CONFIG
   "description": "Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from PDF first; falls back to NIM FLUX image generation for slides without images.",
   "capabilities": ["document_to_pptx", "pdf_to_presentation", "pptx_generation", "document_conversion"],
   "input_schema": {
-    "file_path":       "str  — absolute path to source PDF or TXT file",
-    "output_path":     "str  — where to save the .pptx, e.g. /tmp/output.pptx",
+    "file_path":       "str  — path to the source PDF or TXT, inside a document folder",
+    "file_id":         "str  — or: the upload id of a PDF or TXT attached in the chat",
+    "output_path":     "str  — a .pptx path inside a document folder; default a private temp dir",
     "slide_count":     "int  — target number of slides, default 8",
     "theme":           "str  — color theme hint, e.g. 'dark executive', 'minimal light', default 'dark executive'",
     "nim_fallback":    "bool — generate NIM images for slides without a real PDF image, default true",
@@ -61,12 +66,12 @@ SPAWN CONFIG
 TASK PAYLOAD EXAMPLES
 ──────────────────────
 Minimal:
-  { "file_path": "/home/user/report.pdf", "output_path": "/tmp/report.pptx" }
+  { "file_path": "/home/user/Documents/report.pdf", "output_path": "/home/user/Documents/report.pptx" }
 
 Full:
   {
-    "file_path":      "/home/user/report.pdf",
-    "output_path":    "/tmp/report.pptx",
+    "file_path":      "/home/user/Documents/report.pdf",
+    "output_path":    "/home/user/Documents/report.pptx",
     "slide_count":    10,
     "theme":          "minimal light",
     "nim_fallback":   true,
@@ -74,23 +79,26 @@ Full:
     "min_img_height": 200
   }
 
+An attached file:
+  { "file_id": "0f3c9a5e4b2d4c1e8a7b6c5d4e3f2a1b" }
+
 No NIM (extracted images only, text-only for slides without one):
   {
-    "file_path":    "/home/user/report.pdf",
-    "output_path":  "/tmp/report.pptx",
+    "file_path":    "/home/user/Documents/report.pdf",
+    "output_path":  "/home/user/Documents/report.pptx",
     "nim_fallback": false
   }
 """
 
 import asyncio
 import json
-import os
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from wactorz.documents import DocumentRefused, readable_document, writable_document
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. DOCUMENT READING
@@ -110,18 +118,30 @@ def _read_pdf_text(path):
     return "\n\n".join(pages)
 
 
+class UndecodableError(ValueError):
+    """A text file in none of the encodings tried."""
+
+    def __init__(self, path: Any) -> None:
+        super().__init__(f"Cannot decode file: {path}")
+
+
 def _read_txt(path: str) -> str:
     for enc in ("utf-8", "latin-1"):
         try:
             return Path(path).read_text(encoding=enc)
         except UnicodeDecodeError:
             continue
-    raise ValueError(f"Cannot decode file: {path}")
+    raise UndecodableError(path)
+
+
+def _is_pdf(path: str) -> bool:
+    """Whether `path` is a PDF, by its first bytes: an upload has no extension to go by."""
+    with Path(path).open("rb") as handle:
+        return handle.read(5) == b"%PDF-"
 
 
 def _read_document(path: str) -> str:
-    ext = Path(path).suffix.lower()
-    if ext == ".pdf":
+    if _is_pdf(path):
         return _read_pdf_text(path)
     return _read_txt(path)
 
@@ -368,184 +388,248 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. PPTXGENJS SCRIPT BUILDER
+# 5. DECK BUILDER  (python-pptx)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HEX6 = re.compile(r"[0-9A-Fa-f]{6}")
+
+#: The palette a slide falls back to, colour by colour.
+_DEFAULT_PALETTE = {
+    "bg_dark": "1E2761",
+    "bg_light": "F5F7FA",
+    "accent": "4A90D9",
+    "text_dark": "1A1A2E",
+    "text_light": "FFFFFF",
+}
+
+#: The slide, in inches: 16:9 at PowerPoint's default width.
+_SLIDE_W, _SLIDE_H = 10.0, 5.625
+
+_EMU_PER_INCH = 914400
+
+#: How far a bullet's text sits from the left edge, and how far its bullet hangs.
+_BULLET_INDENT = 0.25
 
 
 def _hex_color(value, fallback):
     """Six hex digits, or the default.
 
-    These values are the only ones in the generated script that are not
-    passed through `json.dumps`: they go in raw, inside single quotes, into JS
-    that `node` then executes. And they are LLM-chosen from the *document's*
-    content — so a crafted document could close the quote and append statements:
-
-        x'}); require('child_process').execSync('...'); ({a:'
-
-    Refusing anything that is not six hex digits closes that. It falls back
-    rather than raising, because a bad palette is not a reason to fail a
-    conversion the user asked for.
+    The palette is chosen by the model from the *document's* content, so it is
+    whatever the document steered it to. Anything that is not six hex digits
+    falls back rather than raising, because a bad palette is not a reason to
+    fail a conversion the user asked for.
     """
     return value if isinstance(value, str) and _HEX6.fullmatch(value) else fallback
 
 
-def _build_js(outline, image_assignment, output_path):
-    """Generate a Node.js / pptxgenjs script as a string."""
-    title = outline.get("title", "Presentation")
-    slides = outline.get("slides", [])
-    colors = outline.get("theme_colors", {})
+def _palette(outline) -> dict[str, str]:
+    colors = outline.get("theme_colors")
+    colors = colors if isinstance(colors, dict) else {}
+    return {key: _hex_color(colors.get(key), default) for key, default in _DEFAULT_PALETTE.items()}
 
-    C = {
-        "bg_dark": _hex_color(colors.get("bg_dark"), "1E2761"),
-        "bg_light": _hex_color(colors.get("bg_light"), "F5F7FA"),
-        "accent": _hex_color(colors.get("accent"), "4A90D9"),
-        "text_dark": _hex_color(colors.get("text_dark"), "1A1A2E"),
-        "text_light": _hex_color(colors.get("text_light"), "FFFFFF"),
-    }
 
-    L = [
-        "const pptxgen = require('pptxgenjs');",
-        "const pres = new pptxgen();",
-        "pres.layout = 'LAYOUT_16x9';",
-        f"pres.title = {json.dumps(title)};",
-        "",
-    ]
+def _emu(inches: float) -> int:
+    return round(inches * _EMU_PER_INCH)
 
-    for slide in slides:
-        idx = slide["index"]
-        stype = slide.get("type", "content")
-        stitle = slide.get("title", "")
-        subtitle = slide.get("subtitle", "")
-        bullets = slide.get("bullets", [])
-        img = image_assignment.get(idx)
-        is_dark = stype in ("title", "closing")
-        bg = C["bg_dark"] if is_dark else C["bg_light"]
-        tc = C["text_light"] if is_dark else C["text_dark"]
 
-        L.append(f"// ── Slide {idx}: {stype} ──────────────────────────")
-        L.append("{ const s = pres.addSlide();")
-        L.append(f"  s.background = {{ color: '{bg}' }};")
+def _box(x: float, y: float, w: float, h: float) -> tuple[int, int, int, int]:
+    return _emu(x), _emu(y), _emu(w), _emu(h)
 
-        # Left accent bar
-        L.append(
-            f"  s.addShape(pres.shapes.RECTANGLE, "
-            f"{{ x:0, y:0, w:0.07, h:5.625, "
-            f"fill:{{color:'{C['accent']}'}}, line:{{color:'{C['accent']}'}} }});"
+
+def _rgb(hex6: str) -> Any:
+    from pptx.dml.color import RGBColor  # optional dependency: installed with the recipe
+
+    return RGBColor.from_string(hex6)
+
+
+def _opacity(transparency: int) -> str:
+    """A transparency percentage as DrawingML's opacity, in thousandths of a percent."""
+    return str((100 - transparency) * 1000)
+
+
+def _rect(slide, box: tuple[int, int, int, int], color: str, transparency: int = 0) -> None:
+    """A filled rectangle with no visible outline."""
+    from pptx.enum.shapes import MSO_SHAPE  # optional dependency: installed with the recipe
+    from pptx.oxml.ns import qn  # optional dependency: installed with the recipe
+
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, *box)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = _rgb(color)
+    shape.line.color.rgb = _rgb(color)
+    shape.shadow.inherit = False
+    if transparency:
+        # python-pptx has no property for a fill's transparency; DrawingML
+        # carries it as an alpha on the colour.
+        for colour in shape.element.xpath("./p:spPr/a:solidFill/a:srgbClr"):
+            colour.append(colour.makeelement(qn("a:alpha"), {"val": _opacity(transparency)}))
+
+
+def _picture(slide, path: str, box: tuple[int, int, int, int], transparency: int = 0) -> bool:
+    """`path` filling `box`, cropped rather than stretched; False if it cannot be read.
+
+    An image that cannot be read leaves the slide without one rather than
+    failing the deck: the text is what the slide is for.
+    """
+    from pptx.oxml.ns import qn  # optional dependency: installed with the recipe
+
+    try:
+        pic = slide.shapes.add_picture(path, *box)
+    except (OSError, ValueError):
+        return False
+    width, height = pic.image.size
+    box_ratio, image_ratio = box[2] / box[3], (width / height if height else 0)
+    if image_ratio > box_ratio:
+        pic.crop_left = pic.crop_right = (1 - box_ratio / image_ratio) / 2
+    elif 0 < image_ratio < box_ratio:
+        pic.crop_top = pic.crop_bottom = (1 - image_ratio / box_ratio) / 2
+    if transparency:
+        for blip in pic.element.xpath(".//a:blip"):
+            blip.append(blip.makeelement(qn("a:alphaModFix"), {"amt": _opacity(transparency)}))
+    return True
+
+
+def _bulleted(textbox) -> None:
+    """Every paragraph of `textbox` as a bullet point, hanging from its first line."""
+    from pptx.oxml.ns import qn  # optional dependency: installed with the recipe
+
+    for paragraph in textbox.element.xpath(".//a:p"):
+        properties = paragraph.get_or_add_pPr()
+        properties.set("marL", str(_emu(_BULLET_INDENT)))
+        properties.set("indent", str(-_emu(_BULLET_INDENT)))
+        properties.append(properties.makeelement(qn("a:buChar"), {"char": "•"}))
+
+
+def _text(
+    slide,
+    box: tuple[int, int, int, int],
+    lines: list[Any],
+    style: dict[str, Any],
+) -> Any:
+    """A text box holding `lines`, one paragraph each, all in `style`.
+
+    `style` takes ``size`` and ``color``, and optionally ``bold``, ``italic``,
+    ``font``, ``align`` (``"left"`` or ``"center"``), ``tight`` (no inner
+    margin) and ``space_after`` (points after each paragraph).
+    """
+    from pptx.enum.text import (
+        MSO_ANCHOR,
+        PP_ALIGN,
+    )  # optional dependency: installed with the recipe
+    from pptx.util import Pt  # optional dependency: installed with the recipe
+
+    textbox = slide.shapes.add_textbox(*box)
+    frame = textbox.text_frame
+    frame.word_wrap = True
+    frame.vertical_anchor = MSO_ANCHOR.TOP
+    if style.get("tight"):
+        frame.margin_left = frame.margin_right = frame.margin_top = frame.margin_bottom = 0
+    for i, line in enumerate(lines):
+        paragraph = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
+        paragraph.alignment = PP_ALIGN.CENTER if style.get("align") == "center" else PP_ALIGN.LEFT
+        if style.get("space_after"):
+            paragraph.space_after = Pt(style["space_after"])
+        run = paragraph.add_run()
+        run.text = str(line)
+        run.font.size = Pt(style["size"])
+        run.font.bold = bool(style.get("bold"))
+        run.font.italic = bool(style.get("italic"))
+        run.font.name = style.get("font", "Calibri")
+        run.font.color.rgb = _rgb(style["color"])
+    return textbox
+
+
+def _title_slide(slide, spec, image, colors) -> None:
+    if image and _picture(slide, image, _box(4.6, 0, 5.4, _SLIDE_H)):
+        # A dark veil over the picture, so the title beside it stays readable.
+        _rect(slide, _box(4.6, 0, 5.4, _SLIDE_H), colors["bg_dark"], transparency=45)
+    _text(
+        slide,
+        _box(0.3, 1.7, 5.5, 1.2),
+        [spec.get("title", "")],
+        {"size": 38, "bold": True, "color": colors["text_light"]},
+    )
+    if spec.get("subtitle"):
+        _text(
+            slide,
+            _box(0.3, 3.05, 5.5, 0.7),
+            [spec["subtitle"]],
+            {"size": 17, "italic": True, "color": colors["accent"], "font": "Calibri Light"},
         )
 
-        if stype == "title":
-            if img:
-                L.append(
-                    f"  s.addImage({{ path:{json.dumps(img)}, x:4.6, y:0, w:5.4, h:5.625, "
-                    f"sizing:{{type:'cover',w:5.4,h:5.625}} }});"
-                )
-                # Gradient-style dark overlay so text is readable over the image
-                L.append(
-                    f"  s.addShape(pres.shapes.RECTANGLE, "
-                    f"{{ x:4.6, y:0, w:5.4, h:5.625, "
-                    f"fill:{{color:'{C['bg_dark']}',transparency:45}}, "
-                    f"line:{{color:'{C['bg_dark']}'}} }});"
-                )
-            L.append(
-                f"  s.addText({json.dumps(stitle)}, "
-                f"{{ x:0.3, y:1.7, w:5.5, h:1.2, "
-                f"fontSize:38, bold:true, color:'{C['text_light']}', "
-                f"fontFace:'Calibri', align:'left' }});"
-            )
-            if subtitle:
-                L.append(
-                    f"  s.addText({json.dumps(subtitle)}, "
-                    f"{{ x:0.3, y:3.05, w:5.5, h:0.7, "
-                    f"fontSize:17, italic:true, color:'{C['accent']}', "
-                    f"fontFace:'Calibri Light', align:'left' }});"
-                )
 
-        elif stype == "closing":
-            if img:
-                L.append(
-                    f"  s.addImage({{ path:{json.dumps(img)}, x:0, y:0, w:10, h:5.625, "
-                    f"sizing:{{type:'cover',w:10,h:5.625}}, transparency:55 }});"
-                )
-            L.append(
-                f"  s.addText({json.dumps(stitle)}, "
-                f"{{ x:1.5, y:1.8, w:7, h:1.1, "
-                f"fontSize:34, bold:true, color:'{C['text_light']}', "
-                f"fontFace:'Calibri', align:'center' }});"
-            )
-            if subtitle:
-                L.append(
-                    f"  s.addText({json.dumps(subtitle)}, "
-                    f"{{ x:1.5, y:3.1, w:7, h:0.7, "
-                    f"fontSize:16, italic:true, color:'{C['accent']}', "
-                    f"fontFace:'Calibri Light', align:'center' }});"
-                )
-
-        else:  # content
-            # Slide title
-            L.append(
-                f"  s.addText({json.dumps(stitle)}, "
-                f"{{ x:0.25, y:0.2, w:9.5, h:0.72, "
-                f"fontSize:25, bold:true, color:'{tc}', "
-                f"fontFace:'Calibri', align:'left', margin:0 }});"
-            )
-            # Thin divider under title
-            L.append(
-                f"  s.addShape(pres.shapes.RECTANGLE, "
-                f"{{ x:0.25, y:0.98, w:9.5, h:0.03, "
-                f"fill:{{color:'{C['accent']}'}}, line:{{color:'{C['accent']}'}} }});"
-            )
-
-            text_w = 4.7 if img else 9.3
-
-            if img:
-                L.append(
-                    f"  s.addImage({{ path:{json.dumps(img)}, x:5.1, y:1.1, w:4.65, h:4.2, "
-                    f"sizing:{{type:'cover',w:4.65,h:4.2}} }});"
-                )
-
-            if bullets:
-                items = []
-                for i, b in enumerate(bullets[:5]):
-                    last = i == len(bullets[:5]) - 1
-                    items.append(
-                        f"    {{ text:{json.dumps(b)}, options:{{"
-                        f"bullet:true, breakLine:{'false' if last else 'true'}, "
-                        f"fontSize:15, color:'{tc}', fontFace:'Calibri', paraSpaceAfter:9 }} }}"
-                    )
-                L.append(
-                    "  s.addText([\n"
-                    + ",\n".join(items)
-                    + f"\n  ], {{ x:0.25, y:1.1, w:{text_w}, h:4.2, valign:'top' }});"
-                )
-
-        L.append("}")
-        L.append("")
-
-    L.append(f"pres.writeFile({{ fileName:{json.dumps(output_path)} }})")
-    L.append(f"  .then(() => console.log('OK:' + {json.dumps(output_path)}))")
-    L.append("  .catch(e => { console.error('ERR:' + e.message); process.exit(1); });")
-
-    return "\n".join(L)
+def _closing_slide(slide, spec, image, colors) -> None:
+    if image:
+        _picture(slide, image, _box(0, 0, _SLIDE_W, _SLIDE_H), transparency=55)
+    centred = {"align": "center"}
+    _text(
+        slide,
+        _box(1.5, 1.8, 7, 1.1),
+        [spec.get("title", "")],
+        {**centred, "size": 34, "bold": True, "color": colors["text_light"]},
+    )
+    if spec.get("subtitle"):
+        _text(
+            slide,
+            _box(1.5, 3.1, 7, 0.7),
+            [spec["subtitle"]],
+            {
+                **centred,
+                "size": 16,
+                "italic": True,
+                "color": colors["accent"],
+                "font": "Calibri Light",
+            },
+        )
 
 
-async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
-    """Run a command without stopping the event loop for its duration.
+def _content_slide(slide, spec, image, colors) -> None:
+    _text(
+        slide,
+        _box(0.25, 0.2, 9.5, 0.72),
+        [spec.get("title", "")],
+        {"size": 25, "bold": True, "color": colors["text_dark"], "tight": True},
+    )
+    # A thin rule under the title.
+    _rect(slide, _box(0.25, 0.98, 9.5, 0.03), colors["accent"])
+    pictured = bool(image) and _picture(slide, image, _box(5.1, 1.1, 4.65, 4.2))
+    bullets = spec.get("bullets") or []
+    if bullets:
+        textbox = _text(
+            slide,
+            _box(0.25, 1.1, 4.7 if pictured else 9.3, 4.2),
+            list(bullets)[:5],
+            {"size": 15, "color": colors["text_dark"], "space_after": 9},
+        )
+        _bulleted(textbox)
 
-    ``npm install`` here allows itself two minutes and ``node`` one, and calling
-    them inline meant nothing else in the process ran for that long — including
-    the framework's own task timeout, which therefore could never fire on the
-    very calls it exists to bound.
 
-    A thread rather than ``asyncio.create_subprocess_exec``, matching
-    ``installer_agent``: asyncio subprocesses are unavailable on Windows under
-    ``SelectorEventLoop``. The cost is that cancelling the awaiting task does not
-    kill the process — it runs on until its own ``timeout`` — but the rest of the
-    system is free in the meantime, which it was not before.
+_LAYOUTS = {"title": _title_slide, "closing": _closing_slide}
+
+
+def _build_deck(outline, image_assignment, output_path: str) -> None:
+    """Write the deck `outline` describes to `output_path`, pictures placed by slide index.
+
+    Blocking: it reads every picture and writes the file, so it is run in a
+    thread rather than on the event loop.
     """
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: subprocess.run(cmd, **kwargs))  # noqa: S603  # argv built here, never from input
+    from pptx import Presentation  # optional dependency: installed with the recipe
+    from pptx.util import Emu  # optional dependency: installed with the recipe
+
+    colors = _palette(outline)
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Emu(_emu(_SLIDE_W)), Emu(_emu(_SLIDE_H))
+    deck.core_properties.title = str(outline.get("title", "Presentation"))[:255]
+    blank = deck.slide_layouts[6]
+    for spec in outline.get("slides", []):
+        kind = spec.get("type", "content")
+        slide = deck.slides.add_slide(blank)
+        dark = kind in _LAYOUTS
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = _rgb(colors["bg_dark" if dark else "bg_light"])
+        # The accent bar down the left edge of every slide.
+        _rect(slide, _box(0, 0, 0.07, _SLIDE_H), colors["accent"])
+        _LAYOUTS.get(kind, _content_slide)(slide, spec, image_assignment.get(spec["index"]), colors)
+    deck.save(output_path)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -556,29 +640,21 @@ async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
 async def setup(agent):
     errors = []
 
-    # Check Python deps
-    for pkg, imp in [("pymupdf", "fitz"), ("pdfplumber", "pdfplumber"), ("Pillow", "PIL")]:
+    for pkg, imp in [
+        ("python-pptx", "pptx"),
+        ("pymupdf", "fitz"),
+        ("pdfplumber", "pdfplumber"),
+        ("Pillow", "PIL"),
+    ]:
         try:
             __import__(imp)
         except ImportError:
             errors.append(f"pip install {pkg}")
 
-    # Check node is available (pptxgenjs is installed locally at runtime if needed)
-    # Not installed at all raises rather than returning a failure code.
-    try:
-        r = await _run_blocking(
-            ["node", "--version"], capture_output=True, text=True, shell=(os.name == "nt")
-        )
-        node_found = r.returncode == 0
-    except OSError:
-        node_found = False
-    if not node_found:
-        errors.append("Node.js not found — install from nodejs.org")
-
     if errors:
         await agent.alert(f"doc-to-pptx-agent: missing deps — {'; '.join(errors)}", "warning")
     else:
-        await agent.log("doc-to-pptx-agent ready (PyMuPDF + pdfplumber + Node.js)")
+        await agent.log("doc-to-pptx-agent ready (python-pptx + PyMuPDF + pdfplumber)")
 
 
 def _failed(error: str, **progress: Any) -> dict[str, Any]:
@@ -617,7 +693,6 @@ async def handle_task(agent, payload: Any) -> Any:
                     pass  # looked like JSON and was not; try the next field
     if not isinstance(payload, dict):
         payload = {}
-    file_path = payload.get("file_path", "")
     numbers = {}
     for field, default in (("slide_count", 8), ("min_img_width", 200), ("min_img_height", 150)):
         try:
@@ -629,20 +704,31 @@ async def handle_task(agent, payload: Any) -> Any:
     min_h = numbers["min_img_height"]
     nim_fallback = bool(payload.get("nim_fallback", True))
 
-    if not file_path or not Path(file_path).exists():
-        return _failed(f"File not found: {file_path}")
+    # Read and written only where `wactorz.documents` allows: the request is
+    # written by a model, from whatever it was reading.
+    try:
+        source = readable_document(
+            str(payload.get("file_path") or ""), str(payload.get("file_id") or "")
+        )
+        requested = str(payload.get("output_path") or "")
+        target = writable_document(requested, ".pptx") if requested else None
+    except DocumentRefused as refused:
+        return _failed(str(refused))
+    file_path = str(source)
 
-    # A private temp dir, not a fixed `/tmp/presentation.pptx`. That name was
-    # predictable in a world-writable directory: two conversions at once
-    # clobbered each other, and anything that got there first — a symlink, say —
-    # decided where the file was actually written. `mkdtemp` is 0700 and honours
-    # TMPDIR, so it is also correct off Linux. The path goes back to the caller
-    # as `pptx_path`, so a generated name costs nothing.
-    output_path = payload.get("output_path") or str(
-        Path(tempfile.mkdtemp(prefix="wactorz-pptx-")) / "presentation.pptx"
+    # Unnamed, the deck goes in a private temp dir, not a fixed
+    # `/tmp/presentation.pptx`: that name was predictable in a world-writable
+    # directory, so two conversions at once clobbered each other, and anything
+    # that got there first — a symlink, say — decided where the file was
+    # actually written. `mkdtemp` is 0700 and honours TMPDIR, so it is also
+    # correct off Linux. The path goes back to the caller as `pptx_path`.
+    output_path = (
+        str(target)
+        if target
+        else str(Path(tempfile.mkdtemp(prefix="wactorz-pptx-")) / "presentation.pptx")
     )
 
-    is_pdf = Path(file_path).suffix.lower() == ".pdf"
+    is_pdf = _is_pdf(file_path)
     work_dir = tempfile.mkdtemp(prefix="doc2pptx_")
 
     await agent.log(f"Processing: {Path(file_path).name}")
@@ -709,44 +795,19 @@ async def handle_task(agent, payload: Any) -> Any:
             await agent.log(f"  {unassigned} slide(s) will be text-only (nim_fallback=false)")
 
         # ── Step 4: Build PPTX ──────────────────────────────────────────────
-        await agent.log("Step 4/4 — Building .pptx with pptxgenjs...")
+        await agent.log("Step 4/4 — Building .pptx...")
         built = {
             "slide_count": len(slides),
             "title": title,
             "images_extracted": n_extracted,
             "images_generated": n_generated,
         }
-        js_script = _build_js(outline, assignment, output_path)
-        js_path = Path(work_dir) / "build.js"
-        js_path.write_text(js_script, encoding="utf-8")
-
-        # Ensure pptxgenjs is available in the work dir.
-        # Global npm installs are not always on NODE_PATH so we install locally.
-        if not (Path(work_dir) / "node_modules" / "pptxgenjs").exists():
-            await agent.log("Installing pptxgenjs locally...")
-            npm = await _run_blocking(
-                ["npm", "install", "pptxgenjs", "--prefer-offline"],
-                capture_output=True,
-                text=True,
-                cwd=work_dir,
-                timeout=120,
-                shell=(os.name == "nt"),
-            )
-            if npm.returncode != 0:
-                err = (npm.stderr or npm.stdout or "npm failed").strip()
-                return _failed(f"npm install pptxgenjs failed: {err[:300]}", **built)
-
-        result = await _run_blocking(
-            ["node", str(js_path)],
-            capture_output=True,
-            text=True,
-            cwd=work_dir,
-            timeout=60,
-            shell=(os.name == "nt"),
-        )
-        if result.returncode != 0 or not Path(output_path).exists():
-            err = (result.stderr or result.stdout or "Unknown error").strip()
-            return _failed(f"pptxgenjs failed: {err[:400]}", **built)
+        try:
+            await asyncio.to_thread(_build_deck, outline, assignment, output_path)
+        except ImportError:
+            return _failed("python-pptx is not installed: pip install python-pptx", **built)
+        except Exception as e:
+            return _failed(f"Building the deck failed: {e}", **built)
 
         size_kb = Path(output_path).stat().st_size // 1024
         await agent.log(
@@ -769,8 +830,8 @@ async def handle_task(agent, payload: Any) -> Any:
         return {"pptx_path": output_path, **built, "error": None}
 
     finally:
-        # Extracted images, the script and a local pptxgenjs install; the deck
-        # has the images embedded and lives elsewhere, so none of it is needed.
+        # Extracted and generated images; the deck has them embedded and lives
+        # elsewhere, so none of it is needed.
         shutil.rmtree(work_dir, ignore_errors=True)
 
 

@@ -3,8 +3,11 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActivityFeed, MAX_ITEMS } from "../ui/dashboard/activityFeed";
+import { ActivityFeed, MAX_HEARTBEATS, MAX_ITEMS } from "../ui/feed/activityFeed";
 import type { FeedItem } from "../types/feed";
+
+/** How long a test that builds a large DOM on purpose may take. Generous: it only bounds a failure. */
+const SLOW_TEST_MS = 30_000;
 
 const record = (text: string, ts = 1_700_000_000) => ({
     source: "app",
@@ -80,7 +83,8 @@ describe("holding agent events", () => {
     });
 });
 
-describe("the cap on held events", () => {
+// Each test here builds the feed past its cap, which is slow on a loaded runner.
+describe("the cap on held events", { timeout: SLOW_TEST_MS }, () => {
     beforeEach(() => {
         document.body.innerHTML = "";
     });
@@ -123,6 +127,38 @@ describe("the cap on held events", () => {
 
         expect(feed.count).toBe(MAX_ITEMS);
         expect(feed.build().textContent).toContain("event 0");
+    });
+});
+
+describe("heartbeats, under a cap of their own", { timeout: SLOW_TEST_MS }, () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    const beat = (i: number) => item({ type: "heartbeat", label: `beat ${i}`, timestamp: i });
+
+    it("never push a real event out, however many arrive", () => {
+        const feed = new ActivityFeed(host(false));
+        feed.push(item({ label: "the one real event", timestamp: 0 }));
+
+        for (let i = 1; i <= MAX_ITEMS * 2; i++) {
+            feed.push(beat(i));
+        }
+
+        expect(feed.count).toBe(1 + MAX_HEARTBEATS);
+        expect(feed.build().textContent).toContain("the one real event");
+    });
+
+    it("leave the other events their own cap", () => {
+        const feed = new ActivityFeed(host(false));
+        for (let i = 0; i < MAX_HEARTBEATS; i++) {
+            feed.push(beat(i));
+        }
+        for (let i = 0; i <= MAX_ITEMS; i++) {
+            feed.push(item({ label: `event ${i}`, timestamp: 10_000 + i }));
+        }
+
+        expect(feed.count).toBe(MAX_ITEMS + MAX_HEARTBEATS);
     });
 });
 
@@ -248,6 +284,19 @@ describe("the log half", () => {
 
         expect(stop).toHaveBeenCalled();
         expect(unwire).toHaveBeenCalled();
+    });
+
+    it("keeps taking pushed records while paused, as the view is left", () => {
+        const feed = new ActivityFeed(host(false));
+        const stop = vi.spyOn(feed.logs, "stop");
+        feed.wire();
+
+        feed.pause();
+        push("while away");
+
+        expect(stop).toHaveBeenCalled();
+        expect(feed.logs.entries).toHaveLength(1);
+        feed.release();
     });
 
     it("takes pushed records once wired", () => {

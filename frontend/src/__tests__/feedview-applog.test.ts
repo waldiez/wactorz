@@ -13,6 +13,7 @@
  * displaying attacker-influenceable strings.
  */
 import { describe, it, expect, vi } from "vitest";
+import { DEFAULT_FILTERS, type FeedFilters } from "../ui/feed/feedEntries";
 import {
     appLogItemEl,
     applyFilters,
@@ -20,9 +21,7 @@ import {
     shortOrigin,
     MAX_ROWS,
     appendFeedItemToView,
-    DEFAULT_FILTERS,
-    type FeedFilters,
-} from "../ui/dashboard/feedView";
+} from "../ui/feed/feedView";
 import type { AppLogItem, FeedItem } from "../types/feed";
 
 const log = (over: Partial<AppLogItem> = {}): AppLogItem => ({
@@ -97,12 +96,12 @@ describe("a multi-line record", () => {
 
         expect(full.hidden).toBe(false);
         expect(full.textContent).toBe(traceback);
-        expect(row.getAttribute("aria-expanded")).toBe("true");
+        expect(row.querySelector(".af-feed-toggle")!.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("expands from the keyboard too", () => {
         const row = render(log({ text: traceback }));
-        row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        row.querySelector<HTMLButtonElement>(".af-feed-toggle")!.click();
         expect(row.querySelector<HTMLElement>(".af-feed-full")!.hidden).toBe(false);
     });
 

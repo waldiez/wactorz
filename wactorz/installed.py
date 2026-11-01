@@ -13,8 +13,6 @@ in ``WACTORZ_AGENTS`` or ``WACTORZ_PIPELINES``, are not entry points and do not
 pass through here.
 """
 
-from __future__ import annotations
-
 import importlib.metadata
 import logging
 import re

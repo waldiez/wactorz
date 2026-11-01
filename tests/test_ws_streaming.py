@@ -342,3 +342,54 @@ async def test_what_arrives_outside_a_turn_goes_to_the_latest_turns_agent(
                 break
 
     assert frame["from"] == "catalog"
+
+
+class TestWhichTurnAFrameIsOf:
+    async def test_a_message_with_no_id_is_given_one_on_the_turn_frame(
+        self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _route(_text: str, reply: Any, **_: Any) -> None:
+            await reply("hello")
+
+        monkeypatch.setattr(chat, "route_chat", _route)
+
+        async with client.ws_connect("/ws") as socket:
+            await socket.send_str(json.dumps({"type": "chat", "content": "hi"}))
+            seen = await _all_until_turn_end(socket)
+
+        turn = next(f for f in seen if f["type"] == "turn")
+        assert turn["turn_id"]
+        assert {f["turn_id"] for f in seen if f["type"] in ("chat", "turn_end")} == {
+            turn["turn_id"]
+        }
+
+    async def test_a_refused_answer_after_a_turn_is_not_of_that_turn(
+        self, client: TestClient[Any, Any], db: _Db, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _route(_text: str, reply: Any, **_: Any) -> None:
+            await reply("hello")
+
+        async def _refused(_frame: dict[str, Any]) -> str:
+            return "that question is closed"
+
+        monkeypatch.setattr(chat, "route_chat", _route)
+        monkeypatch.setattr(answers, "answer_from_dashboard", _refused)
+
+        async with client.ws_connect("/ws") as socket:
+            await socket.send_str(json.dumps({"type": "chat", "content": "hi", "id": "m1"}))
+            await _all_until_turn_end(socket)
+            await socket.send_str(json.dumps({"type": "answer"}))
+            refusal = json.loads((await socket.receive(timeout=5)).data)
+            while refusal["type"] != "chat":
+                refusal = json.loads((await socket.receive(timeout=5)).data)
+
+        assert refusal["content"] == "[error] that question is closed"
+        assert "turn_id" not in refusal
+
+
+async def _all_until_turn_end(socket: Any) -> list[dict[str, Any]]:
+    """Every frame up to and including the end of the turn."""
+    frames: list[dict[str, Any]] = []
+    while not frames or frames[-1]["type"] != "turn_end":
+        frames.append(json.loads((await socket.receive(timeout=5)).data))
+    return frames

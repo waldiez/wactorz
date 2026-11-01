@@ -50,6 +50,32 @@ def db_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Db]:
     yield recorder
 
 
+async def test_every_frame_of_a_turn_names_it_and_the_last_says_it_is_over(db: _Db) -> None:
+    socket = _Socket()
+    replies = TurnReplies(cast(web.WebSocketResponse, socket), MAIN, "message-1")
+
+    await replies.reply("whole")
+    await replies.chunk("piece")
+    await replies.end()
+    await replies.finished()
+
+    assert [(f["type"], f["turn_id"]) for f in socket.frames] == [
+        ("chat", "message-1"),
+        ("stream_chunk", "message-1"),
+        ("stream_end", "message-1"),
+        ("turn_end", "message-1"),
+    ]
+
+
+async def test_a_turn_end_on_a_socket_that_has_gone_is_not_an_error(db: _Db) -> None:
+    socket = _Socket()
+    socket.gone = True
+
+    await TurnReplies(cast(web.WebSocketResponse, socket), MAIN, "message-1").finished()
+
+    assert socket.frames == []
+
+
 def _replies(socket: _Socket, owner: chat.TurnOwner) -> TurnReplies:
     return TurnReplies(cast(web.WebSocketResponse, socket), owner)
 

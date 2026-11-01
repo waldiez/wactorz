@@ -11,6 +11,7 @@ import functools
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 from aiohttp import WSMsgType, web
@@ -266,9 +267,12 @@ class TurnReplies:
     piece.
     """
 
-    def __init__(self, ws: web.WebSocketResponse, owner: chat.TurnOwner) -> None:
+    def __init__(self, ws: web.WebSocketResponse, owner: chat.TurnOwner, turn_id: str = "") -> None:
         self._ws = ws
         self._owner = owner
+        #: The sender's id for the message this turn answers, on every frame of the
+        #: turn: frames carry the agent, which two overlapping turns can share.
+        self._turn_id = turn_id
         self._streamed: list[str] = []
 
     async def reply(self, text: str, **offered: Any) -> None:
@@ -309,13 +313,30 @@ class TurnReplies:
             whole, self._streamed = "".join(self._streamed), []
             _persist_chat(self._owner, "assistant", whole)
 
+    def outside_the_turn(self) -> "TurnReplies":
+        """The same agent's replies, for what is said apart from this turn."""
+        return TurnReplies(self._ws, self._owner)
+
+    async def finished(self) -> None:
+        """Say the turn is over, however it ended.
+
+        A whole reply has no end of its own, and a turn may send several, so only
+        this tells a client nothing more is coming.
+        """
+        try:
+            await self._send("turn_end")
+        except Exception:
+            logger.debug("[ws] Could not deliver the end of a turn", exc_info=True)
+
     async def _send(self, kind: str, **fields: Any) -> None:
+        turn = {"turn_id": self._turn_id} if self._turn_id else {}
         await self._ws.send_str(
             json.dumps(
                 {
                     "type": kind,
                     "from": self._owner.name,
                     "agent_id": self._owner.agent_id,
+                    **turn,
                     **fields,
                     "timestamp": time.time(),
                 }
@@ -360,6 +381,8 @@ async def _run_turn(
         # The socket is already gone; that is why we are here.
         except Exception:  # noqa: S110
             pass
+    finally:
+        await replies.finished()
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
@@ -411,7 +434,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     elif msg_type == "answer":
                         problem = await answers.answer_from_dashboard(data)
                         if problem:
-                            await replies.reply(f"[error] {problem}")
+                            await replies.outside_the_turn().reply(f"[error] {problem}")
 
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
@@ -433,7 +456,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                 str(data.get("agent_name") or ""),
                                 data.get("agent_id"),
                             )
-                            replies = TurnReplies(ws, owner)
+                            # A sender that gave no id still gets one, on the
+                            # `turn` frame, to tell overlapping turns apart by.
+                            turn_id = str(data.get("id") or uuid.uuid4().hex)
+                            replies = TurnReplies(ws, owner, turn_id)
                             # Said before anything else of the turn, so the page
                             # files the user's own message with the agent it
                             # reached: a mention names that agent by name, and
@@ -445,6 +471,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                         "agent_id": owner.agent_id,
                                         "name": owner.name,
                                         "id": data.get("id"),
+                                        "turn_id": turn_id,
                                         "timestamp": time.time(),
                                     }
                                 )

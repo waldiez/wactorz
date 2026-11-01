@@ -308,6 +308,19 @@ describe("WSClient", () => {
         expect(reached).toEqual([{ id: "m1", agentId: "catalog-id", name: "catalog" }]);
     });
 
+    it("takes the end of a turn as nothing to show", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.on("chat", spy);
+        c.connect("ws://localhost/ws");
+
+        ws().emit("message", {
+            data: JSON.stringify({ type: "turn_end", from: "main", agent_id: "m", turn_id: "t1" }),
+        });
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
     it("calls onStatePatch when state field is present", () => {
         const c = new WSClient();
         const spy = vi.fn();

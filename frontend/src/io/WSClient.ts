@@ -115,6 +115,10 @@ function told(type: unknown, data: Record<string, unknown>): boolean {
                 name: asStr(data["name"]),
             });
             return true;
+        case "turn_end":
+            // For clients that follow a turn to its end. The page shows a reply as
+            // it arrives and has nothing to do here.
+            return true;
         case "app_log":
             // Records the server wrote since the last frame.
             emit("af-app-log", { entries: asArray(data["entries"]) });

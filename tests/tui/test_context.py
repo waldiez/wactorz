@@ -17,7 +17,9 @@ import wactorz.tui
 from tests.test_client import KEY, _Db, db_fixture, server_fixture  # noqa: F401
 from tests.waiting import until
 from wactorz.client import Client, Cost, UnavailableError
+from wactorz.tui import app as tui_app
 from wactorz.tui.attachments import Staged
+from wactorz.tui.chatlog import Message
 from wactorz.tui.context import TUIContext, host_stats
 from wactorz.web import chat, runtime
 
@@ -141,14 +143,41 @@ async def test_a_backlog_that_cannot_be_read_leaves_the_stream_running(
     assert [entry["text"] for entry in seen] == ["live"]
 
 
-async def test_history_comes_back_oldest_first(context: TUIContext, db: _Db) -> None:
-    db.rows.extend(
-        [{"role": "user", "content": "newest"}, {"role": "assistant", "content": "oldest"}]
-    )
+async def test_history_comes_back_as_messages_of_their_threads(
+    context: TUIContext, db: _Db
+) -> None:
+    db.rows.append({"role": "assistant", "content": "stored"})
 
-    rows = await context.history()
+    messages = await context.history()
 
-    assert [row["content"] for row in rows] == ["oldest", "newest"]
+    assert [(m.role, m.text) for m in messages] == [("assistant", "stored")]
+
+
+async def test_the_servers_commands_are_read(context: TUIContext) -> None:
+    assert all(typed.startswith("/") for typed in await context.commands())
+
+
+async def test_an_agents_own_message_reaches_the_transcript(context: TUIContext) -> None:
+    heard: list[Message] = []
+    following = asyncio.create_task(context.follow(lambda _logs: None, heard.append))
+    await until(lambda: context.state.connected, "the socket")
+
+    for channel in list(runtime.ws_clients):
+        await channel.ws.send_json(
+            {
+                "type": "server_event",
+                "topic": "agents/a1/chat",
+                "thread_id": "t1",
+                "payload": {"from": "watcher", "content": "the door opened", "timestamp": 2.0},
+            }
+        )
+        await channel.ws.send_json(
+            {"type": "server_event", "topic": "agents/a1/heartbeat", "payload": {"name": "x"}}
+        )
+    await until(lambda: heard, "the message")
+    following.cancel()
+
+    assert [(m.thread, m.speaker, m.text) for m in heard] == [("t1", "watcher", "the door opened")]
 
 
 async def test_a_turn_goes_through_the_server(
@@ -223,3 +252,8 @@ def test_the_tui_reaches_wactorz_only_through_the_client() -> None:
                 assert name in allowed, f"{path.name}: {name}"
             if isinstance(node, ast.ImportFrom) and not node.level:
                 assert not (node.module or "").startswith("wactorz"), path.name
+
+
+async def test_a_server_is_told_from_nothing_there(server: TestServer) -> None:
+    assert await tui_app._answers(str(server.make_url("")))
+    assert not await tui_app._answers("http://127.0.0.1:9")

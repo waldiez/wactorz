@@ -61,22 +61,23 @@ async def test_the_filter_command_is_inert_without_the_pane(app: WactorzTUI) -> 
     async with app.run_test() as pilot:
         pilot.app.logs = None  # pyright: ignore[reportAttributeAccessIssue]
         pilot.app._handle_command("filter mqtt")  # pyright: ignore[reportAttributeAccessIssue]
+        await pilot.pause()
         assert pilot.app.query_one(TabbedContent).active == "logs"  # still navigates
 
 
 async def test_a_log_command_without_the_pane_reports_unknown(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         pilot.app.logs = None  # pyright: ignore[reportAttributeAccessIssue]
-        pilot.app._handle_command("clear")  # pyright: ignore[reportAttributeAccessIssue]
+        pilot.app._handle_command("clearlogs")  # pyright: ignore[reportAttributeAccessIssue]
         await pilot.pause()
-        assert any("unknown command" in n.message for n in pilot.app._notifications)
+        assert any("Tabs:" in n.message for n in pilot.app._notifications)
 
 
 async def test_an_empty_command_reports_unknown(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         pilot.app._handle_command("")  # pyright: ignore[reportAttributeAccessIssue]
         await pilot.pause()
-        assert any("unknown command" in n.message for n in pilot.app._notifications)
+        assert any("Tabs:" in n.message for n in pilot.app._notifications)
 
 
 # ── logs pane internals ─────────────────────────────────────────────────────

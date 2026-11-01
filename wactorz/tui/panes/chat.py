@@ -1,123 +1,170 @@
-"""Chat tab — a conversation transcript with the orchestrator (and @agent targets).
+"""Chat tab — threads beside a transcript, drawn from the :class:`ChatLog`.
 
-Each turn is its own ``Static``; the in-flight reply is updated in place as
-chunks stream in, then left as the final message. User and agent text is shown
-as a Rich ``Text`` (not markup) so stray brackets in content can't break the
-render. The app feeds this pane via :meth:`add_user` / :meth:`begin_reply` /
-:meth:`stream` / :meth:`end_reply`, and :meth:`restore` puts the stored
-conversation back when the app starts; routing lives in :class:`TUIContext`.
+The list has "All" first and then each agent, with what it has said since it was
+last read. The transcript shows what the log says is visible, so choosing a thread
+needs nothing from the server. A reply still arriving is updated in place, as
+plain text; finished, it is drawn as Markdown, as the dashboard draws it. Text is
+never treated as markup, so stray brackets in what an agent says cannot break the
+render.
 """
 
-from __future__ import annotations
-
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from typing import Any
 
+from rich.console import Group
+from rich.markdown import Markdown
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.widgets import Static
+from textual.containers import Horizontal, VerticalScroll
+from textual.message import Message as TextualMessage
+from textual.widgets import OptionList, Static
+from textual.widgets.option_list import Option
 
 from ..attachments import describe
+from ..chatlog import ALL, USER, ChatLog, Message
 from ..context import Snapshot, TUIContext
 from ..theme import NODE
 
 _HINT = (
-    "[dim]Type below and press Enter. Prefix with @name to target one agent; "
-    "everything else goes to the orchestrator. Drop a file onto the terminal to "
-    "attach it.[/]"
+    "[dim]Type below and press Enter. It goes to the thread on the left; @name goes "
+    "to that agent. Drop a file onto the terminal to attach it.[/]"
 )
-
 
 #: How the transcript names the person at the keyboard.
 _YOU = "you  "
 
 
-class ChatPane(VerticalScroll):
-    """Scrolling transcript with in-place streaming of the current reply."""
+class Turn(Static):
+    """One message in the transcript."""
+
+    def __init__(self, message: Message) -> None:
+        kind = "chat-user" if message.role == USER else "chat-reply"
+        super().__init__(classes=kind)
+        self.message = message
+        self.redraw()
+
+    @property
+    def shown(self) -> str:
+        """The message as words, whatever it is drawn with."""
+        files = " ".join(str(item.get("name")) for item in self.message.files)
+        picks = " ".join(self.message.choices)
+        return " ".join(
+            part for part in (self.message.speaker, self.message.text, files, picks) if part
+        )
+
+    def redraw(self) -> None:
+        """Draw the message as it stands now."""
+        message = self.message
+        if message.role == USER:
+            self.update(_user_line(message.text, message.files))
+        elif message.streaming or not message.text:
+            self.update(
+                _reply_line(message.speaker, message.text or "…", body_dim=not message.text)
+            )
+        else:
+            self.update(_finished(message))
+
+
+class ThreadList(OptionList):
+    """The threads to read."""
+
+    class Chosen(TextualMessage):
+        """A person picked a thread."""
+
+        def __init__(self, thread: str) -> None:
+            super().__init__()
+            self.thread = thread
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._reply: Static | None = None
-        self._label = "main"
-        self._buffer = ""
+        self._drawn: list[tuple[str, str]] = []
+
+    def show(self, threads: list[tuple[str, str]], log: ChatLog) -> None:
+        """List ``threads``, redrawing only when something on it changed."""
+        wanted = [(ALL, "All")]
+        for thread, label in threads:
+            unread = log.unread.get(thread, 0)
+            wanted.append((thread, f"{label} ({unread})" if unread else label))
+        if wanted == self._drawn:
+            return
+        self._drawn = wanted
+        self.clear_options()
+        self.add_options([Option(Text(label), id=f"t{thread}") for thread, label in wanted])
+        ids = [thread for thread, _ in wanted]
+        if log.selected in ids:
+            self.highlighted = ids.index(log.selected)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Say which thread was picked."""
+        event.stop()
+        self.post_message(self.Chosen(str(event.option.id)[1:]))
+
+
+class ChatPane(Horizontal):
+    """Threads beside the transcript of the one being read."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.log_ = ChatLog()
+        self._ctx: TUIContext | None = None
+        self._threads: list[tuple[str, str]] = []
 
     def compose(self) -> ComposeResult:
-        """The usage hint, first in the transcript so restored turns can follow it."""
-        yield Static(_HINT, classes="chat-hint")
+        """The thread list, and the transcript with its usage hint."""
+        yield ThreadList(id="chat-threads")
+        with VerticalScroll(id="chat-transcript"):
+            yield Static(_HINT, classes="chat-hint")
 
-    def refresh_view(self, _snap: Snapshot, _ctx: TUIContext, /) -> None:
-        """No-op: chat is event-driven. Present so the pane satisfies TUIView."""
+    def attach(self, ctx: TUIContext) -> None:
+        """Read from ``ctx``'s log."""
+        self._ctx = ctx
+        self.log_ = ctx.log
 
-    # ── Transcript updates (driven by the app's chat worker) ─────────────────
+    def refresh_view(self, _snap: Snapshot, ctx: TUIContext, /) -> None:
+        """Keep the list of threads current."""
+        self._threads = ctx.threads()
+        self.query_one(ThreadList).show(self._threads, self.log_)
 
-    def restore(self, rows: Sequence[Mapping[str, Any]]) -> None:
-        """Put the stored conversation back, above anything said since the app started.
+    @property
+    def _transcript(self) -> VerticalScroll:
+        return self.query_one("#chat-transcript", VerticalScroll)
 
-        Mounted after the hint rather than at the end: the history is read off the
-        event loop, and a message sent before it arrives belongs below it.
-        """
-        if not rows:
-            return
-        # Headed and closed, so each rule names what follows it: what was said
-        # before, then this session.
-        turns = [
-            Static(f"── earlier conversation · {len(rows)} messages ──", classes="chat-divider"),
-            *(_stored_turn(row) for row in rows),
-            Static("── now ──", classes="chat-divider"),
-        ]
-        self.mount(*turns, after=self.query_one(".chat-hint"))
-        self.scroll_end(animate=False)
+    def turns(self) -> list[Turn]:
+        """What the transcript shows, in order."""
+        return list(self._transcript.query(Turn))
 
-    def add_user(self, text: str, attachments: Iterable[Mapping[str, Any]] = ()) -> None:
-        """Append the user's message, and what was attached to it, to the transcript."""
-        self.mount(Static(_user_line(text, attachments), classes="chat-user"))
-        self.scroll_end(animate=False)
+    def redraw(self) -> None:
+        """Draw the thread being read from the log, from the top."""
+        transcript = self._transcript
+        for turn in self.turns():
+            turn.remove()
+        transcript.mount(*[Turn(message) for message in self.log_.visible()])
+        transcript.scroll_end(animate=False)
+        self.query_one(ThreadList).show(self._threads, self.log_)
 
-    def begin_reply(self, label: str = "main") -> Static:
-        """Open an in-flight reply bubble attributed to ``label``, and return it."""
-        self._label = label
-        self._buffer = ""
-        reply = Static(self._compose_line("…", body_dim=True), classes="chat-reply")
-        self._reply = reply
-        self.mount(reply)
-        self.scroll_end(animate=False)
-        return reply
+    def said(self, message: Message) -> None:
+        """Take in a new message, drawing it if its thread is being read."""
+        if message not in self.log_.messages:
+            self.log_.add(message)
+        if message in self.log_.visible():
+            self._transcript.mount(Turn(message))
+            self._transcript.scroll_end(animate=False)
+        self.query_one(ThreadList).show(self._threads, self.log_)
 
-    def stream(self, chunk: str, agent: str = "") -> None:
-        """Append a chunk to the in-flight reply, updating it in place.
-
-        ``agent`` is who said it, which only the server knows for certain.
-        """
-        # A chunk can arrive without begin_reply() when a caller streams cold.
-        reply = self._reply if self._reply is not None else self.begin_reply()
-        self._label = agent or self._label
-        self._buffer += chunk
-        reply.update(self._compose_line(self._buffer))
-        self.scroll_end(animate=False)
-
-    def end_reply(self) -> None:
-        """Close the in-flight reply, marking it empty if nothing arrived."""
-        if self._reply is not None and not self._buffer:
-            self._reply.update(self._compose_line("(no response)", body_dim=True))
-        self._reply = None
-        self._buffer = ""
-
-    # ── Rendering ────────────────────────────────────────────────────────────
-
-    def _compose_line(self, body: str, *, body_dim: bool = False) -> Text:
-        return _reply_line(self._label, body, body_dim=body_dim)
+    def changed(self, message: Message) -> None:
+        """Redraw ``message`` where it is shown, as more of it arrives."""
+        for turn in self.turns():
+            if turn.message is message:
+                turn.redraw()
+                self._transcript.scroll_end(animate=False)
 
 
-def _stored_turn(row: Mapping[str, Any]) -> Static:
-    """One chat_log row as the transcript shows it."""
-    content = str(row.get("content") or "")
-    if row.get("role") == "user":
-        files = row.get("attachments")
-        listed = files if isinstance(files, list) else []
-        return Static(_user_line(content, listed), classes="chat-user restored")
-    label = str(row.get("agent_name") or "main")
-    return Static(_reply_line(label, content), classes="chat-reply restored")
+def _finished(message: Message) -> Group:
+    """A finished reply: its speaker, its words as Markdown, and any choices."""
+    parts: list[Any] = [Text(f"{message.speaker}", style="bold green"), Markdown(message.text)]
+    for number, address in enumerate(message.choices, start=1):
+        parts.append(Text(f"  {number}. @{address}   /pick {number}", style="dim"))
+    return Group(*parts)
 
 
 def _indented(body: str, label: str) -> str:

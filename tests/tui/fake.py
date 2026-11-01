@@ -16,19 +16,29 @@ class _Chat:
         self.parts = parts
         self.rows = rows
         self.asked: list[str] = []
+        self.addressed: list[str | None] = []
         self.attached: list[list[Attachment]] = []
         self.fails_with: Exception | None = None
 
-    async def send(self, text: str, *, attachments: Any = (), **_: Any) -> AsyncIterator[Part]:
+    async def send(
+        self, text: str, *, to: str | None = None, attachments: Any = ()
+    ) -> AsyncIterator[Part]:
         self.asked.append(text)
+        self.addressed.append(to)
         self.attached.append(list(attachments))
-        for part in self.parts:
-            yield part
+        for found in self.parts:
+            yield found
         if self.fails_with is not None:
             raise self.fails_with
 
     async def history(self, *, limit: int = 200, **_: Any) -> list[dict[str, Any]]:
         return self.rows[:limit]
+
+    async def commands(self) -> list[dict[str, Any]]:
+        return [{"typed": "/agents"}, {"typed": "/plans approve"}]
+
+    async def stop_all(self) -> int:
+        return 1
 
 
 class _Files:

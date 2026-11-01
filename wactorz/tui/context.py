@@ -24,6 +24,7 @@ from ..client import (
     Server,
 )
 from .attachments import Staged
+from .chatlog import ASSISTANT, ChatLog, Message, message_from_row
 from .snapshot import HostStats, Snapshot
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,12 @@ def host_stats(reported: dict[str, Any]) -> HostStats:
 class TUIContext:
     """One server, as the panes see it. `start` before use."""
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, *, hosted: bool = False) -> None:
         self.client = client
+        #: Whether this process started the server, so closing the TUI stops it.
+        self.hosted = hosted
         self.state = LiveState()
+        self.log = ChatLog()
         self.server = Server(version="", uploads=False)
         self.user = getpass.getuser()
         try:
@@ -107,16 +111,53 @@ class TUIContext:
         """Who a turn looks addressed to, until the server says who answered it."""
         if text.startswith("@") and text[1:].strip():
             return text[1:].split()[0]
-        return MAIN
+        return self.label_of(self.log.selected) or MAIN
 
-    async def history(self, limit: int = HISTORY_LIMIT) -> list[dict[str, Any]]:
-        """The latest chat_log rows, oldest first, for the chat tab to restore."""
+    def threads(self) -> list[tuple[str, str]]:
+        """Each agent to talk to, as ``(id, label)``: a shared name is told apart by node."""
+        agents = self.state.agents
+        names = [str(agent.get("name") or "") for agent in agents]
+        found: dict[str, str] = {}
+        for agent, name in zip(agents, names, strict=True):
+            node = agent.get("node")
+            shared = names.count(name) > 1 and node
+            found[str(agent.get("agent_id") or name)] = f"{name}@{node}" if shared else name
+        for message in self.log.messages:
+            if message.thread and message.thread not in found:
+                found[message.thread] = message.speaker
+        return sorted(found.items(), key=lambda thread: thread[1])
+
+    def label_of(self, thread: str) -> str:
+        """The name a thread goes by, or ``""`` when nothing is known of it."""
+        return dict(self.threads()).get(thread, "")
+
+    def thread_named(self, label: str) -> str | None:
+        """The thread going by ``label``, or None."""
+        return next((id_ for id_, name in self.threads() if name == label), None)
+
+    async def history(
+        self, *, agent_id: str | None = None, limit: int = HISTORY_LIMIT
+    ) -> list[Message]:
+        """Stored messages, one thread's or all of them."""
         try:
-            rows = await self.client.chat.history(limit=limit)
+            rows = await self.client.chat.history(agent_id=agent_id, limit=limit)
         except ClientError:
             logger.warning("[tui] could not read the chat history", exc_info=True)
             return []
-        return list(reversed(rows))
+        return [message_from_row(row) for row in rows]
+
+    async def commands(self) -> list[str]:
+        """What the server takes after a slash, as it goes in the box."""
+        try:
+            forms = await self.client.chat.commands()
+        except ClientError:
+            logger.warning("[tui] could not read the commands", exc_info=True)
+            return []
+        return [str(form.get("typed") or "") for form in forms if form.get("typed")]
+
+    async def stop_all(self) -> int:
+        """Cancel the turns in progress on the server, anyone's."""
+        return await self.client.chat.stop_all()
 
     async def store_attachments(self, staged: list[Staged]) -> tuple[list[Attachment], list[str]]:
         """Store dropped files on the server: what is stored, and what failed."""
@@ -129,9 +170,11 @@ class TUIContext:
                 failed.append(f"{item.name} ({exc})")
         return stored, failed
 
-    def chat_stream(self, text: str, attachments: list[Attachment]) -> AsyncIterator[Part]:
-        """Say ``text`` and yield what comes back until the turn ends."""
-        return self.client.chat.send(text, attachments=attachments)
+    def chat_stream(
+        self, text: str, attachments: list[Attachment], *, to: str | None = None
+    ) -> AsyncIterator[Part]:
+        """Say ``text`` to ``to`` and yield what comes back until the turn ends."""
+        return self.client.chat.send(text, to=to, attachments=attachments)
 
     # ── What the panes render ────────────────────────────────────────────────
 
@@ -155,7 +198,28 @@ class TUIContext:
             self._logged.popitem(last=False)
         return fresh
 
-    async def follow(self, on_logs: Callable[[LogEntries], None]) -> None:
+    def _heard(self, frame: Frame) -> Message | None:
+        """An agent's own message, said outside any turn of this terminal's."""
+        topic = str(frame.raw.get("topic") or "")
+        payload = frame.raw.get("payload")
+        if frame.type != "server_event" or not isinstance(payload, dict):
+            return None
+        parts = topic.split("/")
+        if len(parts) != 3 or parts[0] != "agents" or parts[2] != "chat":
+            return None
+        return Message(
+            thread=str(frame.raw.get("thread_id") or parts[1]),
+            role=ASSISTANT,
+            speaker=str(payload.get("from") or parts[1][:8]),
+            text=str(payload.get("content") or ""),
+            ts=float(payload.get("timestamp") or 0.0),
+        )
+
+    async def follow(
+        self,
+        on_logs: Callable[[LogEntries], None],
+        on_message: Callable[[Message], None] = lambda _message: None,
+    ) -> None:
         """Keep the state and the logs current for as long as the connection lasts.
 
         The backlog is read once the socket is up, and again each time it comes
@@ -171,8 +235,13 @@ class TUIContext:
             if behind and self.state.connected:
                 behind = False
                 on_logs(self._unseen(await self._backlog()))
-            if isinstance(event, Frame) and event.type == "app_log":
+            if not isinstance(event, Frame):
+                continue
+            if event.type == "app_log":
                 on_logs(self._unseen(list(event.raw.get("entries") or ())))
+            heard = self._heard(event)
+            if heard is not None and heard.text:
+                on_message(heard)
 
     async def snapshot(self) -> Snapshot:
         """The state as it stands, for one refresh tick."""

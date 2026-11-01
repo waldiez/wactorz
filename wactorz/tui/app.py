@@ -3,7 +3,9 @@
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from rich.text import Text
@@ -12,9 +14,11 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Input, Static, TabbedContent, TabPane
 
-from ..client import Attachment, Client, ClientError, NoServerError
+from ..client import Attachment, Client, ClientError, Part, TimedOutError, UnavailableError
 from .attachments import Staged, describe, examine
+from .chatlog import ALL, ASSISTANT, USER, Message
 from .command import CommandInput
+from .completion import Offers
 from .context import TUIContext, TUIView
 from .meta import SUBTITLE, VERSION
 from .panes import (
@@ -24,28 +28,46 @@ from .panes import (
     LogsPane,
     SettingsPane,
 )
+from .panes.chat import ThreadList
 from .snapshot import Snapshot
 from .theme import NODE, SIGNATURE, VIOLET, WACTORZ_THEME
 
 # Tab order (id == label). Keep in sync with the TabPanes composed below.
 TAB_IDS = ["home", "chat", "agents", "logs", "settings"]
 
-# Slash-words handled by the TUI itself. Anything else after "/" is sent to the
-# agent; a leading "//" escapes a literal slash (so "//help" reaches the agent).
-_RESERVED_COMMANDS = set(TAB_IDS) | {
+# Slash-words this terminal answers itself. Anything else after "/" goes to the
+# server, which has its own /agents, /help and the rest; a leading "//" sends a word
+# of these to the server after all.
+_RESERVED_COMMANDS = {
     "quit",
     "exit",
     "q",
-    "help",
     "?",
-    "clear",
+    "tab",
+    "thread",
+    "stop",
+    "pick",
+    "detach",
+    "clearlogs",
     "pause",
     "level",
     "filter",
-    "detach",
 }
 
+#: The port a server on this machine answers on unless ``MONITOR_PORT`` says.
+DEFAULT_PORT = 8888
+#: Seconds to wait for a server on this machine to say it is there.
+PROBE_TIMEOUT_S = 2.0
+
 _REFRESH_INTERVAL = 1.0
+
+
+_HELP = (
+    "Tabs: Tab/⇧Tab or /tab <name> · Threads: ^N/^B or /thread <name> · F8 or /stop "
+    "cancels every turn · /pick <n> answers a which-one · Logs: F2 level, F3 pause, F4 "
+    "clear, /filter <text> · Drop a file to attach it, /detach removes it · //word sends "
+    "a word of these to the server · /quit exits. Anything else after / goes to the server."
+)
 
 
 class WactorzTUI(App):
@@ -61,6 +83,9 @@ class WactorzTUI(App):
         Binding("f3", "log_pause", "Pause logs", show=False),
         Binding("f4", "log_clear", "Clear logs", show=False),
         Binding("escape", "focus_command", "Command bar", show=False),
+        Binding("ctrl+n", "next_thread", "Next thread", show=False),
+        Binding("ctrl+b", "prev_thread", "Previous thread", show=False),
+        Binding("f8", "stop_turns", "Stop", show=False),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
@@ -74,6 +99,9 @@ class WactorzTUI(App):
         self.logs: LogsPane | None = None
         # Files dropped onto the terminal, waiting for the next message.
         self._staged: list[Staged] = []
+        self._offers = Offers()
+        # What was last sent, for a pick among the agents a name fitted.
+        self._last_sent = ""
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -107,6 +135,8 @@ class WactorzTUI(App):
                 # Mirrors the dashboard, which offers no drop zone when uploads
                 # are off: a dropped path is then just text.
                 accept_files=self.ctx.server.uploads,
+                suggester=self._offers,
+                offers=self._offers,
             )
             yield Static(self._render_hints(), id="keyhints")
             yield Static("", id="statusbar")
@@ -120,6 +150,7 @@ class WactorzTUI(App):
             self.query_one(SettingsPane),
         )
         self.logs = self.query_one(LogsPane)
+        self.query_one(ChatPane).attach(self.ctx)
         self.set_interval(_REFRESH_INTERVAL, self._refresh)
         self.run_worker(self._refresh(), exclusive=False)
         self.run_worker(self._restore_chat(), exclusive=False)
@@ -136,6 +167,7 @@ class WactorzTUI(App):
             # snapshot() reaches into arbitrary agent code; a bad tick must
             # never take the UI down — the next tick will try again.
             return
+        self._offers.agents = [label for _, label in self.ctx.threads()]
         for view in self._views:
             view.refresh_view(self._snap, self.ctx)
         self.query_one("#statusbar", Static).update(self._render_status())
@@ -156,15 +188,59 @@ class WactorzTUI(App):
     async def _follow(self) -> None:
         """Stay with the server, for the state and the logs."""
         try:
-            await self.ctx.follow(self.query_one(LogsPane).add)
+            await self.ctx.follow(self.query_one(LogsPane).add, self.query_one(ChatPane).said)
         except ClientError as exc:
             self.notify(f"Connection ended: {exc}", severity="error", timeout=10)
 
     # ── Chat history ─────────────────────────────────────────────────────────
 
     async def _restore_chat(self) -> None:
-        """Open the chat tab on the conversation so far, not on an empty page."""
-        self.query_one(ChatPane).restore(await self.ctx.history())
+        """Open the chat tab on the conversation so far, and learn the server's commands."""
+        self._offers.commands = await self.ctx.commands()
+        self.ctx.log.restore(await self.ctx.history())
+        self.query_one(ChatPane).redraw()
+
+    def _select_thread(self, thread: str) -> None:
+        """Read ``thread``, drawing it now and fetching what is stored of it."""
+        self.ctx.log.select(thread)
+        self.query_one(ChatPane).redraw()
+        self.query_one(TabbedContent).active = "chat"
+        if thread:
+            self.run_worker(self._restore_thread(thread), exclusive=False)
+
+    async def _restore_thread(self, thread: str) -> None:
+        self.ctx.log.restore(await self.ctx.history(agent_id=thread))
+        self.query_one(ChatPane).redraw()
+
+    def on_thread_list_chosen(self, event: ThreadList.Chosen) -> None:
+        """A thread was picked from the list."""
+        self._select_thread(event.thread)
+
+    def _step_thread(self, delta: int) -> None:
+        ids = [ALL, *[thread for thread, _ in self.ctx.threads()]]
+        selected = self.ctx.log.selected
+        here = ids.index(selected) if selected in ids else 0
+        self._select_thread(ids[(here + delta) % len(ids)])
+
+    def action_next_thread(self) -> None:
+        """Ctrl+N — read the next thread."""
+        self._step_thread(1)
+
+    def action_prev_thread(self) -> None:
+        """Ctrl+B — read the previous thread."""
+        self._step_thread(-1)
+
+    def action_stop_turns(self) -> None:
+        """F8 — cancel the turns in progress on the server."""
+        self.run_worker(self._stop_turns(), exclusive=False)
+
+    async def _stop_turns(self) -> None:
+        try:
+            stopped = await self.ctx.stop_all()
+        except ClientError as exc:
+            self.notify(f"Could not stop: {exc}", severity="error", timeout=5)
+            return
+        self.notify(f"Stopped {stopped} turn(s), on every client of this server", timeout=3)
 
     # ── Key hints (context-aware) ────────────────────────────────────────────
 
@@ -178,8 +254,8 @@ class WactorzTUI(App):
             )
         return (
             f"  {k}Tab{e}/{k}⇧Tab{e} switch tabs   "
-            f"{k}/<tab>{e} jump (e.g. /agents)   "
-            f"{k}/{e} command   "
+            f"{k}^N{e}/{k}^B{e} threads   {k}F8{e} stop   "
+            f"{k}/{e} command   {k}/?{e} help   "
             f"{k}^C{e} or {k}/quit{e} exit"
         )
 
@@ -290,55 +366,126 @@ class WactorzTUI(App):
     def _send_chat(self, text: str) -> None:
         staged, self._staged = self._staged, []
         self._update_tray()
+        self._last_sent = text
+        self._offers.typed.append(text)
         self.run_worker(self._chat_worker(text, staged), exclusive=False)
 
+    def _addressee(self, text: str) -> str | None:
+        """Who ``text`` goes to: the thread being read, unless it says for itself."""
+        if text.startswith(("/", "@")) or self.ctx.log.selected == ALL:
+            return None
+        return self.ctx.label_of(self.ctx.log.selected) or None
+
+    def _turn_reached(self, sent: Message, agent_id: str) -> None:
+        """File what was said where it arrived: a mention can move it to another thread."""
+        log = self.ctx.log
+        if not agent_id or sent.thread == agent_id:
+            return
+        log.move(sent, agent_id)
+        if log.selected != ALL:
+            log.select(agent_id)
+        self.query_one(ChatPane).redraw()
+
     async def _chat_worker(self, text: str, staged: list[Staged]) -> None:
-        chat = self.query_one(ChatPane)
+        pane = self.query_one(ChatPane)
         self.query_one(TabbedContent).active = "chat"
         stored: list[Attachment] = []
         if staged:
             stored, failed = await self.ctx.store_attachments(staged)
             if failed:
                 self.notify("Could not attach: " + ", ".join(failed), severity="warning", timeout=5)
-        chat.add_user(text, [{"name": file.name, "size": file.size} for file in stored])
-        chat.begin_reply(self.ctx.attribution(text))
+        files = [{"name": file.name, "size": file.size} for file in stored]
+        sent = Message(self.ctx.log.selected, USER, "you", text, time.time(), files)
+        pane.said(sent)
+        label = self.ctx.attribution(text)
+        reply = Message(sent.thread, ASSISTANT, label, "", time.time(), streaming=True)
+        pane.said(reply)
         try:
-            async for part in self.ctx.chat_stream(text, stored):
-                chat.stream(part.text, part.agent)
+            async for part in self.ctx.chat_stream(text, stored, to=self._addressee(text)):
+                self._turn_reached(sent, part.agent_id)
+                reply = self._heard_part(pane, reply, part)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Any agent-side failure is shown in the transcript, not raised.
-            chat.stream(f"\n[error] {exc}")
+            reply.text += f"\n[error] {exc}"
         finally:
-            chat.end_reply()
+            reply.text = reply.text or "(no response)"
+            reply.streaming = False
+            pane.changed(reply)
+
+    @staticmethod
+    def _heard_part(pane: ChatPane, reply: Message, part: Part) -> Message:
+        """Add ``part`` to the transcript, and return the message more would go in."""
+        reply.speaker = part.agent or reply.speaker
+        reply.thread = part.agent_id or reply.thread
+        if part.streaming or not reply.text:
+            reply.text += part.text
+            reply.choices = part.choices
+            pane.changed(reply)
+            return reply
+        # A second whole reply in one turn is a message of its own.
+        reply.streaming = False
+        pane.changed(reply)
+        following = Message(
+            reply.thread, ASSISTANT, reply.speaker, part.text, time.time(), choices=part.choices
+        )
+        following.streaming = True
+        pane.said(following)
+        return following
+
+    def _pick(self, argument: str) -> None:
+        """Send the last message again, to one of the agents its name fitted."""
+        offered = next((m.choices for m in reversed(self.ctx.log.messages) if m.choices), ())
+        if not argument.isdigit() or not 0 < int(argument) <= len(offered):
+            self.notify("Nothing to pick: /pick <number> after a list", severity="warning")
+            return
+        words = self._last_sent.split(maxsplit=1)
+        rest = words[1] if len(words) > 1 and self._last_sent.startswith("@") else self._last_sent
+        self._send_chat(f"@{offered[int(argument) - 1]} {rest}")
 
     def _handle_command(self, cmd: str) -> None:
-        name = cmd.split()[0].lower() if cmd else ""
+        name, _, argument = cmd.partition(" ")
+        name, argument = name.lower(), argument.strip()
         if name in ("quit", "exit", "q"):
             self.exit()
-        elif name in TAB_IDS:
-            self.query_one(TabbedContent).active = name
-        elif name in ("clear", "pause", "level") and self.logs:
+        elif name == "tab":
+            self._go_to_tab(argument)
+        elif name == "thread":
+            self._go_to_thread(argument)
+        elif name == "stop":
+            self.action_stop_turns()
+        elif name == "pick":
+            self._pick(argument)
+        elif name in ("clearlogs", "pause", "level") and self.logs:
             {
-                "clear": self.logs.clear_logs,
+                "clearlogs": self.logs.clear_logs,
                 "pause": self.logs.toggle_pause,
                 "level": self.logs.cycle_level,
             }[name]()
         elif name == "filter":
-            term = cmd.split(" ", 1)[1].strip() if " " in cmd else ""
             self.query_one(TabbedContent).active = "logs"
             if self.logs:
-                self.logs.set_filter(term)
+                self.logs.set_filter(argument)
         elif name == "detach":
             self._staged = []
             self._update_tray()
-        elif name in ("help", "?"):
-            self.notify(
-                "Tabs: Tab/⇧Tab or /<tab> · Logs: F2 level, F3 pause, F4 clear, "
-                "/filter <text> · Drop a file to attach it, /detach removes it · "
-                "//text sends a literal / to the agent · /quit exit"
-            )
         else:
-            self.notify(f"unknown command: /{cmd}", severity="warning", timeout=3)
+            self.notify(_HELP)
+
+    def _go_to_tab(self, name: str) -> None:
+        if name in TAB_IDS:
+            self.query_one(TabbedContent).active = name
+        else:
+            self.notify(f"Tabs: {', '.join(TAB_IDS)}", severity="warning", timeout=3)
+
+    def _go_to_thread(self, label: str) -> None:
+        if label.lower() in ("", "all"):
+            self._select_thread(ALL)
+            return
+        thread = self.ctx.thread_named(label.removeprefix("@"))
+        if thread is None:
+            self.notify(f"No thread called {label}", severity="warning", timeout=3)
+        else:
+            self._select_thread(thread)
 
 
 async def run_async(context: TUIContext) -> None:
@@ -355,19 +502,49 @@ async def _attach(client: Client) -> None:
 def _parsed_url(argv: list[str] | None) -> str | None:
     parser = argparse.ArgumentParser(
         prog="wactorz-tui",
-        description="Attach to a running Wactorz. The key comes from WACTORZ_API_KEY.",
+        description=(
+            "The Wactorz terminal UI. With no server named it uses the one on this machine, "
+            "or starts one. The key comes from WACTORZ_API_KEY."
+        ),
     )
     parser.add_argument("--url", help="the server, as http://host:8888 (default: WACTORZ_URL)")
     return parser.parse_args(argv).url
 
 
+async def _answers(url: str) -> bool:
+    """Whether anything is serving at ``url``."""
+    async with Client(url, timeout=PROBE_TIMEOUT_S) as client:
+        try:
+            await client.server()
+        except (UnavailableError, TimedOutError):
+            return False
+        except ClientError:
+            return True  # it refused us, which takes a server
+    return True
+
+
+def _attach_or_start() -> None:
+    """With no server named: use the one on this machine, or start one and run over it.
+
+    Started by the command, since only that may know about the server's side, and
+    in a process of its own for that reason: this one stays a client.
+    """
+    url = f"http://127.0.0.1:{os.environ.get('MONITOR_PORT') or DEFAULT_PORT}"
+    if asyncio.run(_answers(url)):
+        environ = {**os.environ, "WACTORZ_URL": url}
+        asyncio.run(_attach(Client.from_env(environ)))
+        return
+    sys.exit(subprocess.call([sys.executable, "-m", "wactorz", "--interface", "tui"]))
+
+
 def run(argv: list[str] | None = None) -> None:
-    """``wactorz-tui``: attach to a server. Says why and exits if that cannot be done."""
+    """``wactorz-tui``: attach to the server named, or if none, as `_attach_or_start` does."""
     url = _parsed_url(argv)
     try:
-        environ = {**os.environ, "WACTORZ_URL": url} if url else None
-        asyncio.run(_attach(Client.from_env(environ)))
-    except NoServerError as exc:
-        sys.exit(f"wactorz-tui: {exc}. Pass --url or set WACTORZ_URL.")
+        if url or os.environ.get("WACTORZ_URL"):
+            environ = {**os.environ, "WACTORZ_URL": url} if url else None
+            asyncio.run(_attach(Client.from_env(environ)))
+        else:
+            _attach_or_start()
     except ClientError as exc:
         sys.exit(f"wactorz-tui: {exc}")

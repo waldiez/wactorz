@@ -1,7 +1,5 @@
 """The command bar: an Input that hands a dropped file to the app instead of typing it."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +8,7 @@ from textual.message import Message
 from textual.widgets import Input
 
 from .attachments import paths_in_paste
+from .completion import Offers
 
 
 class CommandInput(Input):
@@ -28,9 +27,30 @@ class CommandInput(Input):
             self.paths = paths
             self.text = text
 
-    def __init__(self, *args: Any, accept_files: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, accept_files: bool = True, offers: Offers | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.accept_files = accept_files
+        self._offers = offers
+        # Where ↑ has got to in what was typed, and what was in the bar before it.
+        self._back = 0
+        self._draft = ""
+
+    def key_up(self) -> None:
+        """↑ — the previous thing typed."""
+        typed = self._offers.typed if self._offers else []
+        if self._back < len(typed):
+            self._draft = self.value if self._back == 0 else self._draft
+            self._back += 1
+            self.value = typed[-self._back]
+
+    def key_down(self) -> None:
+        """↓ — the next thing typed, ending on what was in the bar."""
+        typed = self._offers.typed if self._offers else []
+        if self._back:
+            self._back -= 1
+            self.value = typed[-self._back] if self._back else self._draft
 
     def _on_paste(self, event: events.Paste) -> None:
         """Announce a drop; any other paste falls through to Input's own handler."""

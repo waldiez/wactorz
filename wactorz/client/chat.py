@@ -149,6 +149,11 @@ class Chat:
             params["since"] = since
         return await self._transport.request("GET", "/api/chats", params=params)
 
+    async def commands(self) -> list[dict[str, Any]]:
+        """The slash commands this server answers, each way to type them."""
+        answer = await self._transport.request("GET", "/api/commands")
+        return list(answer.get("commands") or ())
+
     async def stop_all(self) -> int:
         """Cancel every turn in progress on the server, anyone's. How many were."""
         answer = await self._transport.request("POST", "/api/chat/stop")

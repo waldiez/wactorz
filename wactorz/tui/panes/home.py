@@ -21,9 +21,15 @@ def _identity_lines(snap: Snapshot, ctx: TUIContext) -> list[str]:
     """Who this session is, and what it is attached to."""
     server = "[green]● connected[/]" if snap.connected else "[red]○ reconnecting[/]"
     broker = "[green]● connected[/]" if snap.broker_connected else "[red]○ offline[/]"
+    lifetime = (
+        "started here: closing this stops the agents"
+        if ctx.hosted
+        else "attached: the agents keep running when this closes"
+    )
     return [
         f"  [b]Session[/]   [green]{ctx.user}[/]@[{VIOLET}]{ctx.host}[/]",
         f"  [b]Server[/]    {ctx.address}  {server}",
+        f"              [dim]{lifetime}[/]",
         f"  [b]Model[/]     [{NODE}]{ctx.llm_provider}[/] / [{NODE}]{ctx.llm_model}[/]",
         f"  [b]Broker[/]    {broker}",
     ]

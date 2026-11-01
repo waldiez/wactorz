@@ -6,14 +6,21 @@ off for as long as the TUI owns the terminal; what they would have said reaches
 the logs tab through the server. File handlers are left alone.
 """
 
+import asyncio
 import logging
 import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from ..client import Client
+from ..client import Client, UnavailableError
 from .app import run_async
 from .context import TUIContext
+
+#: Seconds to wait for this process's monitor to start answering. Generous, as a
+#: loaded machine is slow rather than broken, and how often to ask meanwhile.
+MONITOR_PATIENCE_S = 60.0
+MONITOR_POLL_S = 0.1
 
 
 def _writes_to_terminal(handler: logging.Handler) -> bool:
@@ -58,8 +65,27 @@ def console_quiet() -> Iterator[None]:
             root.addHandler(handler)
 
 
+async def wait_for_monitor(client: Client, *, patience: float = MONITOR_PATIENCE_S) -> None:
+    """Return once the monitor answers. It starts in the background, and takes a moment.
+
+    Only a monitor that is not there yet is waited for: any other refusal is an
+    answer, and raised. Raises the last failure if ``patience`` runs out.
+    """
+    deadline = time.monotonic() + patience
+    while True:
+        try:
+            await client.server()
+        except UnavailableError:
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(MONITOR_POLL_S)
+        else:
+            return
+
+
 async def run_hosted(port: int, api_key: str) -> None:
     """Run the TUI against the monitor this process is serving on ``port``."""
     with console_quiet():
         async with Client(f"http://127.0.0.1:{port}", api_key=api_key) as client:
-            await run_async(TUIContext(client))
+            await wait_for_monitor(client)
+            await run_async(TUIContext(client, hosted=True))

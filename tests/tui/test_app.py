@@ -22,8 +22,10 @@ from textual.widgets import Input, Static, TabbedContent
 
 from tests.tui.fake import FakeClient, context_over, part
 from wactorz.client import Attachment, Client, Part, TurnInterruptedError, UnauthorizedError
+from wactorz.tui import app as app_mod
 from wactorz.tui.app import TAB_IDS, WactorzTUI, run, run_async
 from wactorz.tui.attachments import Staged
+from wactorz.tui.chatlog import Message, message_from_row
 from wactorz.tui.context import TUIContext
 from wactorz.tui.meta import VERSION
 from wactorz.tui.panes import ChatPane, LogsPane
@@ -54,8 +56,8 @@ class _Ctx(TUIContext):
             raise RuntimeError("snapshot exploded")
         return self._snap
 
-    async def history(self, limit: int = 200) -> list[dict[str, Any]]:
-        return list(self._stored)
+    async def history(self, *, agent_id: str | None = None, limit: int = 200) -> list[Message]:
+        return [message_from_row(row) for row in self._stored]
 
     async def store_attachments(self, staged: list[Staged]) -> tuple[list[Attachment], list[str]]:
         return [
@@ -63,7 +65,7 @@ class _Ctx(TUIContext):
         ], []
 
     async def chat_stream(  # pyright: ignore[reportIncompatibleMethodOverride]
-        self, text: str, attachments: list[Attachment]
+        self, text: str, attachments: list[Attachment], *, to: str | None = None
     ) -> AsyncIterator[Part]:
         self.asked.append(text)
         self.attached.append(list(attachments))
@@ -221,7 +223,7 @@ async def test_the_key_hints_change_on_the_logs_tab(app: WactorzTUI) -> None:
 @pytest.mark.parametrize("tab", TAB_IDS)
 async def test_a_tab_command_jumps_to_that_tab(app: WactorzTUI, tab: str) -> None:
     async with app.run_test() as pilot:
-        await _submit(pilot, f"/{tab}")
+        await _submit(pilot, f"/tab {tab}")
         assert pilot.app.query_one(TabbedContent).active == tab
 
 
@@ -234,7 +236,7 @@ async def test_the_quit_commands_exit(app: WactorzTUI, word: str) -> None:
 
 async def test_the_help_command_notifies(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
-        await _submit(pilot, "/help")
+        await _submit(pilot, "/?")
         assert any("Tabs:" in n.message for n in pilot.app._notifications)
 
 
@@ -253,7 +255,7 @@ async def test_the_log_commands_reach_the_logs_pane(app: WactorzTUI) -> None:
         await _submit(pilot, "/pause")
         assert logs.paused is True
         logs.records.append((logging.INFO, "x"))
-        await _submit(pilot, "/clear")
+        await _submit(pilot, "/clearlogs")
         assert not logs.records
 
 
@@ -290,14 +292,14 @@ async def test_the_reply_is_rendered(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         await _submit(pilot, "hello")
         chat = pilot.app.query_one(ChatPane)
-        assert any("hi" in str(w.content) for w in chat.query(".chat-reply"))
+        assert any("hi" in w.shown for w in chat.turns())
 
 
 async def test_an_at_prefix_labels_the_reply_with_the_target(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         await _submit(pilot, "@weather forecast?")
         chat = pilot.app.query_one(ChatPane)
-        assert any("weather" in str(w.content) for w in chat.query(".chat-reply"))
+        assert any("weather" in w.shown for w in chat.turns())
 
 
 async def test_a_double_slash_escapes_a_literal_slash(app: WactorzTUI) -> None:
@@ -309,8 +311,15 @@ async def test_a_double_slash_escapes_a_literal_slash(app: WactorzTUI) -> None:
 
 async def test_a_reserved_word_is_not_sent_to_the_agent(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
-        await _submit(pilot, "/agents")
+        await _submit(pilot, "/pause")
         assert pilot.app.ctx.asked == []
+
+
+async def test_the_servers_own_commands_reach_it(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/agents")
+        await pilot.app.workers.wait_for_complete()
+        assert pilot.app.ctx.asked == ["/agents"]
 
 
 async def test_an_empty_submission_does_nothing(app: WactorzTUI) -> None:
@@ -352,7 +361,7 @@ async def test_an_agent_failure_is_shown_in_the_transcript() -> None:
     async with WactorzTUI(_Boom()).run_test() as pilot:
         await _submit(pilot, "hello")
         chat = pilot.app.query_one(ChatPane)
-        assert any("[error]" in str(w.content) for w in chat.query(".chat-reply"))
+        assert any("[error]" in w.shown for w in chat.turns())
         assert pilot.app.is_running
 
 
@@ -367,7 +376,7 @@ async def test_the_chat_tab_opens_on_the_stored_conversation() -> None:
     async with WactorzTUI(_Ctx(history=stored)).run_test() as pilot:
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()
-        texts = [str(w.content) for w in pilot.app.query_one(ChatPane).query(Static)]
+        texts = [w.shown for w in pilot.app.query_one(ChatPane).turns()]
         assert any("yesterday's question" in t for t in texts)
         assert any("yesterday's answer" in t for t in texts)
 
@@ -450,7 +459,7 @@ async def test_the_staged_files_go_with_the_next_message(app: WactorzTUI, pdf: P
         assert [[a.name for a in turn] for turn in pilot.app.ctx.attached] == [["report.pdf"]]
         assert not _tray(pilot).display
         chat = pilot.app.query_one(ChatPane)
-        assert any("report.pdf" in str(w.content) for w in chat.query(".chat-user"))
+        assert any("report.pdf" in w.shown for w in chat.turns())
 
 
 async def test_detach_takes_the_staged_files_off(app: WactorzTUI, pdf: Path) -> None:
@@ -493,7 +502,7 @@ async def test_the_server_says_who_answered_whoever_was_addressed() -> None:
         await _submit(pilot, "@cat list")
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()
-        replies = [str(w.content) for w in pilot.app.query_one(ChatPane).query(".chat-reply")]
+        replies = [w.shown for w in pilot.app.query_one(ChatPane).turns()]
         assert any("catalog" in reply and "sure" in reply for reply in replies)
 
 
@@ -504,12 +513,12 @@ async def test_a_turn_cut_off_says_so_in_the_transcript() -> None:
         await _submit(pilot, "hi")
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()
-        replies = [str(w.content) for w in pilot.app.query_one(ChatPane).query(".chat-reply")]
+        replies = [w.shown for w in pilot.app.query_one(ChatPane).turns()]
         assert any("connection dropped" in reply for reply in replies)
 
 
 async def test_a_connection_that_ends_for_good_is_said(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def refused(_self: TUIContext, _on_logs: Any) -> None:
+    async def refused(_self: TUIContext, *_handlers: Any) -> None:
         raise UnauthorizedError("http://server.test")
 
     monkeypatch.setattr(TUIContext, "follow", refused)
@@ -520,13 +529,60 @@ async def test_a_connection_that_ends_for_good_is_said(monkeypatch: pytest.Monke
         assert any("refused the key" in text for text in notified)
 
 
-def test_wactorz_tui_with_no_server_says_how_to_name_one(
+def test_with_no_server_named_and_none_here_it_starts_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("WACTORZ_URL", raising=False)
+    started: list[list[str]] = []
 
-    with pytest.raises(SystemExit, match="--url"):
+    async def nothing_here(_url: str) -> bool:
+        return False
+
+    def call(command: list[str]) -> int:
+        started.append(command)
+        return 3
+
+    monkeypatch.delenv("WACTORZ_URL", raising=False)
+    monkeypatch.setattr(app_mod, "_answers", nothing_here)
+    monkeypatch.setattr(app_mod.subprocess, "call", call)
+
+    with pytest.raises(SystemExit) as ended:
         run([])
+
+    assert started[0][1:] == ["-m", "wactorz", "--interface", "tui"]
+    assert ended.value.code == 3
+
+
+def test_with_no_server_named_and_one_here_it_attaches(monkeypatch: pytest.MonkeyPatch) -> None:
+    attached: list[str] = []
+
+    async def something_here(_url: str) -> bool:
+        return True
+
+    async def attach(client: Client) -> None:
+        attached.append(client.url)
+
+    def never(_command: list[str]) -> int:
+        raise AssertionError("started a server beside the one that answered")
+
+    monkeypatch.delenv("WACTORZ_URL", raising=False)
+    monkeypatch.setenv("MONITOR_PORT", "18888")
+    monkeypatch.setattr(app_mod, "_answers", something_here)
+    monkeypatch.setattr(app_mod, "_attach", attach)
+    monkeypatch.setattr(app_mod.subprocess, "call", never)
+
+    run([])
+
+    assert attached == ["http://127.0.0.1:18888"]
+
+
+def test_a_server_named_is_never_replaced_by_starting_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    def never(_command: list[str]) -> int:
+        raise AssertionError("started a server when one was named")
+
+    monkeypatch.setattr(app_mod.subprocess, "call", never)
+
+    with pytest.raises(SystemExit, match="not available"):
+        run(["--url", "http://localhost:9"])
 
 
 def test_wactorz_tui_says_why_it_could_not_attach(monkeypatch: pytest.MonkeyPatch) -> None:

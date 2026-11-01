@@ -14,10 +14,27 @@ from typing import Any, cast
 import pytest
 
 from wactorz import app as app_mod
-from wactorz.client import UnavailableError
+from wactorz.client import Client, UnauthorizedError, UnavailableError
 from wactorz.errors import StartupError
 from wactorz.tui import hosted
 from wactorz.tui.context import TUIContext
+
+
+async def _up_at_once(_client: Client) -> None:
+    """In place of waiting for a monitor these tests do not have."""
+
+
+class _Answering:
+    """A client whose server takes a few tries to come up."""
+
+    def __init__(self, failures: list[Exception]) -> None:
+        self.failures = failures
+        self.asked = 0
+
+    async def server(self) -> None:
+        self.asked += 1
+        if self.failures:
+            raise self.failures.pop(0)
 
 
 class _Tty:
@@ -40,6 +57,7 @@ async def test_the_tui_connects_to_this_process_with_its_key(
         seen.append(context)
 
     monkeypatch.setattr(hosted, "run_async", fake_run)
+    monkeypatch.setattr(hosted, "wait_for_monitor", _up_at_once)
 
     await app_mod._run_tui(18888, "the-key", [])
 
@@ -63,6 +81,7 @@ async def test_companions_stop_when_the_tui_exits(monkeypatch: pytest.MonkeyPatc
         await started.wait()
 
     monkeypatch.setattr(hosted, "run_async", fake_run)
+    monkeypatch.setattr(hosted, "wait_for_monitor", _up_at_once)
 
     await app_mod._run_tui(18888, "", [companion()])
 
@@ -76,6 +95,7 @@ async def test_a_monitor_that_does_not_answer_is_a_startup_error(
         raise UnavailableError("http://127.0.0.1:18888", "nothing there")
 
     monkeypatch.setattr(hosted, "run_async", fake_run)
+    monkeypatch.setattr(hosted, "wait_for_monitor", _up_at_once)
 
     with pytest.raises(StartupError, match="could not connect"):
         await app_mod._run_tui(18888, "", [])
@@ -103,6 +123,30 @@ async def test_it_cannot_run_without_the_monitor() -> None:
 
     with pytest.raises(StartupError, match="--no-monitor"):
         await app_mod._run_interface(args, cast(Any, None), None, cast(Any, object()), "tui", [])
+
+
+class TestWaitingForTheMonitor:
+    async def test_a_monitor_still_starting_is_waited_for(self) -> None:
+        gone = UnavailableError("http://127.0.0.1:18888", "not yet")
+        client = _Answering([gone, gone])
+
+        await hosted.wait_for_monitor(cast(Client, client))
+
+        assert client.asked == 3
+
+    async def test_it_gives_up_in_the_end(self) -> None:
+        gone = UnavailableError("http://127.0.0.1:18888", "not yet")
+
+        with pytest.raises(UnavailableError):
+            await hosted.wait_for_monitor(cast(Client, _Answering([gone, gone])), patience=0)
+
+    async def test_a_refusal_is_an_answer_and_is_not_waited_out(self) -> None:
+        client = _Answering([UnauthorizedError("http://127.0.0.1:18888")])
+
+        with pytest.raises(UnauthorizedError):
+            await hosted.wait_for_monitor(cast(Client, client))
+
+        assert client.asked == 1
 
 
 class TestTheConsole:

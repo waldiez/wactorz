@@ -86,6 +86,7 @@ IMPORT_TO_PACKAGE = {
 _CATALOGUE_AND_EXAMPLES = (
     "aiomqtt",
     "edge-tts",
+    "deepgram-sdk",
     "faster-whisper",
     "reachy-mini",
     "webrtcvad-wheels",

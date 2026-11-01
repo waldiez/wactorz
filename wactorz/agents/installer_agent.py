@@ -53,7 +53,20 @@ from ..core.packages import (
     unlisted,
 )
 from ..core.paths import resolve_state_dir
-from ..core.pip import PIP_TIMEOUT_S, index_args, is_installable_name
+from ..core.pip import (
+    NO_INSTALLER_MESSAGE,
+    PIP_INSTALL_TIMEOUT_S,
+    PIP_TIMEOUT_S,
+    index_args,
+    installed_versions,
+    installer_command,
+    is_installable_name,
+    make_user_site_importable,
+    pending_restart,
+    refresh_import_caches,
+    requirement_is_satisfied,
+    stale_loaded_distributions,
+)
 from ..core.refusals import REFUSED, UNANSWERED, RecentRefusals
 from . import node_service
 from .lookup import find_main_actor
@@ -417,14 +430,27 @@ class InstallerAgent(Actor):
             packages = payload.get("packages", [])
             if isinstance(packages, str):
                 packages = [p.strip() for p in packages.replace(",", " ").split()]
-            return await self._install_packages(packages, self._wanted_by(msg, payload))
+            options = {}
+            if payload.get("require_install_success") is True:
+                options["require_install_success"] = True
+            if "for_agent" in payload:
+                options["for_agent"] = str(payload["for_agent"])
+            if "notify" in payload:
+                options["notify"] = bool(payload["notify"])
+            return await self._install_packages(packages, self._wanted_by(msg, payload), **options)
 
         if action == "install_restored":
-            # An agent main is restoring: its packages were cleared when it was placed.
             packages = payload.get("packages", [])
             if isinstance(packages, str):
                 packages = packages.replace(",", " ").split()
-            return await self._install_packages(packages, self._wanted_by(msg, payload), ask=False)
+            return await self._install_packages(
+                packages,
+                self._wanted_by(msg, payload),
+                ask=False,
+                require_install_success=payload.get("require_install_success") is True,
+                for_agent=str(payload.get("for_agent") or ""),
+                notify=bool(payload.get("notify")),
+            )
 
         if action == "check":
             packages = payload.get("packages", [])
@@ -538,12 +564,12 @@ class InstallerAgent(Actor):
             )
             return waiting
         names = ", ".join(waiting)
-        question_id = await self.notify_user(
+        question_id = await self.ask_permission(
             f"{wanted_by} needs {names} installed, and "
             f"{'it is' if len(waiting) == 1 else 'they are'} not on the list of packages "
             "installed without asking. Install, and allow from now on? "
             f"Typing /packages allow {' '.join(waiting)} does the same.",
-            options=(INSTALL, REFUSE),
+            (INSTALL, REFUSE),
         )
         settled: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._asking[question_id] = _Asking(tuple(waiting), settled)
@@ -560,22 +586,10 @@ class InstallerAgent(Actor):
             # spawn already refused. A request for them soon after is refused
             # without asking; after that, it asks afresh.
             if self._asking.pop(question_id, None) is not None:
-                await self._close_question(question_id, NO_ANSWER)
+                await self.close_permission(question_id, NO_ANSWER)
                 for package in waiting:
                     self._refusals.remember(normalized(package), UNANSWERED)
         return unlisted(waiting, self._allowed())
-
-    async def _close_question(self, question_id: str, option: str) -> None:
-        """Mark ``question_id`` answered with ``option`` wherever it is shown."""
-        closing = Answer(
-            id=question_id,
-            agent_id=self.actor_id,
-            option=option,
-            index=-1,
-            channel=self.name,
-            timestamp=time.time(),
-        )
-        await self._mqtt_publish(closing.topic, closing.to_payload(), qos=1)
 
     async def _settle_allowed(self) -> None:
         """Let through every question whose packages are all allowed now, and close it."""
@@ -585,7 +599,7 @@ class InstallerAgent(Actor):
                 self._asking.pop(question_id)
                 if not asking.settled.done():
                     asking.settled.set_result(True)
-                await self._close_question(question_id, ALLOWED)
+                await self.close_permission(question_id, ALLOWED)
 
     @staticmethod
     def _not_allowed(refused: list[str]) -> dict:
@@ -612,6 +626,7 @@ class InstallerAgent(Actor):
             return
         if not asking.settled.done():
             asking.settled.set_result(answer.option == INSTALL)
+        await self.permission_answered(answer)
         if answer.option != INSTALL:
             for package in asking.packages:
                 self._refusals.remember(normalized(package), REFUSED)
@@ -654,8 +669,21 @@ class InstallerAgent(Actor):
     # ── Core install logic ──────────────────────────────────────────────────
 
     async def _install_packages(
-        self, packages: list[str], wanted_by: str = "an agent", *, ask: bool = True
+        self,
+        packages: list[str],
+        wanted_by: str = "an agent",
+        *,
+        ask: bool = True,
+        for_agent: str = "",
+        notify: bool = False,
+        require_install_success: bool = False,
     ) -> dict:
+        """Install `packages` one at a time, reporting each and the outcome.
+
+        With `notify`, each package actually being installed is announced in
+        chat as well as the activity log: a first install of a robot SDK takes
+        minutes, and a chat that says nothing for that long reads as a hang.
+        """
         if not packages:
             return {"error": "No packages specified"}
 
@@ -665,7 +693,7 @@ class InstallerAgent(Actor):
             pip_name = IMPORT_TO_PACKAGE.get(pkg.strip(), pkg.strip())
             if not is_installable_name(pip_name):
                 continue
-            if not self._is_installed(PACKAGE_TO_IMPORT.get(pip_name, pip_name)):
+            if not await asyncio.to_thread(requirement_is_satisfied, pip_name):
                 to_install.append(pip_name)
         refused = await self._cleared(to_install, wanted_by) if ask else []
         if refused:
@@ -673,12 +701,12 @@ class InstallerAgent(Actor):
 
         results = {}
         failed = []
+        wanted = [p.strip() for p in packages if p.strip()]
+        suffix = f" for {for_agent}" if for_agent else ""
+        before = await asyncio.to_thread(installed_versions)
+        ran_pip = False
 
-        for pkg in packages:
-            pkg = pkg.strip()
-            if not pkg:
-                continue
-
+        for index, pkg in enumerate(wanted, start=1):
             # Resolve import name → pip name (e.g. "cv2" → "opencv-python")
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
 
@@ -691,9 +719,10 @@ class InstallerAgent(Actor):
                 failed.append(pkg)
                 continue
 
-            # Check if already importable (invalidate cache so fresh installs show up)
-            import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
-            if self._is_installed(import_name):
+            # Installed metadata, version specifier included: a pinned
+            # `name==1.2` is not "installed" just because some other version
+            # imports, and a pip name need not be the module's name.
+            if pip_name not in to_install:
                 logger.info("[%s] %s already installed.", self.name, pip_name)
                 results[pip_name] = "already_installed"
                 continue
@@ -703,8 +732,14 @@ class InstallerAgent(Actor):
                 f"agents/{self.actor_id}/logs",
                 {"type": "log", "message": f"Installing {pip_name}...", "timestamp": time.time()},
             )
+            if notify:
+                await self.notify_user(f"Installing {pip_name} ({index}/{len(wanted)}){suffix}…")
 
-            success, output = await self._pip_install(pip_name)
+            ran_pip = True
+            if require_install_success:
+                success, output = await self._pip_install(pip_name, timeout_s=PIP_INSTALL_TIMEOUT_S)
+            else:
+                success, output = await self._pip_install(pip_name)
 
             # duckduckgo-search was renamed to ddgs in v9 — try the other name as fallback
             if not success and pip_name in ("duckduckgo-search", "ddgs"):
@@ -746,14 +781,31 @@ class InstallerAgent(Actor):
                 {"type": "log", "message": status, "timestamp": time.time()},
             )
 
+        # A dependency pip upgraded or downgraded on the way can be one this
+        # process already imported, and then no agent that needs it will work
+        # until the process restarts. Said here, where it is known, rather than
+        # left to surface later as an ImportError nobody can explain.
+        restart_required = []
+        if ran_pip:
+            after = await asyncio.to_thread(installed_versions)
+            restart_required = await asyncio.to_thread(stale_loaded_distributions, before, after)
+        if restart_required:
+            logger.warning(
+                "[%s] Install replaced packages this process already loaded: %s — restart needed",
+                self.name,
+                ", ".join(restart_required),
+            )
         return {
             "results": results,
             "failed": failed,
             "success": len(failed) == 0,
+            "restart_required": pending_restart(restart_required),
             "message": f"Installed {len(results) - len(failed)}/{len(results)} packages",
         }
 
-    async def _pip_install(self, package: str) -> tuple[bool, str]:
+    async def _pip_install(
+        self, package: str, *, timeout_s: float = PIP_TIMEOUT_S
+    ) -> tuple[bool, str]:
         """Run pip install using the same interpreter that launched this process.
 
         sys.executable inside a venv points to  venv/Scripts/python.exe  (Windows)
@@ -764,8 +816,12 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        cmd = [sys.executable, "-m", "pip", "install", *index_args(), package, "--quiet"]
-        if sys.platform != "win32":
+        base = installer_command()
+        if base is None:
+            return False, NO_INSTALLER_MESSAGE
+        cmd = [*base, *index_args(), package, "--quiet"]
+        if sys.platform != "win32" and base[1:2] == ["-m"]:
+            # pip's flag; uv installs into the environment it is pointed at.
             cmd.append("--break-system-packages")
 
         def _run_pip() -> tuple[bool, str]:
@@ -773,11 +829,11 @@ class InstallerAgent(Actor):
                 result = subprocess.run(  # noqa: S603  # argv, no shell; name pre-screened
                     cmd,
                     capture_output=True,
-                    timeout=PIP_TIMEOUT_S,
+                    timeout=timeout_s,
                 )
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
             except subprocess.TimeoutExpired:
-                return False, f"pip timed out after {PIP_TIMEOUT_S}s"
+                return False, f"pip timed out after {timeout_s:g}s"
             except FileNotFoundError:
                 return False, f"Python executable not found: {sys.executable}"
             except Exception as e:
@@ -791,7 +847,8 @@ class InstallerAgent(Actor):
 
             if success:
                 # Refresh import machinery so the new package is visible immediately
-                importlib.invalidate_caches()
+                make_user_site_importable()
+                refresh_import_caches()
 
         except Exception as e:
             return False, f"Executor error: {type(e).__name__}: {e}"
@@ -800,7 +857,7 @@ class InstallerAgent(Actor):
 
     def _is_installed(self, import_name: str) -> bool:
         """Check importability, always refreshing the import cache first."""
-        importlib.invalidate_caches()
+        refresh_import_caches()
         try:
             importlib.import_module(import_name)
         except ImportError:
@@ -983,6 +1040,7 @@ class InstallerAgent(Actor):
             password=password,
             tls_ca=tls.ca if tls is not None and enabled else None,
             check_hostname=bool(tls is not None and tls.check_hostname),
+            extensions=target.extensions,
         )
         credentials = bool(username or password)
         remote = f"{home}/wactorz/.env"

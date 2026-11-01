@@ -357,11 +357,12 @@ class TestCommandExpiry:
         assert _stored_topics(pub) == ["nodes/rpi/desired_state"]
         pub._close_db()
 
-    def test_an_old_task_for_an_agent_is_not_replayed(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("topic", ["agents/by-name/lights/task", "agents/at/rpi/lights/task"])
+    def test_an_old_task_for_an_agent_is_not_replayed(self, tmp_path: Path, topic: str) -> None:
         # The rest of the control plane: a task from an hour ago is not one to do now.
         pub = MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
         pub._init_db()
-        self._store(pub, "agents/by-name/lights", MQTTPublisher.COMMAND_EXPIRY_S + 60)
+        self._store(pub, topic, MQTTPublisher.COMMAND_EXPIRY_S + 60)
 
         pub._expire()
 

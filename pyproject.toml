@@ -67,8 +67,22 @@ cron      = ["croniter>=2.0.0"]
 # Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
 # no Bluetooth adapter has nothing to install it for.
 flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
-data      = ["pandas>=2.0.0"]
+# Parquet, for the readings and shadow pairs the model loop keeps (docs/design/data-storage.md).
+data      = ["pandas>=2.0.0", "pyarrow>=15.0.0"]
 vision    = ["opencv-python>=4.8.0"]
+# The Reachy Mini catalogue agent's packages, the same list its recipe installs
+# on first spawn. Installed up front they resolve together with Wactorz's own,
+# so that spawn has nothing to install and needs no restart. Out of `all`: on
+# Linux the robot SDK compiles part of itself and needs system GStreamer.
+reachy    = [
+    "reachy-mini==1.12.0; python_version >= '3.11'",
+    "numpy; python_version >= '3.11'",
+    "edge-tts; python_version >= '3.11'",
+    "pillow>=13; python_version >= '3.11'",
+    "webrtcvad-wheels; python_version >= '3.11'",
+    "deepgram-sdk>=3,<4; python_version >= '3.11'",
+]
+
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported
 # through `wactorz.core.integrations.langchain`.
 langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
@@ -96,6 +110,8 @@ dev       = [
     # Test-only support for optional catalogue-agent media paths. These stay out
     # of core and all, so Reachy Mini remains an opt-in catalogue agent.
     "numpy>=1.24.0",
+    # So the Parquet writer and the shadow trial are tested for real.
+    "pyarrow>=15.0.0",
     "Pillow>=10.0.0",
     # So the doc-to-pptx agent's deck is built for real in its tests.
     "python-pptx>=1.0.2",
@@ -125,7 +141,7 @@ dev       = [
 # suite - and with no dependency lock in this project, nothing else would catch
 # that. Same reasoning as the `docs` extra above pins markdown and pygments: the
 # dependency decides the thing being compared.
-e2e       = ["playwright==1.63.0"]
+e2e       = ["playwright==1.64.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
@@ -148,6 +164,7 @@ wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 wactorz-state   = "wactorz.state_archive:main"
 wactorz-artifacts = "wactorz.artifacts_cli:main"
+wactorz-data    = "wactorz.data.cli:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"
 
 [project.urls]
@@ -174,18 +191,31 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
 # A security fix younger than that is let through by name, up to the day it was
-# taken: certifi drops emSign roots whose intermediate keys were compromised
-# (GHSA-6q48-6c7w-9gw2), pip vendors that certifi, Pillow 13 fixes decoder
-# memory-safety flaws (GHSA-8g5g-8vmr-9782 and others), filelock 4.2.1 stops
-# its read-write lock reopening a planted SQLite file (GHSA-v4x8-3wr5-3wq8 and
-# others), and setuptools 84.1.0 closes a path escape in legacy wheel installs
-# (GHSA-xmj3-9gf7-h52w). An entry can go once the release it admits is older
-# than the window.
-exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", pip = "2026-10-21T00:00:00Z", pillow = "2026-10-21T00:00:00Z", filelock = "2026-10-21T00:00:00Z", setuptools = "2026-10-21T00:00:00Z" }
+# taken: pyasn1 0.6.5 closes quadratic-time decoding (GHSA-9m75-vc3g-4x39 and
+# others). An entry can go once the release it admits is older than the window.
+exclude-newer-package = { pyasn1 = "2026-10-28T00:00:00Z" }
 # Python 3.10 cannot have the fixed filelock (4.1.1 onwards needs 3.11), and the
 # 4.1 line it could have adds advisories of its own. It stays on the 4.0 line, which
 # has the fewest; only torch, an optional dependency, pulls it in. Drop this with 3.10.
-constraint-dependencies = ["filelock<4.1; python_version < '3.11'"]
+# These plugin releases publish only cp313t/cp314t Windows wheels. Universal
+# resolution otherwise selects them for ordinary CPython and macOS as well.
+# Keep the SDK's supported ranges; allow subsequent compatible releases.
+constraint-dependencies = [
+    "filelock<4.1; python_version < '3.11'",
+    "gstreamer-plugins!=1.28.8",
+    "gstreamer-plugins-gpl!=1.28.8",
+    "gstreamer-plugins-gpl-restricted!=1.28.8",
+    "gstreamer-plugins-libs!=1.28.8",
+    "gstreamer-plugins-restricted!=1.28.8",
+]
+
+# PyGObject's metadata build requires native Cairo and introspection libraries.
+# Use its published runtime requirements so resolving the opt-in Reachy extra
+# does not require those system libraries on development or CI hosts.
+[[tool.uv.dependency-metadata]]
+name = "pygobject"
+version = "3.46.0"
+requires-dist = ["pycairo>=1.16.0"]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

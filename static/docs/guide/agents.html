@@ -215,27 +215,46 @@
 </tr>
 </tbody>
 </table>
+<h4 id="addressing-an-agent">Addressing an agent</h4>
+<p>An agent's full address is <code>name@node</code>: <code>@counter@pi-kitchen</code>, <code>@weather@main</code> (main is the
+node <code>main</code>, also spelled <code>local</code>). A bare name is enough while one agent has it. When agents
+on more than one node have the name, nothing is sent: a person is told the addresses, and a
+program (<code>send_to</code>, <code>delegate_task</code>, <code>POST /api/chat</code>, <code>POST /api/reset</code>) is refused with
+them. Main never picks one. The dashboard offers the addresses as buttons, and sends the
+message again to the one pressed; it calls each agent of a shared name by its address, in
+the chat list, the target picker and the <code>@mention</code> suggestions, and <code>#/chat/&lt;name&gt;@&lt;node&gt;</code>
+opens that one's conversation. The same address works in the terminal chat and in
+<code>/agents restart|stop|delete</code>, <code>/start</code> and <code>/migrate</code>, and one naming a node the agent is
+not on is refused. <code>@</code> is not allowed in a new agent's name or a new node's name.</p>
+<p>A task for an agent on a node goes on that node's own topic, <code>agents/at/&lt;node&gt;/&lt;name&gt;/task</code>,
+so it reaches that agent alone. A node from before that takes tasks only by name, and every
+node running the name hears a task sent by name, so while another node runs the name, a task
+for the agent on such a node is refused even by its full address; deploying the node again
+lifts it. A reset of a name kept in more than one place is refused too, since main keeps what
+a reset clears by name.</p>
+<h4 id="two-agents-of-one-name">Two agents of one name</h4>
+<p>A name is unique on one host, so two hosts may each run an agent of the same name. A spawn
+naming a node where the name does not run, while it runs on another host, says what it
+means: <code>"replace": true</code> moves that agent there, keeping its id, and <code>"alongside": true</code>
+runs a second agent of the name there, under an id of its own. A spawn that says neither
+spawns nothing, and you are told both. <code>/agents copy &lt;agent&gt; &lt;node&gt;</code> does the second from
+chat: <code>/agents copy counter pi-kitchen</code> leaves <code>counter@main</code> running and starts
+<code>counter@pi-kitchen</code> from the same config, with none of its state.</p>
+<p>Two agents of one name on one host would share an address, so a spawn, a move or a copy
+onto a host that already runs the name is refused, and so is a second agent of a name on a
+node from before ids were kept, which would give it the first one's id; deploy that node
+again first. <code>"replace"</code> with the name on more than one host does not say which one moves:
+move one with <code>/migrate &lt;agent&gt;@&lt;node&gt; &lt;node&gt;</code>. Every command that acts on one agent —
+<code>/agents restart|stop|delete</code>, <code>/start</code>, <code>/migrate</code>, <code>/agents copy</code>, a <code>&lt;delete&gt;</code> block —
+takes the address, and a bare name kept on more than one host acts on none of them.</p>
 <h4 id="memory">Memory</h4>
 <p>After every exchange, a background LLM task extracts durable facts (HA URLs, entity IDs, webhook URLs, preferences) into <code>_user_facts</code>, which are injected into the system prompt on the next call. Rolling summarisation kicks in when conversation history exceeds 30 messages. Both conversation history and user facts are stored in SQLite and survive restarts.</p>
 <h4 id="spawn-registry">Spawn registry</h4>
-<p>Every DynamicAgent spawned during the session is saved to the <code>_spawned_agents</code> key in SQLite. On restart, MainActor re-spawns every entry so pipelines survive reboots. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.</p>
+<p>Every DynamicAgent spawned during the session is saved to the spawn registry in SQLite, one entry per agent, kept by its id (<code>_spawned_agents_by_id</code>). On restart, MainActor re-spawns every entry so pipelines survive reboots. A registry from before entries were kept by id (<code>_spawned_agents</code>, by name) is read once and left as it was. A fast-path import check skips dependency installation for packages that are already available, ensuring catalog agents restore instantly.</p>
 <h4 id="commands">Commands</h4>
-<div class="highlight"><pre><span></span><code><span class="o">/</span><span class="nx">agents</span><span class="w">                   </span><span class="err">—</span><span class="w"> </span><span class="nx">list</span><span class="w"> </span><span class="nx">all</span><span class="w"> </span><span class="nx">running</span><span class="w"> </span><span class="nx">agents</span><span class="w"> </span><span class="nx">with</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="nx">status</span>
-<span class="o">/</span><span class="nx">agents</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">keyword</span><span class="p">&gt;</span><span class="w">         </span><span class="err">—</span><span class="w"> </span><span class="nx">filter</span><span class="w"> </span><span class="nx">agents</span><span class="w"> </span><span class="nx">by</span><span class="w"> </span><span class="nx">capability</span><span class="w"> </span><span class="nx">keyword</span>
-<span class="o">/</span><span class="nx">agents</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">name</span><span class="p">&gt;</span><span class="w">       </span><span class="err">—</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="nx">remove</span><span class="w"> </span><span class="nx">an</span><span class="w"> </span><span class="nx">agent</span>
-<span class="o">/</span><span class="nx">rules</span><span class="w">                    </span><span class="err">—</span><span class="w"> </span><span class="nx">list</span><span class="w"> </span><span class="nx">active</span><span class="w"> </span><span class="nx">pipeline</span><span class="w"> </span><span class="nx">rules</span>
-<span class="o">/</span><span class="nx">rules</span><span class="w"> </span><span class="nx">delete</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">id</span><span class="p">&gt;</span><span class="w">        </span><span class="err">—</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="nx">agents</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="nx">remove</span><span class="w"> </span><span class="nx">rule</span>
-<span class="o">/</span><span class="nx">memory</span><span class="w">                   </span><span class="err">—</span><span class="w"> </span><span class="nx">show</span><span class="w"> </span><span class="nx">user</span><span class="w"> </span><span class="nx">facts</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="nx">conversation</span><span class="w"> </span><span class="nx">summary</span>
-<span class="o">/</span><span class="nx">memory</span><span class="w"> </span><span class="nx">clear</span><span class="w">             </span><span class="err">—</span><span class="w"> </span><span class="nx">wipe</span><span class="w"> </span><span class="nx">all</span><span class="w"> </span><span class="nx">memory</span>
-<span class="o">/</span><span class="nx">memory</span><span class="w"> </span><span class="nx">forget</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">key</span><span class="p">&gt;</span><span class="w">      </span><span class="err">—</span><span class="w"> </span><span class="nx">remove</span><span class="w"> </span><span class="nx">one</span><span class="w"> </span><span class="nx">fact</span>
-<span class="o">/</span><span class="nx">webhook</span><span class="w"> </span><span class="nx">discord</span><span class="w"> </span><span class="p">&lt;</span><span class="nx">url</span><span class="p">&gt;</span><span class="w">    </span><span class="err">—</span><span class="w"> </span><span class="nx">store</span><span class="w"> </span><span class="nx">a</span><span class="w"> </span><span class="nx">Discord</span><span class="w"> </span><span class="nx">webhook</span><span class="w"> </span><span class="nx">URL</span>
-<span class="o">/</span><span class="nx">webhook</span><span class="w">                  </span><span class="err">—</span><span class="w"> </span><span class="nx">list</span><span class="w"> </span><span class="nx">stored</span><span class="w"> </span><span class="nx">webhooks</span>
-<span class="o">/</span><span class="nx">topics</span><span class="w">                   </span><span class="err">—</span><span class="w"> </span><span class="nx">list</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">topics</span><span class="w"> </span><span class="nx">published</span><span class="w"> </span><span class="nx">by</span><span class="w"> </span><span class="nx">known</span><span class="w"> </span><span class="nx">agents</span>
-<span class="o">/</span><span class="nx">nodes</span><span class="w">                    </span><span class="err">—</span><span class="w"> </span><span class="nx">list</span><span class="w"> </span><span class="nx">remote</span><span class="w"> </span><span class="nx">nodes</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="nx">their</span><span class="w"> </span><span class="nx">agents</span>
-<span class="o">/</span><span class="nx">bus</span><span class="w">                      </span><span class="err">—</span><span class="w"> </span><span class="nx">list</span><span class="w"> </span><span class="nx">TopicBus</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">Reactive</span><span class="w"> </span><span class="nx">Pub</span><span class="o">/</span><span class="nx">Sub</span><span class="w"> </span><span class="nx">Registry</span>
-<span class="o">/</span><span class="nx">help</span><span class="w">                     </span><span class="err">—</span><span class="w"> </span><span class="nx">show</span><span class="w"> </span><span class="nx">all</span><span class="w"> </span><span class="nx">commands</span>
-</code></pre></div>
-
+<p>Main answers slash commands without a model call: agents, nodes, models, pipelines and
+plans, memory, notifications, diagnostics. <code>/help</code> on the dashboard lists them all, and the
+<a href="https://github.com/waldiez/wactorz/blob/main/docs/reference.md#13-interfaces">reference's command table</a> is written from the same source.</p>
 <hr />
 <h3 id="planneragent-core-llm">PlannerAgent <code>[core]</code> <code>[LLM]</code></h3>
 <p><strong>File:</strong> <code>wactorz/agents/planner/</code> (<code>agent.py</code> plus its extracted concerns)</p>
@@ -407,6 +426,7 @@
 <span class="nv">@catalog</span><span class="w"> </span><span class="n">spawn</span><span class="w"> </span><span class="n">anomaly</span><span class="o">-</span><span class="n">detector</span>
 </code></pre></div>
 
+<p>A recipe starts on main. If an agent of its name already runs on a node, nothing is spawned and the catalog says so: <code>@catalog spawn anomaly-detector replace</code> moves that agent to main, keeping its id, and <code>@catalog spawn anomaly-detector alongside</code> starts a second one on main.</p>
 <p>See the <a href="#catalog-recipes">Catalog recipes</a> section below for available recipes.</p>
 <hr />
 <h3 id="homeassistantagent-core-llm">HomeAssistantAgent <code>[core]</code> <code>[LLM]</code></h3>
@@ -833,7 +853,7 @@
 </tbody>
 </table>
 <blockquote>
-<p><strong>A task's payload is untrusted input.</strong> On main, any agent may send one; on a node, any node on the broker may, by name (<code>agents/by-name/&lt;name&gt;/task</code>); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what <code>handle_task</code> acts on, and never run, install or fetch what a payload names without checking it.</p>
+<p><strong>A task's payload is untrusted input.</strong> On main, any agent may send one; on a node, any node on the broker may, on its node's topic (<code>agents/at/&lt;node&gt;/&lt;name&gt;/task</code>) or by name (<code>agents/by-name/&lt;name&gt;/task</code>); and a person's text, or a page another agent fetched, may carry instructions meant for a model. Check what <code>handle_task</code> acts on, and never run, install or fetch what a payload names without checking it.</p>
 </blockquote>
 <h4 id="agent-api-agent-object-inside-generated-code">Agent API (<code>agent</code> object inside generated code)</h4>
 <table>
@@ -1167,7 +1187,7 @@ the class are read into the catalogue entry; <code>AGENT_NAME</code> names the a
 (default: the class name, <code>MyAgent</code> → <code>my-agent</code>); <code>AUTOSTART = False</code> keeps it
 in the catalogue until asked for.</p>
 <h3 id="registering-it">Registering it</h3>
-<p>Three ways in, all equivalent once the system is up:</p>
+<p>Three ways in, all equivalent once the system is up (a package's entry points load once it is named in <code>WACTORZ_EXTENSIONS</code>):</p>
 <table>
 <thead>
 <tr>
@@ -1189,8 +1209,8 @@ in the catalogue until asked for.</p>
 </tr>
 <tr>
 <td><code>[project.entry-points."wactorz.agents"]</code> in your package's <code>pyproject.toml</code></td>
-<td>the package</td>
-<td>anything <code>pip install</code>ed</td>
+<td>the package, named in <code>WACTORZ_EXTENSIONS</code></td>
+<td>an installed package</td>
 </tr>
 </tbody>
 </table>

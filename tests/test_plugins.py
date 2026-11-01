@@ -127,12 +127,29 @@ class TestBuild:
         assert callable(recipe["factory"])
 
 
+#: What the package brings of its own, found whatever a deployment names.
+BUILT_IN = {"recorder"}
+
+
 class TestDiscover:
     def test_targets_named_in_the_environment_are_loaded(self) -> None:
         found = plugins.discover(env="tests.test_plugins:Probe, tests.test_plugins:decorated")
 
         assert set(found) == {"probe", "decorated"}
         assert found["probe"].target == "tests.test_plugins:Probe"
+
+    def test_the_packages_own_agents_are_apart_from_the_deployments(self) -> None:
+        assert set(plugins.discover(env="")) == set()
+        own = plugins.built_in()
+
+        assert set(own) == BUILT_IN
+        recorder = own["recorder"]
+        assert recorder.target == "wactorz.agents.recorder_agent:RecorderAgent"
+        assert recorder.autostart is False
+        assert recorder.recipe()["type"] == "native"
+        assert plugins.for_name("recorder") is not None
+        assert plugins.for_target(recorder.target) is not None
+        assert recorder.target in plugins.targets()
 
     def test_a_bad_target_is_skipped_not_fatal(self, caplog: pytest.LogCaptureFixture) -> None:
         found = plugins.discover(env="no.such.module:Thing json:dumps tests.test_plugins:Probe")

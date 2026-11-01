@@ -3,11 +3,20 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { buildChatMessageEl, buildChatEmptyState } from "../ui/dashboard/chatThread";
+import { buildChatMessageEl, buildChatChoicesState, buildChatEmptyState } from "../ui/chat/chatThread";
+import { allByRole, byRole } from "./queries";
 import type { ChatMessage, Attachment } from "../types/agent";
 
 function msg(over: Partial<ChatMessage>): ChatMessage {
-    return { id: "1", from: "main", to: "user", content: "hi", timestampMs: 1_700_000_000_000, ...over };
+    return {
+        id: "1",
+        from: "main",
+        to: "user",
+        threadId: "main",
+        content: "hi",
+        timestampMs: 1_700_000_000_000,
+        ...over,
+    };
 }
 
 function att(over: Partial<Attachment>): Attachment {
@@ -57,6 +66,7 @@ describe("buildChatMessageEl", () => {
             msg({
                 from: "user",
                 to: "reachy-mini",
+                threadId: "reachy-mini",
                 source: "voice",
                 surface: "reachy-mini",
                 surfaceLabel: "Reachy",
@@ -197,6 +207,57 @@ describe("buildChatMessageEl", () => {
         const el = buildChatMessageEl(msg({ attachments: [att({ url: "/api/upload/f.pdf", name: "f" })] }));
         const link = el.querySelector<HTMLAnchorElement>("a.af-chat-attach-file")!;
         expect(link.getAttribute("href")).toBe("/api/upload/f.pdf");
+    });
+});
+
+describe("buildChatChoicesState", () => {
+    it("links each agent's conversation by its address, as text", () => {
+        const el = buildChatChoicesState("counter", ["counter@main", "<b>x</b>@pi"]);
+
+        expect(allByRole(el, "link").map(a => [a.textContent, a.getAttribute("href")])).toEqual([
+            ["@counter@main", "#/chat/counter@main"],
+            ["@<b>x</b>@pi", "#/chat/%3Cb%3Ex%3C%2Fb%3E@pi"],
+        ]);
+        expect(el.querySelector("b")).toBeNull();
+        expect(el.textContent).toContain("More than one agent is called @counter");
+    });
+});
+
+describe("buildChatMessageEl — a name several agents share", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    const offer = (over: Partial<ChatMessage> = {}): ChatMessage =>
+        msg({
+            id: "r1",
+            content: "More than one agent is called 'counter'.",
+            addressChoice: { addresses: ["counter@main", "counter@pi"], retryOf: "m1" },
+            ...over,
+        });
+
+    it("offers a button per address, and a press names the reply and the address", () => {
+        const picks: unknown[] = [];
+        const seen = (e: Event): void => {
+            picks.push((e as CustomEvent).detail);
+        };
+        const el = buildChatMessageEl(offer());
+        document.addEventListener("af-pick-address", seen);
+        try {
+            byRole(el, "button", "@counter@pi").click();
+        } finally {
+            document.removeEventListener("af-pick-address", seen);
+        }
+
+        expect(allByRole(el, "button").map(b => b.textContent)).toEqual(["@counter@main", "@counter@pi"]);
+        expect(picks).toEqual([{ id: "r1", address: "counter@pi" }]);
+    });
+
+    it("once picked, keeps the buttons dimmed with the pick marked", () => {
+        const el = buildChatMessageEl(offer({ answer: "counter@pi" }));
+
+        allByRole(el, "button").forEach(b => expect((b as HTMLButtonElement).disabled).toBe(true));
+        expect(byRole(el, "button", "@counter@pi").getAttribute("aria-pressed")).toBe("true");
     });
 });
 

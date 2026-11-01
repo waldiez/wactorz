@@ -498,9 +498,11 @@ class TestWindow:
         made: list[str] = []
         real_make = bus.make_window
 
-        def _make(topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+        def _make(
+            topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+        ) -> StreamWindow:
             made.append(topic)
-            return real_make(topic, seconds=seconds, max_size=max_size)
+            return real_make(topic, seconds=seconds, max_size=max_size, event_time=event_time)
 
         monkeypatch.setattr(bus, "make_window", _make)
 

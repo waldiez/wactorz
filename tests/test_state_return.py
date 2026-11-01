@@ -23,6 +23,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 
 
@@ -155,7 +156,7 @@ async def run_listener(
     # What main placed on the node: the agent is spawned from this entry, and
     # the source's desired state is rebuilt from it without the agent.
     entries = {"collector": config(node="rpi")} if registry is None else registry
-    setattr(main, "_get_spawn_registry", lambda: dict(entries))
+    setattr(main, "_get_spawn_registry", lambda: SpawnRegistry.from_names(dict(entries)))
     setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
 
     def _stop() -> None:

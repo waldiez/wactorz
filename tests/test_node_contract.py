@@ -51,6 +51,11 @@ CONTROL_TOPICS = frozenset(
         # Clear one agent's chat, state or counters here, or every agent's, as
         # main has cleared its own records of them.
         "reset",
+        # Have an agent here serve another version of a model it names, with
+        # the new pin: a pointer the agent's pin follows has moved.
+        "swap_model",
+        # Main kept, or could not keep, a recorded file the node sent.
+        "data_ack",
         # An agent's blob, in chunks, as main places it here, and an artifact an
         # agent here names, as main answers `artifact_request`. Not signed: the
         # signed spawn names its hash, and only a match is used.
@@ -80,6 +85,10 @@ REPORT_TOPICS = frozenset(
         "artifact_request",
         # A reset done, quoting main's request and naming the agents it cleared.
         "reset_done",
+        # How a swap went, quoting main's token: the version served now, or why not.
+        "swap_ack",
+        # A recorded file is on its way on `blob_return`: its source, path, hash and size.
+        "data_file",
     }
 )
 
@@ -160,6 +169,9 @@ MANIFEST_FIELDS = frozenset(
         "code_bundles",
         # That it clears its own agents' copies when main resets them.
         "resets",
+        # That an agent runs under the id its spawn names.
+        "actor_ids",
+        "tasks_by_node",
     }
 )
 
@@ -173,8 +185,12 @@ MANIFEST_FIELDS = frozenset(
 SPAWN_CONFIG_FIELDS = frozenset(
     {
         "name",
+        # The id main's spawn registry keeps; a node too old for it derives
+        # one from the name.
+        "actor_id",
         "code",
         "poll_interval",
+        "task_timeout_s",
         "description",
         "input_schema",
         "output_schema",

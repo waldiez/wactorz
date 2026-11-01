@@ -19,9 +19,10 @@
  * Keys not registered are **never** stored, even if the server sends them.
  */
 
+import { emit } from "../events";
+import { apiUrl, requestJson } from "../io/api";
 import { safeStorage } from "../safeStorage";
-import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
-import { UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { BLOCKED_PACKAGES_KEY, SIGN_OUT_KEY, UPLOADS_KEY } from "./keys";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
@@ -107,28 +108,36 @@ registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
 );
 
-/** Fetch `/api/config` and seed every registered client-side key from it.
- *  Returns whether the HA URL changed (the caller uses this to refresh the
- *  Devices nav link). */
+// Core entry — the installed packages left out because WACTORZ_EXTENSIONS does not
+// name them. Only the server sets it, and naming one clears the notice.
+registerConfigEntry(
+    BLOCKED_PACKAGES_KEY,
+    c => ((c.extensions as Record<string, unknown> | undefined)?.blocked as string[] | undefined)?.join(","),
+    { clearWhenAbsent: true },
+);
+
+/** Fetch `/api/config` and seed every registered client-side key from it. Whether
+ *  the server answered: what is stored is from an earlier visit, or unset, if not. */
 export async function seedServerConfig(): Promise<boolean> {
-    try {
-        const ingress: string = window.__WACTORZ_INGRESS_PATH ?? "";
-        const resp = await fetch(`${ingress}/api/config`);
-        if (!resp.ok) {
-            return false;
-        }
-        const cfg = (await resp.json()) as Record<string, unknown>;
-        let haChanged = false;
-        for (const [key, { extract, clearWhenAbsent }] of _entries) {
-            const value = extract(cfg);
-            const changed =
-                !value && clearWhenAbsent ? clearKeyFromServer(key) : seedKeyFromServer(key, value);
-            if (key === "wactorz-ha-url" && changed) {
-                haChanged = true;
-            }
-        }
-        return haChanged;
-    } catch {
+    const got = await requestJson<Record<string, unknown> | null>(apiUrl("/api/config"));
+    if (!got.ok || !got.value) {
         return false; // server may not be ready yet
     }
+    for (const [key, { extract, clearWhenAbsent }] of _entries) {
+        const value = extract(got.value);
+        if (!value && clearWhenAbsent) {
+            clearKeyFromServer(key);
+        } else {
+            seedKeyFromServer(key, value);
+        }
+    }
+    return true;
+}
+
+/** Seed the config once, for the whole page, and tell it the keys can be read.
+ *  Whether the server answered, as {@link seedServerConfig} says. */
+export async function loadServerConfig(): Promise<boolean> {
+    const read = await seedServerConfig();
+    emit("af-config-loaded");
+    return read;
 }

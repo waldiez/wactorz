@@ -261,6 +261,12 @@ ARTIFACT_MAX_BYTES = _env_int("WACTORZ_ARTIFACT_MAX_BYTES", 256 * 1024 * 1024)
 #: names is kept whatever the total. 0 keeps everything.
 NODE_ARTIFACT_CACHE_BYTES = _env_int("WACTORZ_NODE_ARTIFACT_CACHE_BYTES", 1024 * 1024 * 1024)
 
+#: How many days of recorded readings main keeps under its data directory
+#: (docs/design/data-storage.md). Past it, an hour of a source is removed, unless
+#: a stored model says it was trained on it. 0 keeps everything, which is the
+#: default: letting data go is a choice an install makes.
+DATA_RETENTION_DAYS = _env_float("WACTORZ_DATA_RETENTION_DAYS", 0.0)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:
@@ -461,6 +467,10 @@ class DeployTarget:
     #: ``on`` and ``off`` decide instead. See ``InstallerAgent._decide_node_tls``.
     broker_tls: str = ""
     broker_tls_port: int = 8883
+    #: The node's own ``WACTORZ_EXTENSIONS``: which packages installed there it
+    #: loads. Set per target, as ``/deploy`` rewrites the node's ``.env`` and a
+    #: node's packages need not be main's.
+    extensions: str = ""
 
 
 def _env_slug(name: str) -> str:
@@ -509,6 +519,7 @@ def deploy_name_error(node_name: str) -> str | None:
 def reserved_node_name_error(node_name: str) -> str | None:
     """Why ``node_name`` may not be given to a new node, or None if it may.
 
+    A name that already means main, or one holding the address separator.
     Checked where a node is made -- ``/deploy`` and ``setup-local`` -- and not
     where one starts: a node already running under such a name keeps starting,
     and is renamed by deploying it again under another.
@@ -519,6 +530,11 @@ def reserved_node_name_error(node_name: str) -> str | None:
             f"Node name {name!r} already means main itself: `/migrate <agent> {name}` moves an "
             "agent to main, and the dashboard lists main's agents under 'local'. Give the "
             "node another name; a node on main's own machine is usually 'sandbox'."
+        )
+    if "@" in name:
+        return (
+            f"Node name {name!r} contains '@', which separates an agent's name from its node "
+            "in an address (name@node). Give the node a name without it."
         )
     return None
 
@@ -551,6 +567,7 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
                 broker_password=os.getenv(f"DEPLOY_{slug}_BROKER_PASSWORD", ""),
                 broker_tls=os.getenv(f"DEPLOY_{slug}_BROKER_TLS", "").strip(),
                 broker_tls_port=_env_int(f"DEPLOY_{slug}_BROKER_TLS_PORT", 8883),
+                extensions=os.getenv(f"DEPLOY_{slug}_EXTENSIONS", "").strip(),
             )
         )
     return tuple(targets)
@@ -646,6 +663,9 @@ class AppConfig:
     #: ``package.module:attr`` targets of pipelines this deployment brings; the
     #: value of WACTORZ_PIPELINES as given. See wactorz/pipelines.py.
     pipelines_env: str
+    #: The installed distributions whose entry points are loaded, or ``*`` for
+    #: all; the value of WACTORZ_EXTENSIONS as given. See wactorz/installed.py.
+    extensions_env: str
     #: Whether the Home Assistant agents start: ``auto`` (when HA_URL and
     #: HA_TOKEN are set), ``on``, or ``off``.
     ha_agents: str
@@ -736,6 +756,7 @@ CONFIG = AppConfig(
     social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
     agents_env=os.getenv("WACTORZ_AGENTS", ""),
     pipelines_env=os.getenv("WACTORZ_PIPELINES", ""),
+    extensions_env=os.getenv("WACTORZ_EXTENSIONS", ""),
     ha_agents=_env_choice("WACTORZ_HA_AGENTS", "auto", ("auto", "on", "off")),
     minimal=_env_truthy("WACTORZ_MINIMAL"),
     orchestrator_env=os.getenv("WACTORZ_ORCHESTRATOR", "").strip(),

@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from wactorz import config, retention
+from wactorz.core.identity import derive_actor_id
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.persistence.db import WactorzDB
 from wactorz.web import uploads
@@ -42,6 +43,7 @@ def _turn(db: WactorzDB, age_days: float, files: tuple[str, ...] = ()) -> None:
         role="user",
         content=f"{age_days:g} days old",
         attachments=attached or None,
+        agent_id=derive_actor_id("main"),
     )
 
 

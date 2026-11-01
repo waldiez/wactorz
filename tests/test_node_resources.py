@@ -127,10 +127,21 @@ class TestDisk:
         assert isinstance(free, int)
         assert free > 0
 
-    def test_a_state_directory_not_made_yet_measures_the_one_above(self, tmp_path: Path) -> None:
-        assert resources.disk_free_mb(tmp_path / "wactorz" / "state") == resources.disk_free_mb(
-            tmp_path
-        )
+    def test_a_state_directory_not_made_yet_measures_the_one_above(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Which directory is measured, not two live readings: other tests write
+        # to the same filesystem between them.
+        measured: list[Path] = []
+
+        def _usage(path: Path) -> SimpleNamespace:
+            measured.append(Path(path))
+            return SimpleNamespace(total=0, used=0, free=7 * MIB)
+
+        monkeypatch.setattr(resources.shutil, "disk_usage", _usage)
+
+        assert resources.disk_free_mb(tmp_path / "wactorz" / "state") == 7
+        assert measured == [tmp_path]
 
 
 class TestTemperature:

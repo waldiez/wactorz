@@ -592,7 +592,7 @@ class ScheduledAgent(Actor):
             main = find_main_actor(self._registry)
             if main:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                     pass
         await self.stop()

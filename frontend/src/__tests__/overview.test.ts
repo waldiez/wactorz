@@ -3,16 +3,23 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { OverviewView, type OverviewHost } from "../ui/dashboard/overview";
-import type { AgentInfo } from "../types/agent";
-import type { StatCardData, AgentAction } from "../ui/dashboard/cards";
-import type { TrendKind } from "../ui/dashboard/trendPanel";
+import { OverviewView, type OverviewHost } from "../ui/overview/overview";
+import { BLOCKED_PACKAGES_KEY } from "../config/keys";
+import type { AgentInfo, RemoteNode } from "../types/agent";
+import type { StatCardData, AgentAction } from "../ui/overview/cards";
+import type { TrendKind } from "../ui/overview/trendPanel";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): OverviewHost {
+/** A host whose agents and nodes a test changes, as the store would. */
+interface FakeOverviewHost extends OverviewHost {
+    readonly agents: Map<string, AgentInfo>;
+    readonly remoteNodes: Map<string, RemoteNode>;
+}
+
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): FakeOverviewHost {
     const map = new Map(agents.map(a => [a.id, a]));
     const statData = (): StatCardData => ({
         agents: [...map.values()],
@@ -27,6 +34,7 @@ function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): Overv
         lastHb: new Map(),
         remoteNodes: new Map(),
         removingIds: new Set(),
+        label: a => a.name,
         hostStats: () => [10, 512, 1024],
         statData,
         onChat: vi.fn<(name: string) => void>(),
@@ -256,5 +264,37 @@ describe("a card's state for its dot", () => {
         view.patchCard(agent("worker", { state: "stopped" }));
 
         expect(card().dataset["state"]).toBe("stopped");
+    });
+});
+
+describe("OverviewView left-out packages", () => {
+    beforeEach(() => localStorage.clear());
+
+    it("adds the notice to a mounted overview when the server says, once", () => {
+        const host = makeHost();
+        const view = new OverviewView(host);
+        host.root.append(view.build());
+        localStorage.setItem(BLOCKED_PACKAGES_KEY, "acme");
+
+        view.renderBlockedNotice();
+        view.renderBlockedNotice();
+
+        expect(host.root.querySelectorAll("[role=status]")).toHaveLength(1);
+    });
+
+    it("builds the notice with the overview once the name is known", () => {
+        localStorage.setItem(BLOCKED_PACKAGES_KEY, "acme");
+
+        expect(new OverviewView(makeHost()).build().textContent).toContain("acme");
+    });
+
+    it("does nothing with no overview mounted or nothing to say", () => {
+        const host = makeHost();
+        const view = new OverviewView(host);
+        view.renderBlockedNotice();
+        host.root.append(view.build());
+        view.renderBlockedNotice();
+
+        expect(host.root.querySelector("[role=status]")).toBeNull();
     });
 });

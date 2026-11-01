@@ -13,6 +13,12 @@
  */
 import { MAX_STREAM_CHARS } from "./streamCap";
 
+/** Which stream a frame belongs to: its agent's id, or its sender's name for a frame without one.
+ *  Two agents may share a name, so a name alone would merge their replies. */
+export function streamKey(agentId: string, from: string): string {
+    return agentId || from;
+}
+
 export class AgentStreams {
     private _buffers = new Map<string, string>();
 
@@ -21,6 +27,11 @@ export class AgentStreams {
     append(from: string, chunk: string): void {
         const cur = this._buffers.get(from) ?? "";
         this._buffers.set(from, (cur + chunk).slice(0, MAX_STREAM_CHARS));
+    }
+
+    /** Make `from`'s buffer `text`, as the reply so far is reported elsewhere. */
+    set(from: string, text: string): void {
+        this._buffers.set(from, text.slice(0, MAX_STREAM_CHARS));
     }
 
     /** True while `from` has an unfinished stream. */

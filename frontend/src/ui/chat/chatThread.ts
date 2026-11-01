@@ -1,0 +1,253 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/**
+ * Pure DOM builders for the dashboard's in-card chat thread: one message row
+ * and the empty-state placeholder. Kept side-effect-free (they return detached
+ * elements) so the dashboard just appends them where needed.
+ */
+import type { ChatMessage, Attachment } from "../../types/agent";
+import { renderMarkdown } from "../markdown";
+import { isImage, humanSize } from "./uploads";
+import { iconMarkup } from "../shell/icons";
+import { MAIN_AGENT } from "../../agents/naming";
+import { openLightbox } from "../shell/lightbox";
+import { timeLabel } from "../../time";
+import { button, clickable, el, externalLink, pressed, testId } from "../dom";
+import { emit } from "../../events";
+import { formatRoute } from "../../router";
+
+/** Where a url is about to be used. The allow-list differs by destination, and
+ *  a single list for both is what let `data:` reach an anchor href. */
+type UrlContext = "media" | "link";
+
+/** Attachments are internally sourced (uploads → same-origin / blob: / data:),
+ *  but guard the scheme anyway so a hostile url can't smuggle javascript: into
+ *  a src or href. Returns "" for anything outside the allow-list.
+ *
+ *  `data:` is allowed for `media` and never for `link`: an <img src> renders,
+ *  it does not navigate, whereas following a `data:text/html` href runs script
+ *  in this origin. Browsers block top-level `data:` navigation today, which is
+ *  the only reason this was latent — it is not a guarantee to build on, and
+ *  uploads will start putting server-supplied urls here. */
+function safeAttachmentUrl(url: string, context: UrlContext): string {
+    try {
+        const proto = new URL(url, window.location.origin).protocol;
+        const allowed =
+            context === "media" ? ["http:", "https:", "blob:", "data:"] : ["http:", "https:", "blob:"];
+        return allowed.includes(proto) ? url : "";
+    } catch {
+        return "";
+    }
+}
+
+/** Clickable thumbnail that opens the lightbox; keyboard-operable (it's a button
+ *  in spirit, kept as an <img> for layout). */
+function buildImageThumb(url: string, name: string): HTMLImageElement {
+    const img = el("img", "af-chat-attach-thumb");
+    img.src = url;
+    img.alt = name;
+    img.loading = "lazy";
+    // Exposed as a button rather than a bare clickable image no AT/keyboard user can reach.
+    return clickable(img, `Open preview: ${name}`, () => openLightbox(url, name));
+}
+
+/** Let an inline image be opened full size, by pointer or keyboard. */
+function makeZoomable(img: HTMLImageElement): void {
+    const name = img.alt || "image";
+    clickable(img, `Open preview: ${name}`, () => openLightbox(img.src, name));
+}
+
+/** Render agent markdown with its inline images wired to the lightbox.
+ *
+ * The markdown renderer emits inert images on purpose — the lightbox belongs to
+ * this layer, and importing it there would pull a dashboard dependency into a
+ * generic renderer. That only works if every caller comes through here: a
+ * screenshot arriving live is rendered by the streaming path and one by the
+ * history path, and for a while only the second one attached the behaviour, so
+ * a new image was dead until the page was reloaded.
+ */
+export function renderAgentMarkdown(text: string): DocumentFragment {
+    const rendered = renderMarkdown(text);
+    rendered.querySelectorAll("img.af-chat-md-img").forEach(el => {
+        makeZoomable(el as HTMLImageElement);
+    });
+    return rendered;
+}
+
+/** Image thumbnail (click → lightbox) or file chip for one attachment. */
+function buildAttachmentEl(att: Attachment): HTMLElement {
+    if (isImage(att)) {
+        const src = att.url ? safeAttachmentUrl(att.url, "media") : "";
+        if (src) {
+            return buildImageThumb(src, att.name);
+        }
+    }
+    // Not an image (or not renderable): a chip, linked only if the url is safe
+    // to navigate to. Anything else degrades to an unlinked <span>.
+    const url = att.url ? safeAttachmentUrl(att.url, "link") : "";
+    const chip = url ? externalLink(url, "af-chat-attach-file") : el("span", "af-chat-attach-file");
+    // The icon is fixed markup; the filename is whatever was uploaded, so it
+    // goes in as text.
+    chip.innerHTML = iconMarkup("file", 13);
+    chip.appendChild(el("span", "", `${att.name} · ${humanSize(att.size)}`));
+    return chip;
+}
+
+/** A row of attachment previews appended below a message's text. */
+function buildAttachments(attachments: Attachment[]): HTMLElement {
+    const wrap = el("div", "af-chat-attachments");
+    attachments.forEach(att => wrap.appendChild(buildAttachmentEl(att)));
+    return wrap;
+}
+
+/** The buttons for a question's options, or the pick once it is answered.
+ *
+ *  A press fires `af-answer-option`; the message is marked answered by whoever
+ *  listens, here or from another channel, so the buttons never decide on their
+ *  own that the question is closed. Option text is set as text: the agent chose it. */
+export function buildOptions(msg: ChatMessage): HTMLElement {
+    const wrap = el("div", "af-chat-options");
+    const answered = msg.answer !== undefined;
+    (msg.options ?? []).forEach((option, index) => {
+        const btn = testId(button("af-chat-option", option), "chat-option");
+        if (answered) {
+            btn.disabled = true;
+            if (option === msg.answer) {
+                btn.classList.add("af-chat-option-picked");
+                pressed(btn, true);
+            }
+        } else {
+            btn.addEventListener("click", () => {
+                emit("af-answer-option", { id: msg.id, agentId: msg.agentId ?? "", option, index });
+            });
+        }
+        wrap.appendChild(btn);
+    });
+    if (answered && msg.answer && !(msg.options ?? []).includes(msg.answer)) {
+        // Answered elsewhere with words the buttons do not carry: still shown.
+        wrap.appendChild(el("span", "af-chat-option-picked af-chat-option-note", `✓ ${msg.answer}`));
+    }
+    return wrap;
+}
+
+/** The buttons for the addresses a name fits, or the pick once one is made.
+ *  A press fires `af-pick-address`; the chat re-sends the message that used the name. */
+export function buildAddressChoices(msg: ChatMessage): HTMLElement {
+    const wrap = el("div", "af-chat-options");
+    for (const address of msg.addressChoice?.addresses ?? []) {
+        const btn = testId(button("af-chat-option", `@${address}`), "chat-option");
+        if (msg.answer !== undefined) {
+            btn.disabled = true;
+            if (address === msg.answer) {
+                btn.classList.add("af-chat-option-picked");
+                pressed(btn, true);
+            }
+        } else {
+            btn.addEventListener("click", () => emit("af-pick-address", { id: msg.id, address }));
+        }
+        wrap.appendChild(btn);
+    }
+    return wrap;
+}
+
+/** The bubble body: agent replies render Markdown; user messages stay plain so
+ *  stray *asterisks* / backticks they type are never reformatted. */
+function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
+    const bubble = testId(el("div", "af-chat-msg-bubble"), "message-body");
+    if (isUser) {
+        bubble.textContent = msg.content;
+    } else if (msg.content) {
+        bubble.appendChild(renderAgentMarkdown(msg.content));
+    }
+    if (msg.attachments?.length) {
+        bubble.appendChild(buildAttachments(msg.attachments));
+    }
+    if (!isUser && msg.options?.length) {
+        bubble.appendChild(buildOptions(msg));
+    }
+    if (!isUser && msg.addressChoice?.addresses.length) {
+        bubble.appendChild(buildAddressChoices(msg));
+    }
+    return bubble;
+}
+
+/** The test id of a message row, by whose message it is. */
+const MESSAGE_ROW = { user: "user-message", agent: "agent-message" } as const;
+
+/** Build a detached chat message row (user vs agent styling, optional time). */
+export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
+    const isUser = msg.from === "user";
+    const surfaceLabel = msg.source === "voice" ? msg.surfaceLabel?.trim() || msg.surface?.trim() || "" : "";
+
+    const side = isUser ? "user" : "agent";
+    const row = testId(el("div", `af-chat-msg af-chat-msg-${side}`), MESSAGE_ROW[side]);
+
+    const from = testId(el("div", "af-chat-msg-from"), "message-from");
+    if (isUser) {
+        const via = surfaceLabel ? ` · via ${surfaceLabel}` : "";
+        from.textContent = `you${via} · ${timeLabel(msg.timestampMs)}`;
+    } else {
+        from.textContent = surfaceLabel && msg.from === msg.surface ? surfaceLabel : msg.from;
+    }
+
+    row.append(from, buildMsgBubble(msg, isUser));
+    const footer = buildMsgFooter(msg, isUser);
+    if (footer) {
+        row.append(footer);
+    }
+    return row;
+}
+
+/** The line under a message's bubble, or null for none: when an agent's was sent
+ *  (and where else a question went), or that the person's has not gone yet. */
+function buildMsgFooter(msg: ChatMessage, isUser: boolean): HTMLElement | null {
+    if (isUser) {
+        // Said in words: it has not gone yet.
+        return msg.queued ? el("div", "af-chat-msg-time", "Waiting to send") : null;
+    }
+    // A question also sent on a chat channel says so, since the answer may
+    // come from there rather than from these buttons.
+    const via = msg.channel && msg.options?.length ? ` · also on ${msg.channel}` : "";
+    return el("div", "af-chat-msg-time", `${timeLabel(msg.timestampMs)}${via}`);
+}
+
+/**
+ * The pane for a name several agents share, asked for by name alone: no
+ * conversation is opened, since nothing says which one is meant; each one's is
+ * offered by its address.
+ */
+export function buildChatChoicesState(name: string, addresses: string[]): HTMLElement {
+    const empty = el("div", "af-chat-empty");
+    const lead = el("p");
+    lead.append("More than one agent is called ", el("strong", "", `@${name}`), ". Open one:");
+    const choices = el("ul", "af-chat-choices");
+    for (const address of addresses) {
+        const link = el("a", "", `@${address}`);
+        link.href = formatRoute({ view: "chat", path: [address] });
+        const item = el("li");
+        item.appendChild(link);
+        choices.appendChild(item);
+    }
+    empty.append(lead, choices);
+    return empty;
+}
+
+/** Placeholder shown when a thread has no messages yet. */
+export function buildChatEmptyState(chatTarget: string): HTMLElement {
+    const empty = el("div", "af-chat-empty");
+    const lead = el("p");
+    if (chatTarget === MAIN_AGENT) {
+        lead.append("Say hello to ", el("strong", "", "@main"), " — the system orchestrator.");
+        empty.appendChild(lead);
+        return empty;
+    }
+    // The agent's name is set as text: whoever spawned it chose it.
+    lead.append("No messages with ", el("strong", "", `@${chatTarget}`), " yet.");
+    const note = el("p", "", "New messages will be sent directly to this agent.");
+    note.style.fontSize = "11px";
+    note.style.opacity = "0.5";
+    empty.append(lead, note);
+    return empty;
+}

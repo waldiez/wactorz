@@ -3,8 +3,9 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { buildFeedView, DEFAULT_FILTERS, type FeedFilters } from "../ui/dashboard/feedView";
-import { toEntry } from "../ui/dashboard/appLogs";
+import { DEFAULT_FILTERS, type FeedFilters } from "../ui/feed/feedEntries";
+import { buildFeedView } from "../ui/feed/feedView";
+import { toEntry } from "../io/appLogs";
 import { logFeedItem } from "../agents/mapping";
 import { ServerEventRouter } from "../io/ServerEventRouter";
 import type { AppLogItem, FeedItem } from "../types/feed";

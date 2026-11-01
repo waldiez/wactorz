@@ -18,13 +18,14 @@ import asyncio
 import contextlib
 import logging
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 import pytest
 
+from tests.waiting import until
 from wactorz.core import mqtt as core_mqtt
 from wactorz.core import mqtt_publisher
 from wactorz.core.mqtt_publisher import MQTTPublisher
@@ -60,8 +61,10 @@ async def _fake_broker(client: _Client) -> AsyncIterator[_Client]:
     yield client
 
 
-async def _run_briefly(pub: MQTTPublisher, client: _Client, seconds: float = 0.3) -> None:
-    """Drive the real `MQTTPublisher._run` against a fake broker, without backoff."""
+async def _run_until(
+    pub: MQTTPublisher, client: _Client, done: Callable[[], object], what: str
+) -> None:
+    """Drive the real `MQTTPublisher._run` against a fake broker, without backoff, until ``done``."""
     real_sleep = asyncio.sleep
 
     async def _no_backoff(delay: float, *a: Any, **kw: Any) -> Any:
@@ -73,9 +76,11 @@ async def _run_briefly(pub: MQTTPublisher, client: _Client, seconds: float = 0.3
         mock.patch.object(mqtt_publisher.asyncio, "sleep", _no_backoff),
     ):
         task = asyncio.create_task(pub._run("localhost", 1883))
-        await real_sleep(seconds)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        try:
+            await until(done, what)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.fixture(name="pub")
@@ -150,7 +155,9 @@ class TestAMessageTheClientRefuses:
         _queue_stored(pub, "good")
         client = _Client(refuse={"bad": error})
 
-        await _run_briefly(pub, client)
+        await _run_until(
+            pub, client, lambda: client.published and not _stored(pub), "the good one sent"
+        )
 
         assert client.published == ["good"]
         assert client.attempts["bad"] == 1
@@ -167,7 +174,9 @@ class TestAMessageThatKeepsFailing:
         _queue_stored(pub, "good")
         client = _Client(refuse={"poison": RuntimeError("malformed packet")})
 
-        await _run_briefly(pub, client)
+        await _run_until(
+            pub, client, lambda: client.published and not _stored(pub), "the good one sent"
+        )
 
         assert client.attempts["poison"] == 3
         assert client.published == ["good"]
@@ -182,6 +191,6 @@ class TestAMessageThatKeepsFailing:
             _queue_stored(pub, topic)
         client = _Client(fail_once=("a", "b", "c"))
 
-        await _run_briefly(pub, client)
+        await _run_until(pub, client, lambda: len(client.published) == 3, "all three sent")
 
         assert client.published == ["a", "b", "c"]

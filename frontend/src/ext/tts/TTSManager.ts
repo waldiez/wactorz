@@ -22,7 +22,11 @@
 
 import { safeStorage } from "../../safeStorage";
 import { emit } from "../../events";
+import { posting, requestBytes, requestJson } from "../../io/api";
 import type { TTSVoice } from "./types";
+
+/** How long synthesis may take: the server waits on a remote voice service. */
+const TTS_TIMEOUT_MS = 60_000;
 
 const LS_BEEP = "wactorz.beep";
 const LS_TTS = "wactorz.tts";
@@ -43,7 +47,7 @@ export class TTSManager {
     /** Whether the ambient sound has been told to duck and not yet told to stop. */
     private _ducked = false;
     /** API base — empty for plain web, ingress prefix behind HA.
-     *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
+     *  Must be set (app.ts) before init(); bare "/api/…" escapes the ingress prefix. */
     private _apiBase = "";
 
     constructor() {
@@ -69,19 +73,12 @@ export class TTSManager {
     }
 
     private async _checkServer(): Promise<boolean> {
-        try {
-            const res = await fetch(`${this._apiBase}/api/tts/voices`);
-            if (res.ok) {
-                const data: unknown = await res.json();
-                if (Array.isArray(data) && data.length > 0) {
-                    this._voices = data as TTSVoice[];
-                    this._serverAvailable = true;
-                    this._emitVoices();
-                    return true;
-                }
-            }
-        } catch {
-            /* network error */
+        const got = await requestJson<unknown>(`${this._apiBase}/api/tts/voices`);
+        if (got.ok && Array.isArray(got.value) && got.value.length > 0) {
+            this._voices = got.value as TTSVoice[];
+            this._serverAvailable = true;
+            this._emitVoices();
+            return true;
         }
         this._serverAvailable = false;
         return false;
@@ -272,24 +269,24 @@ export class TTSManager {
         // POST, not GET: synthesis is work, not a read. A GET can be fired
         // cross-origin with no Origin header at all (`<img src>`), which is the
         // assumption the server's Origin check rests on.
-        fetch(`${this._apiBase}/api/tts`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(voice ? { text, voice } : { text }),
-        })
-            .then(res => {
-                if (res.status === 503 || res.status === 404) {
+        requestBytes(`${this._apiBase}/api/tts`, posting(voice ? { text, voice } : { text }), TTS_TIMEOUT_MS)
+            .then(got => {
+                if (got.ok) {
+                    this._serverAvailable = true;
+                    return got.value;
+                }
+                // Only an answer that says so rules the server out for the session:
+                // one slow reply is no reason to change the voice for good.
+                const gone =
+                    !got.timedOut && (got.status === undefined || got.status === 503 || got.status === 404);
+                if (gone) {
                     this._serverAvailable = false;
-                    unduck();
+                }
+                unduck();
+                if (gone || got.timedOut) {
                     this._fallBack(text, mine);
-                    return null;
                 }
-                if (!res.ok) {
-                    unduck();
-                    return null;
-                }
-                this._serverAvailable = true;
-                return res.arrayBuffer();
+                return null;
             })
             .then(buf => {
                 if (!buf || overtaken()) {

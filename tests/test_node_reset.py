@@ -3,12 +3,13 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from tests.node_messages import SignedMessage
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import api_reset, node_reset
 
 
@@ -217,11 +218,13 @@ class TestWhichAnswersCount:
 
 
 class _SpawnedOnEdge:
-    """Main, as far as the reset route reads it: one agent placed on a node."""
+    """Main, as far as the reset route reads it: one agent placed on a node, and no node heard from."""
+
+    _known_nodes: ClassVar[dict[str, dict[str, Any]]] = {}
 
     @staticmethod
-    def _get_spawn_registry() -> dict[str, Any]:
-        return {"counter": {"name": "counter", "node": "edge"}}
+    def _get_spawn_registry() -> SpawnRegistry:
+        return SpawnRegistry.from_names({"counter": {"name": "counter", "node": "edge"}})
 
 
 class TestTheResetRoute:
@@ -229,7 +232,12 @@ class TestTheResetRoute:
 
     @staticmethod
     async def _post(
-        monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]
+        monkeypatch: pytest.MonkeyPatch,
+        body: dict[str, Any],
+        status: int = 200,
+        *,
+        cleared: list[dict[str, Any]] | None = None,
+        frames: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], list[tuple[str, str | None, dict[str, set[str]]]]]:
         asked: list[tuple[str, str | None, dict[str, set[str]]]] = []
 
@@ -242,9 +250,18 @@ class TestTheResetRoute:
         monkeypatch.setattr(node_reset, "reset_on_nodes", reset_on_nodes)
         monkeypatch.setattr(api_reset, "find_main_actor", lambda _registry: _SpawnedOnEdge())
         monkeypatch.setattr(api_reset.runtime, "registry", None)
-        monkeypatch.setattr(api_reset.ws, "broadcast", AsyncMock())
+
+        async def broadcast(frame: dict[str, Any]) -> None:
+            if frames is not None:
+                frames.append(frame)
+
+        def reset_chat(*_args: Any, **kwargs: Any) -> None:
+            if cleared is not None:
+                cleared.append(kwargs)
+
+        monkeypatch.setattr(api_reset.ws, "broadcast", broadcast)
+        monkeypatch.setattr("wactorz.reset.reset_chat", reset_chat)
         for name in (
-            "reset_chat",
             "reset_agent_state",
             "reset_metrics",
             "reset_spawns",
@@ -257,7 +274,7 @@ class TestTheResetRoute:
 
         response = await api_reset.reset_handler(request)
 
-        assert response.status == 200
+        assert response.status == status
         return json.loads(response.body), asked  # pyright: ignore[reportArgumentType]
 
     @pytest.mark.parametrize("scope", ["chat", "state", "metrics"])
@@ -269,6 +286,110 @@ class TestTheResetRoute:
         assert [(s, a) for s, a, _on in asked] == [(scope, "counter")]
         assert asked[0][2].get("edge") == {"counter"}
         assert answer["nodes"] == {"edge": "cleared"}
+
+    async def test_an_address_resets_the_agent_it_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answer, asked = await self._post(monkeypatch, {"scope": "chat", "agent": "counter@edge"})
+
+        assert [(s, a) for s, a, _on in asked] == [("chat", "counter")]
+        assert answer["agent"] == "counter"
+
+    async def test_a_name_taken_before_the_separator_was_refused_is_reset_whole(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(api_reset.runtime.state, "nodes", {"pi": {"agents": ["counter@old"]}})
+
+        answer, asked = await self._post(monkeypatch, {"scope": "chat", "agent": "counter@old"})
+
+        assert [(s, a) for s, a, _on in asked] == [("chat", "counter@old")]
+        assert answer["agent"] == "counter@old"
+
+    async def test_an_address_on_a_node_without_the_name_resets_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Not `counter` wherever it is instead.
+        answer, asked = await self._post(
+            monkeypatch, {"scope": "chat", "agent": "counter@wrong"}, status=404
+        )
+
+        assert answer["error"] == "No agent 'counter' is on node 'wrong'."
+        assert asked == []
+
+    async def test_a_name_on_two_nodes_resets_neither(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(api_reset.runtime.state, "nodes", {"pi": {"agents": ["counter"]}})
+
+        answer, asked = await self._post(
+            monkeypatch, {"scope": "chat", "agent": "counter"}, status=409
+        )
+
+        assert "`counter@edge` or `counter@pi`" in answer["error"]
+        assert asked == []
+
+    async def test_a_node_only_main_has_heard_from_yet_counts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The dashboard is shown a heartbeat after main takes it, so main's
+        # table can be a heartbeat ahead.
+        monkeypatch.setattr(_SpawnedOnEdge, "_known_nodes", {"pi": {"agents": ["counter"]}})
+
+        answer, asked = await self._post(
+            monkeypatch, {"scope": "chat", "agent": "counter"}, status=409
+        )
+
+        assert "`counter@edge` or `counter@pi`" in answer["error"]
+        assert asked == []
+
+    @staticmethod
+    def _shared(monkeypatch: pytest.MonkeyPatch) -> None:
+        """``counter`` on edge, as placed, and on pi, known by its heartbeat."""
+        monkeypatch.setitem(api_reset.runtime.state, "nodes", {"pi": {"agents": ["counter"]}})
+        monkeypatch.setitem(
+            api_reset.runtime.state,
+            "agents",
+            {"id-on-pi": {"name": "counter", "node": "pi"}},
+        )
+
+    async def test_one_of_two_on_nodes_asks_its_node_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._shared(monkeypatch)
+
+        answer, asked = await self._post(monkeypatch, {"scope": "chat", "agent": "counter@pi"})
+
+        assert asked == [("chat", "counter", {"pi": {"counter"}})]
+        assert answer["agent"] == "counter@pi"
+
+    async def test_one_of_two_is_cleared_by_its_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._shared(monkeypatch)
+        cleared: list[dict[str, Any]] = []
+        frames: list[dict[str, Any]] = []
+
+        await self._post(
+            monkeypatch,
+            {"scope": "chat", "agent": "counter@pi"},
+            cleared=cleared,
+            frames=frames,
+        )
+
+        assert cleared == [{"actor_id": "id-on-pi", "on_main": False}]
+        assert frames[0]["agent_id"] == "id-on-pi"
+
+    async def test_an_address_with_no_id_to_go_by_resets_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # By name instead, it would take the other agent's history with it.
+        monkeypatch.setitem(api_reset.runtime.state, "nodes", {"pi": {"agents": ["counter"]}})
+        monkeypatch.setitem(api_reset.runtime.state, "agents", {})
+
+        answer, asked = await self._post(
+            monkeypatch, {"scope": "chat", "agent": "counter@pi"}, status=409
+        )
+
+        assert "cannot be told" in answer["error"]
+        assert asked == []
 
     @pytest.mark.parametrize("scope", ["spawns", "logs"])
     async def test_one_that_concerns_main_alone_asks_no_node(
@@ -300,6 +421,9 @@ class _Registry:
 
     def all_actors(self) -> list[Any]:
         return self._actors
+
+    def find_by_name(self, name: str) -> Any | None:
+        return next((actor for actor in self._actors if actor.name == name), None)
 
 
 class TestAStateResetHere:

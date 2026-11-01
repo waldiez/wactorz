@@ -21,16 +21,18 @@ describe("ext/tts barrel (index.ts)", () => {
         const spyApi = vi.spyOn(mod.tts, "setApiBase");
         const spyInit = vi.spyOn(mod.tts, "init").mockResolvedValue();
 
-        // available: false — init not called
-        mod.register({ apiBase: "/ha", available: false });
+        // The server said no: init not called
+        safeStorage.set("wactorz-tts-available", "0");
+        mod.register({ apiBase: "/ha", configRead: true });
         expect(spyApi).toHaveBeenCalledWith("/ha");
         expect(spyInit).not.toHaveBeenCalled();
 
         spyApi.mockClear();
         spyInit.mockClear();
 
-        // available: true — init called
-        mod.register({ apiBase: "", available: true });
+        // The server said yes: init called
+        safeStorage.set("wactorz-tts-available", "1");
+        mod.register({ apiBase: "", configRead: true });
         expect(spyApi).toHaveBeenCalledWith("");
         expect(spyInit).toHaveBeenCalledOnce();
     });
@@ -83,5 +85,44 @@ describe("ext/tts config seeding", () => {
         await seed({});
 
         expect(safeStorage.get("wactorz-tts-available")).toBe("0");
+    });
+});
+
+describe("register, when /api/config did not answer", () => {
+    it("asks the server for its voices, whatever an earlier visit stored", async () => {
+        vi.resetModules();
+        const { safeStorage: storage } = await import("../../../safeStorage");
+        storage.set("wactorz-tts-available", "0");
+        const mod = await import("../../../ext/tts");
+        const init = vi.spyOn(mod.tts, "init").mockResolvedValue();
+
+        mod.register({ apiBase: "", configRead: false });
+
+        expect(init).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("what the extension does for the page", () => {
+    it("reads aloud what the bus says, until it is stopped", async () => {
+        vi.resetModules();
+        const mod = await import("../../../ext/tts");
+        const { emit } = await import("../../../events");
+        const notify = vi.spyOn(mod.tts, "notify").mockImplementation(() => {});
+
+        const stop = mod.register({ apiBase: "", configRead: true });
+        emit("tts-notify", { text: "hello", from: "main" });
+        stop();
+        emit("tts-notify", { text: "again" });
+
+        expect(notify).toHaveBeenCalledTimes(1);
+        expect(notify).toHaveBeenCalledWith("hello", "main");
+    });
+
+    it("offers itself to the audio settings", async () => {
+        vi.resetModules();
+        const mod = await import("../../../ext/tts");
+        const { voiceControls } = await import("../../../io/voiceControls");
+
+        expect(voiceControls()).toBe(mod.tts);
     });
 });

@@ -55,13 +55,15 @@ def node_env_text(
     password: str,
     tls_ca: str | None = None,
     check_hostname: bool = False,
+    extensions: str = "",
 ) -> str:
     """The node's ``.env``: who it is, where its broker is, and how it proves both.
 
     ``tls_ca`` is the CA's path as the node reads it, or None for plain MQTT.
     The signing key goes with the sequence number main has reached and what to
     do with a control message not signed for it (``WACTORZ_NODE_SIGNING``); see
-    :mod:`wactorz.core.node_signing`.
+    :mod:`wactorz.core.node_signing`. ``extensions`` is the node's
+    ``WACTORZ_EXTENSIONS``; see :mod:`wactorz.installed`.
     """
     lines = [
         f"WACTORZ_NODE={shlex.quote(node)}",
@@ -71,6 +73,8 @@ def node_env_text(
         f"WACTORZ_CONTROL_SINCE={next_sequence()}",
         f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
     ]
+    if extensions:
+        lines.append(f"WACTORZ_EXTENSIONS={shlex.quote(extensions)}")
     if tls_ca is not None:
         lines.append("MQTT_TLS=1")
         lines.append(f"MQTT_TLS_CA={shlex.quote(tls_ca)}")

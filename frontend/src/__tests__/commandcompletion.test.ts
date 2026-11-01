@@ -8,14 +8,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { ChatInput } from "../ui/dashboard/chatInput";
-import {
-    CommandCatalog,
-    CommandCompletion,
-    MAX_SHOWN,
-    matchingForms,
-    type CommandForm,
-} from "../ui/dashboard/commandCompletion";
+import { ChatInput } from "../ui/chat/chatInput";
+import { CommandCatalog, CommandCompletion, MAX_SHOWN, matchingForms } from "../ui/chat/commandCompletion";
+import type { CommandForm } from "../io/commandsApi";
 import { allByRole, byRole } from "./queries";
 
 const FORMS: CommandForm[] = [
@@ -87,7 +82,7 @@ describe("CommandCatalog", () => {
         vi.stubGlobal("fetch", fetched);
         try {
             expect(await new CommandCatalog().load()).toEqual([FORMS[0]]);
-            expect(fetched).toHaveBeenCalledWith("/ingress/abc/api/commands");
+            expect(fetched).toHaveBeenCalledWith("/ingress/abc/api/commands", expect.anything());
         } finally {
             vi.unstubAllGlobals();
             delete window.__WACTORZ_INGRESS_PATH;

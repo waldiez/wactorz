@@ -362,7 +362,7 @@ A message that offers the person a choice, or goes to a chat channel, carries mo
 **Published by:** The agent that asked
 **Retained:** yes
 **Trigger:** When the agent starts, if it has asked anything, and whenever it asks a question or one is answered
-**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back. Cleared when the agent is deleted.
+**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back, and relays it to the dashboard's Inbox. Cleared when the agent is deleted.
 
 ```json
 {
@@ -675,7 +675,8 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/blob_return/{sha256}` | Remote runner | One blob of an agent the node is handing back, in chunks shaped as on `blob`, sent before the `state_return` that names it. Never a format that runs code when it loads |
 | `nodes/{node}/artifact_request` | Remote runner | `{ "agent": "...", "sha256": ["..."] }` — the artifacts an agent spawned here names, pinned in its spawn's `artifacts` as `{ "<key>": { "name": "imu-detector", "version": 3, "sha256": "...", "format": "onnx", "size": ..., "runs_code": false } }`, that the node does not hold. Main answers on `blob` for each that an agent placed on this node names, and the node uses one only if it hashes to what the spawn names |
 | `nodes/{node}/reply/#` | Remote runner | Reply payloads for node requests |
-| `agents/by-name/{agent}/task` | Main actor | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }` |
+| `agents/at/{node}/{agent}/task` | Main actor, or an agent on a node | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }`, for the agent on that node alone; sent to a node whose manifest says `"tasks_by_node": true` |
+| `agents/by-name/{agent}/task` | Main actor, or an agent on a node | The same, by name, for a node from before tasks went by node (or whose manifest has not arrived); every node running the name hears it |
 
 ---
 
@@ -776,7 +777,8 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/artifact_request` | Remote runner | The artifacts an agent spawned here names that the node does not hold |
 | `models/{name}/active` | Main actor | Retained: the version of a model agents serve, or empty when none is marked; at start and on each move |
 | `models/{name}/shadow` | Main actor | Retained: the version of a model on trial beside the active one, or empty; at start and on each move |
-| `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
+| `agents/at/{node}/{agent}/task` | Main actor | Task for an agent on that node |
+| `agents/by-name/{agent}/task` | Main actor | Task by name, for a node from before tasks went by node |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |
 | `main/history_request` | Remote agents | Read main's stored history, a page at a time |

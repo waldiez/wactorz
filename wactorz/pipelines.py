@@ -29,7 +29,6 @@ the outside world without saying so; that is what a first step is for.
 
 from __future__ import annotations
 
-import importlib.metadata
 import logging
 import time
 from collections.abc import Iterable, Iterator
@@ -37,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import plugins
+from . import installed, plugins
 from .agents.rule_agent import RuleConfig
 from .config import CONFIG
 from .core.topic_bus import topic_matches
@@ -348,7 +347,7 @@ def _from_object(obj: Any, target: str) -> dict[str, Pipeline]:
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         logger.warning("[pipelines] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []

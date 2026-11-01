@@ -443,6 +443,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Whether the Home Assistant agents start: <code>auto</code> starts them when <code>HA_URL</code> and <code>HA_TOKEN</code> are set, <code>on</code> and <code>off</code> decide outright</td>
 </tr>
 <tr>
+<td><code>WACTORZ_EXTENSIONS</code></td>
+<td>—</td>
+<td>Installed packages whose extensions, agents and pipelines are loaded: distribution names, comma separated, or <code>*</code> for all. Unset loads none, and each package left out is named once in the log and on the dashboard. What Wactorz ships always loads, and so do targets in <code>WACTORZ_AGENTS</code> and <code>WACTORZ_PIPELINES</code>. A node has its own list, <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code>; see <a href="../guide/extensions.html">Extensions</a></td>
+</tr>
+<tr>
 <td><code>WACTORZ_MINIMAL</code></td>
 <td><code>0</code></td>
 <td>Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as <code>wactorz --minimal</code></td>
@@ -475,7 +480,7 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <tr>
 <td><code>WACTORZ_RETENTION_OUTBOX_DAYS</code></td>
 <td><code>7</code></td>
-<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under <code>nodes/</code> or <code>agents/by-name/</code>, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained <code>desired_state</code> follows this setting</td>
+<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under <code>nodes/</code>, <code>agents/at/</code> or <code>agents/by-name/</code>, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained <code>desired_state</code> follows this setting</td>
 </tr>
 <tr>
 <td><code>WACTORZ_RETENTION_METRICS_DAYS</code></td>
@@ -511,6 +516,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td><code>WACTORZ_NODE_ARTIFACT_CACHE_BYTES</code></td>
 <td><code>1073741824</code></td>
 <td>How much of the artifacts it has fetched a node keeps. Past it, those no agent on the node names are deleted, the least recently used first; one an agent names is kept whatever the total. Read on each node; <code>0</code> keeps everything</td>
+</tr>
+<tr>
+<td><code>WACTORZ_DATA_RETENTION_DAYS</code></td>
+<td><code>0</code></td>
+<td>How many days of recorded readings main keeps under <code>&lt;state&gt;/data/</code> (<code>docs/design/data-storage.md</code>). Past it, an hour of a source is removed a few times a day, unless a stored model says it was trained on it. <code>0</code> keeps everything. <code>wactorz-data sweep --dry-run</code> says what a retention would remove</td>
 </tr>
 <tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
@@ -610,7 +620,7 @@ wactorz-artifacts<span class="w"> </span>verify<span class="w">                 
 wactorz-artifacts<span class="w"> </span>activate<span class="w"> </span>imu-detector:3<span class="w"> </span>--reason<span class="w"> </span><span class="s2">"auc 0.95"</span><span class="w">  </span><span class="c1"># the version agents serve</span>
 wactorz-artifacts<span class="w"> </span>shadow<span class="w"> </span>imu-detector:4<span class="w">                      </span><span class="c1"># one on trial beside it</span>
 wactorz-artifacts<span class="w"> </span>promote<span class="w"> </span>imu-detector<span class="w">                       </span><span class="c1"># the shadow becomes active</span>
-wactorz-artifacts<span class="w"> </span>clear<span class="w"> </span>shadow<span class="w"> </span>imu-detector<span class="w">                  </span><span class="c1"># unset a pointer</span>
+wactorz-artifacts<span class="w"> </span>clear<span class="w"> </span>shadow<span class="w"> </span>imu-detector<span class="w"> </span>--reason<span class="w"> </span><span class="s2">"noisy"</span><span class="w">  </span><span class="c1"># unset a pointer</span>
 </code></pre></div>
 
 <ul>
@@ -620,7 +630,8 @@ wactorz-artifacts<span class="w"> </span>clear<span class="w"> </span>shadow<spa
 <li><strong>The format comes from the file's ending</strong>: <code>.onnx</code>, <code>.safetensors</code>, <code>.npz</code>, <code>.npy</code>, <code>.gguf</code>, <code>.tflite</code>, <code>.skops</code>. <code>--format</code> names it where the ending does not say, as for a <code>.pt</code>, which may hold a <code>state_dict</code> or a whole module; <code>raw</code> keeps bytes as they are. A directory is kept as one archive of it, written the same way on every machine, so the same directory has the same hash wherever it is added; a link inside it is refused.</li>
 <li><strong>Formats that run code when they load are refused</strong> unless <code>--allow-code</code> is given: a pickle (<code>.pkl</code>), a joblib file and a whole torch module (<code>--format torch</code>). One stored anyway is marked as running code.</li>
 <li><strong>Where:</strong> <code>&lt;state&gt;/..artifacts/</code>, beside the rest of the state, in what <code>wactorz-state export</code> writes. <code>--state-dir</code> names another state directory. Adding and removing work while the server runs.</li>
-<li><strong>In chat.</strong> <code>/artifacts</code> lists what is kept, and <code>/artifacts &lt;name&gt;</code> every version of one. <code>/artifacts activate &lt;name:version&gt; [reason]</code>, <code>/artifacts shadow &lt;name:version&gt; [reason]</code>, <code>/artifacts promote &lt;name&gt; [reason]</code> and <code>/artifacts clear active|shadow &lt;name&gt;</code> move the pointers as the command does, recorded as made from chat; a social channel may list but not move. Main's model is given the same list on each turn, with the active and shadow version of each model, and so is the planner when a request becomes a pipeline, so asking for an agent that uses a model ("flag IMU readings far from normal with the imu-detector model") gets one that names it, and the one being served. Main's model has no way to move a pointer: serving a model is the operator's decision, or a deployed program's.</li>
+<li><strong>In chat.</strong> <code>/artifacts</code> lists what is kept, and <code>/artifacts &lt;name&gt;</code> every version of one. <code>/artifacts activate &lt;name:version&gt; [reason]</code>, <code>/artifacts shadow &lt;name:version&gt; [reason]</code>, <code>/artifacts promote &lt;name&gt; [reason]</code> and <code>/artifacts clear active|shadow &lt;name&gt; [reason]</code> move the pointers as the command does, recorded as made from chat; a social channel may list but not move. Main's model is given the same list on each turn, with the active and shadow version of each model, and so is the planner when a request becomes a pipeline, so asking for an agent that uses a model ("flag IMU readings far from normal with the imu-detector model") gets one that names it, and the one being served. Main's model has no way to move a pointer: serving a model is the operator's decision, or a deployed program's.</li>
+<li><strong>On the dashboard.</strong> The Models tab lists every stored model, saying which is serving a version, which is trying one beside it ("on trial") and which has none active, and opens one at <code>#/models/&lt;name&gt;</code>: its versions along a line with the active, the shadow and the previous active marked, a table of versions with what was said of each, and the history of its pointer moves, each with who made it and why. From there a version is tried as shadow, the shadow promoted or cleared, and the active rolled back to the version it replaced; each move asks first and takes an optional reason, recorded as made from the dashboard. A pointer moved anywhere else (the CLI, chat, an agent) shows there within seconds. Making a version active directly is left to the CLI and chat: from the dashboard a version is served by being tried first.</li>
 <li><strong>Which store.</strong> Every <code>wactorz-artifacts</code> command says which store it used, and <code>add</code> warns when it had to make a new state directory: the default is <code>./state</code> in the folder it runs from, which is Wactorz's own only when run from where Wactorz runs. Pass <code>--state-dir</code>, or set <code>WACTORZ_STATE_DIR</code> for both.</li>
 <li><strong>In an agent.</strong> A generated or catalogue agent names artifacts in its spawn config, <code>"artifacts": {"model": "imu-detector:3"}</code>, and its program opens one with <code>agent.artifact_path("model")</code>: the file, or for a directory the directory it unpacks to, once, in <code>&lt;state&gt;/..unpacked-artifacts/</code> (left out of an export, and unpacked again when needed). A spawn on main that names an artifact that is not stored is refused.</li>
 <li><strong>On a node.</strong> Main pins each artifact to the version and the bytes it means when the spawn goes out — <code>imu-detector</code> alone means the newest then — and keeps that pinned form, so the agent restarted or moved later runs the same model. The node keeps what it fetches in <code>&lt;state&gt;/..artifact-cache/</code> across restarts, asks main only for what it lacks, and starts the agent once every file is there and matches its SHA-256; one that does not arrive leaves the agent unstarted, and a migration is put back where it was. Main sends a node only the artifacts an agent placed on it names. A spawn naming an artifact that is not stored, or one over <code>WACTORZ_ARTIFACT_MAX_BYTES</code>, is refused before anything is sent.</li>

@@ -236,9 +236,11 @@ An agent the deployment brings — a function declared with `@wactorz.agent`, an
 {"name": "imu-anomaly", "node": "rpi-kitchen", "type": "module", "target": "imu_anomaly.agent:detect", "options": {"threshold": 4.0}}
 ```
 
-Main sends the agent's code with the spawn: the folder its module is in, `.py` files only, which the node writes under `~/wactorz/state/..bundles/`, checks against the hash the signed spawn names, and imports the agent from. The packages it lists in `requires={"packages": [...]}` are installed first. **An agent's own code has to live in that folder**: one that imports code of the main machine's from anywhere else is refused before it moves, naming the import — see *Using Wactorz as a library*. A node that has the package installed itself, with the target named in `WACTORZ_AGENTS` or as a `wactorz.agents` entry point, builds it from that and is sent no code; the targets it can build and whether it takes code (`code_bundles`) are in its manifest. A node from before this release takes no code, and main refuses to move a library agent there until it is deployed again. On the node the agent runs as it does on main, with no model: `me.llm` is `None` there. The models it names with `models=` (or `MODELS` on a class) go with it as artifacts: main pins them when it sends the agent, and the node fetches them before it builds it, as for any agent whose spawn names artifacts. *Using Wactorz as a library* has the rest.
+Main sends the agent's code with the spawn: the folder its module is in, `.py` files only, which the node writes under `~/wactorz/state/..bundles/`, checks against the hash the signed spawn names, and imports the agent from. The packages it lists in `requires={"packages": [...]}` are installed first. **An agent's own code has to live in that folder**: one that imports code of the main machine's from anywhere else is refused before it moves, naming the import — see *Using Wactorz as a library*. A node that has the package installed itself, with the target named in `WACTORZ_AGENTS`, or as a `wactorz.agents` entry point of a package in its own `WACTORZ_EXTENSIONS` (`DEPLOY_<NODE>_EXTENSIONS` on main, since `/deploy` writes the node's `.env`), builds it from that and is sent no code; the targets it can build and whether it takes code (`code_bundles`) are in its manifest. A node from before this release takes no code, and main refuses to move a library agent there until it is deployed again. On the node the agent runs as it does on main, with no model: `me.llm` is `None` there. The models it names with `models=` (or `MODELS` on a class) go with it as artifacts: main pins them when it sends the agent, and the node fetches them before it builds it, as for any agent whose spawn names artifacts. *Using Wactorz as a library* has the rest.
 
-> **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh.
+An agent on a node runs under the id main keeps for it, which it keeps across restarts and moves; the node says it does so (`actor_ids`) in its manifest. A node from before ids were kept gives an agent the id derived from its name. Main gives a new agent there that id, and refuses to send it an agent that already has an id of its own, saying to deploy the node again.
+
+> **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh. If the name runs on another host instead, `"replace": true` moves it to this node and `"alongside": true` runs a second one here (see *Two agents of one name* in the agents guide); with neither, nothing is spawned.
 
 ---
 
@@ -364,9 +366,11 @@ Only for a node main does not know at all, such as one that was down when main
 started, is a withdrawal taken at once. What else a node can publish under
 another agent's topics, such as its status or logs, is taken as given.
 
-That includes tasks. A task on `agents/by-name/<name>/task` reaches the agent of
-that name on whichever node runs it, and any node may publish one, so an agent
-on a node is asked by whoever publishes there, another node included. Its
+That includes tasks. A task on `agents/at/<node>/<name>/task` reaches the agent
+of that name on that node, and one on `agents/by-name/<name>/task`, which nodes
+from before tasks went by node still use, the agent of that name on every node
+that runs it. Any node may publish either, so an agent on a node is asked by
+whoever publishes there, another node included. Its
 `handle_task` should treat the payload as untrusted input, as it would text from
 the web: check what it acts on, and never run or install what a task names.
 
@@ -677,10 +681,17 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
 | `nodes/{name}/reset` | → runner | Clear one agent's chat, state or counters here, or every agent's, as main has cleared its own records. Payload: `{"scope": "chat" \| "state" \| "metrics", "agent": "..." or null, "request": "..."}`. Signed. |
 | `nodes/{name}/reset_done` | ← runner | The reset done, quoting `request` and naming the agents it cleared (`"cleared": [...]`); a scope the node does not reach into is answered with none. |
-| `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
+| `nodes/{name}/swap_model` | → runner | Have an agent here serve another version of a model it names, because the pointer its pin follows moved. Payload: `{"agent": "...", "key": "...", "entry": {pinned artifact}, "token": "..."}`. The node fetches the version as it fetched the first, swaps it in place, and keeps the old one if the new one will not load. Signed. |
+| `nodes/{name}/swap_ack` | ← runner | How the swap went, quoting the token: `{"ok": true}` with `from` and `to`, or `{"ok": false, "reason": "..."}`. |
+| `nodes/{name}/data_file` | ← runner | A recorded file is on its way on `blob_return`: `{"source": "...", "path": "<source>/<yyyy>/<mm>/<dd>/<hh>.parquet", "sha256": "...", "size": n}`. Sent for each file a recorder here closes; sent again if main does not answer. |
+| `nodes/{name}/data_ack` | → runner | Main kept the file under its own data directory, or could not: `{"sha256": "...", "ok": true}` or `{"ok": false, "reason": "..."}`. Signed. |
+| `nodes/{name}/reply/{id}` | ← runner | Replies to what this node asks main, such as an LLM call. |
+| `agents/at/{name}/{agent}/reply/{id}` | ← runner | The reply to an `agent.send_to()` sent by an agent on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |
 | `agents/{id}/logs` | ← agent | Log messages from `agent.log()` and `agent.alert()`. |
-| `agents/by-name/{name}/task` | → agent | Task addressed to a named agent on any node. Runner routes to local agents by name. Any node may publish one, so its payload is untrusted input. |
+| `agents/at/{name}/+/task` | → agent | A task for an agent on this node, by its name. Any node may publish one, so its payload is untrusted input. The node's manifest says `"tasks_by_node": true`. |
+| `agents/by-name/+/task` | → agent | A task by name alone, from a sender that addresses no node; every node running the name takes it. Untrusted input, as above. |
+| `agents/+/manifest` | → runner | Every agent's retained manifest, read for where agents run, so `agent.send_to("name@node")` from this node reaches the right one. An agent here stamps its own with `"node"` and `"tasks_by_node": true`. |
 
 
 ### Why a repair travels in two steps

@@ -15,6 +15,7 @@ import pytest
 from wactorz.agents.main.hosts import NodeHost
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import OFFLINE_GRACE_S, NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.web import lifecycle, runtime
 
 # ── Main gives up on a silent node ─────────────────────────────────────────────
@@ -29,10 +30,12 @@ class _NodeHost:
         self.registry = dict(registry)
         self.events: list[tuple[Any, ...]] = []
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
-    def _remove_from_spawn_registry(self, name: str) -> None:
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
         self.registry.pop(name, None)
         self.events.append(("unregistered", name))
 
@@ -131,16 +134,17 @@ class _Main:
         self.registry = dict(registry)
         self.nodes = _Nodes(online)
         self.published: list[tuple[str, Any, int]] = []
-        self.persisted: dict[str, Any] = {}
 
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.registry)
 
-    def recall(self, key: str, default: Any = None) -> Any:
-        return self.registry
+    def _remove_from_spawn_registry(
+        self, name: str, node: str | None = None, *, actor_id: str | None = None
+    ) -> None:
+        self.registry.pop(name, None)
 
-    def persist(self, key: str, value: Any) -> None:
-        self.persisted[key] = value
+    def _clear_spawn_registry(self) -> None:
+        self.registry = {}
 
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None

@@ -10,7 +10,7 @@
  * event the chat input picks up as a pending attachment chip.
  */
 import { toast } from "./ToastManager";
-import { isAccepted, humanSize, MAX_BYTES, uploadFile } from "./dashboard/uploads";
+import { isAccepted, humanSize, MAX_BYTES, uploadFile } from "./chat/uploads";
 import { emit } from "../events";
 import { el } from "./dom";
 
@@ -40,13 +40,14 @@ export class DropZone {
 
     private _buildOverlay(): HTMLElement {
         const overlay = el("div", "af-drop-overlay");
-        overlay.innerHTML = `
-      <div class="af-drop-card">
-        <div class="af-drop-icon">⬆</div>
-        <div class="af-drop-title">Drop files to upload</div>
-        <div class="af-drop-sub">images · audio · pdf · ppt · txt · up to ${humanSize(MAX_BYTES)} each</div>
-        <div class="af-drop-list"></div>
-      </div>`;
+        const card = el("div", "af-drop-card");
+        card.append(
+            el("div", "af-drop-icon", "⬆"),
+            el("div", "af-drop-title", "Drop files to upload"),
+            el("div", "af-drop-sub", `images · audio · pdf · ppt · txt · up to ${humanSize(MAX_BYTES)} each`),
+            el("div", "af-drop-list"),
+        );
+        overlay.appendChild(card);
         return overlay;
     }
 

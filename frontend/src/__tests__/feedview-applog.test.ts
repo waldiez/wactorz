@@ -13,6 +13,7 @@
  * displaying attacker-influenceable strings.
  */
 import { describe, it, expect, vi } from "vitest";
+import { DEFAULT_FILTERS, type FeedFilters } from "../ui/feed/feedEntries";
 import {
     appLogItemEl,
     applyFilters,
@@ -20,9 +21,7 @@ import {
     shortOrigin,
     MAX_ROWS,
     appendFeedItemToView,
-    DEFAULT_FILTERS,
-    type FeedFilters,
-} from "../ui/dashboard/feedView";
+} from "../ui/feed/feedView";
 import type { AppLogItem, FeedItem } from "../types/feed";
 
 const log = (over: Partial<AppLogItem> = {}): AppLogItem => ({

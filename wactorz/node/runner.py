@@ -37,8 +37,9 @@ from ..config import (
 )
 from ..core import bundles
 from ..core.actor import Actor, ActorState, SupervisorStrategy
+from ..core.agent_directory import MANIFESTS, AgentDirectory
 from ..core.agent_reset import LIVE_SCOPES
-from ..core.artifacts import ArtifactError, pinned_in
+from ..core.artifacts import ArtifactError, check_pinned, pinned_in
 from ..core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsUnusable,
@@ -54,6 +55,7 @@ from ..core.blob_transfer import (
     wait_for,
 )
 from ..core.cancellation import cancel_all_until_done
+from ..core.identity import given_actor_id
 from ..core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -70,12 +72,18 @@ from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
-from ..core.topics import RETAINED_AGENT_LEAVES
+from ..core.topics import (
+    RETAINED_AGENT_LEAVES,
+    node_task_subscription,
+    task_by_name_topic,
+    task_target,
+)
 from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
 from .agent import NodeAgent
 from .artifact_cache import CACHE_DIRNAME, ArtifactCache
+from .data_shipping import DataShipper
 from .hosted import NodeHosted
 from .publishing import NodePublisher
 from .signing import (
@@ -129,6 +137,9 @@ class NodeRunner:
         self._loops: list[asyncio.Task] = []
         self._loop_lag = LoopLagMonitor()
         self.registry = ActorRegistry()
+        #: Where the other agents are, from their retained manifests, so an agent
+        #: here can send to one by its address (see `wactorz.core.agent_directory`).
+        self.directory = AgentDirectory()
         self.supervisor = Supervisor(self.registry, self._inject)
         # The back-reference `ActorSystem` gives the registry on main. Without
         # it an agent here cannot reach its own supervisor, and two things go
@@ -158,6 +169,8 @@ class NodeRunner:
         #: name -> the plugin built from the bundle its spawn carried, and the
         #: directory that bundle is in, from the moment it is written.
         self._bundled: dict[str, tuple[plugins.AgentPlugin, Path]] = {}
+        #: Sends main the readings a recorder here files, one closed file at a time.
+        self.shipper = DataShipper(self.node_name, self.state_dir, self.publish)
         #: One bundle written and imported at a time: each changes `sys.path`
         #: and `sys.modules`, and clears away the bundles no agent here uses.
         self._bundle_lock = asyncio.Lock()
@@ -344,7 +357,8 @@ class NodeRunner:
             target = config.get("target") or "a target it does not name"
             reason = (
                 f"this node cannot build {target}: install its package here and name it in "
-                "WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
+                "WACTORZ_AGENTS, or list it as a wactorz.agents entry point of a package named in "
+                "this node's WACTORZ_EXTENSIONS"
             )
             logger.error("[runner] Not starting '%s': %s", name, reason)
             await self._log_to_dashboard(
@@ -473,6 +487,7 @@ class NodeRunner:
         """The library agent ``plugin`` builds, made this node's before it starts."""
         options = config.get("options")
         actor = plugin.build(
+            actor_id=given_actor_id(config.get("actor_id")),
             name=str(config["name"]),
             persistence_dir=self.state_dir,
             options=dict(options) if isinstance(options, dict) else None,
@@ -783,6 +798,12 @@ class NodeRunner:
                 # it sends the agent's code with the spawn, which this node takes.
                 "agents": plugins.targets(),
                 "code_bundles": True,
+                # That an agent sent here runs under the id its spawn names,
+                # rather than one derived from its name.
+                "actor_ids": True,
+                # That a task for an agent here may come on this node's own
+                # topic, agents/at/<node>/<name>/task, rather than only by name.
+                "tasks_by_node": True,
                 # Whether this node clears its agents' chat, state or counters
                 # when main resets its own; main asks only a node that says so.
                 "resets": True,
@@ -882,6 +903,8 @@ class NodeRunner:
             f"nodes/{self.node_name}/list": self._on_list,
             f"nodes/{self.node_name}/code_request": self._on_code_request,
             f"nodes/{self.node_name}/reset": self._on_reset,
+            f"nodes/{self.node_name}/swap_model": self._on_swap_model,
+            f"nodes/{self.node_name}/data_ack": self._on_data_ack,
         }
         handler = exact.get(topic_str)
         if handler is not None:
@@ -1103,6 +1126,92 @@ class NodeRunner:
             },
         )
 
+    async def _on_swap_model(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Have an agent here serve another version of a model it names, and say how it went.
+
+        Main sends this when a pointer the agent's pin follows has moved,
+        with the new pin -- name, version, hash, format, size -- since the
+        pointer topic alone does not carry enough to fetch and check a
+        version. Signed like every other command, and answered on
+        ``nodes/<node>/swap_ack`` quoting main's token, so main records the
+        swap that landed and says on the feed what did not.
+        """
+        if not isinstance(data, dict):
+            return
+        # Off the subscriber loop, as every command is: the fetch waits on
+        # blobs this same loop delivers.
+        self._background(self._swap_and_answer(data), "swap_model")
+
+    async def _swap_and_answer(self, data: dict[str, Any]) -> None:
+        """Carry out one swap, then answer with what the agent serves now, or why not."""
+        name = str(data.get("agent") or "")
+        key = str(data.get("key") or "")
+        answer: dict[str, Any] = {
+            "token": data.get("token", ""),
+            "agent": name,
+            "key": key,
+            "node": self.node_name,
+            "timestamp": time.time(),
+        }
+        hosted = self.hosted(name)
+        config = self._configs.get(name)
+        if hosted is None or config is None:
+            await self._answer_swap({**answer, "ok": False, "reason": "not running here"})
+            return
+        try:
+            entry = check_pinned(data.get("entry"))
+        except ArtifactError as exc:
+            await self._answer_swap(
+                {**answer, "ok": False, "reason": f"not a pinned artifact: {exc}"}
+            )
+            return
+        try:
+            named = pinned_in(config)
+        except ArtifactError as exc:
+            await self._answer_swap({**answer, "ok": False, "reason": f"its artifacts: {exc}"})
+            return
+        held = named.get(key)
+        answer["from"] = None if held is None else held.get("version")
+        answer["to"] = entry["version"]
+        # The config with the new pin, fetched against while the old one is
+        # still what the agent names: the cache keeps what any config here
+        # names, so the old version stays until the swap has landed.
+        wanted = {**config, "artifacts": {**named, key: entry}}
+        problem = await self._fetch_artifacts(name, wanted)
+        if problem:
+            await self._answer_swap({**answer, "ok": False, "reason": problem})
+            return
+        try:
+            path = await asyncio.to_thread(self.artifacts.readable_path, entry)
+            await hosted.swap_model(key, {**entry, "path": str(path)})
+        except Exception as exc:
+            logger.warning("[runner] '%s' keeps its %s: %s", name, key, exc)
+            await self._answer_swap({**answer, "ok": False, "reason": str(exc)})
+            return
+        # The stored config is the one the supervisor's factory closed over,
+        # so changing it here is what a restart rebuilds the agent from.
+        config["artifacts"] = wanted["artifacts"]
+        logger.info(
+            "[runner] '%s' now serves %s:%s as %s", name, entry["name"], entry["version"], key
+        )
+        await self._answer_swap({**answer, "ok": True, "reason": ""})
+
+    async def _answer_swap(self, answer: dict[str, Any]) -> None:
+        await self.publish(f"nodes/{self.node_name}/swap_ack", answer)
+
+    async def _on_data_ack(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Main says whether it kept a recorded file this node sent; see `DataShipper`."""
+        if not isinstance(data, dict) or not isinstance(data.get("sha256"), str):
+            return
+        key = await asyncio.to_thread(
+            self.shipper.acknowledge,
+            str(data["sha256"]),
+            data.get("ok") is True,
+            str(data.get("reason") or ""),
+        )
+        if key is not None and data.get("ok") is not True:
+            logger.warning("[runner] main did not keep %s: %s", key, data.get("reason"))
+
     async def _on_code_request(self, topic_str: str, data: Any, msg: Any) -> None:
         """Answer with the program an agent here is actually running.
 
@@ -1167,10 +1276,9 @@ class NodeRunner:
         is the loop waiting for the call to finish. It deadlocks and times out a
         minute later although main answered in milliseconds.
         """
-        parts = topic_str.split("/")  # agents/by-name/{agent_name}/task
-        if len(parts) < 4:
+        agent_name = task_target(topic_str)
+        if agent_name is None:
             return
-        agent_name = parts[2]
         agent = self.hosted(agent_name)
         if agent is None or not isinstance(data, dict):
             return
@@ -1252,9 +1360,16 @@ class NodeRunner:
             f"nodes/{self.node_name}/list",
             f"nodes/{self.node_name}/code_request",
             f"nodes/{self.node_name}/reset",
+            f"nodes/{self.node_name}/swap_model",  # serve another version of a model
+            f"nodes/{self.node_name}/data_ack",  # main took a recorded file
             f"nodes/{self.node_name}/reply/#",
             f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
-            "agents/by-name/+/task",
+            # Tasks for the agents here: on this node's own topic, and by name
+            # from a sender on a release that addresses no node.
+            node_task_subscription(self.node_name),
+            task_by_name_topic("+"),
+            # Every agent's manifest, retained: where the others are.
+            MANIFESTS,
         ]
 
         while self._running:
@@ -1274,17 +1389,7 @@ class NodeRunner:
                     )
 
                     async for msg in client.messages:
-                        topic_str = str(msg.topic)
-                        if topic_str.startswith(self._blob_prefix):
-                            # Binary, and never a command: before any decoding.
-                            await self._accept_blob(topic_str, msg.payload)
-                            continue
-                        try:
-                            data = json.loads(msg.payload.decode())
-                        except Exception:
-                            data = msg.payload.decode()
-                        if self._admit_control(topic_str, msg):
-                            await self._dispatch_control(topic_str, data, msg)
+                        await self._receive(msg)
 
             except asyncio.CancelledError:
                 break
@@ -1294,6 +1399,24 @@ class NodeRunner:
                         "[runner] Subscriber disconnected: %s. Reconnecting in about 3s...", e
                     )
                     await asyncio.sleep(reconnect_wait(3.0))
+
+    async def _receive(self, msg: Any) -> None:
+        """Take one message off the control connection: where agents are, a blob, or a command."""
+        topic_str = str(msg.topic)
+        if topic_str.endswith("/manifest") and topic_str.startswith("agents/"):
+            # Read, never acted on: the directory only says where.
+            self.directory.take(topic_str, message_bytes(msg.payload))
+            return
+        if topic_str.startswith(self._blob_prefix):
+            # Binary, and never a command: before any decoding.
+            await self._accept_blob(topic_str, msg.payload)
+            return
+        try:
+            data = json.loads(msg.payload.decode())
+        except Exception:
+            data = msg.payload.decode()
+        if self._admit_control(topic_str, msg):
+            await self._dispatch_control(topic_str, data, msg)
 
     @property
     def _blob_prefix(self) -> str:
@@ -1330,6 +1453,8 @@ class NodeRunner:
         tasks = self._loops = [
             asyncio.create_task(self.publisher.run(publisher_ready)),
             asyncio.create_task(self._node_heartbeat_loop()),
+            # Readings a recorder files here go to main, where the record is.
+            asyncio.create_task(self.shipper.run()),
             # Returns at once unless this node's service has a watchdog set.
             asyncio.create_task(watchdog_loop()),
         ]

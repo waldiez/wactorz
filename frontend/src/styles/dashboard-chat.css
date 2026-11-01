@@ -28,12 +28,28 @@
   color: rgba(255, 255, 255, 0.6);
   text-align: center;
 }
+.af-chat-choices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.af-chat-choices a {
+  color: #8ab4ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 /* ── IO Bar (embedded in af-root) ── */
+/* The last row of the dashboard, so it alone meets the screen's bottom edge and
+   keeps the home indicator's room below its controls. */
 .af-iobar {
   display: flex;
   align-items: flex-end;
   gap: 8px;
   padding: 8px 12px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   border-top: 1px solid rgba(37, 99, 235, 0.15);
   background: rgba(4, 8, 16, 0.9);
   flex-shrink: 0;

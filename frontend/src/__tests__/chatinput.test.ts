@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ChatInput, type ChatInputHost } from "../ui/dashboard/chatInput";
+import { ChatInput, type ChatInputHost } from "../ui/chat/chatInput";
 
 interface Harness {
     ci: ChatInput;
@@ -23,11 +23,12 @@ function setup(agents = ["main", "picam"]): Harness {
     wrap.append(ghost, input); // input.previousElementSibling === ghost (recordSent relies on this)
     document.body.appendChild(wrap);
 
+    // As the target select is built: each agent's id, shown as `@` and its label.
     const select = document.createElement("select");
     agents.forEach(n => {
         const o = document.createElement("option");
-        o.value = n;
-        o.text = n;
+        o.value = `${n}-id`;
+        o.text = `@${n}`;
         select.appendChild(o);
     });
 
@@ -58,6 +59,45 @@ describe("ChatInput @mentions", () => {
         expect(h.host.agentNames).toHaveBeenCalled();
     });
 
+    it("reads as a listbox the box controls, its highlight followed by a screen reader", () => {
+        document.body.append(h.panel);
+        h.panel.parentElement!.append(h.input);
+        h.input.value = "@";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect(h.panel.getAttribute("role")).toBe("listbox");
+        expect(h.panel.getAttribute("aria-label")).toBe("Agents");
+        expect(h.input.getAttribute("aria-controls")).toBe(h.panel.id);
+        const options = h.panel.querySelectorAll('[role="option"]');
+        expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+        expect(options[1]?.getAttribute("aria-selected")).toBe("false");
+        expect(h.input.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
+        h.ci.closePanel(h.panel);
+
+        expect(h.input.getAttribute("aria-activedescendant")).toBeNull();
+        expect(h.input.getAttribute("aria-controls")).toBe(h.ci.commands.element.id);
+    });
+
+    it("points at no option once none is highlighted", () => {
+        document.body.append(h.panel);
+        h.panel.parentElement!.append(h.input);
+        h.input.value = "@";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        h.ci.onKeydown(
+            new KeyboardEvent("keydown", { key: "ArrowLeft" }),
+            h.input,
+            h.select,
+            h.ghost,
+            h.panel,
+        );
+
+        expect(h.input.getAttribute("aria-activedescendant")).toBeNull();
+        const selected = h.panel.querySelectorAll('[aria-selected="true"]');
+        expect(selected).toHaveLength(0);
+    });
+
     it("filters mention matches by prefix", () => {
         h.input.value = "@p";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
@@ -75,7 +115,7 @@ describe("ChatInput @mentions", () => {
         h.input.value = "hi @p";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         h.ci.onKeydown(key("Tab"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.setTarget).toHaveBeenCalledWith("picam");
+        expect(h.host.setTarget).toHaveBeenCalledWith("picam-id");
         expect(h.input.value).toBe("hi"); // trailing @query stripped
         expect(h.panel.classList.contains("open")).toBe(false);
     });
@@ -85,7 +125,7 @@ describe("ChatInput @mentions", () => {
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         h.ci.onKeydown(key("ArrowRight"), h.input, h.select, h.ghost, h.panel); // idx 0 -> 1
         h.ci.onKeydown(key("Enter"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.setTarget).toHaveBeenCalledWith("picam");
+        expect(h.host.setTarget).toHaveBeenCalledWith("picam-id");
     });
 
     it("Escape closes the mention panel", () => {
@@ -100,7 +140,7 @@ describe("ChatInput @mentions", () => {
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         const chip = [...h.panel.querySelectorAll("button")].find(b => b.textContent === "main")!;
         chip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        expect(h.host.setTarget).toHaveBeenCalledWith("main");
+        expect(h.host.setTarget).toHaveBeenCalledWith("main-id");
     });
 
     it("a mention with no matching <select> option is a no-op, not a fake target switch", () => {
@@ -116,6 +156,39 @@ describe("ChatInput @mentions", () => {
         expect(h.host.setTarget).not.toHaveBeenCalled();
         expect(h.input.value).toBe("@ghost");
         expect(h.panel.classList.contains("open")).toBe(false);
+    });
+});
+
+describe("ChatInput @mentions of a name two agents share", () => {
+    let h: Harness;
+    beforeEach(() => {
+        h = setup(["main", "counter@main", "counter@pi"]);
+    });
+
+    it("offers each one by its address", () => {
+        h.input.value = "@cou";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect([...h.panel.querySelectorAll("button")].map(b => b.textContent)).toEqual([
+            "counter@main",
+            "counter@pi",
+        ]);
+    });
+
+    it("narrows on the node once the second @ is typed", () => {
+        h.input.value = "@counter@p";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect([...h.panel.querySelectorAll("button")].map(b => b.textContent)).toEqual(["counter@pi"]);
+    });
+
+    it("takes the one picked, by its id, and drops the whole address typed", () => {
+        h.input.value = "count please @counter@p";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+        h.ci.onKeydown(key("Tab"), h.input, h.select, h.ghost, h.panel);
+
+        expect(h.host.setTarget).toHaveBeenCalledWith("counter@pi-id");
+        expect(h.input.value).toBe("count please");
     });
 });
 

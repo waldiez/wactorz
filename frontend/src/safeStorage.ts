@@ -6,7 +6,7 @@
  * localStorage access that never throws.
  *
  * `localStorage` raises in Safari private mode, when storage is disabled, or on
- * quota-exceeded. A throw at module top level (e.g. `main.ts`) aborts bootstrap
+ * quota-exceeded. A throw at module top level (e.g. `app.ts`) aborts bootstrap
  * with a blank page, so these wrappers swallow those errors: reads return `null`
  * and writes become no-ops, degrading persistence quietly instead of breaking
  * the app.

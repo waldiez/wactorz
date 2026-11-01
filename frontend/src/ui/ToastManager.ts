@@ -92,198 +92,6 @@ const THEME: Record<ToastType, ThemeEntry> = {
     },
 };
 
-const CSS = `
-.wz-toasts {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 99999;
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 10px;
-  pointer-events: none;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-}
-
-/* Phones: the composer is the bottom of the viewport, so a bottom-anchored
-   toast lands on the message input — and chat replies are the most common
-   toast, firing exactly when someone is about to type. Anchor to the top
-   instead, clear of the header, and span the width so a long reply stays
-   readable on a narrow screen. column-reverse is kept: with append order
-   that puts the newest toast nearest the anchored edge. */
-@media (max-width: 639px) {
-  .wz-toasts {
-    /* Clears .af-header, which is ~48px at this breakpoint (6px padding plus
-       its content). There is no header-height variable to reference; if the
-       header grows, this needs to grow with it. */
-    top: 60px;
-    bottom: auto;
-    left: 10px;
-    right: 10px;
-  }
-  /* The desktop toast is a fixed 330px, which neither fills a 360px screen nor
-     fits a narrow one. Let it take the container's width instead. */
-  .wz-toast {
-    width: auto;
-  }
-}
-
-.wz-toast {
-  pointer-events: all;
-  width: 330px;
-  background: rgba(12, 12, 20, 0.95);
-  backdrop-filter: blur(28px) saturate(200%);
-  -webkit-backdrop-filter: blur(28px) saturate(200%);
-  border-radius: 18px;
-  border: 1px solid rgba(255,255,255,0.07);
-  box-shadow:
-    0 24px 64px rgba(0,0,0,0.65),
-    0 0 0 1px rgba(255,255,255,0.03),
-    inset 0 1px 0 rgba(255,255,255,0.07);
-  overflow: hidden;
-  cursor: pointer;
-  transform: translateX(calc(100% + 40px));
-  opacity: 0;
-  transition:
-    transform 0.45s cubic-bezier(0.34,1.56,0.64,1),
-    opacity  0.3s  ease;
-  will-change: transform, opacity;
-  user-select: none;
-}
-
-.wz-toast:hover { filter: brightness(1.07); }
-.wz-toast:active { transform: scale(0.98) !important; }
-
-.wz-toast--in {
-  transform: translateX(0);
-  opacity: 1;
-}
-.wz-toast--out {
-  transform: translateX(calc(100% + 40px));
-  opacity: 0;
-  transition:
-    transform 0.3s cubic-bezier(0.4,0,1,1),
-    opacity   0.25s ease;
-}
-
-.wz-toast__strip {
-  height: 3px;
-  width: 100%;
-}
-
-.wz-toast__body {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px 10px;
-}
-
-.wz-toast__avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 800;
-  color: rgba(255,255,255,0.95);
-  flex-shrink: 0;
-  text-shadow: 0 1px 4px rgba(0,0,0,0.4);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
-  letter-spacing: 0.3px;
-}
-
-.wz-toast__content {
-  flex: 1;
-  min-width: 0;
-  padding-top: 1px;
-}
-
-.wz-toast__header {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 5px;
-}
-
-.wz-toast__name {
-  font-size: 13px;
-  font-weight: 700;
-  color: rgba(255,255,255,0.92);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 150px;
-  letter-spacing: 0.15px;
-}
-
-.wz-toast__badge {
-  font-size: 9.5px;
-  padding: 2px 7px;
-  border-radius: 100px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  flex-shrink: 0;
-}
-
-.wz-toast__time {
-  font-size: 10.5px;
-  color: var(--af-text-dim);
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.wz-toast__message {
-  font-size: 12.5px;
-  color: rgba(255,255,255,0.52);
-  line-height: 1.5;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  word-break: break-word;
-}
-
-.wz-toast__actions {
-  padding: 0 16px 13px;
-  display: flex;
-  gap: 8px;
-}
-
-.wz-toast__btn {
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 5px 13px;
-  border-radius: 100px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.06);
-  color: rgba(255,255,255,0.65);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  font-family: inherit;
-  letter-spacing: 0.2px;
-}
-.wz-toast__btn:hover {
-  background: rgba(255,255,255,0.12);
-  color: rgba(255,255,255,0.9);
-  border-color: rgba(255,255,255,0.18);
-}
-
-.wz-toast__progress {
-  height: 2.5px;
-  background: rgba(255,255,255,0.04);
-  margin-top: 4px;
-}
-.wz-toast__progress-bar {
-  height: 100%;
-  width: 100%;
-  transform-origin: left;
-  border-radius: 0 2px 2px 0;
-}
-`;
-
 /** Two-letter avatar initials: first letters of the first two words, else the first two chars. */
 export function initials(name: string): string {
     const parts = name.trim().split(/[\s\-_]+/);
@@ -361,18 +169,7 @@ export class ToastManager {
         if (typeof document === "undefined") {
             return;
         }
-        this.injectCSS();
         this.createContainer();
-    }
-
-    private injectCSS(): void {
-        if (document.getElementById("wz-toast-css")) {
-            return;
-        }
-        const style = document.createElement("style");
-        style.id = "wz-toast-css";
-        style.textContent = CSS;
-        document.head.appendChild(style);
     }
 
     private createContainer(): void {
@@ -384,11 +181,16 @@ export class ToastManager {
         document.body.appendChild(this.container);
     }
 
-    /** Display a toast (evicting the oldest at capacity); auto-dismisses after `durationMs`. */
+    /** Display a toast (evicting the oldest at capacity); auto-dismisses after `durationMs`.
+     *  One with a `key` replaces the toast already shown with it, so a question
+     *  shown again stays one toast. */
     show(opts: ToastOptions): void {
         const type: ToastType = opts.type ?? "system";
         const theme = THEME[type];
         const duration = opts.durationMs ?? (opts.actions?.length ? 8000 : 5000);
+        if (opts.key) {
+            this.close(opts.key);
+        }
 
         // Evict oldest if at cap
         if (this.active.length >= this.MAX) {
@@ -479,6 +281,10 @@ export class ToastManager {
             return;
         }
         clearTimeout(Number(toastEl.dataset["timer"]));
+        // Gone as far as anyone reading or pressing is concerned, while it fades:
+        // a notice closed is neither read out nor focused, nor its buttons pressed.
+        toastEl.setAttribute("aria-hidden", "true");
+        toastEl.inert = true;
         toastEl.classList.remove("wz-toast--in");
         toastEl.classList.add("wz-toast--out");
         this.active = this.active.filter(t => t !== toastEl);

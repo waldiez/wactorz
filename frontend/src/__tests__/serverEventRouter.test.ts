@@ -220,6 +220,67 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         return calls;
     }
 
+    it("says a stored model's pointer moved, an unset one with its empty payload too", () => {
+        const r = new ServerEventRouter();
+        const moved = capture(r, "model-pointer");
+        const raw = capture(r, "raw");
+
+        r.route("models/hvac/shadow", { version: 8 });
+        r.route("models/hvac/active", "");
+        r.route("models/hvac/latest", {});
+
+        expect(moved).toEqual([
+            { name: "hvac", pointer: "shadow" },
+            { name: "hvac", pointer: "active" },
+        ]);
+        expect(raw).toHaveLength(1);
+    });
+
+    it("says an agent's question book changed, a cleared one with its empty payload too", () => {
+        const r = new ServerEventRouter();
+        const books = capture(r, "question-book");
+        const raw = capture(r, "raw");
+
+        r.route("agents/a1/questions", {
+            agent: "asker",
+            questions: [
+                {
+                    id: "q",
+                    text: "Sure?",
+                    options: ["Yes", 3],
+                    channel: "telegram",
+                    asked_at: 10,
+                    answer: null,
+                    answer_channel: "",
+                    context: "It jumped.",
+                },
+                { text: "no id" },
+                null,
+            ],
+        });
+        r.route("agents/a2/questions", "");
+
+        expect(books).toEqual([
+            {
+                agentId: "a1",
+                questions: [
+                    {
+                        id: "q",
+                        agent_id: "a1",
+                        agent: "asker",
+                        text: "Sure?",
+                        options: ["Yes"],
+                        channel: "telegram",
+                        asked_at: 10,
+                        context: "It jumped.",
+                    },
+                ],
+            },
+            { agentId: "a2", questions: [] },
+        ]);
+        expect(raw).toEqual([]);
+    });
+
     it("routes fixed-shape agent topics to their typed events", () => {
         const r = new ServerEventRouter();
         const hb = capture(r, "heartbeat");
@@ -237,6 +298,18 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         expect((al[0] as { severity: string }).severity).toBe("error");
         expect((ch[0] as { content: string }).content).toBe("hi");
         expect((sp[0] as { agentType: string }).agentType).toBe("worker");
+    });
+
+    it("files a chat message in its sender's thread, unless the server names another", () => {
+        // A voice surface relays the person's words to another agent, which the
+        // server names by id; the page never works an id out from a name.
+        const r = new ServerEventRouter();
+        const ch = capture(r, "chat") as { threadId: string }[];
+
+        r.route("agents/a1/chat", { content: "hi", from: "alpha" });
+        r.route("agents/a1/chat", { content: "rain?", from: "user", to: "weather" }, "w1");
+
+        expect(ch.map(m => m.threadId)).toEqual(["a1", "w1"]);
     });
 
     it("routes exact system topics", () => {

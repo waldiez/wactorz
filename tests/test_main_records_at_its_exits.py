@@ -103,8 +103,8 @@ def _main(
     async def _spawn_blocks(response: str) -> tuple[str, list[Any]]:
         return response, []
 
-    async def _delete_blocks(response: str) -> tuple[str, list[str], list[str]]:
-        return response, [], []
+    async def _delete_blocks(response: str) -> tuple[str, list[str], list[str], list[str]]:
+        return response, [], [], []
 
     async def _delegate_blocks(response: str, restricted: bool = False) -> Any:
         return response, list(delegated)

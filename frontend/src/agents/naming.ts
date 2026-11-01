@@ -4,7 +4,7 @@
  */
 /**
  * Canonical agent-name resolution — the single source of truth shared by the
- * agent-store wiring (main.ts), the dashboard and the MQTT normalisers.
+ * agent-store wiring (app.ts), the dashboard and the MQTT normalisers.
  *
  * Agent ids are WID strings of the form `<timestamp>Z-<name>[-<6 hex>]`; the
  * human-facing name is the `<name>` segment.
@@ -19,6 +19,14 @@
  * of them long after the backend stopped using it.
  */
 export const MAIN_AGENT: string = "main";
+
+/**
+ * The node an agent on main itself is addressed by, as in `weather@main`.
+ *
+ * Main is not a node, but an address names one, so it has one: no node may be
+ * called this, and an agent that reports no node runs here.
+ */
+export const MAIN_NODE: string = "main";
 
 /**
  * The transport the dashboard's chat arrives through, not an agent anyone talks to.

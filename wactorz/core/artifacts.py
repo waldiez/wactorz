@@ -33,7 +33,10 @@ A version a pointer names cannot be removed until the pointer is moved off it.
 ``docs/design/model-pointers.md`` records the decision.
 
 The index is changed under a lock on the store's directory, so a command adding
-a model while the server runs does not lose what either of them wrote. The
+a model while the server runs does not lose what either of them wrote. Under the
+same lock, each pointer change is appended to a journal beside the index, with
+who made it and why: whoever made it, in whichever process, main reads the
+journal into the history and trims what it read (`pointer_changes`). The
 directory's name starts with ``..``, which no agent's name may, so it never
 collides with an agent's own; and it is part of what ``wactorz-state export``
 writes.
@@ -393,6 +396,12 @@ class Pointer:
         return asdict(self)
 
 
+#: What a journalled change did: a pointer set to a version, a pointer unset,
+#: or the shadow unset because its version became active.
+MOVED = "moved"
+CLEARED = "cleared"
+PROMOTED = "promoted"
+
 #: What follows the name in a reference: None for a bare name, ``"latest"``, one
 #: of `POINTERS`, or a version number.
 Selector = int | str | None
@@ -457,6 +466,16 @@ class ArtifactStore:
     @property
     def index_path(self) -> Path:
         return self.root / "index.json"
+
+    @property
+    def journal_path(self) -> Path:
+        """Each pointer change not yet read into the history, one JSON object a line."""
+        return self.root / "pointer-moves.jsonl"
+
+    @property
+    def rejected_journal_path(self) -> Path:
+        """Lines of the journal that were not a change, kept for a person to read."""
+        return self.root / "pointer-moves.rejected.jsonl"
 
     def path_of(self, artifact: Artifact) -> Path:
         """The file holding ``artifact``."""
@@ -653,8 +672,10 @@ class ArtifactStore:
         with self._locked():
             index, pointers = self._read_all()
             versions = index.get(name, [])
+            dropped: dict[str, Pointer] = {}
             if everything:
                 gone, kept = versions, []
+                dropped = _pointers_of(name, pointers)
                 pointers.pop(name, None)
             else:
                 if not versions:
@@ -672,6 +693,8 @@ class ArtifactStore:
             else:
                 index.pop(name, None)
             self._write_all(index, pointers)
+            now = time.time()
+            self._journal([_change(CLEARED, was, at=now) for was in dropped.values()])
             still_held = {v["sha256"] for entries in index.values() for v in entries}
             for entry in gone:
                 if entry["sha256"] not in still_held:
@@ -697,8 +720,12 @@ class ArtifactStore:
             raise ArtifactError.names_the_pointer(reference, which, name)
         with self._locked():
             artifacts, pointers = self._read_all()
-            moved = _move_in(artifacts, pointers, which, name, selector, reference, by, reason)
+            changes: list[dict[str, Any]] = []
+            moved = _move_in(
+                artifacts, pointers, which, name, selector, reference, by, reason, changes
+            )
             self._write_all(artifacts, pointers)
+            self._journal(changes)
         return moved
 
     def rollback(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
@@ -723,18 +750,20 @@ class ArtifactStore:
             if previous is None:
                 raise ArtifactConflictError.nothing_to_roll_back(name)
             reference = f"{name}:{previous}"
+            changes: list[dict[str, Any]] = []
             moved = _move_in(
-                artifacts, pointers, "active", name, int(previous), reference, by, reason
+                artifacts, pointers, "active", name, int(previous), reference, by, reason, changes
             )
             self._write_all(artifacts, pointers)
+            self._journal(changes)
         return moved
 
-    def clear(self, which: str, name: str) -> Pointer:
+    def clear(self, which: str, name: str, *, by: str = "", reason: str | None = None) -> Pointer:
         """Unset ``name``'s ``which`` pointer; what it was. Raises `ArtifactError` when it was unset.
 
-        Cleared, ``active`` leaves the bare name meaning the newest again.
-        Nothing is left to record who cleared it on; the caller says so where
-        it reports the change.
+        Cleared, ``active`` leaves the bare name meaning the newest again. A
+        cleared pointer has no entry left in the index to say who cleared it
+        or why, so the journal says (`pointer_changes`).
         """
         which = _pointer_name(which)
         error = name_error(name)
@@ -751,7 +780,59 @@ class ArtifactStore:
             else:
                 pointers.pop(name, None)
             self._write_all(artifacts, pointers)
-        return _pointer(name, which, was)
+            cleared = _pointer(name, which, was)
+            self._journal([_change(CLEARED, cleared, at=time.time(), by=by, reason=reason)])
+        return cleared
+
+    def pointer_changes(self) -> tuple[list[dict[str, Any]], bytes]:
+        """The journalled changes, oldest first, and the lines they were read from.
+
+        Each is ``change`` (`MOVED`, `CLEARED` or `PROMOTED`), ``at``, ``by``,
+        ``reason`` and ``pointer``, the pointer as the change set it or, for a
+        clear, as it stood before. Only whole lines are read: a last line with
+        no end yet is left for later. The lines read go to
+        `forget_pointer_changes` once what they say is recorded.
+        """
+        if not self.journal_path.exists():
+            # Asked on every look of main's: most find nothing, and need no lock to say so.
+            return [], b""
+        with self._locked():
+            try:
+                body = self.journal_path.read_bytes()
+            except FileNotFoundError:
+                return [], b""
+        read = body[: body.rfind(b"\n") + 1]
+        return [change for line in read.splitlines() if (change := _journal_line(line))], read
+
+    def forget_pointer_changes(self, read: bytes) -> list[bytes]:
+        """Drop the lines `pointer_changes` read, keeping what came since; the lines set aside.
+
+        Dropped only while the journal still starts with them: a reader that
+        finds them gone, dropped by another that read them too, drops nothing,
+        so a line journalled meanwhile is never lost. A line that is not a
+        change -- one cut short when a process died writing it -- is moved to
+        ``pointer-moves.rejected.jsonl`` beside the journal rather than lost,
+        and returned so the caller can say so.
+        """
+        if not read:
+            return []
+        with self._locked():
+            try:
+                body = self.journal_path.read_bytes()
+            except FileNotFoundError:
+                return []
+            if not body.startswith(read):
+                return []
+            rejected = [line for line in read.splitlines() if not _journal_line(line)]
+            if rejected:
+                with self.rejected_journal_path.open("ab") as aside:
+                    aside.write(b"".join(line + b"\n" for line in rejected))
+            rest = body[len(read) :]
+            if rest:
+                write_text(self.journal_path, rest.decode("utf-8", errors="replace"))
+            else:
+                self.journal_path.unlink()
+        return rejected
 
     def promote(self, name: str, *, by: str, reason: str | None = None) -> Pointer:
         """Move ``name``'s ``active`` to where ``shadow`` points and clear ``shadow``, as one change.
@@ -768,10 +849,17 @@ class ArtifactStore:
                 raise ArtifactConflictError.no_shadow_to_promote(name)
             target = _resolve_in(artifacts, pointers, name, "shadow", f"{name}:shadow")
             standing["active"] = _pointer_entry(target, standing.get("active"), by, reason)
-            del standing["shadow"]
+            tried = _pointer(name, "shadow", standing.pop("shadow"))
             pointers[name] = standing
             self._write_all(artifacts, pointers)
-        return _pointer(name, "active", standing["active"])
+            active = _pointer(name, "active", standing["active"])
+            self._journal(
+                [
+                    _change(MOVED, active, at=active.moved_at, by=by, reason=reason),
+                    _change(PROMOTED, tried, at=active.moved_at, by=by, reason=reason),
+                ]
+            )
+        return active
 
     # ── Inside ────────────────────────────────────────────────────────────
 
@@ -848,6 +936,21 @@ class ArtifactStore:
         }
         write_text(self.index_path, json.dumps(body, indent=2))
 
+    def _journal(self, changes: list[dict[str, Any]]) -> None:
+        """Append ``changes`` to the journal; called under the lock, after the index is written."""
+        if not changes:
+            return
+        lines = "".join(json.dumps(change, sort_keys=True) + "\n" for change in changes)
+        with self.journal_path.open("a+b") as journal:
+            journal.seek(0, os.SEEK_END)
+            if journal.tell():
+                journal.seek(-1, os.SEEK_END)
+                if journal.read(1) != b"\n":
+                    # A line cut short by a process that died writing it: end
+                    # it, so it is read as the broken line it is, alone.
+                    lines = "\n" + lines
+            journal.write(lines.encode("utf-8"))
+
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:
         """Hold the store's lock, waiting for another process to let go of it."""
@@ -899,6 +1002,26 @@ def _pointer(name: str, which: str, entry: Mapping[str, Any]) -> Pointer:
     )
 
 
+def _change(
+    change: str, pointer: Pointer, *, at: float, by: str = "", reason: str | None = None
+) -> dict[str, Any]:
+    """One line of the journal: what ``change`` did to ``pointer``, when, by whom and why."""
+    return {"change": change, "at": at, "by": by, "reason": reason, "pointer": asdict(pointer)}
+
+
+def _journal_line(line: bytes) -> dict[str, Any] | None:
+    """One line of the journal as the change it holds, or None for one that holds none."""
+    try:
+        change = json.loads(line)
+        if change["change"] not in (MOVED, CLEARED, PROMOTED):
+            return None
+        float(change["at"])
+        Pointer(**change["pointer"])
+    except (ValueError, TypeError, KeyError):
+        return None
+    return change
+
+
 def _pointers_of(name: str, pointers: Mapping[str, dict[str, Any]]) -> dict[str, Pointer]:
     return {which: _pointer(name, which, entry) for which, entry in pointers.get(name, {}).items()}
 
@@ -912,21 +1035,31 @@ def _move_in(
     reference: str,
     by: str,
     reason: str | None,
+    changes: list[dict[str, Any]],
 ) -> Pointer:
-    """`ArtifactStore.move`, over an index already read and held: changes ``pointers``."""
+    """`ArtifactStore.move`, over an index already read and held: changes ``pointers``.
+
+    What it changed is appended to ``changes``, for the journal.
+    """
     target = _resolve_in(artifacts, pointers, name, selector, reference)
     standing = pointers.get(name, {})
     current = standing.get(which)
     if current is not None and current["version"] == target.version:
         raise ArtifactConflictError.already(target.reference, which)
     other = "shadow" if which == "active" else "active"
+    tried = None
     if standing.get(other, {}).get("version") == target.version:
         if which == "shadow":
             raise ArtifactConflictError.shadow_is_active(target.reference)
-        standing.pop(other, None)
+        tried = _pointer(name, other, standing.pop(other))
     standing[which] = _pointer_entry(target, current, by, reason)
     pointers[name] = standing
-    return _pointer(name, which, standing[which])
+    moved = _pointer(name, which, standing[which])
+    changes.append(_change(MOVED, moved, at=moved.moved_at, by=by, reason=reason))
+    if tried is not None:
+        # Active moved onto the version on trial: that is a promotion.
+        changes.append(_change(PROMOTED, tried, at=moved.moved_at, by=by, reason=reason))
+    return moved
 
 
 def _pointer_entry(

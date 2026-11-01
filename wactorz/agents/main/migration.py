@@ -23,18 +23,21 @@ agent it places on a node, and receives them with one a node hands back.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import json
 import logging
 import secrets
 import sys
 import time
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
+from ...core.addresses import MAIN_NODE
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsTooLarge,
@@ -63,7 +66,9 @@ from ...core.mqtt import (
 from ...core.paths import resolve_state_dir
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from ...plugins import MODULE_TYPE, is_module_config
-from .spawns import why_a_node_cannot_run, with_code_for, without_transient_keys
+from .addresses import registered_agent
+from .spawn_registry import SpawnRegistry, address_of, without_transient_keys
+from .spawns import why_a_node_cannot_run, with_code_for
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -133,6 +138,25 @@ PENDING_MIGRATIONS_KEY = "_pending_migrations"
 #: `_purge_local_source`.
 _TRANSIENT_ENTRY_FIELDS = ("local_actor",)
 
+#: A move as the guard against a second one knows it: the agent's name, the
+#: place it is leaving and the place it is going, "" for main.
+Move = tuple[str, str, str]
+
+
+def _place(node: Any) -> str:
+    """A node name as a place a move leaves or reaches: "" for main, however it was written."""
+    text = str(node or "").strip()
+    return "" if text.lower() in ("local", "main") else text
+
+
+def _move_of(pending: Mapping[str, Any]) -> Move:
+    """The move a pending return or spawn is part of."""
+    return (
+        str(pending.get("agent_name") or ""),
+        _place(pending.get("from_node")),
+        _place(pending.get("target_node")),
+    )
+
 
 class Migration:
     """Agents in flight between main and a node."""
@@ -150,6 +174,11 @@ class Migration:
         self._inbox: Inbox | None = None
         #: State returns waiting on their blobs, held so none is collected.
         self._returns: set[asyncio.Task[None]] = set()
+        #: Moves being started, or finished, with no pending entry to show it:
+        #: a move asked for until it is sent, and a return or a confirmation
+        #: from when its entry is taken until the agent is placed or put back.
+        #: Counted, as a return waiting on its blobs holds its move twice.
+        self._in_hand: Counter[Move] = Counter()
 
     @property
     def inbox(self) -> Inbox:
@@ -317,6 +346,12 @@ class Migration:
             return
         self.pending_returns.pop(token)
         self._save_pending()
+        # Still under way until the agent is placed, though its entry is gone.
+        with self._holding(_move_of(started)):
+            await self._take_returned(started, data)
+
+    async def _take_returned(self, started: dict[str, Any], data: dict[str, Any]) -> None:
+        """Place an agent its node handed back, or leave it there if the node refused."""
         agent_name = started["agent_name"]
         from_node = started["from_node"]
         if data.get("refused"):
@@ -334,7 +369,9 @@ class Migration:
 
         if isinstance(state, dict) and references(state):
             # Off the listener: the blobs arrive through it, and it would
-            # otherwise be waiting for itself.
+            # otherwise be waiting for itself. The task holds the move until
+            # it ends, from before it is started.
+            self._in_hand[_move_of(started)] += 1
             task = asyncio.create_task(
                 self._place_returned_or_restart(agent_name, started, cfg, state, left_behind)
             )
@@ -395,8 +432,8 @@ class Migration:
         """
         if self.host is None:
             return None
-        entry = self.host._get_spawn_registry().get(agent_name) or library_agent_config(
-            agent_name, self.host._registry
+        entry = _entry_on(self.host._get_spawn_registry(), agent_name, from_node) or (
+            library_agent_config(agent_name, self.host._registry)
         )
         if not entry:
             logger.warning(
@@ -451,6 +488,8 @@ class Migration:
                 await self._restart_on_source(
                     agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
                 )
+        finally:
+            self._release(_move_of(started))
 
     def moving_to(self, agent_name: str) -> str:
         """The node a move under way is starting ``agent_name`` on, or "" for none.
@@ -466,6 +505,44 @@ class Migration:
             ),
             "",
         )
+
+    def move_under_way(self, move: Move) -> Move | None:
+        """The move under way that ``move`` would cross, or None.
+
+        Under way from the moment a move is asked for until the agent is
+        confirmed where it went or put back where it was. Two moves cross when
+        they are of agents of one name and share a place: one leaving it or
+        arriving there while the other does. Agents of one name on two other
+        hosts move apart.
+        """
+        name, leaving, going = move
+        under_way = [
+            *(_move_of(p) for p in self.pending_returns.values()),
+            *(_move_of(p) for p in self.pending_spawns.values()),
+            *(m for m, held in self._in_hand.items() if held > 0),
+        ]
+        return next(
+            (
+                other
+                for other in under_way
+                if other[0] == name and {other[1], other[2]} & {leaving, going}
+            ),
+            None,
+        )
+
+    @contextlib.contextmanager
+    def _holding(self, move: Move) -> Iterator[None]:
+        """Count ``move`` as under way while the block runs."""
+        self._in_hand[move] += 1
+        try:
+            yield
+        finally:
+            self._release(move)
+
+    def _release(self, move: Move) -> None:
+        self._in_hand[move] -= 1
+        if self._in_hand[move] <= 0:
+            del self._in_hand[move]
 
     def _placed(self, agent_name: str) -> bool:
         """Whether a handed-back agent is running here, or waiting on a target to confirm it.
@@ -650,6 +727,14 @@ class Migration:
             return
         self.pending_spawns.pop(token)
         self._save_pending()
+        # Still under way until it is committed or put back, though its entry is gone.
+        with self._holding(_move_of(pending)):
+            await self._confirmed(pending, data)
+
+    async def _confirmed(self, pending: dict[str, Any], data: dict[str, Any]) -> None:
+        """Commit a move its target confirmed, or put the agent back if the target refused it."""
+        if self.host is None:
+            return
         if data.get("refused"):
             await self._put_back(pending, str(data["refused"]))
             return
@@ -781,7 +866,8 @@ class Migration:
                 continue
             self.pending_spawns.pop(token, None)
             self._save_pending()
-            await self._put_back(pending, None)
+            with self._holding(_move_of(pending)):
+                await self._put_back(pending, None)
 
     async def _put_back(self, pending: dict[str, Any], refused: str | None) -> None:
         """Restore an agent on its source after its target did not take it.
@@ -914,7 +1000,7 @@ class Migration:
             from_node = started.get("from_node", "")
             if not agent_name or not from_node:
                 continue
-            config = self.host._get_spawn_registry().get(agent_name)
+            config = _entry_on(self.host._get_spawn_registry(), agent_name, from_node)
             if not config:
                 logger.warning(
                     "[%s] %r never came back from %r and is not in the registry — "
@@ -932,7 +1018,8 @@ class Migration:
             )
             restored = dict(config)
             restored["node"] = from_node
-            await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
+            with self._holding(_move_of(started)):
+                await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
             self._announce(
                 f"'{agent_name}' did not come back from '{from_node}' — "
                 f"it has been restarted there.",
@@ -1058,6 +1145,22 @@ class Migration:
     async def migrate_agent(
         self, agent_name: str, target_node: str, *, force: bool = False
     ) -> dict[str, Any]:
+        """Move a running agent to a different node; see `_migrate_agent`.
+
+        Returns {"success": bool, "message": str}. The move counts as under way
+        from its checks until it is sent, so a second one asked meanwhile is
+        refused (`move_under_way`); once sent, its pending entry says so.
+        """
+        held: list[Move] = []
+        try:
+            return await self._migrate_agent(agent_name, target_node, force=force, held=held)
+        finally:
+            for move in held:
+                self._release(move)
+
+    async def _migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool, held: list[Move]
+    ) -> dict[str, Any]:
         """Move a running agent to a different node.
 
         A move that would lose state is refused before anything stops: keys
@@ -1066,7 +1169,8 @@ class Migration:
         a node checks its own, from the same two values sent with the request.
 
         Sources of truth, in priority order:
-          1. Spawn registry — has the full config including code.
+          1. Spawn registry — has the full config including code; with the
+             agent running in main's own process, settles that it is on main.
           2. Agent manifest — has node, description, schemas (no code).
           3. Node heartbeats — minimum: tells us which node the agent runs on.
 
@@ -1079,8 +1183,11 @@ class Migration:
         """
         if self.host is None or self.host_nodes is None:
             return {}
-        reg = self.host._get_spawn_registry()
-        config = reg.get(agent_name)
+        named, refusal = registered_agent(self.host, agent_name)
+        if refusal:
+            return {"success": False, "message": refusal}
+        agent_name = named.name
+        config = named.entry
         if config is None:
             # A library agent started with the system has no entry: its config
             # is what a `type: module` spawn of it would say.
@@ -1088,15 +1195,20 @@ class Migration:
         have_code = bool(config and config.get("code"))
 
         # ── Locate the agent via every source we have ─────────────────────────
-        # Registry first, then manifest, then heartbeats. We need at least to
-        # know WHERE the agent is to do anything useful.
+        # What main holds first: a registry entry says where the agent is, its
+        # empty node meaning main itself, and an agent running in this process
+        # is here. Only an agent main has neither for is looked for in the
+        # manifests, then the heartbeats: a manifest retained from where the
+        # agent ran before would otherwise send the move to a node that no
+        # longer has it. A name kept in more than one place always has its
+        # entry here: `registered_agent` takes only an address for it.
         manifest = self.host._agent_manifests.get(agent_name, {})
-        current_node = ""
-        if config:
-            current_node = (config.get("node") or "").strip()
-        if not current_node and manifest:
+        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
+        current_node = named.node
+        placed_by_main = named.entry is not None or local_alive
+        if not placed_by_main and manifest:
             current_node = (manifest.get("node") or "").strip()
-        if not current_node:
+        if not current_node and not placed_by_main:
             # Last resort — the live heartbeats, which may know a node the spawn
             # registry does not record.
             current_node = self.host_nodes.running_agent(agent_name)
@@ -1105,7 +1217,6 @@ class Migration:
         # If we found nothing — not in registry, not in manifest, not heart-
         # beating from any node, not in the local registry — we genuinely
         # can't migrate what doesn't exist.
-        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
         if not config and not manifest and not current_node and not local_alive:
             return {
                 "success": False,
@@ -1113,11 +1224,29 @@ class Migration:
                 f"entry, no manifest, no heartbeat). Nothing to migrate.",
             }
 
-        if current_node == target_node:
+        # Normalise "local" as a target so users can type /migrate agent-name local
+        is_target_local = target_node.strip().lower() in ("", "local", "main")
+
+        # Before anything waits: two moves asked at once must not both pass.
+        move = (agent_name, _place(current_node), "" if is_target_local else target_node)
+        crossed = self.move_under_way(move)
+        if crossed is not None:
+            # Until a move is confirmed, the registry still places the agent
+            # where it left, while it may already run where it is going: a
+            # second move would start from the wrong one.
             return {
                 "success": False,
-                "message": f"Agent '{agent_name}' is already on '{target_node or 'local'}'.",
+                "message": f"'{agent_name}' is moving from '{crossed[1] or 'local'}' to "
+                f"'{crossed[2] or 'local'}'; ask again once that move is done.",
             }
+
+        if current_node == ("" if is_target_local else target_node):
+            return {
+                "success": False,
+                "message": f"Agent '{agent_name}' is already on '{current_node or 'local'}'.",
+            }
+        self._in_hand[move] += 1
+        held.append(move)
 
         if current_node and not config:
             # Wherever it goes, it is placed from main's registry entry; the
@@ -1129,8 +1258,17 @@ class Migration:
                 f"elsewhere. It stays on '{current_node}'.",
             }
 
-        # Normalise "local" as a target so users can type /migrate agent-name local
-        is_target_local = target_node.strip().lower() in ("", "local", "main")
+        occupied = self._occupied(
+            agent_name,
+            "" if is_target_local else target_node,
+            str((config or {}).get("actor_id") or ""),
+        )
+        if occupied:
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {occupied} It stays on "
+                f"'{current_node or 'local'}'.",
+            }
 
         # ── Verify the target node exists and is online ────────────────────────
         # This must happen BEFORE anything destructive. Without it, a typo'd or
@@ -1325,7 +1463,7 @@ class Migration:
 
             bus = get_topic_bus()
             if bus:
-                c = bus.registry.get(agent_name)
+                c = bus.registry.at(agent_name, MAIN_NODE)
                 if c is not None:
                     live_contract = {
                         "publishes": list(c.publishes or []),
@@ -1445,6 +1583,32 @@ class Migration:
         logger.info("[%s] %s", self.host.name, msg)
         return {"success": True, "message": msg}
 
+    def _occupied(self, agent_name: str, target_node: str, moving_id: str = "") -> str | None:
+        """Why ``target_node`` ("" for main) cannot take ``agent_name``: it runs one of the name already.
+
+        A name is unique on a host, so a move there would leave two agents
+        answering to one address. Renaming one on the way is not offered: it
+        would break every address that names it. What runs under the moving
+        agent's own id, ``moving_id``, is that agent -- main keeps its copy
+        until a move out is confirmed -- and is not another one.
+        """
+        if self.host is None:
+            return None
+        here = self.host._registry.find_by_name(agent_name) if self.host._registry else None
+        if here is not None and moving_id and here.actor_id == moving_id:
+            here = None
+        kept = self.host._get_spawn_registry().at(agent_name, target_node)
+        if kept is not None and moving_id and kept["actor_id"] == moving_id:
+            kept = None
+        listed = (
+            bool(target_node)
+            and self.host_nodes is not None
+            and (agent_name in self.host_nodes.known.get(target_node, {}).get("agents", []))
+        )
+        if kept is None and not listed and (target_node or here is None):
+            return None
+        return f"{address_of({'name': agent_name, 'node': target_node})} already runs."
+
     @staticmethod
     def _hand_back_request(agent_name: str, return_token: str, force: bool) -> dict[str, Any]:
         """What a source node is sent to hand an agent back to main.
@@ -1518,8 +1682,7 @@ class Migration:
         if self.host is None:
             return
         # Build desired state from spawn registry filtered to this node
-        reg = self.host._get_spawn_registry()
-        agents = {name: cfg for name, cfg in reg.items() if cfg.get("node", "").strip() == node}
+        agents = {cfg["name"]: cfg for cfg in self.host._get_spawn_registry().on_node(node)}
 
         # Apply pending change before publishing. Stripped, because this message
         # is retained: the runner reconciles from it on every reboot, and a
@@ -1546,6 +1709,11 @@ class Migration:
             qos=1,
         )
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
+
+
+def _entry_on(registry: SpawnRegistry, agent_name: str, node: str) -> dict[str, Any] | None:
+    """The registry entry of ``agent_name`` on ``node``, or else its only entry, or None."""
+    return registry.at(agent_name, node) or registry.only(agent_name)
 
 
 def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) -> bool:

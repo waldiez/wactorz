@@ -12,10 +12,14 @@
 
 import { registerConfigEntry } from "../../config/serverConfig";
 import { listen } from "../../events";
+import { provideVoiceControls } from "../../io/voiceControls";
+import { safeStorage } from "../../safeStorage";
 import { tts } from "./TTSManager";
 
 export { tts, TTSManager } from "./TTSManager";
 export type { TTSVoice } from "./types";
+
+provideVoiceControls(tts);
 
 // This extension's /api/config fields (namespaced under "tts" by the backend
 // seam) — registered at module load so seedServerConfig() picks them up.
@@ -26,22 +30,30 @@ registerConfigEntry("wactorz-tts-available", c =>
     (c.tts as Record<string, unknown> | undefined)?.available ? "1" : "0",
 );
 
-/** Extension config passed to register() once at startup (see main.ts). */
+/** Extension config passed to register() once at startup (see app.ts). */
 export interface TTSConfig {
     apiBase: string;
-    available: boolean;
+    /** Whether `/api/config` answered. Without it the stored flag says nothing, or
+     *  what an earlier visit heard, so the server is asked for its voices instead. */
+    configRead: boolean;
 }
 
 /**
- * Bootstrap the TTS extension. Called once from main.ts during startup.
+ * Bootstrap the TTS extension. Called once from app.ts during startup.
  * The extension self-wires — no other file needs to know about TTSManager.
+ *
+ * @returns the way to stop it listening.
  */
-export function register(config: TTSConfig): void {
+export function register(config: TTSConfig): () => void {
     tts.setApiBase(config.apiBase);
     // A stopped turn stops its voice too: the page saying it stopped while it
     // goes on reading the answer aloud disagrees with itself.
-    listen("tts-stop", () => tts.stopSpeaking());
-    if (config.available) {
+    const stops = [
+        listen("tts-stop", () => tts.stopSpeaking()),
+        listen("tts-notify", ({ text, from }) => tts.notify(text, from)),
+    ];
+    if (!config.configRead || safeStorage.get("wactorz-tts-available") === "1") {
         void tts.init();
     }
+    return () => stops.forEach(stop => stop());
 }

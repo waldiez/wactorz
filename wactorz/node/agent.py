@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
+from ..core.identity import given_actor_id
 from ..core.topic_bus import TopicContract
 from ..monitoring.agent_metrics import RecentDurations
 from .history import read_history, read_stats
@@ -57,11 +58,13 @@ class NodeAgent(NodeHosted, DynamicAgent):
             input_schema=config.get("input_schema"),
             output_schema=config.get("output_schema"),
             trusted=bool(config.get("trusted", False)),
+            task_timeout_s=config.get("task_timeout_s"),
             artifacts=runner.readable_artifacts(config),
             # Passed in rather than assigned after, because `AgentAPI` is built
             # inside this call and decides there whether `agent.llm` exists. It
             # only holds the reference, so handing it a half-built agent is safe.
             llm_provider=BridgeProvider(self),
+            actor_id=given_actor_id(config.get("actor_id")),
             name=str(name),
             persistence_dir=str(directory),
         )

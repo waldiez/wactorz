@@ -16,8 +16,8 @@ wactorz/
 
 frontend/src/
 ├── ext/                    # Frontend extensions (TypeScript) — mirror backend
-│   └── tts/index.ts        #     register({ apiBase, available })
-├── ui/dashboard/
+│   └── tts/index.ts        #     register({ apiBase, configRead })
+├── ui/shell/
 │   └── icons.ts            #     Icon registry — registerIcon(name, svg)
 ├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
 └── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
@@ -25,8 +25,8 @@ frontend/src/
 
 At startup the monitor calls `setup_all(app)`, which auto-discovers every module
 or package under `wactorz/ext/` that exposes a `setup(app)` hook, and every
-extension an installed package registers under the `wactorz.extensions` entry
-point, and wires them in. `collect_public_config(app)` gathers each extension's
+extension registered under the `wactorz.extensions` entry point by an installed
+package named in `WACTORZ_EXTENSIONS`, and wires them in. `collect_public_config(app)` gathers each extension's
 non-secret browser config and merges it into `/api/config`. Nothing in core
 references a specific extension.
 
@@ -92,9 +92,10 @@ The registry itself is on `app[contract.ACTOR_REGISTRY]` (set by core before
 
 ### From another package
 
-An extension does not have to live in this repository. Any package that is
-`pip install`ed beside Wactorz can register one, free or commercial, and it is
-loaded exactly like a module under `wactorz/ext/`, after the built-ins:
+An extension does not have to live in this repository. Any package installed
+beside Wactorz can register one, free or commercial, and once it is named in
+`WACTORZ_EXTENSIONS` it is loaded exactly like a module under `wactorz/ext/`, after
+the built-ins:
 
 ```toml
 # pyproject.toml of the other package
@@ -109,6 +110,26 @@ extension's `__deps__` refers to. A name a built-in extension already uses is
 refused with a log line, so a package cannot stand in for one; a package that
 fails to import, or has no `setup()`, is logged and skipped like a broken module
 under `wactorz/ext/`. Restart Wactorz after installing or removing such a package.
+
+### Enabling a package
+
+Loading a package runs its code in the server, so being installed is not enough:
+an agent's own requirements install packages too. Name the ones you trust, by
+distribution name, or use `*` to load everything installed:
+
+```bash
+WACTORZ_EXTENSIONS=wactorz-mlops,wactorz-tts
+```
+
+The setting covers all three things a package can register: `wactorz.extensions`,
+`wactorz.agents` and `wactorz.pipelines`. An unlisted package is not imported at
+all; it is named once in the log, with the line to add, and on the Overview. The
+modules under `wactorz/ext/` always load.
+
+A node reads its own `WACTORZ_EXTENSIONS`. `/deploy` rewrites the node's `.env`, so
+set it on main as `DEPLOY_<NODE>_EXTENSIONS`. On a node the setting decides which
+agents it can build. Under Home Assistant it is the `extensions` option, on the
+add-on and on each deploy target.
 
 ### Requirements
 
@@ -148,22 +169,24 @@ export interface MyConfig {
     available: boolean;
 }
 
-export function register(config: MyConfig): void {
-    if (!config.available) return;
+export function register(config: MyConfig): () => void {
+    if (!config.available) return () => {};
     // Seed the singleton, then let it self-wire via the event bus.
     myManager.setApiBase(config.apiBase);
     void myManager.init();
+    return listen("my-event", detail => myManager.handle(detail));
 }
 ```
 
-### Wiring in main.ts
+### Wiring in app.ts
 
-`register()` is called once during startup, after `/api/config` is seeded:
+`register()` is called once during startup, after `/api/config` is seeded, by
+`bootFromConfig` in `app.ts`; what it returns is how `createApp`'s `stop` ends it:
 
 ```ts
 import { register as registerMyExt } from "./ext/myname";
 
-registerMyExt({ apiBase: _apiBase, available });
+running.stopMyExt = registerMyExt({ apiBase: ingressBase(), available });
 ```
 
 ### Config seeding
@@ -191,7 +214,7 @@ An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:
 
 ```ts
-import { registerIcon } from "../../ui/dashboard/icons";
+import { registerIcon } from "../../ui/shell/icons";
 
 export function register(config: MyConfig): void {
     // 1. Register the icon BEFORE registerView() uses its name.
@@ -202,14 +225,13 @@ export function register(config: MyConfig): void {
 }
 ```
 
-`registerView(key, icon, label, builder)` is a `CardDashboard` method; `main.ts`
-passes it (plus an `onRender` re-render thunk) into `register()`. The builder is
-a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
+A view is asked for on the bus: `emit("af-register-view", { key, icon, label, build })`
+reaches `CardDashboard.registerView`. `build` is a `() => HTMLElement` thunk called lazily on navigation — keep it pure and build
 a fresh element tree per call.
 
 | Registry                | Module                   | Purpose                      |
 |-------------------------|--------------------------|------------------------------|
-| `registerIcon()`        | `ui/dashboard/icons.ts`  | Add SVG icons by name        |
+| `registerIcon()`        | `ui/shell/icons.ts`      | Add SVG icons by name        |
 | `registerView()`        | `CardDashboard` (method) | Add a nav tab + view builder |
 | `registerConfigEntry()` | `config/serverConfig.ts` | Seed `/api/config` fields    |
 
@@ -265,7 +287,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 ## Checklist
 
 - [ ] Backend `setup()` registers routes under `/api/<ext>/…`
-- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`
+- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`, and its docs say to add the distribution to `WACTORZ_EXTENSIONS`
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload

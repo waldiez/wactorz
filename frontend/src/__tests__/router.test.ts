@@ -49,6 +49,9 @@ describe("formatRoute", () => {
 
     it("keeps a level with a slash in it one level", () => {
         expect(formatRoute({ view: "chat", path: ["a/b"] })).toBe("#/chat/a%2Fb");
+        // An agent's address reads as it is spelled, and reads back the same.
+        expect(formatRoute({ view: "chat", path: ["counter@pi"] })).toBe("#/chat/counter@pi");
+        expect(parseRoute("#/chat/counter@pi")).toEqual({ view: "chat", path: ["counter@pi"] });
     });
 });
 
@@ -110,6 +113,16 @@ describe("startRouter", () => {
         expect(history.length).toBe(before + 1);
     });
 
+    it("puts the same place under a new name in place of its entry, adding nothing to Back", () => {
+        emit("af-view-changed", { view: "chat", path: ["weather"] });
+        const before = history.length;
+
+        emit("af-view-changed", { view: "chat", path: ["weather@main"], replace: true });
+
+        expect(location.hash).toBe("#/chat/weather@main");
+        expect(history.length).toBe(before);
+    });
+
     it("adds nothing when the view followed the address", () => {
         emit("af-view-changed", { view: "feed", path: [] });
         const before = history.length;
@@ -133,7 +146,7 @@ describe("startRouter", () => {
         window.dispatchEvent(new HashChangeEvent("hashchange"));
         history.replaceState(null, "", "#/");
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(routes).toEqual([{ view: "chat", path: ["main"] }]);
     });
@@ -145,7 +158,7 @@ describe("startRouter", () => {
         history.replaceState(null, "", "#/settings");
         window.dispatchEvent(new PopStateEvent("popstate"));
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(routes).toEqual([{ view: "settings", path: [] }]);
     });
@@ -156,7 +169,7 @@ describe("startRouter", () => {
 
         emit("af-view-changed", { view: "feed", path: [] });
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(routes).toEqual([]);
     });
@@ -168,7 +181,7 @@ describe("startRouter", () => {
 
         emit("af-view-changed", { view: "feed", path: [] });
         window.dispatchEvent(new HashChangeEvent("hashchange"));
-        document.removeEventListener("af-route", heard);
+        heard();
 
         expect(location.hash).not.toBe("#/feed");
         expect(routes).toEqual([]);

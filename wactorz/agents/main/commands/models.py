@@ -97,15 +97,16 @@ async def promote_model(ctx: CommandContext, argument: str) -> str:
     prefixes=("/artifacts clear ",),
     summary="unset a model's active or shadow pointer",
     group=MODELS,
-    forms=(("/artifacts clear active|shadow <name>", "unset a pointer"),),
+    forms=(("/artifacts clear active|shadow <name> [reason]", "unset a pointer"),),
 )
 async def clear_model_pointer(ctx: CommandContext, argument: str) -> str:
-    """``/artifacts clear active|shadow <name>``."""
-    which, name = _split(argument)
+    """``/artifacts clear active|shadow <name> [reason]``."""
+    which, rest = _split(argument)
+    name, reason = _split(rest or "")
     if not name:
-        return "Usage: /artifacts clear active|shadow <name>"
+        return "Usage: /artifacts clear active|shadow <name> [reason]"
     try:
-        was = await asyncio.to_thread(_store().clear, which, name)
+        was = await asyncio.to_thread(_store().clear, which, name, by=BY, reason=reason)
     except ArtifactError as exc:
         return f"Cannot clear {which!r} of {name!r}: {exc}"
     await _announce(ctx)

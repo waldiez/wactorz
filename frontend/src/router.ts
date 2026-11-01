@@ -67,9 +67,11 @@ export function parseRoute(hash: string): Route | null {
     return { view, path };
 }
 
-/** Write a route as a hash, each level escaped, so a name with a `/` in it stays one level. */
+/** Write a route as a hash, each level escaped, so a name with a `/` in it stays one level.
+ *  `@` is left as it is: a fragment may hold it, and an agent's address reads `name@node`. */
 export function formatRoute(route: Route): string {
-    return `#/${[route.view, ...route.path.map(encodeURIComponent)].join("/")}`;
+    const level = (part: string) => encodeURIComponent(part).replace(/%40/g, "@");
+    return `#/${[route.view, ...route.path.map(level)].join("/")}`;
 }
 
 /** Where to open: the address's route, else the last view open here, else the overview. */
@@ -100,12 +102,12 @@ export function startRouter(): () => void {
             emit("af-route", route);
         }
     };
-    const onView = listen("af-view-changed", route => {
+    const stopFollowing = listen("af-view-changed", route => {
         safeStorage.set(VIEW_KEY, route.view);
         const hash = formatRoute(route);
         // Unchanged when the view followed the address (Back, a typed link).
         if (hash !== location.hash) {
-            if (landed) {
+            if (landed && !route.replace) {
                 history.pushState(null, "", hash);
             } else {
                 history.replaceState(null, "", hash);
@@ -119,6 +121,6 @@ export function startRouter(): () => void {
     return () => {
         window.removeEventListener("hashchange", onAddress);
         window.removeEventListener("popstate", onAddress);
-        document.removeEventListener("af-view-changed", onView);
+        stopFollowing();
     };
 }

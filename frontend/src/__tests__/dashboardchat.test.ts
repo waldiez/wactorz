@@ -4,28 +4,47 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
+vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn(), close: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
-import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
-import { withoutAttachment } from "../ui/dashboard/attachTray";
+import { DashboardChat, type ChatHost } from "../ui/chat/DashboardChat";
+import { TURN_IDLE_TIMEOUT_MS } from "../chat/turnTracker";
+import { allByRole, byRole, byTestId } from "./queries";
+import { rememberedConversation } from "../ui/shell/viewRoutes";
+import { listen } from "../events";
 import {
     defaultChatTarget,
-    markAnswered,
+    leadingMention,
     preferredChatTarget,
-    resolveSendTarget,
     sendBlockedReason,
     stripLeadingMention,
-} from "../ui/dashboard/chatRouting";
+} from "../ui/chat/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
-import type { View } from "../ui/dashboard/types";
+import type { View } from "../ui/shell/types";
 
+// Every chat a test wires is unwired once the test ends, whether or not the
+// test does it: one left listening hears every later test's events, holds
+// their messages and redraws for them, so the file slows as it goes.
+const wiredChats: DashboardChat[] = [];
+const realWire = DashboardChat.prototype.wire;
+DashboardChat.prototype.wire = function (this: DashboardChat): void {
+    wiredChats.push(this);
+    realWire.call(this);
+};
+afterEach(() => {
+    wiredChats.splice(0).forEach(chat => chat.unwire());
+});
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: View = "chat"): ChatHost {
-    const map = new Map(agents.map(a => [a.name, a]));
+/** A host whose agents a test changes, as the store would. */
+interface FakeChatHost extends ChatHost {
+    readonly agents: Map<string, AgentInfo>;
+}
+
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: View = "chat"): FakeChatHost {
+    const map = new Map(agents.map(a => [a.id, a]));
     let current = view;
     return {
         root: document.createElement("div"),
@@ -35,6 +54,7 @@ function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")], view: 
             current = v;
         }),
         sortedAgents: () => [...map.values()],
+        label: a => a.name,
     };
 }
 
@@ -53,6 +73,42 @@ function mount(host: ChatHost): DashboardChat {
 }
 
 const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-chat-thread")!;
+
+/** Press Stop, as the person does. */
+function pressStop(host: ChatHost, chat: DashboardChat): void {
+    if (!host.root.querySelector(".af-stop-btn")) {
+        host.root.appendChild(chat.buildIobar());
+    }
+    host.root.querySelector<HTMLButtonElement>(".af-stop-btn")!.click();
+}
+
+/** Let what is waiting in the task queue run: a request's answer, and what follows it. */
+const drained = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+/** Send `words` as the person does: typed into the composer and sent with its button. */
+function sendFromComposer(host: ChatHost, chat: DashboardChat, words: string): void {
+    if (!host.root.querySelector("#af-iobar-input")) {
+        host.root.appendChild(chat.buildIobar());
+    }
+    host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!.value = words;
+    host.root.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+}
+
+/**
+ * Send `words`, then answer as the server does once it has routed them: the message
+ * reached the agent `name` (whose id, in these fakes, is its name). A mention names
+ * an agent by name, so only the server can say which agent that is.
+ */
+function sendReaching(host: ChatHost, chat: DashboardChat, words: string, name: string): void {
+    let sent = "";
+    const record = (e: Event) => {
+        sent = (e as CustomEvent<{ id: string }>).detail.id;
+    };
+    document.addEventListener("af-send-message", record);
+    sendFromComposer(host, chat, words);
+    document.removeEventListener("af-send-message", record);
+    document.dispatchEvent(new CustomEvent("af-turn-reached", { detail: { id: sent, agentId: name, name } }));
+}
 
 // A raw UUID agent id — the backend uses these (not WIDs), and one that never
 // resolved to a friendly name keeps the id as its name.
@@ -121,41 +177,44 @@ describe("preferredChatTarget", () => {
     });
 });
 
-describe("resolveSendTarget", () => {
-    const names = ["main", "catalog", "worker"];
+describe("leadingMention", () => {
+    const agents = [agent("main"), agent("catalog"), agent("worker")];
 
-    it("routes to a leading @mention over the picker target", () => {
-        expect(resolveSendTarget("@catalog do the thing", names, "main")).toBe("catalog");
+    it("names the agent a leading @mention is to", () => {
+        expect(leadingMention("@catalog do the thing", agents)).toEqual({
+            spelled: "catalog",
+            found: [agents[1]],
+        });
     });
 
-    it("matches the mention case-insensitively", () => {
-        expect(resolveSendTarget("@Catalog hi", names, "main")).toBe("catalog");
+    it("matches the mention case-insensitively, spelled as the agent spells it", () => {
+        expect(leadingMention("@Catalog hi", agents)?.spelled).toBe("catalog");
     });
 
-    it("falls back to the picker when there is no mention", () => {
-        expect(resolveSendTarget("do the thing", names, "main")).toBe("main");
+    it("is null with no mention", () => {
+        expect(leadingMention("do the thing", agents)).toBeNull();
     });
 
-    it("falls back when the mention names no known agent", () => {
-        expect(resolveSendTarget("@ghost hi", names, "main")).toBe("main");
+    it("finds nothing when the mention names no known agent", () => {
+        expect(leadingMention("@ghost hi", agents)?.found).toEqual([]);
     });
 });
 
 describe("sendBlockedReason", () => {
     it("passes a running agent", () => {
-        expect(sendBlockedReason([agent("worker")], "worker")).toBeNull();
+        expect(sendBlockedReason(agent("worker"), "worker")).toBeNull();
     });
 
     it("tells a stopped agent apart from one that is gone", () => {
         // "start it and try again" is actively wrong for an agent that no longer
         // exists — there is nothing to start.
-        expect(sendBlockedReason([agent("worker", { state: "stopped" })], "worker")).toContain("start it");
-        expect(sendBlockedReason([], "worker")).not.toContain("start it");
-        expect(sendBlockedReason([], "worker")).toContain("worker");
+        expect(sendBlockedReason(agent("worker", { state: "stopped" }), "worker")).toContain("start it");
+        expect(sendBlockedReason(undefined, "worker")).not.toContain("start it");
+        expect(sendBlockedReason(undefined, "worker")).toContain("worker");
     });
 
     it("blocks a message to an agent that cannot be messaged, opened for its question", () => {
-        const reason = sendBlockedReason([agent("installer", { protected: true })], "installer");
+        const reason = sendBlockedReason(agent("installer", { protected: true }), "installer");
         expect(reason).toContain("can't be messaged");
     });
 });
@@ -177,30 +236,6 @@ describe("stripLeadingMention", () => {
 
     it("does not strip a partial-name match", () => {
         expect(stripLeadingMention("@catalogue hi", "catalog")).toBe("@catalogue hi");
-    });
-});
-
-describe("markAnswered", () => {
-    const question: ChatMessage = {
-        id: "q1",
-        from: "hvac",
-        to: "user",
-        content: "Changed?",
-        timestampMs: 1,
-        options: ["yes", "no"],
-    };
-    const plain: ChatMessage = { id: "p1", from: "hvac", to: "user", content: "hi", timestampMs: 2 };
-
-    it("marks the question and leaves the rest as they were", () => {
-        const out = markAnswered([plain, question], "q1", "no")!;
-        expect(out.message).toEqual({ ...question, answer: "no" });
-        expect(out.messages).toEqual([plain, { ...question, answer: "no" }]);
-        expect(question.answer).toBeUndefined(); // copied, not edited
-    });
-
-    it("changes nothing for an unknown id or a message with no options", () => {
-        expect(markAnswered([plain, question], "nope", "no")).toBeNull();
-        expect(markAnswered([plain, question], "p1", "no")).toBeNull();
     });
 });
 
@@ -264,7 +299,7 @@ describe("DashboardChat — resolveDefaultTarget", () => {
         // A fresh page lands on the chat it was left on, before the first
         // agent has registered: the view is drawn for nobody, and the target
         // the arriving agents give it must reach the header and thread too.
-        localStorage.setItem("wactorz-chat-target", "catalog");
+        localStorage.setItem("wactorz-chat-agent-id", "catalog");
         const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => [] }));
         globalThis.fetch = fetchSpy as unknown as typeof fetch;
         const host = makeHost([]);
@@ -297,7 +332,7 @@ describe("DashboardChat — resolveDefaultTarget", () => {
 });
 
 describe("DashboardChat — view construction", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     beforeEach(() => {
         document.body.innerHTML = "";
         host = makeHost();
@@ -319,9 +354,7 @@ describe("DashboardChat — view construction", () => {
         const search = host.root.querySelector<HTMLInputElement>(".af-chat-sidebar-search input")!;
         search.value = "work";
         search.dispatchEvent(new Event("input"));
-        const names = [...list.querySelectorAll<HTMLElement>(".af-chat-agent-row")].map(
-            r => r.dataset["name"],
-        );
+        const names = [...list.querySelectorAll<HTMLElement>(".af-chat-agent-row")].map(r => r.dataset["id"]);
         expect(names).toEqual(["worker"]);
     });
 
@@ -349,7 +382,7 @@ describe("DashboardChat — view construction", () => {
 });
 
 describe("DashboardChat — target selection", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     beforeEach(() => {
         document.body.innerHTML = "";
         host = makeHost();
@@ -359,7 +392,7 @@ describe("DashboardChat — target selection", () => {
 
     it("selecting a sidebar agent switches the open thread", () => {
         const dc = mount(host);
-        const workerRow = host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="worker"]')!;
+        const workerRow = host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-id="worker"]')!;
         workerRow.click();
         expect(dc.chatTarget).toBe("worker");
         expect(host.root.querySelector(".af-chat-pane-title")!.textContent).toBe("@worker");
@@ -370,13 +403,14 @@ describe("DashboardChat — target selection", () => {
         const dc = mount(host);
         dc.wire();
         const row = () =>
-            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-name="installer"]')!;
+            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-id="installer"]')!;
         expect(row().disabled).toBe(true);
 
         const msg: ChatMessage = {
             id: "q1",
             from: "installer",
             to: "user",
+            threadId: "installer",
             content: "Install?",
             timestampMs: Date.now(),
             agentId: "installer-id",
@@ -395,19 +429,134 @@ describe("DashboardChat — target selection", () => {
         dc.unwire();
     });
 
+    it("takes a question asked while the page was away, once, and opens its thread", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        const row = () =>
+            host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-id="installer"]')!;
+        const asked: ChatMessage = {
+            id: "q7",
+            from: "installer",
+            to: "user",
+            threadId: "installer",
+            content: "Install?",
+            timestampMs: Date.now() - 60_000,
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+
+        document.dispatchEvent(
+            new CustomEvent("af-questions-listed", { detail: { open: [asked], answered: [] } }),
+        );
+        expect(row().disabled).toBe(false);
+        row().click();
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+
+        // Listed again on the next reconnect: still one question in the thread.
+        document.dispatchEvent(
+            new CustomEvent("af-questions-listed", { detail: { open: [asked], answered: [] } }),
+        );
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+        dc.unwire();
+    });
+
+    it("draws a question asked while away straight into the thread it belongs to", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("installer");
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(0);
+
+        const asked: ChatMessage = {
+            id: "q8",
+            from: "installer",
+            to: "user",
+            threadId: "installer",
+            content: "Install?",
+            timestampMs: Date.now(),
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+        document.dispatchEvent(
+            new CustomEvent("af-questions-listed", { detail: { open: [asked], answered: [] } }),
+        );
+
+        expect(thread(host).querySelectorAll("button.af-chat-option")).toHaveLength(2);
+        document.dispatchEvent(
+            new CustomEvent("af-questions-listed", { detail: { open: [], answered: [] } }),
+        );
+        dc.unwire();
+    });
+
+    it("does not end a turn on a question re-listed from the ledger", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        const asked: ChatMessage = {
+            id: "q9",
+            from: "main",
+            to: "user",
+            threadId: "main",
+            content: "Approve the plan?",
+            timestampMs: Date.now(),
+            agentId: "main-id",
+            options: ["Approve", "Reject"],
+        };
+        const ended = vi.fn();
+        document.addEventListener("af-chat-message", ended);
+
+        document.dispatchEvent(
+            new CustomEvent("af-questions-listed", { detail: { open: [asked], answered: [] } }),
+        );
+
+        expect(ended).not.toHaveBeenCalled();
+        document.removeEventListener("af-chat-message", ended);
+        dc.unwire();
+    });
+
+    it("lets every listener go on unwire", () => {
+        host = makeHost([agent("main"), agent("installer", { protected: true })]);
+        const dc = mount(host);
+        dc.wire();
+        dc.unwire();
+        const asked: ChatMessage = {
+            id: "q10",
+            from: "installer",
+            to: "user",
+            threadId: "installer",
+            content: "Install?",
+            timestampMs: Date.now(),
+            agentId: "installer-id",
+            options: ["Install", "Refuse"],
+        };
+
+        document.dispatchEvent(
+            new CustomEvent("af-questions-listed", { detail: { open: [asked], answered: [] } }),
+        );
+
+        const row = host.root.querySelector<HTMLButtonElement>('.af-chat-agent-row[data-id="installer"]')!;
+        expect(row.disabled).toBe(true);
+    });
+
     it("does not switch to a non-messageable (system) agent", () => {
         host = makeHost([agent("main"), agent("monitor-agent")]);
         const dc = mount(host);
-        host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="monitor-agent"]')?.click();
+        host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-id="monitor-agent"]')?.click();
         expect(dc.chatTarget).toBe("main"); // unchanged
     });
 
     it("resolveDefaultTarget leaves a target that vanished alone", () => {
         // A target that is merely absent may be coming back, and a deletion has
         // its own signal (dropTargetIfGone). Resolution only fills a blank.
+        // Filled for them, not chosen: the agent it named then leaves the list.
+        host = makeHost([agent("ghost")]);
         const dc = mount(host);
-        dc.chatTarget = "ghost";
+        expect(dc.chatTarget).toBe("ghost");
+        host.agents.delete("ghost");
+
         dc.resolveDefaultTarget();
+
         expect(dc.chatTarget).toBe("ghost");
     });
 
@@ -424,7 +573,7 @@ describe("DashboardChat — target selection", () => {
 });
 
 describe("DashboardChat — sending & live events", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     let dc: DashboardChat;
     beforeEach(() => {
         document.body.innerHTML = "";
@@ -458,6 +607,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "m1",
             from: "main",
             to: "user",
+            threadId: "main",
             content: "hi back",
             timestampMs: Date.now(),
         };
@@ -470,6 +620,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "q1",
             from: "main",
             to: "user",
+            threadId: "main",
             content: "Changed?",
             timestampMs: Date.now(),
             options: ["yes", "no"],
@@ -504,6 +655,7 @@ describe("DashboardChat — sending & live events", () => {
             id: "voice-1",
             from: "user",
             to: "reachy-mini",
+            threadId: "reachy-mini",
             content: "turn on the light",
             timestampMs: Date.now(),
             source: "voice",
@@ -517,13 +669,46 @@ describe("DashboardChat — sending & live events", () => {
         expect(thread(host).textContent).toContain("turn on the light");
     });
 
+    it("takes a voice session's thread as the person's choice: remembered, in the address, named in the composer", () => {
+        dc.unwire();
+        host = makeHost([agent("main"), agent("reachy-mini")]);
+        dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.setTarget("main");
+        dc.wire();
+        const addressed: string[][] = [];
+        const hear = (e: Event) => addressed.push((e as CustomEvent<{ path: string[] }>).detail.path);
+        document.addEventListener("af-view-changed", hear);
+
+        const msg: ChatMessage = {
+            id: "voice-2",
+            from: "user",
+            to: "reachy-mini",
+            threadId: "reachy-mini",
+            content: "lights off",
+            timestampMs: Date.now(),
+            source: "voice",
+            surface: "reachy-mini",
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+
+        document.removeEventListener("af-view-changed", hear);
+        expect(rememberedConversation()).toBe("reachy-mini");
+        expect(addressed).toContainEqual(["reachy-mini"]);
+        expect(host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.placeholder).toBe(
+            "Message @reachy-mini…",
+        );
+    });
+
     it("streams chunks into a live bubble then commits on stream-end", () => {
         document.dispatchEvent(
-            new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main" } }),
+            new CustomEvent("af-stream-chunk", { detail: { chunk: "Hel", from: "main", text: "Hel" } }),
         );
-        document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: "lo", from: "main" } }));
+        document.dispatchEvent(
+            new CustomEvent("af-stream-chunk", { detail: { chunk: "lo", from: "main", text: "Hello" } }),
+        );
         expect(thread(host).textContent).toContain("Hello");
-        document.dispatchEvent(new CustomEvent("af-stream-end"));
+        document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text: "Hello", from: "main" } }));
         // committed into chatMessages → re-render still shows it
         dc.renderChatThread();
         expect(thread(host).textContent).toContain("Hello");
@@ -532,18 +717,28 @@ describe("DashboardChat — sending & live events", () => {
     it("caps accumulation on a runaway stream instead of growing without bound", () => {
         const chunk = "x".repeat(10_000);
         for (let i = 0; i < 30; i++) {
-            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main" } }));
+            const text = chunk.repeat(i + 1);
+            document.dispatchEvent(
+                new CustomEvent("af-stream-chunk", { detail: { chunk, from: "main", text } }),
+            );
         }
-        const streams = (dc as unknown as { _streamUI: { streams: { text: (from: string) => string } } })
-            ._streamUI.streams;
-        expect(streams.text("main").length).toBeLessThan(300_000);
+        const live = thread(host).querySelector('[data-testid="message-body"]');
+        expect(live?.textContent?.length ?? 0).toBeGreaterThan(0);
+        expect(live?.textContent?.length ?? 0).toBeLessThan(300_000);
     });
 
     it("af-reset-chat clears the thread", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "m", from: "main", to: "user", content: "x", timestampMs: 1 },
+                    msg: {
+                        id: "m",
+                        from: "main",
+                        to: "user",
+                        threadId: "main",
+                        content: "x",
+                        timestampMs: 1,
+                    },
                 },
             }),
         );
@@ -556,7 +751,14 @@ describe("DashboardChat — sending & live events", () => {
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "m2", from: "main", to: "user", content: "ignored", timestampMs: 1 },
+                    msg: {
+                        id: "m2",
+                        from: "main",
+                        to: "user",
+                        threadId: "main",
+                        content: "ignored",
+                        timestampMs: 1,
+                    },
                 },
             }),
         );
@@ -565,9 +767,15 @@ describe("DashboardChat — sending & live events", () => {
 });
 
 describe("DashboardChat — thread integrity", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     let dc: DashboardChat;
-    const messages = () => (dc as unknown as { chatMessages: ChatMessage[] }).chatMessages;
+    /** What `name`'s thread shows, message by message, once it is the one open. */
+    const said = (name: string): string[] => {
+        dc.setTarget(name);
+        return [...thread(host).querySelectorAll('[data-testid="message-body"]')].map(
+            n => n.textContent ?? "",
+        );
+    };
 
     beforeEach(() => {
         document.body.innerHTML = "";
@@ -577,51 +785,58 @@ describe("DashboardChat — thread integrity", () => {
     });
 
     it("scoped af-reset-chat drops only that agent's thread, keeping user messages to others", () => {
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "hi main", target: "main", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, dc, "hi main");
         document.dispatchEvent(
             new CustomEvent("af-chat-message", {
                 detail: {
-                    msg: { id: "r1", from: "main", to: "user", content: "reply", timestampMs: 1 },
+                    msg: {
+                        id: "r1",
+                        from: "main",
+                        to: "user",
+                        threadId: "main",
+                        content: "reply",
+                        timestampMs: 1,
+                    },
                 },
             }),
         );
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "hi worker", target: "worker", attachments: [] },
-            }),
-        );
+        sendReaching(host, dc, "@worker hi worker", "worker");
 
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "main" } }));
 
-        // the old filter dropped every user message regardless of its target
-        expect(messages().map(m => `${m.from}->${m.to}:${m.content}`)).toEqual(["user->worker:hi worker"]);
+        expect(said("main")).toEqual([]);
+        expect(said("worker")).toEqual(["hi worker"]);
     });
 
-    it("removes the optimistic bubble when the send fails (af-send-failed)", () => {
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "hello?", target: "main", attachments: [] },
-            }),
-        );
-        expect(thread(host).textContent).toContain("hello?");
+    it("keeps the bubble of a send that did not go out, waiting to go, found by its id", () => {
+        const sends: { id: string; content: string; target: string }[] = [];
+        const record = (e: Event) =>
+            sends.push((e as CustomEvent<{ id: string; content: string; target: string }>).detail);
+        document.addEventListener("af-send-message", record);
+        sendFromComposer(host, dc, "hello?");
+        document.removeEventListener("af-send-message", record);
+        expect(sends).toHaveLength(1);
+        const sent = sends[0]!;
 
-        document.dispatchEvent(
-            new CustomEvent("af-send-failed", { detail: { content: "hello?", target: "main" } }),
-        );
+        document.dispatchEvent(new CustomEvent("af-send-failed", { detail: sent }));
 
-        expect(thread(host).textContent).not.toContain("hello?");
-        expect(messages().some(m => m.content === "hello?")).toBe(false);
+        expect(said("main")).toEqual(["hello?"]);
+        expect(thread(host).textContent).toContain("Waiting to send");
     });
 
     it("keeps concurrent agent streams separate (no merged bubble)", () => {
-        const chunk = (c: string, from: string) =>
-            document.dispatchEvent(new CustomEvent("af-stream-chunk", { detail: { chunk: c, from } }));
+        const soFar = new Map<string, string>();
+        const chunk = (c: string, from: string) => {
+            const text = (soFar.get(from) ?? "") + c;
+            soFar.set(from, text);
+            document.dispatchEvent(
+                new CustomEvent("af-stream-chunk", { detail: { chunk: c, from, agentId: from, text } }),
+            );
+        };
         const end = (from: string, text: string) =>
-            document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text, from } }));
+            document.dispatchEvent(
+                new CustomEvent("af-stream-end", { detail: { text, from, agentId: from } }),
+            );
 
         chunk("A1", "alpha");
         chunk("B1", "beta");
@@ -629,16 +844,279 @@ describe("DashboardChat — thread integrity", () => {
         end("alpha", "A1A2");
 
         // with a single shared buffer this committed "A1B1A2" attributed to alpha
-        expect(messages().find(m => m.from === "alpha")?.content).toBe("A1A2");
-        expect(messages().some(m => m.content.includes("A1B1"))).toBe(false);
+        expect(said("alpha")).toEqual(["A1A2"]);
 
         end("beta", "B1");
-        expect(messages().find(m => m.from === "beta")?.content).toBe("B1");
+        expect(said("beta")).toEqual(["B1"]);
+    });
+});
+
+describe("DashboardChat — one place for its messages", () => {
+    let host: FakeChatHost;
+    let dc: DashboardChat;
+    const origFetch = globalThis.fetch;
+    const shown = (name: string): string[] => {
+        dc.setTarget(name);
+        return [...thread(host).querySelectorAll('[data-testid="message-body"]')].map(
+            n => n.textContent ?? "",
+        );
+    };
+    const arrive = (msg: ChatMessage) =>
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+    const listed = (open: ChatMessage[], answered: ChatMessage[] = []) =>
+        document.dispatchEvent(new CustomEvent("af-questions-listed", { detail: { open, answered } }));
+    const asked = (id: string, over: Partial<ChatMessage> = {}): ChatMessage => ({
+        id,
+        from: "triage",
+        to: "user",
+        threadId: over.from ?? "triage",
+        content: `${id}?`,
+        timestampMs: 1_000,
+        agentId: "triage-id",
+        options: ["Yes", "No"],
+        ...over,
+    });
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        host = makeHost([agent("main"), agent("worker"), agent("triage")]);
+        dc = mount(host);
+        dc.wire();
+        vi.mocked(toast.close).mockClear();
+    });
+
+    afterEach(() => {
+        dc.unwire();
+        globalThis.fetch = origFetch;
+    });
+
+    it("puts a question the ledger lists where its time is, above what came after it", () => {
+        arrive({
+            id: "later",
+            from: "triage",
+            to: "user",
+            threadId: "triage",
+            content: "since then",
+            timestampMs: 5_000,
+        });
+
+        listed([asked("asked-earlier")]);
+
+        expect(shown("triage")).toEqual(["asked-earlier?YesNo", "since then"]);
+    });
+
+    it("keeps another agent's restored history while a busy agent talks", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => [{ id: 1, ts: 1_700_000_000, role: "assistant", content: "from history" }],
+        })) as unknown as typeof fetch;
+        await dc.loadHistory("worker");
+        // Reading the worker while main floods: what the cap must not break, and
+        // main's rows are not drawn, only held.
+        dc.setTarget("worker");
+
+        for (let i = 0; i <= 500; i++) {
+            arrive({
+                id: `m${i}`,
+                from: "main",
+                to: "user",
+                threadId: "main",
+                content: `reply ${i}`,
+                timestampMs: 10 + i,
+            });
+        }
+
+        expect(shown("worker")).toEqual(["from history"]);
+    });
+
+    it("closes a question answered meanwhile, and removes one the ledger no longer lists", () => {
+        listed([asked("answered-elsewhere"), asked("gone")]);
+
+        listed([], [asked("answered-elsewhere", { answer: "Yes" })]);
+
+        expect(shown("triage")).toEqual(["answered-elsewhere?YesNo"]);
+        const buttons = [...thread(host).querySelectorAll<HTMLButtonElement>("button.af-chat-option")];
+        expect(buttons.every(b => b.disabled)).toBe(true);
+        expect(
+            vi
+                .mocked(toast.close)
+                .mock.calls.map(c => c[0])
+                .sort(),
+        ).toEqual(["answered-elsewhere", "gone"]);
+    });
+
+    it("takes a frame delivered twice as one message", () => {
+        const twice = {
+            id: "r1",
+            from: "main",
+            to: "user",
+            threadId: "main",
+            content: "once",
+            timestampMs: 1,
+        };
+        arrive(twice);
+        arrive({ ...twice });
+
+        expect(shown("main")).toEqual(["once"]);
+    });
+});
+
+describe("DashboardChat — one turn at a time", () => {
+    let host: FakeChatHost;
+    let dc: DashboardChat;
+    let input: HTMLTextAreaElement;
+    const sent: string[] = [];
+    const ids: string[] = [];
+    const record = (e: Event) => {
+        const detail = (e as CustomEvent<{ id: string; content: string }>).detail;
+        sent.push(detail.content);
+        ids.push(detail.id);
+    };
+    const type = (words: string) => {
+        input.value = words;
+        host.root.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
+    };
+    const waitingToSend = () =>
+        [...thread(host).querySelectorAll('[data-testid="user-message"]')]
+            .filter(row => row.textContent?.includes("Waiting to send"))
+            .map(row => row.querySelector('[data-testid="message-body"]')?.textContent);
+    const ends = (from: string) =>
+        document.dispatchEvent(new CustomEvent("af-stream-end", { detail: { text: "ok", from } }));
+    const socket = (open: boolean) =>
+        document.dispatchEvent(new CustomEvent("af-socket", { detail: { open } }));
+    const status = (value: string) =>
+        document.dispatchEvent(new CustomEvent("af-connection-status", { detail: { status: value } }));
+    /** The newest send that went out fails: its id comes back, as `IOManager` sends it. */
+    const fails = (content: string) =>
+        document.dispatchEvent(
+            new CustomEvent("af-send-failed", {
+                detail: { id: ids[ids.length - 1], content, target: "main" },
+            }),
+        );
+    const said = () =>
+        [...thread(host).querySelectorAll('[data-testid="user-message"] [data-testid="message-body"]')].map(
+            n => n.textContent,
+        );
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        sent.length = 0;
+        ids.length = 0;
+        host = makeHost();
+        dc = mount(host);
+        dc.wire();
+        host.root.appendChild(dc.buildIobar());
+        input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        dc.setTarget("main");
+        document.addEventListener("af-send-message", record);
+    });
+
+    afterEach(() => {
+        document.removeEventListener("af-send-message", record);
+        vi.useRealTimers();
+    });
+
+    it("queues a message sent during a turn and sends it when the turn ends", () => {
+        type("first");
+        type("second");
+
+        expect(sent).toEqual(["first"]);
+        expect(waitingToSend()).toEqual(["second"]);
+
+        ends("main");
+
+        expect(sent).toEqual(["first", "second"]);
+        expect(waitingToSend()).toEqual([]);
+    });
+
+    it("takes Enter down the same path as the button", () => {
+        type("first");
+        input.value = "by enter";
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+        expect(sent).toEqual(["first"]);
+        expect(waitingToSend()).toEqual(["by enter"]);
+    });
+
+    it("keeps what is sent while the socket is closed, and sends it once it opens", () => {
+        socket(false);
+
+        type("offline");
+        expect(sent).toEqual([]);
+        expect(waitingToSend()).toEqual(["offline"]);
+
+        socket(true);
+        expect(sent).toEqual(["offline"]);
+    });
+
+    it("does not hold a message back while only the broker is away: main answers over the socket", () => {
+        status("disconnected");
+
+        type("hello");
+
+        expect(sent).toEqual(["hello"]);
+        expect(waitingToSend()).toEqual([]);
+    });
+
+    it("keeps a send that failed in its own bubble, waiting, and sends it first once the socket opens", () => {
+        type("same");
+        type("same");
+
+        fails("same");
+
+        // Both bubbles stay; neither is taken for the other.
+        expect(said()).toEqual(["same", "same"]);
+        expect(waitingToSend()).toEqual(["same", "same"]);
+        socket(true);
+        expect(sent).toEqual(["same", "same"]);
+        expect(waitingToSend()).toEqual(["same"]);
+    });
+
+    it("stops showing the agent working once a quiet turn is given up on, and sends the next", () => {
+        vi.useFakeTimers();
+        type("first");
+        type("second");
+        expect(thread(host).querySelector('[data-testid="message-waiting"]')).not.toBeNull();
+
+        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS + 1);
+
+        expect(sent).toEqual(["first", "second"]);
+    });
+
+    it("says on the bus who the turn waits on, and what waits", () => {
+        const turns: { agent: string | null; queued: number }[] = [];
+        const hear = (e: Event) =>
+            turns.push((e as CustomEvent<{ agent: string | null; queued: number }>).detail);
+        document.addEventListener("af-turn", hear);
+
+        type("first");
+        type("second");
+        ends("main");
+        ends("main");
+
+        document.removeEventListener("af-turn", hear);
+        expect(turns).toEqual([
+            { agent: "main", queued: 0 },
+            { agent: "main", queued: 1 },
+            { agent: null, queued: 1 },
+            { agent: "main", queued: 0 },
+            { agent: null, queued: 0 },
+        ]);
+    });
+
+    it("drops what waits on a wipe", () => {
+        type("first");
+        type("second");
+
+        dc.clearAll();
+        ends("main");
+
+        expect(sent).toEqual(["first"]);
     });
 });
 
 describe("DashboardChat — history & misc state", () => {
-    let host: ChatHost;
+    let host: FakeChatHost;
     beforeEach(() => {
         document.body.innerHTML = "";
         host = makeHost();
@@ -699,17 +1177,20 @@ describe("DashboardChat — stop, attachments, external events", () => {
     }
 
     it("stop generation POSTs to /api/chat/stop", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
-        dc._stopGeneration();
-        expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/chat/stop"), {
-            method: "POST",
-        });
+        pressStop(host, dc);
+        expect(fetchSpy).toHaveBeenCalledWith(
+            expect.stringContaining("/api/chat/stop"),
+            expect.objectContaining({ method: "POST" }),
+        );
         fetchSpy.mockRestore();
     });
 
     it("stops the answer being read aloud too, before the server is asked", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         const order: string[] = [];
         const stopped = () => order.push("tts-stop");
         document.addEventListener("tts-stop", stopped);
@@ -718,7 +1199,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
             return Promise.resolve({ ok: true } as unknown as Response);
         });
         try {
-            dc._stopGeneration();
+            pressStop(host, dc);
         } finally {
             document.removeEventListener("tts-stop", stopped);
             fetchSpy.mockRestore();
@@ -728,37 +1209,46 @@ describe("DashboardChat — stop, attachments, external events", () => {
     });
 
     it("says so when stop cannot reach the backend", async () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         vi.mocked(toast.show).mockClear();
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
 
-        await dc._stopGeneration();
+        pressStop(host, dc);
 
         // Stop against a dead backend must say so rather than appear to work.
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+        );
         fetchSpy.mockRestore();
     });
 
     it("says so when the backend refuses the stop", async () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         vi.mocked(toast.show).mockClear();
         const fetchSpy = vi
             .spyOn(globalThis, "fetch")
             .mockResolvedValue({ ok: false, status: 503 } as unknown as Response);
 
-        await dc._stopGeneration();
+        pressStop(host, dc);
 
-        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+        );
         fetchSpy.mockRestore();
     });
 
     it("stays quiet when stop succeeds", async () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
         vi.mocked(toast.show).mockClear();
         const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as unknown as Response);
 
-        await dc._stopGeneration();
+        pressStop(host, dc);
+        await drained();
 
+        expect(fetchSpy).toHaveBeenCalled();
         expect(toast.show).not.toHaveBeenCalled();
         fetchSpy.mockRestore();
     });
@@ -767,7 +1257,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         // Attaching is the first half of composing; the caret belongs where the
         // second half gets typed.
         const host = makeHost();
-        const dc = mount(host) as any;
+        const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
 
@@ -782,7 +1272,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
         // the overview is already visible in the tray. Sending moves to the chat
         // view on its own — attaching should not.
         const host = makeHost([agent("main")], "overview");
-        const dc = mount(host) as any;
+        const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
 
@@ -798,128 +1288,139 @@ describe("DashboardChat — stop, attachments, external events", () => {
         // clears the tray on a target change, and the mention decides the
         // recipient — so the file must ride along to the agent named last.
         const host = makeHost([agent("main"), agent("worker")]);
-        const dc = mount(host) as any;
+        const dc = mount(host);
         host.root.appendChild(dc.buildIobar());
         dc.wire();
-        const seen: Array<{ target: string; attachments: unknown[] }> = [];
+        const seen: Array<{ name: string; attachments: unknown[] }> = [];
         const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
         document.addEventListener("af-send-message", onSend);
 
         document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
-        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
-        input.value = "@worker look at this";
-        dc._sendMessage(input);
+        sendFromComposer(host, dc, "@worker look at this");
 
         document.removeEventListener("af-send-message", onSend);
         dc.unwire();
         expect(seen).toHaveLength(1);
-        expect(seen[0]!.target).toBe("worker");
+        expect(seen[0]!.name).toBe("worker");
         expect(seen[0]!.attachments).toHaveLength(1);
     });
 
     it("sends an attachments-only message and clears the pending tray", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
-        const seen: Array<{ attachments: string[] }> = [];
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+        dc.setTarget("worker"); // the choice is what routes; the select only shows it
+        const seen: Array<{ content: string; target: string; attachments: string[] }> = [];
         const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
         document.addEventListener("af-send-message", onSend);
 
-        dc._pendingAttachments = [att()];
-        const input = document.createElement("textarea");
-        input.value = ""; // no text — attachment alone must still send
-        dc.chatTarget = "worker"; // the choice is what routes; the select only shows it
-        dc._sendMessage(input, document.createElement("select"));
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+        sendFromComposer(host, dc, ""); // no text — the attachment alone must still send
 
         document.removeEventListener("af-send-message", onSend);
-        expect(seen).toEqual([{ content: "", target: "worker", attachments: ["a1"] }]);
-        expect(dc._pendingAttachments).toEqual([]);
+        expect(seen.map(s => [s.content, s.target, s.attachments])).toEqual([["", "worker", ["a1"]]]);
+        expect(allByRole(host.root, "button", "Remove Image #1")).toHaveLength(0);
     });
 
     it("removing a blob attachment revokes its object URL; a non-blob one does not", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
         const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+        const added = (attachment: object) =>
+            document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment } }));
+        added(att({ url: "blob:abc" }));
+        added(att({ id: "a2", name: "notes.txt", mime: "text/plain", url: "https://x/y.txt" }));
 
-        const blob = att({ url: "blob:abc" });
-        const remote = att({ id: "a2", url: "https://x/y.png" });
-        dc._pendingAttachments = [blob, remote];
-
-        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, remote);
+        byRole(host.root, "button", "Remove notes.txt").click();
         expect(revoke).not.toHaveBeenCalled(); // non-blob → nothing to release
-        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, blob);
+        byRole(host.root, "button", "Remove Image #1").click();
         expect(revoke).toHaveBeenCalledWith("blob:abc");
-        expect(dc._pendingAttachments).toEqual([]);
+        expect(allByRole(host.root, "button", "Remove Image #1")).toHaveLength(0);
         revoke.mockRestore();
     });
 
     it("sending revokes pending blob attachment URLs (dev-stub uploads)", () => {
-        const dc = mount(makeHost()) as any;
+        const host = makeHost();
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
         const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-        dc._pendingAttachments = [att({ url: "blob:send-me" })];
-        const input = document.createElement("textarea");
-        input.value = "hi";
-        const select = document.createElement("select");
-        const opt = document.createElement("option");
-        opt.value = "worker";
-        select.append(opt);
-        select.value = "worker";
-        dc._sendMessage(input, select);
+        document.dispatchEvent(
+            new CustomEvent("af-attachment-added", { detail: { attachment: att({ url: "blob:send-me" }) } }),
+        );
+
+        sendFromComposer(host, dc, "@worker hi");
+
         expect(revoke).toHaveBeenCalledWith("blob:send-me");
-        expect(dc._pendingAttachments).toEqual([]);
+        expect(allByRole(host.root, "button", "Remove Image #1")).toHaveLength(0);
         revoke.mockRestore();
     });
 
     it("clearAll revokes pending blob attachment URLs", () => {
-        const dc = mount(makeHost()) as any;
-        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-        dc._pendingAttachments = [att({ url: "blob:wipe-me" })];
-        dc.clearAll();
-        expect(revoke).toHaveBeenCalledWith("blob:wipe-me");
-        expect(dc._pendingAttachments).toEqual([]);
-        revoke.mockRestore();
-    });
-
-    it("an external af-send-message (not self-dispatched) appends to the thread", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
         dc.wire();
+        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
         document.dispatchEvent(
-            new CustomEvent("af-send-message", { detail: { content: "ping", target: "worker" } }),
+            new CustomEvent("af-attachment-added", { detail: { attachment: att({ url: "blob:wipe-me" }) } }),
         );
-        expect(dc.chatTarget).toBe("worker");
-        expect(thread(host).textContent).toContain("ping");
-        dc.unwire();
+
+        dc.clearAll();
+
+        expect(revoke).toHaveBeenCalledWith("blob:wipe-me");
+        revoke.mockRestore();
     });
 
     it("af-reset-chat scoped to an agent drops that agent + user turns, keeps others", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
+        const dc = mount(host);
         dc.wire();
-        dc.chatMessages = [
-            { id: "1", from: "worker", to: "user", content: "w", timestampMs: 1 },
-            { id: "2", from: "main", to: "user", content: "m", timestampMs: 2 },
-            { id: "3", from: "user", to: "worker", content: "u", timestampMs: 3 },
-        ];
+        const arrive = (msg: ChatMessage) =>
+            document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+        arrive({ id: "1", from: "worker", to: "user", threadId: "worker", content: "w", timestampMs: 1 });
+        arrive({ id: "2", from: "main", to: "user", threadId: "main", content: "m", timestampMs: 2 });
+        sendReaching(host, dc, "@worker u", "worker");
+
         document.dispatchEvent(new CustomEvent("af-reset-chat", { detail: { agent: "worker" } }));
-        expect(dc.chatMessages.map((m: ChatMessage) => m.id)).toEqual(["2"]);
+
+        const shown = (name: string) => {
+            dc.setTarget(name);
+            return [...thread(host).querySelectorAll('[data-testid="message-body"]')].map(n => n.textContent);
+        };
+        expect(shown("worker")).toEqual([]);
+        expect(shown("main")).toEqual(["m"]);
         dc.unwire();
     });
 
-    it("populateSelect pins priority names then orders the rest alphabetically", () => {
+    it("the target select pins priority names then orders the rest alphabetically", () => {
         const host = makeHost([agent("zeta"), agent("alpha"), agent("main")]);
-        const dc = mount(host) as any;
-        const select = document.createElement("select");
-        dc._populateSelect(select);
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+
+        dc.updateTargetSelect();
+
+        const select = host.root.querySelector<HTMLSelectElement>("#af-target-select")!;
         expect([...select.options].map(o => o.value)).toEqual(["main", "alpha", "zeta"]);
     });
 
     it("re-rendering mid-stream reattaches the live bubble with its accumulated text", () => {
         const host = makeHost();
-        const dc = mount(host) as any;
-        dc._streamUI.streams.append("main", "partial reply");
-        dc._streamUI["_targets"].set("main", "main");
-        dc._lastSentTarget = "main";
+        const dc = mount(host);
+        dc.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-stream-chunk", {
+                detail: { chunk: "partial reply", from: "main", text: "partial reply" },
+            }),
+        );
+
         dc.renderChatThread();
+
         expect(thread(host).textContent).toContain("partial reply");
+        dc.unwire();
     });
 });
 
@@ -931,13 +1432,10 @@ describe("DashboardChat — @mention target stickiness", () => {
         const host = makeHost([agent("main"), agent("catalog")], "chat");
         const dc = mount(host);
         dc.wire();
-        const iobar = dc.buildIobar();
-        host.root.appendChild(iobar);
-        const input = iobar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        host.root.appendChild(dc.buildIobar());
 
-        input.value = "@catalog spawn weather agent";
-        iobar.querySelector<HTMLButtonElement>(".af-send-btn")!.click();
-        // the @mention switched the open thread to catalog
+        sendReaching(host, dc, "@catalog spawn weather agent", "catalog");
+        // the @mention reached catalog, and the open thread followed it
         expect(dc.chatTarget).toBe("catalog");
 
         // arriving at the view resolves a default — it must NOT revert to main
@@ -991,11 +1489,7 @@ describe("mobile master–detail: which pane is showing", () => {
         expect(el()?.classList.contains("agent-selected")).toBe(false);
 
         chat.wire();
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, chat, "@catalog spawn weather agent");
         chat.afterMount();
 
         expect(el()?.classList.contains("agent-selected")).toBe(true);
@@ -1028,17 +1522,12 @@ describe("mobile master–detail: which pane is showing", () => {
         host.root.appendChild(chat.buildChatView());
         chat.afterMount();
         // The composer lives in the shell, outside the chat view, so the
-        // harness has to supply it the way the dashboard does.
-        const input = document.createElement("textarea");
-        input.id = "af-iobar-input";
-        host.root.appendChild(input);
+        // harness supplies it the way the dashboard does.
+        host.root.appendChild(chat.buildIobar());
+        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
         chat.wire();
 
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
-            }),
-        );
+        sendReaching(host, chat, "@catalog spawn weather agent", "catalog");
 
         expect(input.placeholder).toBe("Message @catalog…");
     });
@@ -1051,11 +1540,7 @@ describe("mobile master–detail: which pane is showing", () => {
         expect(el()?.classList.contains("agent-selected")).toBe(false);
 
         chat.wire();
-        document.dispatchEvent(
-            new CustomEvent("af-send-message", {
-                detail: { content: "@catalog spawn weather-agent", target: "catalog", attachments: [] },
-            }),
-        );
+        sendFromComposer(host, chat, "@catalog spawn weather-agent");
 
         expect(el()?.classList.contains("agent-selected")).toBe(true);
     });
@@ -1067,5 +1552,168 @@ describe("mobile master–detail: which pane is showing", () => {
         host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
         chat.afterMount();
         expect(el()?.classList.contains("agent-selected")).toBe(false);
+    });
+});
+
+describe("two agents of one name", () => {
+    // One on main and one on a Pi: told apart by id, and on screen by `name@node`.
+    const twins = (): FakeChatHost => {
+        const host = makeHost([
+            agent("main", { id: "main-id" }),
+            agent("counter", { id: "on-main" }),
+            agent("counter", { id: "on-pi", node: "pi" }),
+        ]);
+        return {
+            ...host,
+            label: a => (a.name === "counter" ? `counter@${a.id === "on-pi" ? "pi" : "main"}` : a.name),
+        };
+    };
+    const said = (host: ChatHost) =>
+        [...thread(host).querySelectorAll('[data-testid="message-body"]')].map(n => n.textContent);
+    const arrive = (msg: ChatMessage) =>
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+    let fetched: string[];
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        fetched = [];
+        globalThis.fetch = vi.fn(async (url: string) => {
+            fetched.push(url);
+            return { ok: true, json: async () => [] };
+        }) as unknown as typeof fetch;
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it("lists each under the name the page gives it", () => {
+        const host = twins();
+        mount(host);
+
+        const list = byTestId(host.root, "chat-agent-list");
+        expect(allByRole(list, "button").map(b => b.textContent)).toEqual([
+            "main",
+            "counter@main",
+            "counter@pi",
+        ]);
+    });
+
+    it("keeps a thread for each, and fetches each one's history by its id", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        arrive({
+            id: "a",
+            from: "counter",
+            to: "user",
+            threadId: "on-main",
+            content: "here",
+            timestampMs: 1,
+        });
+        arrive({ id: "b", from: "counter", to: "user", threadId: "on-pi", content: "there", timestampMs: 2 });
+
+        byRole(byTestId(host.root, "chat-agent-list"), "button", "counter@pi").click();
+
+        expect(dc.chatTarget).toBe("on-pi");
+        expect(said(host)).toEqual(["there"]);
+        expect(fetched.some(url => url.includes("agent_id=on-pi"))).toBe(true);
+
+        byRole(byTestId(host.root, "chat-agent-list"), "button", "counter@main").click();
+
+        expect(said(host)).toEqual(["here"]);
+    });
+
+    it("opened by the name alone, opens neither and offers each by its address", () => {
+        const host = twins();
+        const dc = mount(host);
+
+        dc.openByName("counter");
+
+        expect(dc.chatTarget).toBe("");
+        const links = [...thread(host).querySelectorAll("a")];
+        expect(links.map(a => [a.textContent, a.getAttribute("href")])).toEqual([
+            ["@counter@main", "#/chat/counter@main"],
+            ["@counter@pi", "#/chat/counter@pi"],
+        ]);
+    });
+
+    it("opened by an address, opens that one", () => {
+        const host = twins();
+        const dc = mount(host);
+
+        dc.openByName("counter@pi");
+
+        expect(dc.chatTarget).toBe("on-pi");
+        expect(dc.chatTargetAddress).toBe("counter@pi");
+    });
+
+    it("keeps a turn sent to one waiting through the other's reply", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("on-pi");
+        const turns: (string | null)[] = [];
+        const stop = listen("af-turn", t => turns.push(t.agent));
+        sendFromComposer(host, dc, "count");
+
+        arrive({ id: "a", from: "counter", to: "user", threadId: "on-main", content: "1", timestampMs: 1 });
+        expect(turns.at(-1)).toBe("on-pi");
+
+        arrive({ id: "b", from: "counter", to: "user", threadId: "on-pi", content: "2", timestampMs: 2 });
+        stop();
+        expect(turns.at(-1)).toBeNull();
+        dc.unwire();
+    });
+
+    it("offers the addresses a bare name fits, and sends the message again to the one picked", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("main-id");
+        const sends: { id: string; content: string; answerer: string }[] = [];
+        const record = (e: Event) => sends.push((e as CustomEvent<(typeof sends)[number]>).detail);
+        document.addEventListener("af-send-message", record);
+        sendFromComposer(host, dc, "@counter five");
+        arrive({
+            id: "r1",
+            from: "main",
+            to: "user",
+            threadId: "main-id",
+            content: "More than one agent is called 'counter'.",
+            timestampMs: 2,
+            addressChoice: { addresses: ["counter@main", "counter@pi"], retryOf: sends[0]!.id },
+        });
+
+        byRole(thread(host), "button", "@counter@pi").click();
+        byRole(thread(host), "button", "@counter@main").click();
+        document.removeEventListener("af-send-message", record);
+
+        expect(sends.map(s => [s.content, s.answerer])).toEqual([
+            ["@counter five", "main-id"],
+            ["@counter@pi five", "on-pi"],
+        ]);
+        expect((byRole(thread(host), "button", "@counter@main") as HTMLButtonElement).disabled).toBe(true);
+        dc.unwire();
+    });
+
+    it("moves a message to the one the server says it reached, and follows it", () => {
+        const host = twins();
+        const dc = mount(host);
+        dc.wire();
+        dc.setTarget("main-id");
+        let sent = "";
+        const record = (e: Event) => {
+            sent = (e as CustomEvent<{ id: string }>).detail.id;
+        };
+        document.addEventListener("af-send-message", record);
+        sendFromComposer(host, dc, "@counter@pi count");
+        document.removeEventListener("af-send-message", record);
+
+        document.dispatchEvent(
+            new CustomEvent("af-turn-reached", { detail: { id: sent, agentId: "on-pi", name: "counter" } }),
+        );
+
+        expect(dc.chatTarget).toBe("on-pi");
+        expect(said(host)).toEqual(["count"]);
+        dc.setTarget("main-id");
+        expect(said(host)).toEqual([]);
     });
 });

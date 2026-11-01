@@ -69,6 +69,25 @@ def resolve_in_store(wanted: Mapping[str, Any], state_dir: str | Path) -> dict[s
     }
 
 
+def resolve_shadow(entry: Mapping[str, Any], state_dir: str | Path) -> dict[str, Any] | None:
+    """The version on trial beside the model ``entry`` names, with its path here; None when none is.
+
+    For an entry that follows ``active``: where ``NAME:shadow`` stands, pinned
+    as a spawn would pin it and unpacked once, so a serving agent can run it
+    beside what it serves. None for an entry that named a version or follows
+    ``shadow`` itself, and while the pointer is unset. Raises `ArtifactError`
+    when the pointer names bytes the store no longer holds.
+    """
+    if entry.get("follows") != "active":
+        return None
+    store = ArtifactStore.in_state_dir(state_dir)
+    name = str(entry["name"])
+    if store.pointer(name, "shadow") is None:
+        return None
+    pinned = store.pin(f"{name}:shadow")
+    return {**pinned, "path": str(store.readable_path(pinned))}
+
+
 def load(entry: Mapping[str, Any], *, allow_code: bool = False) -> Any:
     """The model the resolved ``entry`` holds, read by the loader for its format.
 

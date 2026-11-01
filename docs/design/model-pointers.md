@@ -77,7 +77,7 @@ A pointer records:
 | ----- | ---------- |
 | `version` | The version it names. |
 | `sha256` | The bytes that version held when the pointer was set. A version's bytes never change, but its number can be reused after a remove, so the pointer carries the hash the way a pinned spawn does, and a pointer whose version no longer holds those bytes is reported as dangling rather than followed. |
-| `previous` | The version it named before this move, or null. Enough for a one-step rollback without any history; the history itself is the feed, below. |
+| `previous` | The version it named before this move, or null. Enough for a one-step rollback without any history; the history itself is kept in the provenance graph, below. |
 | `moved_at` | When, as a Unix time, like `added_at` on a version. |
 | `by` | Who moved it: `cli`, `chat`, `dashboard`, `agent:<name>`, `rule:<name>`, or an extension's name. Free text, like `metadata.source` on a version; recorded, never checked. Chat knows the channel a turn came from, not a person's name, so it records where, not who. |
 | `reason` | Why, in the mover's words, or null. The train step writes its margin here; a person writes whatever they would say in a commit message. |
@@ -89,8 +89,19 @@ know, is the better failure. The format-2 reader accepts a format-1 index as one
 pointers and writes it back as format 2.
 
 No history is kept in the index: it holds where each pointer is now and where it was.
-Every move is one event on the feed, which is where "what happened to this model" is
-answered, and the retained topics below say where things stand.
+Every move is one event on the feed, and one `action` node of the provenance graph in
+main's database (`labels-and-provenance.md`), and `GET /api/models/{name}/moves` reads
+the history back. The store appends each change, with who made it and why, to a journal
+beside the index (`pointer-moves.jsonl`), under the lock it changes the index under, in
+whichever process made it; main records the journal on its next look and trims what it
+recorded, only while the journal still starts with what it read, so a second reader never
+drops a line written since. A line that is not a change, one cut short when a process died
+writing it, is moved to `pointer-moves.rejected.jsonl` beside it for a person to read. A change undone before main looks is still kept, as is one made while main was
+down, a clear included. Main also records what it sees changed in the index, which covers
+a journal line lost between the two writes; a change is recorded once, and the journal's
+record, written first, is the one that stands. That
+is where "what happened to this model" is answered; the retained topics below say where
+things stand.
 
 ### How a reference resolves
 
@@ -198,14 +209,103 @@ through the store or through main, never by publishing here.
 - The dashboard's model view shows both and lets a person move them; the feed shows
   every move with its `by` and `reason`.
 
+### Hot swap: what a move does to a running agent
+
+When a pointer moves, every running agent whose pin follows it is re-pinned to where the
+pointer stands now and reloaded in place. The old version is served until the new one is
+in memory; then the path and the loaded object change in one assignment. A version that
+will not load leaves the agent serving what it served, and the feed says so with the
+reason. Nothing restarts, and an agent that named a version is left alone. A pointer
+cleared moves nobody: a pin keeps its version while there is nothing to follow. Both
+pointers swap the same way, since a pin may follow `shadow` as well as `active`.
+
+The program is told through one hook, `on_model(agent, key, model)`, called after the
+swap has landed with the newly loaded object, or `None` for a model the program opens
+itself through `artifact_path`. A program that reads `await agent.load_model(key)` on
+each call needs no hook: the call returns the new version. One that kept what it loaded
+in a local or in `agent.state` replaces it in the hook; without one it keeps serving the
+old object, and the feed line says the host swapped while the program is what decides.
+The IMU example's function reads through `load_model` and needs nothing.
+
+On main, the pointer watcher hands each change to the swap directly. For an agent on a
+node, main sends the node the new pin on a signed control topic
+(`nodes/<node>/swap_model`) and the node answers on `nodes/<node>/swap_ack`, after
+updating the spawn registry and the node's desired state, so the node may fetch the
+version and a reboot runs it. A node that stayed up while main was away is sent the
+version everyone else moved to on main's first look. A swap that landed is an `action`
+node in the provenance graph, joined `led_to` from the move that caused it; one that
+failed is a feed line and nothing in the graph.
+
+Decided against:
+
+- **Restarting the agent.** Rejected: the restart loses the agent's state and in-flight
+  work, which is what the swap exists to keep.
+- **Every read through `load_model`.** Rejected: slower for a program that would hold the
+  object anyway, and still a change to the program; the hook is the change, made once.
+- **A node following `models/<name>/<pointer>` itself.** Rejected: the topic carries the
+  version and its hash, not the format or the size a node needs to fetch and check it,
+  and anything may publish to a topic a node reads, while a command to a node is
+  signed.
+- **Recording a failed swap in the graph.** Rejected: nothing changed; the agent's
+  record stays true, and the feed is where a failure is read.
+
+### Shadow serving: what the `shadow` pointer does to a running agent
+
+A function agent serving a model by its bare name follows `active`, and while the
+model's `shadow` pointer is set it holds that version too. After each message is
+answered with the active version, the same function is called once more with a view
+of the actor that reads the shadow version: `load_model` and `artifact_path` give the
+version on trial, what it publishes goes out under `shadow/` in front of the function's
+own topic, and `persist` does nothing, so a trial never writes the agent's state. The
+two answers, with the input's hash, the event time, both versions and both latencies,
+are one pair, kept as Parquet under `shadow/<model>` in the data layout
+(`data-storage.md`). A pass is skipped, never queued, while the previous one is still
+running, so a trial never slows what is served; the agent counts what it skipped.
+Tasks are answered with the active version only: a task has one reply and one asker.
+
+The trial starts when the pointer is set and ends when it is cleared or promoted, and
+main does both in the agents that serve the model, as it hands every pointer change to
+the hot swap. When it ends, main reads the pairs back, compares them (agreement, the
+scores' difference, latencies, and precision and recall against the labels of a source
+when asked), writes an `outcome` node about the model saying how it ended and what it
+showed, and says so on the feed. `GET /api/models/{name}/trial` shows the comparison
+while a trial runs, or over any window; `/trials` lists the outcomes. The outcome
+stands alone until the train step writes `model` nodes for `evaluated_by` to reach.
+
+Two cuts, for this step:
+
+- **Function agents only.** A program written from chat has side effects of its own,
+  and running it twice per input is not safe without a design of its own.
+- **Agents on main only.** An agent on a node would keep its pairs where main cannot
+  read them until the data package ships files to main; it joins the trial then.
+
+Decided against:
+
+- **Queueing shadow work when the agent is behind.** Rejected: a trial that slows
+  serving is a trial nobody will run twice; a skipped pass is counted and costs nothing.
+- **Running the shadow in a second agent.** Rejected: it would subscribe to the same
+  topics and see a different stream under load, and the pairs would have to be joined
+  by hash after the fact; one agent sees one input twice.
+- **Letting the shadow pass write state.** Rejected: the agent's memory is the served
+  version's; a trial that changed it would change what the active version does next.
+- **Deciding promotion here.** Rejected: the comparison is shown and recorded; whether
+  it is enough is decision 6 and the controller's, not the serving agent's.
+
 ## What was decided against
 
 - **`latest` following `active`.** Rejected: `latest` keeps one meaning, the newest, so
   there is always a way to say that. The bare name is what changes meaning, and only
   once a pointer is set.
 - **A history of moves in the index.** Rejected: the index would grow with every
-  retrain, and the feed already is the history. `previous` covers the one case where
-  the index itself needs to look back, a rollback.
+  retrain, and an older release refuses an index format it does not know. The history
+  is kept as actions in the provenance graph instead. `previous` covers the one case
+  where the index itself needs to look back, a rollback. The journal beside it is
+  not this: it holds only what main has not recorded yet, and an older release does
+  not read it.
+- **Recording a move where main makes it, in the routes and chat commands.** Rejected:
+  a move from the CLI, in its own process, would still be seen only by main's look at
+  the index, which misses one undone before the next look and cannot say who cleared
+  a pointer. The store is where every change passes, whoever makes it.
 - **More pointers, or named tags.** Rejected: two roles are what the loop needs, and a
   tag that means nothing to the system is metadata, which exists.
 - **Pointers in a file of their own.** Rejected: one lock, one file, one export; and a
@@ -221,12 +321,17 @@ through the store or through main, never by publishing here.
 
 - **Step 4, item 5** builds the pointers and the topics as written here: the index
   format, `resolve`, the three operations, the refusals, `follows` on a pin, the CLI
-  and chat commands, main publishing the topics. Built; the dashboard's model view is
-  not part of it and waits for the dashboard work.
-- **Item 7, hot swap**, is a subscriber to `models/{name}/active` that re-pins and
-  reloads the agents whose pin follows it, on main and on nodes.
+  and chat commands, main publishing the topics. Built, and so is the dashboard's model
+  view (the Models tab), which moves every pointer but `activate`: from there a version
+  is served by being tried first. A clear takes no reason, since nothing would keep one.
+- **Item 7, hot swap**, re-pins and reloads the agents whose pin follows a moved pointer,
+  on main and on nodes, as "Hot swap" above says. Built (`wactorz/agents/main/hot_swap.py`,
+  `Actor.swap_model`, the runner's `swap_model` command, `wactorz/core/model_swaps.py`).
 - **Item 8, shadow serving**, resolves `NAME:shadow` beside `active` and runs both; the
-  pointer being unset is what turns the shadow path off.
+  pointer being unset is what turns the shadow path off. Built, for function agents on
+  main, as "Shadow serving" above says (`wactorz/agents/shadow_serving.py`,
+  `FunctionAgent.swap_shadow`, `wactorz/agents/main/shadow_serving.py`,
+  `wactorz/core/shadow_trial.py`, the trial routes).
 - **Item 9, the train step**, stores a version, scores it, and calls `move` or not,
   writing its margin in `reason`.
 - **Step 7, the paid add-on**, calls the same three operations as `agent:<name>` and

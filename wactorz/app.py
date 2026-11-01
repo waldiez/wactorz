@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import config, pipelines, plugins, retention
 from wactorz.agents.lookup import find_main_actor
-from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY
+from wactorz.agents.main.spawn_registry import (
+    NAME_KEYED_REGISTRY_KEY,
+    SPAWN_REGISTRY_KEY,
+    SpawnRegistry,
+    placed_on,
+)
 from wactorz.agents.prompts.assemble import PromptFragment
 from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
@@ -93,8 +98,8 @@ BUILT_IN_AGENT_NAMES = frozenset(
 )
 
 
-def placed_on_nodes(registry: Any) -> dict[str, str]:
-    """Agent name to node, for every spawn-registry entry that places its agent on a node.
+def placed_on_nodes(registry: SpawnRegistry) -> dict[str, str]:
+    """Agent name to node, for every name the spawn registry keeps only on nodes.
 
     A library agent moved to a node is recorded there like any other. Started
     here as well, it would run twice, answering beside the copy the node
@@ -103,8 +108,8 @@ def placed_on_nodes(registry: Any) -> dict[str, str]:
     return {name: node for name, node in placed_by(registry).items() if node}
 
 
-def placed_by(registry: Any) -> dict[str, str]:
-    """Agent name to where the spawn registry places it: a node's name, or "" for main.
+def placed_by(registry: SpawnRegistry) -> dict[str, str]:
+    """Agent name to where the spawn registry places it: "" when one of the name is on main, else a node.
 
     Every entry is main's to restore when it starts, wherever it places the
     agent: one that came back from a node is restored here, from its record.
@@ -112,13 +117,18 @@ def placed_by(registry: Any) -> dict[str, str]:
     as well, which would start it twice, the first copy only to be stopped by
     the restore a moment later.
     """
-    if not isinstance(registry, dict):
-        return {}
     placed: dict[str, str] = {}
-    for name, entry in registry.items():
-        if isinstance(entry, dict):
-            placed[str(name)] = str(entry.get("node") or "").strip()
+    for entry in sorted(registry, key=placed_on):
+        placed.setdefault(entry["name"], placed_on(entry))
     return placed
+
+
+def stored_spawn_registry(db: Any) -> SpawnRegistry:
+    """Main's spawn registry as ``db`` holds it, read before main is running."""
+    return SpawnRegistry.stored(
+        db.kv_get("main", SPAWN_REGISTRY_KEY, None),
+        db.kv_get("main", NAME_KEYED_REGISTRY_KEY, None),
+    )
 
 
 def startable_plugins(found: Iterable[plugins.AgentPlugin]) -> list[plugins.AgentPlugin]:
@@ -664,10 +674,10 @@ async def build_system(
         )
 
     # The agents this deployment brings -- WACTORZ_AGENTS, wactorz.agents entry
-    # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
+    # points of listed packages, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
-    recorded = placed_by(_db.kv_get("main", SPAWN_REGISTRY_KEY, None))
+    recorded = placed_by(stored_spawn_registry(_db))
     elsewhere = {name: node for name, node in recorded.items() if node}
     for plugin in startable_plugins(plugins.discover().values()):
         if plugin.name in elsewhere:

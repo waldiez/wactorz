@@ -902,6 +902,26 @@ class TestTasks:
         (reply,) = [p for t, p, _ in runner.published if t == "nodes/main/reply/abc"]
         assert reply == {"keys": ["city"]}
 
+    async def test_a_task_on_this_nodes_own_topic_reaches_the_agent(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent(
+            {
+                "name": "collector",
+                "code": "async def handle_task(agent, payload):\n    return {'got': payload}\n",
+            }
+        )
+
+        await runner._on_task(
+            f"agents/at/{runner.node_name}/collector/task",
+            {"payload": 42, "_reply_topic": "main/reply/abc", "_remote_task": True},
+            _Message(payload=b"{}"),
+        )
+        await _settle()
+
+        (reply,) = [p for t, p, _ in runner.published if t == "main/reply/abc"]
+        assert reply == {"got": 42}
+
     async def test_a_task_for_an_agent_that_is_not_here_is_ignored(
         self, runner: RecordingRunner
     ) -> None:

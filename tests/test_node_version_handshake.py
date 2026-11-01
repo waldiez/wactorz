@@ -35,6 +35,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core import compatibility, node_signing
 from wactorz.node import cli as node_cli
@@ -180,8 +181,8 @@ class _Main:
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
         setattr(main.spawns, "_save_to_spawn_registry", self.saved.append)
-        setattr(main.spawns, "_get_spawn_registry", dict)
-        setattr(main, "_get_spawn_registry", dict)
+        setattr(main.spawns, "_get_spawn_registry", SpawnRegistry)
+        setattr(main, "_get_spawn_registry", SpawnRegistry)
         self.main = main
 
     def topics(self) -> list[str]:
@@ -268,8 +269,8 @@ def _migrating_main(nodes: dict[str, dict[str, Any]], on: str = "") -> Any:
     main = fixture.main
     registry = {"collector": {"name": "collector", "code": "print(1)", "node": on}}
     main._agent_manifests = {}
-    setattr(main, "_get_spawn_registry", lambda: dict(registry))
-    setattr(main.spawns, "_get_spawn_registry", lambda: dict(registry))
+    setattr(main, "_get_spawn_registry", lambda: SpawnRegistry.from_names(dict(registry)))
+    setattr(main.spawns, "_get_spawn_registry", lambda: SpawnRegistry.from_names(dict(registry)))
     setattr(main, "recall", lambda *_a, **_k: {})
     setattr(main, "persist", lambda *_a, **_k: None)
     return fixture

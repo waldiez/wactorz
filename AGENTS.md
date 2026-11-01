@@ -13,7 +13,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 - `wactorz/` — the Python package: `agents/`, `core/`, `interfaces/`, `web/` (the aiohttp
   server: `app` routes + `runtime` shared state + a module per concern — named `web` to avoid
-  colliding with `monitoring/`), `ext/` (optional features), `cli.py`, `config.py`.
+  colliding with `monitoring/`), `ext/` (optional features), `client/` (a client of a running server,
+  which imports only the standard library and `aiohttp`), `cli.py`, `config.py`.
 - **Inside `agents/`, an agent is a file until it grows a second concern; then it becomes a
   package with the same internal shape** — `agents/main/` is the worked example, and its
   `__init__.py` states the rule and the layering it depends on (a package may import from the
@@ -32,7 +33,9 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 | Run backend | `make run` · full dev stack: `make dev-full` |
 | Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) · every supported Python, opt-in: `make test-py-versions` (`PYTHONS="3.10 3.11"` to narrow) · main and a node over a real mosquitto: `make test-broker` (needs Docker) · the same two kept busy for a while, failing on anything that only grows: `make soak` (`DURATION=` seconds, default 300) · the whole product through a browser, with a real broker and a node deployed over SSH: `make e2e` (needs Docker; `make e2e-setup` once; see `e2e/README.md`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
-| Frontend lint | `make lint` (typecheck + prettier + eslint + markdownlint) |
+| Lint | `make lint` (Python + frontend) · split: `make lint-py` (ruff + basedpyright) / `make lint-frontend` (typecheck + prettier + eslint + markdownlint) |
+| Format | `make fmt` (Python + frontend) · split: `make fmt-py` / `make fmt-frontend` |
+| Type-check | `make typecheck` (Python + frontend) · split: `make typecheck-py` / `make typecheck-frontend` |
 | Workflows, shell scripts, Dockerfiles | `make lint-ci` (zizmor + shellcheck + hadolint, pinned images; needs Docker, online with `GH_TOKEN`) |
 | App image checks | `make image` then `make image-smoke` (beside a broker: probes, no root, no set-id) and `make image-scan` (Trivy; accepted findings in `.trivyignore.yaml`); `IMAGE=` picks another image, and `make image FLAVOUR=ultra` builds the larger of the two (PyTorch, Ultralytics, OpenCV, GStreamer) |
 | Build everything | `make build` · local CI: `make ci` |
@@ -50,9 +53,12 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - Bun for JS/TS. Tests run on Vitest + happy-dom and coverage is **gated** — `bun run coverage`
   fails below the floor. Raise the floor as you add tests; never lower it. New components and bug
   fixes ship with a test in `src/__tests__/`.
-- No framework: components are plain DOM classes that communicate through the typed event bus in
-  `src/events.ts` (`emit`/`listen` + `AppEventMap`) — fire events, don't call other components directly.
+- No framework: components are plain DOM classes. Across component trees, from transport to UI and to and
+  from extensions, they use the typed event bus in `src/events.ts` (`emit`/`listen` + `AppEventMap`); inside
+  a tree a parent hands its child a host interface. Every subscription has an owner that ends it.
+- Layering is linted: `io/`, `config/` and `events.ts` import no view, and core imports no extension.
 - Build elements in code; never `innerHTML` with untrusted/remote strings (escape or use `textContent`).
+- Every request goes through `src/io/api.ts`, which gives it a timeout; lint refuses `fetch` anywhere else.
 
 ## Python conventions
 

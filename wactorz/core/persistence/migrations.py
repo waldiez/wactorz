@@ -34,12 +34,15 @@ import sqlite3
 import time
 from typing import Any
 
+from ..identity import derive_actor_id
+from .schema import ADDED_COLUMN_INDEXES, PROVENANCE_SQL
+
 logger = logging.getLogger(__name__)
 
 # ── Current version ────────────────────────────────────────────────────────
 # Increment this when adding new migrations.
 # The startup sequence runs all migrations between the stored version and this.
-FRAMEWORK_VERSION = 4
+FRAMEWORK_VERSION = 7
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -104,13 +107,69 @@ def migrate_sql_4(conn: sqlite3.Connection):
             conn.execute(f"ALTER TABLE node_metrics_history ADD COLUMN {column} {kind}")
 
 
+def migrate_sql_5(conn: sqlite3.Connection):
+    """v4 → v5: the provenance graph, where labels and the model loop's record live.
+
+    The same tables the schema creates for a new database; see
+    docs/design/labels-and-provenance.md.
+    """
+    conn.executescript(PROVENANCE_SQL)
+
+
+def migrate_sql_6(conn: sqlite3.Connection):
+    """v5 → v6: chat history is kept by the agent's id, not its name.
+
+    Two agents may share a name, so a name no longer says whose a turn was.
+    Every row written before this belongs to the only agent its name could
+    then mean, whose id was derived from the name: that is filled in here.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(chat_log)")}
+    if "agent_id" not in present:
+        conn.execute("ALTER TABLE chat_log ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''")
+    names = [
+        row[0]
+        for row in conn.execute("SELECT DISTINCT agent_name FROM chat_log WHERE agent_id = ''")
+    ]
+    conn.executemany(
+        "UPDATE chat_log SET agent_id = ? WHERE agent_name = ? AND agent_id = ''",
+        [(derive_actor_id(name), name) for name in names],
+    )
+    for statement in ADDED_COLUMN_INDEXES:
+        conn.execute(statement)
+
+
+#: The columns a reading gained once the collector kept its event time apart
+#: from its arrival (docs/design/event-time.md).
+READING_TIME_COLUMNS = (
+    ("arrived", "REAL"),
+    ("time_source", "TEXT DEFAULT ''"),
+)
+
+
+def migrate_sql_7(conn: sqlite3.Connection):
+    """v6 → v7: a reading keeps when it happened apart from when it arrived.
+
+    ``ts`` is the event time the payload said, or the arrival when it said
+    none; ``arrived`` is always the arrival, and ``time_source`` says which
+    ``ts`` is. Rows written before this have the arrival in ``ts`` and nothing
+    in the new columns, which reads as before.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(sensor_readings)")}
+    for column, kind in READING_TIME_COLUMNS:
+        if column not in present:
+            conn.execute(f"ALTER TABLE sensor_readings ADD COLUMN {column} {kind}")
+
+
 # Register SQL migrations: version → function
 # Each migration upgrades FROM (version-1) TO (version)
 _SQL_MIGRATIONS = {
     2: migrate_sql_2,
     3: migrate_sql_3,
     4: migrate_sql_4,
-    # 5: migrate_sql_5,  ← add future migrations here
+    5: migrate_sql_5,
+    6: migrate_sql_6,
+    7: migrate_sql_7,
+    # 8: migrate_sql_8,  ← add future migrations here
 }
 
 

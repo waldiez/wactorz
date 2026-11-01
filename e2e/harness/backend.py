@@ -30,6 +30,7 @@ from .run import NODE_NAME, REPO_ROOT, Run
 #: Settings a developer plausibly has in `.env` that would change what a
 #: scenario tests, and that this suite does not set itself.
 LEFT_EMPTY = (
+    "WACTORZ_EXTENSIONS",
     "LLM_FAKE_INTENT",
     "LLM_API_KEY",
     "LLM_MODEL",

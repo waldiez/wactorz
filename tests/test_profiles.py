@@ -14,6 +14,11 @@ import pytest
 
 from wactorz import app as app_module
 from wactorz.agents.function_agent import spec_of
+from wactorz.agents.main.spawn_registry import (
+    NAME_KEYED_REGISTRY_KEY,
+    SPAWN_REGISTRY_KEY,
+    SpawnRegistry,
+)
 from wactorz.cli import get_args
 from wactorz.config import CONFIG, _env_choice
 from wactorz.errors import StartupError
@@ -646,11 +651,18 @@ class TestTheProviderUnderTheMinimalProfile:
         await app_module._build_provider(get_args(["--minimal", "--llm", "ollama"]), minimal=True)
         assert factory == ["ollama"]
 
-    async def test_the_full_profile_builds_the_configured_one(self, factory: list[str]) -> None:
+    async def test_the_full_profile_builds_the_configured_one(
+        self, factory: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pinned: CONFIG is read from this machine's environment, which may name any provider.
+        monkeypatch.setattr(
+            app_module, "CONFIG", dataclasses.replace(CONFIG, llm_provider="anthropic")
+        )
+
         with pytest.raises(StartupError) as refused:
             await app_module._build_provider(get_args([]), minimal=False)
 
-        assert factory == [CONFIG.llm_provider]
+        assert factory == ["anthropic"]
         # The message names both ways out.
         assert "wactorz[anthropic]" in str(refused.value)
         assert "LLM_PROVIDER=none" in str(refused.value)
@@ -667,10 +679,39 @@ class TestWhatTheRegistryPlacesOnNodes:
             "junk": "not a config",
         }
 
-        assert app_module.placed_on_nodes(registry) == {"imu-anomaly": "rpi-kitchen"}
+        assert app_module.placed_on_nodes(SpawnRegistry.from_names(registry)) == {
+            "imu-anomaly": "rpi-kitchen"
+        }
 
     def test_no_registry_places_nothing(self) -> None:
-        assert app_module.placed_on_nodes(None) == {}
+        assert app_module.placed_on_nodes(SpawnRegistry()) == {}
+
+    def test_a_name_also_kept_on_main_is_not_only_on_a_node(self) -> None:
+        registry = SpawnRegistry.from_names({"imu-anomaly": {"type": "module", "node": "pi"}})
+        registry = registry.with_entry(
+            {"name": "imu-anomaly", "type": "module", "node": "", "actor_id": "here"}
+        )
+
+        assert app_module.placed_by(registry) == {"imu-anomaly": ""}
+        assert app_module.placed_on_nodes(registry) == {}
+
+    def test_the_store_is_read_under_either_key(self) -> None:
+        class _Db:
+            def __init__(self, stored: dict[str, Any]) -> None:
+                self.stored = stored
+
+            def kv_get(self, owner: str, key: str, default: Any = None) -> Any:
+                return self.stored.get(key, default) if owner == "main" else default
+
+        old = {"collector": {"code": "x = 1", "node": "rpi"}}
+
+        from_old = app_module.stored_spawn_registry(_Db({NAME_KEYED_REGISTRY_KEY: old}))
+        emptied = app_module.stored_spawn_registry(
+            _Db({NAME_KEYED_REGISTRY_KEY: old, SPAWN_REGISTRY_KEY: {}})
+        )
+
+        assert app_module.placed_by(from_old) == {"collector": "rpi"}
+        assert app_module.placed_by(emptied) == {}
 
     def test_every_entry_is_mains_to_restore_wherever_it_places_the_agent(self) -> None:
         """One that came home from a node has an entry placing it here; main
@@ -681,4 +722,7 @@ class TestWhatTheRegistryPlacesOnNodes:
             "junk": "not a config",
         }
 
-        assert app_module.placed_by(registry) == {"imu-anomaly": "", "collector": "rpi"}
+        assert app_module.placed_by(SpawnRegistry.from_names(registry)) == {
+            "imu-anomaly": "",
+            "collector": "rpi",
+        }

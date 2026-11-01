@@ -38,6 +38,8 @@ from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any
 
+from .pip import refresh_import_caches
+
 logger = logging.getLogger(__name__)
 
 #: The most source a bundle may hold. Far above the agents it is for; a folder
@@ -359,7 +361,7 @@ def prepare_import(directory: Path, bundles_dir: Path, in_use: set[Path]) -> Non
             raise BundleError.name_taken(name, where)
     kept = [p for p in sys.path if not _stale_entry(p, bundles_dir, in_use | {directory})]
     sys.path[:] = [str(directory), *(p for p in kept if p != str(directory))]
-    importlib.invalidate_caches()
+    refresh_import_caches()
 
 
 def local_names_in(directory: Path) -> set[str]:

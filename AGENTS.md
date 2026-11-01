@@ -13,7 +13,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 - `wactorz/` — the Python package: `agents/`, `core/`, `interfaces/`, `web/` (the aiohttp
   server: `app` routes + `runtime` shared state + a module per concern — named `web` to avoid
-  colliding with `monitoring/`), `ext/` (optional features), `cli.py`, `config.py`.
+  colliding with `monitoring/`), `ext/` (optional features), `client/` (a client of a running server,
+  which imports only the standard library and `aiohttp`), `cli.py`, `config.py`.
 - **Inside `agents/`, an agent is a file until it grows a second concern; then it becomes a
   package with the same internal shape** — `agents/main/` is the worked example, and its
   `__init__.py` states the rule and the layering it depends on (a package may import from the

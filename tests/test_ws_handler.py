@@ -301,6 +301,7 @@ class TestWhoseTurnItIs:
             "agent_id": derive_actor_id("catalog"),
             "name": "catalog",
             "id": "m-1",
+            "turn_id": "m-1",
             "timestamp": turn["timestamp"],
         }
         assert reply["agent_id"] == derive_actor_id("catalog")

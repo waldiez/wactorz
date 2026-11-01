@@ -713,6 +713,25 @@ After connection the server streams every MQTT message as a JSON object. Field n
 
 The dashboard also receives bespoke control frames (`delete_agent`, snapshot diffs, etc.) over the same socket, plus `server_event` frames — the live MQTT activity, relayed by the monitor so the browser never connects to the broker directly.
 
+### Connecting from outside a browser
+
+A program connects like any other client of this API: `X-API-Key` or `Authorization: Bearer` on the handshake, and no `Origin`. The stream is live state with no replay: after a reconnect the server sends `full_snapshot` again, and anything said in between is in `GET /api/chats`. A frame with a `type` a client does not know is safe to ignore.
+
+`wactorz.client` is a Python client for this, and its surface is provisional:
+
+```python
+from wactorz.client import Client
+
+async with Client.from_env() as wz:              # WACTORZ_URL, WACTORZ_API_KEY
+    async for part in wz.chat.send("what is running?", to="catalog", attachments=["notes.txt"]):
+        print(part.text, end="")
+    for question in await wz.questions.open():
+        await wz.questions.answer(question, question.options[0])
+    print(await wz.request("GET", "/api/models"))  # any route without a helper
+```
+
+The monitor serves no TLS: across a network, put a proxy in front of it, or the key travels in clear. A server reached by a name of its own needs that name in `WACTORZ_ALLOWED_HOSTS`. Under Home Assistant a client cannot use ingress: it needs an `api_key` set and a published port.
+
 ### Chat frames
 
 A chat turn is sent as `{"type": "chat", "content": "...", "agent_name": "main", "agent_id": "…", "id": "…"}`: the thread the page is in, by name and id, and the page's id for the message. Only `content` is required.
@@ -724,6 +743,12 @@ The server answers first with the agent the turn reached, which is the agent an 
 ```
 
 `id` is the message's own, so the page files the person's words in that agent's thread. Every reply frame that follows (`chat`, `stream_chunk`, `stream_end`) carries the same `from` (the agent's name) and `agent_id`.
+
+Every reply frame of a turn also carries `turn_id`: the message's own `id`, or for a message sent without one an id the server chose, given on the `turn` frame. So turns that overlap can be told apart even when one agent answers both. A turn always closes with a `turn_end` frame, however it ended: finished, failed or stopped. A whole reply (`chat`) has no end of its own and a turn may send several, so `turn_end` is what says nothing more is coming:
+
+```json
+{"type": "turn_end", "from": "catalog", "agent_id": "…", "turn_id": "…", "timestamp": 1760000002.1}
+```
 
 A relayed `server_event` for an agent's chat message carries `thread_id`, the id of the agent whose thread it is in, when that is not the agent whose topic it came on: a voice surface relays the person's words to the agent that answers them, which it names only by name.
 

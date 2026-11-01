@@ -24,6 +24,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`wactorz.client`, a Python client for a running server (provisional).** Talks to the monitor's
+  REST API and `/ws` from outside it: `Client.from_env()` reads `WACTORZ_URL` and `WACTORZ_API_KEY`,
+  `chat.send()` follows a turn to its end with attachments, `files` stores and reads files,
+  `questions` reads and answers the Inbox,
+  `events()` keeps one socket connected and says what it missed, and `request()` reaches any route.
+  Chat frames now carry `turn_id`, and every turn closes with a `turn_end` frame.
 - **Recorded readings can be let go after a while, except what a model learned from.**
   `WACTORZ_DATA_RETENTION_DAYS` makes main remove hours of readings older than that from its
   data directory, a few times a day, keeping any hour a stored model says it was trained on

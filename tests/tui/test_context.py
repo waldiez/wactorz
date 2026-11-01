@@ -1,820 +1,225 @@
-"""The TUI's data access layer.
+"""The TUI's view of a server, against the real application.
 
-Nothing real is attached here — the actor, registry and psutil are all fakes.
-The point of this module is that it is *defensive*: it reaches into duck-typed
-agent code that may be half-built, absent, or throwing, and the UI must keep
-rendering regardless. So most of these assert what happens when things break.
+Only what a turn says is faked. The socket, the routes and the key are real, so
+this is what a terminal attached to a server sees.
 """
 
-# pylint: disable=missing-function-docstring,protected-access,too-few-public-methods
-# pyright: reportArgumentType=false
-
-import builtins
-import socket
-import sys
-from collections.abc import AsyncIterator, Callable
+import ast
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, cast
-from unittest.mock import patch
+from typing import Any
 
 import pytest
+from aiohttp.test_utils import TestServer
 
-from wactorz.core.persistence import chat_turn_recorded
-from wactorz.core.turns import current_turn
-from wactorz.orchestration import TUI, Orchestrator, is_trusted
-from wactorz.tui import context as ctx_mod
+import wactorz.tui
+from tests.test_client import KEY, _Db, db_fixture, server_fixture  # noqa: F401
+from tests.waiting import until
+from wactorz.client import Client, Cost, UnavailableError
 from wactorz.tui.attachments import Staged
-from wactorz.tui.context import TUIContext, TUIView, _as_float, create_context
-from wactorz.tui.snapshot import Snapshot
-from wactorz.web import uploads
+from wactorz.tui.context import TUIContext, host_stats
+from wactorz.web import chat, runtime
 
 
-class _Actor:
-    """A main actor with scriptable listers."""
-
-    def __init__(
-        self,
-        agents: list[dict] | None = None,
-        nodes: list[dict] | None = None,
-        protected: bool = False,
-    ) -> None:
-        self._agents = agents if agents is not None else []
-        self._nodes = nodes if nodes is not None else []
-        self.protected = protected
-
-    async def list_agents(self) -> list[dict]:
-        return self._agents
-
-    def list_nodes(self) -> list[dict]:
-        return self._nodes
+@pytest.fixture(name="context")
+async def context_fixture(server: TestServer) -> AsyncIterator[TUIContext]:
+    async with Client(str(server.make_url("")), api_key=KEY) as client:
+        context = TUIContext(client)
+        await context.start()
+        yield context
 
 
-class _Registry:
-    def __init__(self, actors: tuple = ()) -> None:
-        self._actors = list(actors)
-
-    def all_actors(self) -> list:
-        return self._actors
-
-    def find_by_name(self, name: str) -> object | None:
-        return next((a for a in self._actors if a.name == name), None)
+async def test_it_reads_what_the_server_says_about_itself(context: TUIContext) -> None:
+    assert context.server.version
+    assert context.server.upload_max_bytes > 0
+    assert context.server.uploads_per_message > 0
 
 
-class _DB:
-    """The two chat_log calls the context makes, recorded."""
-
-    def __init__(self, rows: list[dict[str, Any]] | None = None, fail: bool = False) -> None:
-        self.rows = rows or []
-        self.fail = fail
-        self.writes: list[dict[str, Any]] = []
-
-    def query_chat_log(self, limit: int = 200, **_filters: Any) -> list[dict[str, Any]]:
-        if self.fail:
-            raise RuntimeError("database is locked")
-        return list(self.rows)[:limit]
-
-    def write_chat_log(self, *, agent_id: str, **row: Any) -> None:
-        # Keyword-only and required, as the real one is: history is kept by id.
-        self.writes.append({"agent_id": agent_id, **row})
+async def test_a_refused_key_ends_the_start(server: TestServer) -> None:
+    async with Client(str(server.make_url("")), api_key="wrong") as client:
+        with pytest.raises(Exception, match="refused the key"):
+            await TUIContext(client).start()
 
 
-@pytest.fixture(name="no_db", autouse=True)
-def no_db_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No database unless a test installs one: other suites set the process-wide one."""
-    monkeypatch.setattr(ctx_mod, "get_db", lambda: None)
-
-
-def _use_db(monkeypatch: pytest.MonkeyPatch, db: _DB) -> _DB:
-    monkeypatch.setattr(ctx_mod, "get_db", lambda: db)
-    return db
-
-
-RECORD = {"id": "a" * 32, "name": "report.pdf", "mime": "application/pdf", "size": 9}
-
-
-def _system(registry: object | None = None, client: object = ...) -> SimpleNamespace:
-    """An ActorSystem stand-in; pass client=None for "no broker"."""
-    system = SimpleNamespace(registry=registry)
-    if client is not ...:
-        system._mqtt_client = client
-    return system
-
-
-@pytest.fixture(name="no_psutil", autouse=True)
-def no_psutil_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep host sampling out of the domain tests (opt back in explicitly)."""
-    monkeypatch.setattr(TUIContext, "_host_stats", lambda self: Snapshot().host)
-
-
-# ── construction ────────────────────────────────────────────────────────────
-
-
-def test_a_standalone_context_has_no_system() -> None:
-    ctx = TUIContext()
-    assert ctx.main_actor is None
-    assert ctx.system is None
-    assert ctx.registry is None
-
-
-def test_the_registry_comes_from_the_system() -> None:
-    registry = _Registry()
-    assert TUIContext(system=_system(registry)).registry is registry
-
-
-def test_identity_is_captured_at_construction() -> None:
-    ctx = TUIContext()
-    assert ctx.user
-    assert ctx.host
-
-
-def test_an_unresolvable_hostname_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(socket, "gethostname", lambda: (_ for _ in ()).throw(OSError))
-    assert TUIContext().host == "localhost"
-
-
-# ── config passthrough ──────────────────────────────────────────────────────
-
-
-def test_config_values_are_surfaced(monkeypatch: pytest.MonkeyPatch) -> None:
-    # CONFIG is a frozen dataclass, so swap the singleton rather than a field.
-    monkeypatch.setattr(
-        ctx_mod,
-        "CONFIG",
-        SimpleNamespace(
-            llm_model="gpt-9",
-            llm_provider="openai",
-            mqtt_host="broker.local",
-            mqtt_port=8883,
-        ),
-    )
-    ctx = TUIContext()
-    assert ctx.llm_model == "gpt-9"
-    assert ctx.llm_provider == "openai"
-    assert ctx.broker == "broker.local:8883"
-
-
-@pytest.mark.parametrize("field", ["llm_model", "llm_provider"])
-def test_an_unset_config_value_renders_as_a_dash(
-    monkeypatch: pytest.MonkeyPatch, field: str
+async def test_the_snapshot_is_what_the_socket_said(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(ctx_mod, "CONFIG", SimpleNamespace(**{field: ""}))
-    assert getattr(TUIContext(), field) == "—"
+    agent = {"agent_id": "a1", "name": "worker", "state": "running"}
+    monkeypatch.setitem(runtime.state, "agents", {"a1": agent})
+    monkeypatch.setattr(runtime, "mqtt_connected", True)
+    logs: list[Any] = []
+    following = asyncio.create_task(context.follow(logs.extend))
+
+    await until(lambda: context.state.agents, "the first frames")
+    snap = await context.snapshot()
+    following.cancel()
+
+    assert [agent["name"] for agent in snap.agents] == ["worker"]
+    assert snap.connected
+    assert snap.broker_connected
 
 
-# ── chat ────────────────────────────────────────────────────────────────────
+async def test_the_periods_spend_and_limit_come_from_the_server(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def cost() -> Cost:
+        return Cost(spend_usd=5.0, limit_usd=10.0, period="monthly")
+
+    monkeypatch.setattr(context.client.system, "cost", cost)
+    context.state.total_cost_usd = 100.0
+
+    snap = await context.snapshot()
+
+    assert (snap.cost_usd, snap.period_spend_usd, snap.cost_limit_usd) == (100.0, 5.0, 10.0)
+    assert snap.cost_period == "monthly"
 
 
-def _approx(value: float, expected: float) -> bool:
-    """Float comparison that does not consult sys.modules.
-
-    pytest.approx reaches for numpy, which another test in this suite leaves
-    stubbed in sys.modules — see tests/test_supervisor.py.
-    """
-    return abs(value - expected) < 1e-6
+def _line(text: str) -> dict[str, Any]:
+    return {"ts": 1.0, "origin": "wactorz.test", "level": "INFO", "text": text}
 
 
-async def _collect(ag: AsyncIterator) -> list:
-    return [chunk async for chunk in ag]
+async def _follow_with_backlog(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch, backlog: list[dict[str, Any]]
+) -> tuple[list[Any], asyncio.Task[None]]:
+    async def logs(*, limit: int) -> list[dict[str, Any]]:
+        return list(backlog)
+
+    monkeypatch.setattr(context.client.system, "logs", logs)
+    seen: list[Any] = []
+    following = asyncio.create_task(context.follow(seen.extend))
+    await until(lambda: seen, "the backlog")
+    return seen, following
 
 
-async def test_chat_says_so_when_nothing_is_attached() -> None:
-    chunks = await _collect(TUIContext().chat_stream("hi"))
-    assert chunks == ["(no system attached — standalone UI)"]
+async def test_live_log_lines_follow_the_backlog_and_a_line_in_both_shows_once(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen, following = await _follow_with_backlog(context, monkeypatch, [_line("before")])
+
+    for channel in list(runtime.ws_clients):
+        await channel.ws.send_json(
+            {"type": "app_log", "entries": [_line("before"), _line("after")]}
+        )
+    await until(lambda: len(seen) > 1, "the live line")
+    following.cancel()
+
+    assert [entry["text"] for entry in seen] == ["before", "after"]
 
 
-async def test_chat_prefers_the_streaming_entry_point() -> None:
-    class _Streaming:
-        async def process_user_input_stream(self, text: str) -> AsyncIterator:
-            for part in ("Hel", "lo ", text):
-                yield part
+async def test_what_was_logged_while_the_socket_was_down_is_recovered(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backlog = [_line("before")]
+    seen, following = await _follow_with_backlog(context, monkeypatch, backlog)
 
-        async def process_user_input(self, text: str) -> None:  # must not be used
-            raise AssertionError("the non-streaming path was taken")
+    backlog.append(_line("while away"))
+    for channel in list(runtime.ws_clients):
+        await channel.ws.close()
+    await until(lambda: len(seen) > 1, "the backlog reread")
+    following.cancel()
 
-    chunks = await _collect(TUIContext(main_actor=_Streaming()).chat_stream("bob"))
-    assert "".join(chunks) == "Hello bob"
-
-
-async def test_a_marker_dict_becomes_a_bracketed_note() -> None:
-    class _WithMarker:
-        async def process_user_input_stream(self, _text: str) -> AsyncIterator:
-            yield "done"
-            yield {"system_msg": "spawned agent-7"}
-
-    chunks = await _collect(TUIContext(main_actor=_WithMarker()).chat_stream("x"))
-    assert chunks == ["done", "\n[spawned agent-7]"]
+    assert [entry["text"] for entry in seen] == ["before", "while away"]
 
 
-async def test_a_marker_dict_without_a_message_is_dropped() -> None:
-    class _EmptyMarker:
-        async def process_user_input_stream(self, _text: str) -> AsyncIterator:
-            yield {"other_key": "ignored"}
-            yield "text"
+async def test_a_backlog_that_cannot_be_read_leaves_the_stream_running(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def logs(*, limit: int) -> list[dict[str, Any]]:
+        raise UnavailableError("http://server.test", "no")
 
-    assert await _collect(TUIContext(main_actor=_EmptyMarker()).chat_stream("x")) == ["text"]
+    monkeypatch.setattr(context.client.system, "logs", logs)
+    seen: list[Any] = []
+    following = asyncio.create_task(context.follow(seen.extend))
 
+    await until(lambda: context.state.connected, "the socket")
+    for channel in list(runtime.ws_clients):
+        await channel.ws.send_json({"type": "app_log", "entries": [_line("live")]})
+    await until(lambda: seen, "the live line")
+    following.cancel()
 
-async def test_non_string_chunks_are_stringified() -> None:
-    class _Numeric:
-        async def process_user_input_stream(self, _text: str) -> AsyncIterator:
-            yield 42
-
-    assert await _collect(TUIContext(main_actor=_Numeric()).chat_stream("x")) == ["42"]
-
-
-async def test_chat_falls_back_to_the_non_streaming_call() -> None:
-    class _OneShot:
-        async def process_user_input(self, text: str) -> str:
-            return f"reply to {text}"
-
-    chunks = await _collect(TUIContext(main_actor=_OneShot()).chat_stream("hi"))
-    assert chunks == ["reply to hi"]
+    assert [entry["text"] for entry in seen] == ["live"]
 
 
-async def test_an_actor_that_cannot_chat_says_so() -> None:
-    chunks = await _collect(TUIContext(main_actor=SimpleNamespace()).chat_stream("hi"))
-    assert chunks == ["(chat unavailable on this actor)"]
+async def test_history_comes_back_oldest_first(context: TUIContext, db: _Db) -> None:
+    db.rows.extend(
+        [{"role": "user", "content": "newest"}, {"role": "assistant", "content": "oldest"}]
+    )
 
+    rows = await context.history()
 
-# ── attribution ─────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("text", "agent"),
-    [("@weather hi", "weather"), ("hi", "main"), ("@", "main"), ("/help", "main")],
-)
-def test_standalone_a_mention_is_taken_at_its_word(text: str, agent: str) -> None:
-    assert TUIContext().attribution(text) == agent
-
-
-def test_attached_the_dashboard_rule_decides(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ctx_mod, "turn_attribution", lambda text: "filed-here")
-    assert TUIContext(main_actor=_Actor()).attribution("@ghost hi") == "filed-here"
-
-
-def test_a_bare_at_sign_does_not_break_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
-    def explode(text: str) -> str:
-        raise IndexError(text)
-
-    monkeypatch.setattr(ctx_mod, "turn_attribution", explode)
-    assert TUIContext(main_actor=_Actor()).attribution("@") == "main"
-
-
-# ── history ─────────────────────────────────────────────────────────────────
-
-
-async def test_standalone_there_is_no_history(monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_db(monkeypatch, _DB(rows=[{"content": "someone else's"}]))
-    assert await TUIContext().history() == []
-
-
-async def test_history_comes_back_oldest_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    # chat_log answers newest first; a transcript reads the other way.
-    _use_db(monkeypatch, _DB(rows=[{"content": "newest"}, {"content": "oldest"}]))
-    rows = await TUIContext(main_actor=_Actor()).history()
     assert [row["content"] for row in rows] == ["oldest", "newest"]
 
 
-async def test_no_database_means_no_history() -> None:
-    assert await TUIContext(main_actor=_Actor()).history() == []
-
-
-async def test_an_unreadable_history_is_an_empty_tab(monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_db(monkeypatch, _DB(fail=True))
-    assert await TUIContext(main_actor=_Actor()).history() == []
-
-
-# ── recording a turn ────────────────────────────────────────────────────────
-
-
-class _Main:
-    """A main actor whose stream answers with fixed chunks and remembers its call."""
-
-    def __init__(self, *chunks: Any) -> None:
-        self.chunks = chunks or ("sun", "ny", {"done": True})
-        self.received: dict[str, Any] = {}
-
-    async def process_user_input_stream(
-        self, text: str, attachments: list[dict[str, Any]] | None = None
-    ) -> AsyncIterator:
-        self.received = {
-            "text": text,
-            "attachments": attachments,
-            "marked": chat_turn_recorded.get(),
-        }
-        for chunk in self.chunks:
-            yield chunk
-
-
-async def test_both_halves_of_a_turn_are_stored(monkeypatch: pytest.MonkeyPatch) -> None:
-    db = _use_db(monkeypatch, _DB())
-    await _collect(TUIContext(main_actor=_Main()).chat_stream("weather?"))
-    assert [(w["role"], w["content"], w["agent_name"]) for w in db.writes] == [
-        ("user", "weather?", "main"),
-        ("assistant", "sunny", "main"),
-    ]
-
-
-async def test_the_agent_is_told_the_turn_is_already_stored(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_a_turn_goes_through_the_server(
+    context: TUIContext, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    _use_db(monkeypatch, _DB())
-    main = _Main()
-    await _collect(TUIContext(main_actor=main).chat_stream("hi"))
-    assert main.received["marked"] is True
+    got: list[Any] = []
 
+    async def route(_text: str, reply: Any, attachments: Any, **_: Any) -> None:
+        got.extend(attachments)
+        await reply("seen")
 
-async def test_a_stored_turn_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
-    db = _use_db(monkeypatch, _DB())
-    monkeypatch.setattr(ctx_mod, "redact", lambda text: f"<redacted {len(text)}>")
-    await _collect(TUIContext(main_actor=_Main()).chat_stream("my key is sk-123"))
-    assert all(w["content"].startswith("<redacted") for w in db.writes)
+    monkeypatch.setattr(chat, "route_chat", route)
+    source = tmp_path / "notes.txt"
+    source.write_bytes(b"words")
 
-
-async def test_attachments_reach_the_model_as_content_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db = _use_db(monkeypatch, _DB())
-    monkeypatch.setattr(
-        ctx_mod, "to_blocks", lambda records, _read: [{"doc": r["name"]} for r in records]
+    stored, failed = await context.store_attachments(
+        [Staged(path=source, name="notes.txt", size=5)]
     )
-    main = _Main("read it")
-    await _collect(TUIContext(main_actor=main).chat_stream("summarise", [RECORD]))
-    assert main.received["attachments"] == [{"doc": "report.pdf"}]
-    assert db.writes[0]["attachments"] == [RECORD]
-    assert db.writes[1]["attachments"] is None
+    parts = [part async for part in context.chat_stream("hi", stored)]
+
+    assert failed == []
+    assert [part.text for part in parts] == ["seen"]
+    assert [file["name"] for file in got] == ["notes.txt"]
 
 
-@pytest.mark.parametrize(
-    ("text", "why"),
-    [("/help", "a command does not take attachments"), ("@weather look", "one agent")],
-)
-async def test_a_turn_that_cannot_carry_files_says_so(
-    monkeypatch: pytest.MonkeyPatch, text: str, why: str
+async def test_a_file_that_will_not_store_is_named_and_the_rest_go(
+    context: TUIContext, tmp_path: Path
 ) -> None:
-    _use_db(monkeypatch, _DB())
-    main = _Main("ok")
-    chunks = await _collect(TUIContext(main_actor=main).chat_stream(text, [RECORD]))
-    assert "report.pdf" in chunks[0]
-    assert why in chunks[0]
-    assert main.received["attachments"] is None
+    good = tmp_path / "good.txt"
+    good.write_bytes(b"words")
+    empty = tmp_path / "empty.txt"
+    empty.touch()
 
-
-async def test_an_actor_without_a_stream_says_files_were_not_sent() -> None:
-    class _OneShot:
-        async def process_user_input(self, text: str) -> str:
-            return "answered"
-
-    chunks = await _collect(TUIContext(main_actor=_OneShot()).chat_stream("look", [RECORD]))
-    assert "takes text only" in chunks[0]
-    assert chunks[-1] == "answered"
-
-
-async def test_a_failed_reply_is_stored_with_the_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    db = _use_db(monkeypatch, _DB())
-
-    class _Dies:
-        async def process_user_input_stream(self, _text: str) -> AsyncIterator:
-            yield "part"
-            raise RuntimeError("agent died")
-
-    with pytest.raises(RuntimeError):
-        await _collect(TUIContext(main_actor=_Dies()).chat_stream("hi"))
-    assert db.writes[-1]["content"] == "part\n[error] agent died"
-
-
-async def test_a_failed_write_does_not_fail_the_turn(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Broken(_DB):
-        def write_chat_log(self, **row: Any) -> None:
-            raise RuntimeError("disk full")
-
-    _use_db(monkeypatch, _Broken())
-    chunks = await _collect(TUIContext(main_actor=_Main("still answered")).chat_stream("hi"))
-    assert chunks == ["still answered"]
-
-
-async def test_dropped_files_are_stored_and_failures_named(tmp_path: Path) -> None:
-    good = tmp_path / "a.pdf"
-    good.write_bytes(b"%PDF-1.7\n")
-    staged = [Staged(good, "a.pdf", 9), Staged(tmp_path / "gone.pdf", "gone.pdf", 9)]
-    with patch.object(uploads, "resolve_state_dir", return_value=str(tmp_path)):
-        records, failed = await TUIContext().store_attachments(staged)
-    assert [r["name"] for r in records] == ["a.pdf"]
-    assert len(failed) == 1
-    assert failed[0].startswith("gone.pdf (")
-
-
-# ── agents / nodes ──────────────────────────────────────────────────────────
-
-
-async def test_agents_and_nodes_come_from_the_main_actor() -> None:
-    actor = _Actor(agents=[{"name": "a"}], nodes=[{"id": "n1"}])
-    snap = await TUIContext(main_actor=actor).snapshot()
-    # No registry attached, so nothing enriches the protected flag.
-    assert snap.agents == [{"name": "a"}]
-    assert snap.nodes == [{"id": "n1"}]
-
-
-async def test_a_sync_list_agents_is_also_accepted() -> None:
-    # MainActor's is a coroutine, but a custom actor may expose a plain method.
-    actor = SimpleNamespace(list_agents=lambda: [{"name": "sync"}])
-    snap = await TUIContext(main_actor=actor).snapshot()
-    assert snap.agents == [{"name": "sync"}]
-
-
-async def test_an_async_list_nodes_is_skipped_rather_than_left_unawaited() -> None:
-    # There is no loop to await on in the sync path; a coroutine object in the
-    # snapshot would blow up the pane that renders it.
-    async def _async_nodes() -> list[dict]:
-        return [{"id": "n"}]
-
-    actor = SimpleNamespace(list_agents=list, list_nodes=_async_nodes)
-    snap = await TUIContext(main_actor=actor).snapshot()
-    assert snap.nodes == []
-
-
-async def test_a_throwing_lister_yields_an_empty_list() -> None:
-    def _boom() -> None:
-        raise RuntimeError("agent exploded")
-
-    actor = SimpleNamespace(list_agents=_boom, list_nodes=_boom)
-    snap = await TUIContext(main_actor=actor).snapshot()
-    assert snap.agents == []
-    assert snap.nodes == []
-
-
-async def test_an_actor_without_listers_yields_empty_lists() -> None:
-    snap = await TUIContext(main_actor=SimpleNamespace()).snapshot()
-    assert snap.agents == []
-    assert snap.nodes == []
-
-
-async def test_a_lister_returning_none_yields_an_empty_list() -> None:
-    actor = SimpleNamespace(list_agents=lambda: None, list_nodes=lambda: None)
-    snap = await TUIContext(main_actor=actor).snapshot()
-    assert snap.agents == []
-    assert snap.nodes == []
-
-
-async def test_a_non_callable_attribute_is_ignored() -> None:
-    actor = SimpleNamespace(list_agents="not a method", list_nodes=123)
-    snap = await TUIContext(main_actor=actor).snapshot()
-    assert snap.agents == []
-    assert snap.nodes == []
-
-
-async def test_without_an_actor_the_registry_names_the_agents() -> None:
-    registry = _Registry([SimpleNamespace(name="alpha"), SimpleNamespace(name="beta")])
-    snap = await TUIContext(system=_system(registry)).snapshot()
-    assert snap.agents == [
-        {"name": "alpha", "state": "running"},
-        {"name": "beta", "state": "running"},
-    ]
-
-
-def test_the_registry_fallback_guards_against_no_registry() -> None:
-    # _fill_agents only calls this with a registry, but the guard is what
-    # lets the method be typed and used on its own.
-    assert TUIContext()._registry_agents() == []
-
-
-async def test_a_throwing_registry_yields_no_agents() -> None:
-    registry = SimpleNamespace(all_actors=lambda: (_ for _ in ()).throw(RuntimeError))
-    snap = await TUIContext(system=_system(registry)).snapshot()
-    assert snap.agents == []
-
-
-# ── the protected flag ──────────────────────────────────────────────────────
-
-
-async def test_the_protected_flag_is_read_off_the_live_actor() -> None:
-    # get_status() omits it, so it has to be enriched from the registry.
-    registry = _Registry([SimpleNamespace(name="guard", protected=True)])
-    actor = _Actor(agents=[{"name": "guard"}])
-    snap = await TUIContext(main_actor=actor, system=_system(registry)).snapshot()
-    assert snap.agents[0]["protected"] is True
-
-
-async def test_an_existing_protected_flag_is_not_overwritten() -> None:
-    registry = _Registry([SimpleNamespace(name="guard", protected=False)])
-    actor = _Actor(agents=[{"name": "guard", "protected": True}])
-    snap = await TUIContext(main_actor=actor, system=_system(registry)).snapshot()
-    assert snap.agents[0]["protected"] is True
-
-
-async def test_an_unknown_agent_gets_no_protected_flag() -> None:
-    registry = _Registry([])
-    actor = _Actor(agents=[{"name": "ghost"}])
-    snap = await TUIContext(main_actor=actor, system=_system(registry)).snapshot()
-    assert "protected" not in snap.agents[0]
-
-
-async def test_a_throwing_registry_lookup_is_survivable() -> None:
-    registry = SimpleNamespace(
-        all_actors=list,
-        find_by_name=lambda _n: (_ for _ in ()).throw(RuntimeError),
+    stored, failed = await context.store_attachments(
+        [Staged(good, "good.txt", 5), Staged(empty, "empty.txt", 0)]
     )
-    actor = _Actor(agents=[{"name": "x"}])
-    snap = await TUIContext(main_actor=actor, system=_system(registry)).snapshot()
-    assert "protected" not in snap.agents[0]
 
+    assert [file.name for file in stored] == ["good.txt"]
+    assert "empty.txt" in failed[0]
 
-async def test_without_a_registry_nothing_is_enriched() -> None:
-    actor = _Actor(agents=[{"name": "x"}])
-    snap = await TUIContext(main_actor=actor).snapshot()
-    assert "protected" not in snap.agents[0]
 
+def test_the_servers_vitals_tolerate_what_is_missing() -> None:
+    assert host_stats({"cpu": 1.5}).cpu_pct == 1.5
+    assert host_stats({}).mem_total_mb == 0.0
 
-# ── broker ──────────────────────────────────────────────────────────────────
 
+def test_a_mention_is_a_guess_at_who_answers_until_the_server_says() -> None:
+    attribution = TUIContext.attribution
 
-async def test_no_system_means_no_broker() -> None:
-    assert (await TUIContext().snapshot()).broker_connected is False
+    assert attribution(_nobody(), "@catalog list") == "catalog"
+    assert attribution(_nobody(), "@") == "main"
+    assert attribution(_nobody(), "hello") == "main"
 
 
-async def test_a_system_without_a_client_is_offline() -> None:
-    assert (await TUIContext(system=_system()).snapshot()).broker_connected is False
+def _nobody() -> TUIContext:
+    return TUIContext(Client("http://server.test"))
 
 
-async def test_a_none_client_is_offline() -> None:
-    assert (await TUIContext(system=_system(client=None)).snapshot()).broker_connected is False
+def test_the_tui_reaches_wactorz_only_through_the_client() -> None:
+    # A gap in the API shows as a gap, rather than being reached around.
+    folder = Path(wactorz.tui.__file__).parent
+    allowed = {"..client", "..._version", ".._version"}
 
-
-async def test_a_client_is_assumed_connected_unless_it_says_otherwise() -> None:
-    # Be permissive: not every client exposes a `connected` attribute.
-    snap = await TUIContext(system=_system(client=SimpleNamespace())).snapshot()
-    assert snap.broker_connected is True
-
-
-async def test_a_client_reporting_disconnected_is_believed() -> None:
-    system = _system(client=SimpleNamespace(connected=False))
-    assert (await TUIContext(system=system).snapshot()).broker_connected is False
-
-
-# ── cost ────────────────────────────────────────────────────────────────────
-
-
-async def test_cost_is_read_from_the_llm_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        TUIContext,
-        "_fill_cost",
-        lambda self, snap: setattr(snap, "cost_usd", 1.25),
-    )
-    assert (await TUIContext().snapshot()).cost_usd == 1.25
-
-
-def test_cost_survives_a_missing_llm_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The standalone UI has no reason to have loaded the provider stack.
-    real_import = builtins.__import__
-
-    def _no_llm(name: str, *args: Any, **kwargs: Any) -> object:
-        if "llm_agent" in name:
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _no_llm)
-    snap = Snapshot()
-    TUIContext()._fill_cost(snap)
-    assert snap.cost_usd == 0.0
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [(2.5, 2.5), ("3.5", 3.5), (None, 0.0), ("", 0.0), ("junk", 0.0), ([], 0.0)],
-)
-def test_cost_values_are_coerced(raw: object, expected: object) -> None:
-    assert _as_float(raw) == expected
-
-
-# ── host stats ──────────────────────────────────────────────────────────────
-
-
-def _psutil(**overrides: Any) -> SimpleNamespace:
-    """A psutil stand-in with sane defaults."""
-    defaults = {
-        "cpu_percent": lambda interval=None: 12.5,
-        "cpu_count": lambda logical=True: 8,
-        "virtual_memory": lambda: SimpleNamespace(total=16 * 1024**3, available=8 * 1024**3),
-        "boot_time": lambda: 1000.0,
-        "net_io_counters": lambda: SimpleNamespace(bytes_recv=1000, bytes_sent=500),
-    }
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
-
-
-@pytest.fixture(name="with_psutil")
-def with_psutil_fixture(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
-    """Re-enable host sampling against a fake psutil."""
-    monkeypatch.undo()  # drop the autouse stub
-
-    def _install(module: object) -> None:
-        monkeypatch.setitem(sys.modules, "psutil", module)
-
-    return _install
-
-
-def test_host_stats_are_empty_without_psutil(with_psutil: Callable[[object], None]) -> None:
-    with_psutil(None)
-    assert "psutil" in sys.modules
-    assert TUIContext()._host_stats().cpu_pct == 0.0
-
-
-def test_host_stats_are_sampled(with_psutil: Callable[[object], None]) -> None:
-    with_psutil(_psutil())
-    stats = TUIContext()._host_stats()
-    assert stats.cpu_pct == 12.5
-    assert stats.cpu_cores == 8
-    assert _approx(stats.ram_total_gb, 16.0)
-    assert _approx(stats.ram_used_gb, 8.0)
-
-
-def test_an_unknown_core_count_is_zero_not_none(with_psutil: Callable[[object], None]) -> None:
-    with_psutil(_psutil(cpu_count=lambda logical=True: None))
-    assert TUIContext()._host_stats().cpu_cores == 0
-
-
-def test_a_restricted_host_yields_partial_stats(with_psutil: Callable[[object], None]) -> None:
-    # Containers and sandboxes raise OSError from some psutil probes.
-    with_psutil(_psutil(virtual_memory=lambda: (_ for _ in ()).throw(OSError("denied"))))
-    stats = TUIContext()._host_stats()
-    assert stats.cpu_pct == 12.5  # sampled before the failure
-    assert stats.ram_total_gb == 0.0
-
-
-def test_the_first_tick_reports_no_network_rate(with_psutil: Callable[[object], None]) -> None:
-    # Rates need two samples; the first must not report a huge spike.
-    with_psutil(_psutil())
-    stats = TUIContext()._host_stats()
-    assert stats.net_down_bps == 0.0
-    assert stats.net_up_bps == 0.0
-
-
-def test_network_rates_are_computed_between_ticks(
-    with_psutil: Callable[[object], None], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with_psutil(_psutil())
-    ctx = TUIContext()
-    ticks = iter([100.0, 102.0])
-    monkeypatch.setattr(ctx_mod.time, "monotonic", lambda: next(ticks))
-
-    ctx._host_stats()  # seeds the counters
-    # pylint: disable=line-too-long
-    sys.modules["psutil"].net_io_counters = lambda: SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        bytes_recv=3000,
-        bytes_sent=1500,
-    )
-    stats = ctx._host_stats()
-    assert _approx(stats.net_down_bps, 1000.0)  # 2000 bytes / 2 s
-    assert _approx(stats.net_up_bps, 500.0)
-
-
-def test_a_counter_reset_never_reports_a_negative_rate(
-    with_psutil: Callable[[object], None],
-) -> None:
-    # Interface counters wrap or reset; a negative rate would render as garbage.
-    with_psutil(_psutil())
-    ctx = TUIContext()
-    ctx._host_stats()
-    # pylint: disable=line-too-long
-    sys.modules["psutil"].net_io_counters = lambda: SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        bytes_recv=0,
-        bytes_sent=0,
-    )
-    stats = ctx._host_stats()
-    assert stats.net_down_bps == 0.0
-    assert stats.net_up_bps == 0.0
-
-
-# ── the view protocol ───────────────────────────────────────────────────────
-
-
-def test_anything_with_refresh_view_satisfies_the_protocol() -> None:
-    class _Pane:
-        def refresh_view(self, snap: Snapshot, ctx: TUIContext, /) -> None:
-            """A conforming pane."""
-
-    assert isinstance(_Pane(), TUIView)
-
-
-def test_something_without_refresh_view_does_not() -> None:
-    assert not isinstance(SimpleNamespace(), TUIView)
-
-
-# ── create_context ──────────────────────────────────────────────────────────
-
-
-async def test_create_context_builds_a_system_from_the_cli_args(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    args = SimpleNamespace(interface="rest")
-    actor, orchestrator = object(), object()
-    system = SimpleNamespace(registry=None)
-
-    async def _build(passed: SimpleNamespace) -> tuple:
-        assert passed is args
-        assert passed.interface == "cli"  # the TUI forces the in-process path
-        return system, actor, None, orchestrator  # system, main, database, orchestrator
-
-    monkeypatch.setattr(ctx_mod, "get_args", lambda: args)
-    monkeypatch.setattr(ctx_mod, "build_system", _build)
-
-    ctx = await create_context()
-    assert ctx.main_actor is actor
-    assert ctx.system is system
-    assert ctx.orchestrator is orchestrator
-
-
-# ── who answers a turn ──────────────────────────────────────────────────────
-
-
-class _Orchestrator:
-    """An orchestrator that answers with fixed chunks and remembers how it was asked."""
-
-    def __init__(self, *chunks: str) -> None:
-        self.chunks = chunks or ("from", " the orchestrator")
-        self.asked: list[dict[str, Any]] = []
-
-    async def handle_turn_stream(
-        self,
-        text: str,
-        *,
-        channel: str,
-        user: str | None = None,
-        attachments: list[dict[str, Any]] | None = None,
-    ) -> AsyncIterator[str]:
-        self.asked.append(
-            {"text": text, "channel": channel, "attachments": attachments, "turn": current_turn()}
-        )
-        for chunk in self.chunks:
-            yield chunk
-
-
-async def test_a_message_goes_to_the_orchestrator_as_an_operator_turn() -> None:
-    # As from the dashboard and the command line: an orchestrator of the
-    # deployment's own answers here too, with the operator's commands.
-    orchestrator, main = _Orchestrator(), _Main()
-    ctx = TUIContext(main_actor=main, orchestrator=cast(Orchestrator, orchestrator))
-
-    chunks = await _collect(ctx.chat_stream("what is running?"))
-
-    assert chunks == ["from", " the orchestrator"]
-    [asked] = orchestrator.asked
-    assert (asked["text"], asked["channel"]) == ("what is running?", TUI)
-    assert is_trusted(asked["channel"])
-    assert main.received == {}
-
-
-async def test_a_command_goes_to_the_orchestrator_too() -> None:
-    orchestrator = _Orchestrator("ok")
-    ctx = TUIContext(main_actor=_Main(), orchestrator=cast(Orchestrator, orchestrator))
-
-    await _collect(ctx.chat_stream("/agents"))
-
-    assert [a["text"] for a in orchestrator.asked] == ["/agents"]
-
-
-async def test_a_message_to_one_agent_goes_to_main_which_routes_it() -> None:
-    orchestrator, main = _Orchestrator(), _Main("counted 1")
-    ctx = TUIContext(main_actor=main, orchestrator=cast(Orchestrator, orchestrator))
-
-    chunks = await _collect(ctx.chat_stream("@counter one"))
-
-    assert chunks == ["counted 1"]
-    assert main.received["text"] == "@counter one"
-    assert orchestrator.asked == []
-
-
-async def test_without_main_the_orchestrator_takes_a_message_to_one_agent() -> None:
-    # The minimal profile: the model-free orchestrator is what reaches agents.
-    orchestrator = _Orchestrator("42")
-    ctx = TUIContext(system=_system(), orchestrator=cast(Orchestrator, orchestrator))
-
-    assert await _collect(ctx.chat_stream("@counter one")) == ["42"]
-
-
-async def test_files_reach_the_orchestrator_as_content_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _use_db(monkeypatch, _DB())
-    monkeypatch.setattr(
-        ctx_mod, "to_blocks", lambda records, _read: [{"doc": r["name"]} for r in records]
-    )
-    orchestrator = _Orchestrator("read it")
-    ctx = TUIContext(main_actor=_Main(), orchestrator=cast(Orchestrator, orchestrator))
-
-    await _collect(ctx.chat_stream("summarise", [RECORD]))
-
-    assert orchestrator.asked[0]["attachments"] == [{"doc": "report.pdf"}]
-
-
-async def test_a_turn_has_an_id_its_log_lines_carry() -> None:
-    orchestrator = _Orchestrator()
-    ctx = TUIContext(main_actor=_Main(), orchestrator=cast(Orchestrator, orchestrator))
-
-    await _collect(ctx.chat_stream("hello"))
-    await _collect(ctx.chat_stream("again"))
-
-    first, second = (a["turn"] for a in orchestrator.asked)
-    assert first and second and first != second
-    assert current_turn() == ""  # and none is left behind once it ends
+    for path in folder.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                # Within the TUI is fine: one dot, or two from a pane to its package.
+                below = path.parent != folder
+                if node.level == 1 or (below and node.level == 2):
+                    continue
+                name = "." * node.level + (node.module or "")
+                assert name in allowed, f"{path.name}: {name}"
+            if isinstance(node, ast.ImportFrom) and not node.level:
+                assert not (node.module or "").startswith("wactorz"), path.name

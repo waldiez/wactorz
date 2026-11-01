@@ -10,15 +10,14 @@ browser would.
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
-from wactorz import config
 from wactorz.tui import attachments
 from wactorz.tui.attachments import Staged
-from wactorz.web import uploads
 
+#: The most a file may be: as the server says, on `/api/config`.
+LIMIT = 1024 * 1024
 PDF = b"%PDF-1.7\n" + b"\x00" * 40
 
 
@@ -75,29 +74,31 @@ def test_ordinary_text_is_not_a_drop(text: str) -> None:
 
 
 def test_an_accepted_file_is_staged_with_its_size(pdf: Path) -> None:
-    assert attachments.examine([pdf]) == ([Staged(path=pdf, name="report.pdf", size=len(PDF))], [])
+    assert attachments.examine([pdf], LIMIT) == (
+        [Staged(path=pdf, name="report.pdf", size=len(PDF))],
+        [],
+    )
 
 
 def test_a_path_that_is_not_a_file_makes_the_paste_text(tmp_path: Path, pdf: Path) -> None:
-    assert attachments.examine([pdf, tmp_path / "missing.pdf"]) is None
-    assert attachments.examine([tmp_path]) is None
+    assert attachments.examine([pdf, tmp_path / "missing.pdf"], LIMIT) is None
+    assert attachments.examine([tmp_path], LIMIT) is None
 
 
 def test_an_unsupported_type_is_skipped_with_a_reason(tmp_path: Path) -> None:
     exe = tmp_path / "tool.exe"
     exe.write_bytes(b"MZ" + b"\x00" * 10)
-    assert attachments.examine([exe]) == ([], ["tool.exe (unsupported type)"])
+    assert attachments.examine([exe], LIMIT) == ([], ["tool.exe (unsupported type)"])
 
 
-def test_a_file_over_the_limit_is_skipped(monkeypatch: pytest.MonkeyPatch, pdf: Path) -> None:
-    monkeypatch.setattr(config, "UPLOAD_MAX_BYTES", 10)
-    assert attachments.examine([pdf]) == ([], ["report.pdf (over 10 B)"])
+def test_a_file_over_the_limit_is_skipped(pdf: Path) -> None:
+    assert attachments.examine([pdf], 10) == ([], ["report.pdf (over 10 B)"])
 
 
 def test_an_empty_file_is_skipped(tmp_path: Path) -> None:
     empty = tmp_path / "empty.txt"
     empty.write_bytes(b"")
-    assert attachments.examine([empty]) == ([], ["empty.txt (empty)"])
+    assert attachments.examine([empty], LIMIT) == ([], ["empty.txt (empty)"])
 
 
 @pytest.mark.parametrize(
@@ -121,19 +122,6 @@ def test_types_follow_the_dashboard_accept_list(name: str, accepted: bool) -> No
 
 
 # ── storing and describing ──────────────────────────────────────────────────
-
-
-def test_a_staged_file_is_stored_as_an_upload(tmp_path: Path, pdf: Path) -> None:
-    with patch.object(uploads, "resolve_state_dir", return_value=str(tmp_path)):
-        record = attachments.store_staged(Staged(path=pdf, name="report.pdf", size=len(PDF)))
-        file_id = str(record["id"])
-        assert uploads.metadata(file_id) == {
-            "id": file_id,
-            "name": "report.pdf",
-            "mime": "application/pdf",
-            "size": len(PDF),
-        }
-        assert uploads.read_bytes(file_id) == PDF
 
 
 @pytest.mark.parametrize(

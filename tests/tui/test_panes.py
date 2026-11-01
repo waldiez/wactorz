@@ -9,18 +9,19 @@ the panes look each other's widgets up by id through the app's DOM.
 # pylint: disable=missing-function-docstring,protected-access
 
 import logging
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from textual.widgets import Button, Input, RichLog, Static
 
+from tests.tui.fake import context_over
 from wactorz.tui.app import WactorzTUI
 from wactorz.tui.context import TUIContext
 from wactorz.tui.logo import LOGO_COMPACT
 from wactorz.tui.panes import AgentsPane, ChatPane, HomePane, LogsPane, SettingsPane
 from wactorz.tui.panes import chat as chat_mod
 from wactorz.tui.panes import home as home_mod
+from wactorz.tui.panes import logs as logs_mod
 from wactorz.tui.panes import settings as settings_mod
 from wactorz.tui.snapshot import HostStats, Snapshot
 
@@ -28,7 +29,7 @@ from wactorz.tui.snapshot import HostStats, Snapshot
 @pytest.fixture(name="ctx")
 def ctx_fixture() -> TUIContext:
     """A standalone context — no actor system attached."""
-    return TUIContext()
+    return context_over()
 
 
 @pytest.fixture(name="app")
@@ -59,39 +60,32 @@ async def test_home_renders_identity_and_stats(app: WactorzTUI, ctx: TUIContext)
 def test_home_shows_the_broker_state() -> None:
     snap_up = _snap(broker_connected=True)
     snap_down = _snap(broker_connected=False)
-    assert "connected" in "\n".join(home_mod._identity_lines(snap_up, TUIContext()))
-    assert "offline" in "\n".join(home_mod._identity_lines(snap_down, TUIContext()))
+    assert "connected" in "\n".join(home_mod._identity_lines(snap_up, context_over()))
+    assert "offline" in "\n".join(home_mod._identity_lines(snap_down, context_over()))
 
 
-def test_home_shows_a_cost_limit_only_when_one_is_set() -> None:
-    with_limit = "\n".join(home_mod._stats_lines(_snap(cost_usd=1.0, cost_limit_usd=10.0)))
-    without = "\n".join(home_mod._stats_lines(_snap(cost_usd=1.0)))
-    assert "/ $10.00" in with_limit
-    assert "/ $" not in without
+def test_home_sets_the_limit_against_the_periods_spend_not_the_all_time_total() -> None:
+    snap = _snap(cost_usd=100.0, period_spend_usd=5.0, cost_limit_usd=10.0, cost_period="monthly")
+    lines = "\n".join(home_mod._stats_lines(snap))
+    assert "$100.00" in lines
+    assert "$5.00[/] / $10.00" in lines
+    assert "Monthly" in lines
 
 
-def test_home_humanizes_the_host_stats() -> None:
-    host = HostStats(cpu_pct=12.5, cpu_cores=8, net_down_bps=2048, uptime_s=5 * 3600)
+def test_home_shows_no_limit_when_none_is_set() -> None:
+    assert "/ $" not in "\n".join(home_mod._stats_lines(_snap(cost_usd=1.0)))
+
+
+def test_home_shows_the_servers_vitals() -> None:
+    host = HostStats(cpu_pct=12.5, mem_used_mb=512, mem_total_mb=2048)
     lines = "\n".join(home_mod._stats_lines(_snap(host=host)))
-    assert "12.5%" in lines and "(8 cores)" in lines
-    assert "2.0 KB/s" in lines
-    assert "5h 0m" in lines
+    assert "12.5%" in lines
+    assert "512 / 2048 MB" in lines
 
 
-def test_home_reports_the_state_dir(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("WACTORZ_STATE_DIR", "/var/lib/wactorz")
-    assert home_mod.state_dir() == "/var/lib/wactorz"
-
-
-def test_the_state_dir_has_a_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("WACTORZ_STATE_DIR", raising=False)
-    assert home_mod.state_dir() == "./state"
-
-
-def test_a_blank_state_dir_reads_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A `WACTORZ_STATE_DIR=` line in `.env` is unset to the backend, not "".
-    monkeypatch.setenv("WACTORZ_STATE_DIR", "  ")
-    assert home_mod.state_dir() == "./state"
+def test_home_says_when_the_connection_is_down() -> None:
+    down = "\n".join(home_mod._identity_lines(_snap(connected=False), context_over()))
+    assert "reconnecting" in down
 
 
 async def test_home_picks_the_compact_logo_when_narrow(app: WactorzTUI, ctx: TUIContext) -> None:
@@ -106,7 +100,7 @@ async def test_home_picks_the_compact_logo_when_narrow(app: WactorzTUI, ctx: TUI
 
 async def test_the_agents_table_has_its_columns(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
-        assert len(pilot.app.query_one(AgentsPane).columns) == 8
+        assert len(pilot.app.query_one(AgentsPane).columns) == 7
 
 
 async def test_agents_are_listed_alphabetically(app: WactorzTUI, ctx: TUIContext) -> None:
@@ -120,26 +114,17 @@ async def test_agents_are_listed_alphabetically(app: WactorzTUI, ctx: TUIContext
 async def test_agent_rows_carry_their_vitals(app: WactorzTUI, ctx: TUIContext) -> None:
     async with app.run_test() as pilot:
         table = pilot.app.query_one(AgentsPane)
-        table.refresh_view(
-            _snap(
-                agents=[
-                    {
-                        "name": "worker",
-                        "state": "running",
-                        "agent_type": "llm",
-                        "messages_processed": 12,
-                        "restart_count": 2,
-                        "uptime": 3600,
-                        "node": "edge-1",
-                    }
-                ]
-            ),
-            ctx,
-        )
+        agent = {
+            "name": "worker",
+            "state": "running",
+            "task": "reading",
+            "messages_processed": 12,
+            "cost_usd": 0.5,
+            "node": "edge-1",
+        }
+        table.refresh_view(_snap(agents=[agent]), ctx)
         row = [str(cell) for cell in table.get_row_at(0)]
-        assert row[:5] == ["worker", "running", "llm", "12", "2"]
-        assert row[5] == "1h 0m"
-        assert row[6] == "edge-1"
+        assert row[:6] == ["worker", "running", "reading", "12", "$0.5000", "edge-1"]
 
 
 async def test_missing_agent_fields_get_defaults(app: WactorzTUI, ctx: TUIContext) -> None:
@@ -148,15 +133,15 @@ async def test_missing_agent_fields_get_defaults(app: WactorzTUI, ctx: TUIContex
         table.refresh_view(_snap(agents=[{}]), ctx)
         row = [str(cell) for cell in table.get_row_at(0)]
         assert row[0] == "?"  # no name
-        assert row[2] == "core"  # no type
-        assert row[6] == "local"  # no node
+        assert row[2] == "idle"  # no task
+        assert row[5] == "local"  # no node
 
 
 async def test_a_protected_agent_is_marked(app: WactorzTUI, ctx: TUIContext) -> None:
     async with app.run_test() as pilot:
         table = pilot.app.query_one(AgentsPane)
         table.refresh_view(_snap(agents=[{"name": "a", "protected": True}]), ctx)
-        assert str(table.get_row_at(0)[7]) == "🔒"
+        assert str(table.get_row_at(0)[6]) == "🔒"
 
 
 async def test_the_table_is_rebuilt_not_appended(app: WactorzTUI, ctx: TUIContext) -> None:
@@ -369,77 +354,19 @@ async def test_settings_renders_the_grouped_config(app: WactorzTUI, ctx: TUICont
         pane = pilot.app.query_one(SettingsPane)
         pane.refresh_view(_snap(), ctx)
         body = str(pilot.app.query_one("#settings-body", Static).content)
-        for heading in ("LLM", "MQTT", "Home Assistant", "Runtime"):
+        for heading in ("LLM", "Server", "1.2.3", ctx.address):
             assert heading in body
 
 
-def test_settings_never_prints_a_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        settings_mod,
-        "CONFIG",
-        SimpleNamespace(
-            llm_provider="openai",
-            llm_model="gpt-9",
-            llm_api_key="sk-SUPERSECRET",
-            llm_cost_limit_period="daily",
-            ollama_url="",
-            mqtt_host="broker",
-            mqtt_port=1883,
-            ws_port=9001,
-            mqtt_username="user",
-            mqtt_password="hunter2",
-            ha_url="http://ha",
-            ha_token="ha-TOKEN",
-            discord_token="disc-TOKEN",
-            telegram_token="tg-TOKEN",
-            interface="cli",
-            api_key="api-SECRET",
-        ),
-    )
-    body = "\n".join(
-        settings_mod._llm_lines(_snap())
-        + settings_mod._mqtt_lines()
-        + settings_mod._integration_lines()
-        + settings_mod._runtime_lines()
-    )
-    for secret in ("SUPERSECRET", "hunter2", "ha-TOKEN", "disc-TOKEN", "tg-TOKEN", "api-SECRET"):
-        assert secret not in body
-    assert "openai" in body  # non-secrets still shown
+def test_a_cost_limit_of_zero_reads_as_disabled() -> None:
+    ctx = context_over()
+    assert "disabled" in "\n".join(settings_mod._llm_lines(_snap(cost_limit_usd=0), ctx))
+    assert "$25.00" in "\n".join(settings_mod._llm_lines(_snap(cost_limit_usd=25), ctx))
 
 
-def test_an_anonymous_broker_is_labelled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        settings_mod,
-        "CONFIG",
-        SimpleNamespace(
-            mqtt_host="b", mqtt_port=1883, ws_port=9001, mqtt_username="", mqtt_password=""
-        ),
-    )
-    assert "(anonymous)" in "\n".join(settings_mod._mqtt_lines())
-
-
-def test_a_cost_limit_of_zero_reads_as_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        settings_mod,
-        "CONFIG",
-        SimpleNamespace(
-            llm_provider="",
-            llm_model="",
-            llm_api_key="",
-            llm_cost_limit_period="daily",
-            ollama_url="",
-        ),
-    )
-    assert "disabled" in "\n".join(settings_mod._llm_lines(_snap(cost_limit_usd=0)))
-    assert "$25.00" in "\n".join(settings_mod._llm_lines(_snap(cost_limit_usd=25)))
-
-
-def test_settings_show_the_state_dir_as_the_backend_resolves_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("WACTORZ_STATE_DIR", "")
-    monkeypatch.setattr(settings_mod, "CONFIG", SimpleNamespace(interface="tui", api_key=""))
-    assert "./state" in "\n".join(settings_mod._runtime_lines())
+def test_a_log_entry_keeps_its_level_and_a_strange_one_reads_as_info() -> None:
+    assert logs_mod.record_of({"level": "ERROR", "text": "x"})[0] == logging.ERROR
+    assert logs_mod.record_of({"level": "ODD", "text": "x"})[0] == logging.INFO
 
 
 def test_config_rows_are_aligned() -> None:
@@ -449,8 +376,8 @@ def test_config_rows_are_aligned() -> None:
 # ── logs ────────────────────────────────────────────────────────────────────
 
 
-def _record(level: int, message: str) -> tuple[int, str]:
-    return (level, message)
+def _entry(level: str, text: str) -> dict[str, Any]:
+    return {"level": level, "text": text, "origin": "wactorz.test", "ts": 1760000000.0}
 
 
 async def test_the_logs_toolbar_is_composed(app: WactorzTUI) -> None:
@@ -464,16 +391,8 @@ async def test_the_logs_toolbar_is_composed(app: WactorzTUI) -> None:
 async def test_captured_records_reach_the_view(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         logs = pilot.app.query_one(LogsPane)
-        logs.bridge.buffer.append(_record(logging.INFO, "hello world"))
-        logs._drain()
-        assert logs.records[-1][1] == "hello world"
-
-
-async def test_draining_an_empty_buffer_does_nothing(app: WactorzTUI) -> None:
-    async with app.run_test() as pilot:
-        logs = pilot.app.query_one(LogsPane)
-        logs._drain()
-        assert not logs.records
+        logs.add([_entry("INFO", "hello world")])
+        assert "hello world" in logs.records[-1][1]
 
 
 async def test_records_below_the_level_are_retained_but_not_shown(app: WactorzTUI) -> None:
@@ -481,9 +400,8 @@ async def test_records_below_the_level_are_retained_but_not_shown(app: WactorzTU
     async with app.run_test() as pilot:
         logs = pilot.app.query_one(LogsPane)
         logs.min_level = logging.ERROR
-        logs.bridge.buffer.append(_record(logging.INFO, "chatter"))
-        logs._drain()
-        assert logs.records[-1][1] == "chatter"
+        logs.add([_entry("INFO", "chatter")])
+        assert "chatter" in logs.records[-1][1]
         assert logs._matches(logging.INFO, "chatter") is False
 
 
@@ -511,9 +429,8 @@ async def test_pausing_stops_new_lines_but_keeps_recording(app: WactorzTUI) -> N
         logs = pilot.app.query_one(LogsPane)
         logs.toggle_pause()
         assert logs.paused is True
-        logs.bridge.buffer.append(_record(logging.INFO, "while paused"))
-        logs._drain()
-        assert logs.records[-1][1] == "while paused"  # still captured
+        logs.add([_entry("INFO", "while paused")])
+        assert "while paused" in logs.records[-1][1]  # still captured
 
 
 async def test_the_pause_button_flips_its_label(app: WactorzTUI) -> None:
@@ -528,8 +445,7 @@ async def test_the_pause_button_flips_its_label(app: WactorzTUI) -> None:
 async def test_clearing_drops_the_history(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         logs = pilot.app.query_one(LogsPane)
-        logs.bridge.buffer.append(_record(logging.INFO, "gone"))
-        logs._drain()
+        logs.add([_entry("INFO", "gone")])
         logs.clear_logs()
         assert not logs.records
 
@@ -583,11 +499,6 @@ async def test_the_toolbar_buttons_drive_the_same_actions(app: WactorzTUI) -> No
         logs.query_one("#log-pause", Button).press()
         await pilot.pause()
         assert logs.paused is True
-
-
-async def test_the_bridge_is_installed_while_the_pane_lives(app: WactorzTUI) -> None:
-    async with app.run_test() as pilot:
-        assert pilot.app.query_one(LogsPane).bridge._installed is True
 
 
 async def test_the_history_is_headed_and_closed(app: WactorzTUI) -> None:

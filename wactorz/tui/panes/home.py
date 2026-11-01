@@ -1,12 +1,8 @@
 """Home tab — wordmark, session/runtime identity, and live quick-stats."""
 
-from __future__ import annotations
-
 from textual.widgets import Static
 
-from ...core.paths import resolve_state_dir
 from ..context import Snapshot, TUIContext
-from ..format import human_bytes, human_duration
 from ..logo import pick_logo
 from ..meta import SUBTITLE, VERSION
 from ..theme import INDIGO, NODE, SIGNATURE, VIOLET
@@ -21,37 +17,37 @@ _KEYBOARD_HELP = (
 )
 
 
-def state_dir() -> str:
-    """Where the backend keeps its state, resolved the way the backend resolves it."""
-    return resolve_state_dir()
-
-
 def _identity_lines(snap: Snapshot, ctx: TUIContext) -> list[str]:
     """Who this session is, and what it is attached to."""
+    server = "[green]● connected[/]" if snap.connected else "[red]○ reconnecting[/]"
     broker = "[green]● connected[/]" if snap.broker_connected else "[red]○ offline[/]"
     return [
         f"  [b]Session[/]   [green]{ctx.user}[/]@[{VIOLET}]{ctx.host}[/]",
+        f"  [b]Server[/]    {ctx.address}  {server}",
         f"  [b]Model[/]     [{NODE}]{ctx.llm_provider}[/] / [{NODE}]{ctx.llm_model}[/]",
-        f"  [b]Broker[/]    {ctx.broker}  {broker}",
-        f"  [b]State[/]     [magenta]{state_dir()}[/]",
+        f"  [b]Broker[/]    {broker}",
     ]
 
 
 def _stats_lines(snap: Snapshot) -> list[str]:
     """Live counters — the same numbers the status bar summarises."""
     host = snap.host
-    cost_limit = f" / ${snap.cost_limit_usd:.2f}" if snap.cost_limit_usd > 0 else ""
-    ram = f"{host.ram_used_gb:.1f} / {host.ram_total_gb:.1f} GiB"
+    period = (
+        [
+            f"    [b]{snap.cost_period.capitalize():<8}[/] [green]${snap.period_spend_usd:.2f}[/]"
+            f" / ${snap.cost_limit_usd:.2f}"
+        ]
+        if snap.cost_limit_usd > 0
+        else []
+    )
     return [
         "  [yellow]Quick stats[/]",
         f"    [b]Agents[/]   [{NODE}]{snap.agent_count}[/]",
         f"    [b]Nodes[/]    [{NODE}]{snap.node_count}[/]",
-        f"    [b]Cost[/]     [green]${snap.cost_usd:.2f}[/]{cost_limit}",
-        f"    [b]CPU[/]      [{NODE}]{host.cpu_pct:.1f}%[/]  ({host.cpu_cores} cores)",
-        f"    [b]RAM[/]      [{VIOLET}]{ram}[/]",
-        f"    [b]Net[/]      [green]↓{human_bytes(host.net_down_bps)}[/]  "
-        f"[yellow]↑{human_bytes(host.net_up_bps)}[/]",
-        f"    [b]Uptime[/]   {human_duration(host.uptime_s)}",
+        f"    [b]Cost[/]     [green]${snap.cost_usd:.2f}[/]",
+        *period,
+        f"    [b]CPU[/]      [{NODE}]{host.cpu_pct:.1f}%[/]",
+        f"    [b]Memory[/]   [{VIOLET}]{host.mem_used_mb:.0f} / {host.mem_total_mb:.0f} MB[/]",
     ]
 
 

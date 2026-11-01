@@ -7,11 +7,9 @@ piece of it has to be an absolute path or a file URI, and every one has to name
 a file that exists. Anything else is an ordinary paste. A relative word such as
 ``README.md`` never counts, because that is what typing looks like.
 
-Which files are accepted, and how large, follows the dashboard, so a file the
-browser would refuse is refused here too.
+Which files are accepted follows the dashboard, and how large the server says,
+so a file the browser would refuse is refused here too.
 """
-
-from __future__ import annotations
 
 import mimetypes
 import os
@@ -23,11 +21,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from .. import config
-from ..web import uploads
-
 #: MIME-type prefixes the dashboard accepts: ``ACCEPTED_MIME`` in
-#: ``frontend/src/ui/dashboard/uploads.ts``.
+#: ``frontend/src/ui/chat/uploads.ts``.
 ACCEPTED_MIME = ("image/", "audio/", "text/", "application/pdf")
 
 #: Extensions accepted when the guessed type matches no prefix: the dashboard's
@@ -92,7 +87,7 @@ def _as_path(token: str) -> Path | None:
     return path if path.is_absolute() else None
 
 
-def examine(paths: list[Path]) -> tuple[list[Staged], list[str]] | None:
+def examine(paths: list[Path], max_bytes: int) -> tuple[list[Staged], list[str]] | None:
     """Split dropped files into ones to attach and why the rest were skipped.
 
     None when any of them is not an existing file: then the paste was a path
@@ -108,7 +103,7 @@ def examine(paths: list[Path]) -> tuple[list[Staged], list[str]] | None:
             size = path.stat().st_size
         except OSError:
             return None
-        reason = refusal(path, size)
+        reason = refusal(path, size, max_bytes)
         if reason:
             skipped.append(f"{path.name} ({reason})")
         else:
@@ -116,12 +111,12 @@ def examine(paths: list[Path]) -> tuple[list[Staged], list[str]] | None:
     return accepted, skipped
 
 
-def refusal(path: Path, size: int) -> str:
+def refusal(path: Path, size: int, max_bytes: int) -> str:
     """Why the dashboard would not take this file, or ``""`` when it would."""
     if not accepted_type(path):
         return "unsupported type"
-    if size > config.UPLOAD_MAX_BYTES:
-        return f"over {human_size(config.UPLOAD_MAX_BYTES)}"
+    if max_bytes and size > max_bytes:
+        return f"over {human_size(max_bytes)}"
     if size == 0:
         return "empty"
     return ""
@@ -133,11 +128,6 @@ def accepted_type(path: Path) -> bool:
     if guessed and guessed.startswith(ACCEPTED_MIME):
         return True
     return path.suffix.lower() in ACCEPTED_EXT
-
-
-def store_staged(staged: Staged) -> dict[str, Any]:
-    """Store a staged file the way the upload endpoint does. Reads the disk."""
-    return dict(uploads.store(staged.path.read_bytes(), staged.name))
 
 
 def human_size(size: float) -> str:

@@ -15,7 +15,7 @@ from aiohttp.web import Response
 
 from .. import installed
 from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
-from . import cost, origins, probes, questions, runtime
+from . import cost, origins, probes, questions, runtime, uploads
 from .metrics import known_nodes
 
 logger = logging.getLogger(__name__)
@@ -184,7 +184,11 @@ async def config_handler(request: web.Request) -> Response:
         # has to learn it from the server rather than from how it was built —
         # otherwise a deployment with uploads off still offers a drop zone that
         # can only fail, and one with uploads on hides a feature it has.
-        "uploads": {"enabled": config.UPLOADS_ENABLED},
+        "uploads": {
+            "enabled": config.UPLOADS_ENABLED,
+            "max_bytes": config.UPLOAD_MAX_BYTES,
+            "max_per_message": uploads.MAX_PER_MESSAGE,
+        },
         # Whether this browser holds a session it could end, which is not the
         # same question as "is a key configured". Under Home Assistant ingress
         # the user was authenticated by HA and carries no session here, so a

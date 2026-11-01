@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.tui.fake import context_over
 from wactorz.tui import app as app_mod
 from wactorz.tui.app import WactorzTUI
-from wactorz.tui.context import TUIContext
 
 
 def _stylesheet_path() -> Path:
@@ -44,7 +44,7 @@ def test_the_stylesheet_was_actually_found() -> None:
 @pytest.mark.parametrize("selector_id", _IDS)
 async def test_every_styled_id_exists_in_the_app(selector_id: str) -> None:
     """A `#foo` rule with no `id="foo"` widget is dead weight."""
-    app = WactorzTUI(TUIContext())
+    app = WactorzTUI(context_over())
     async with app.run_test() as pilot:
         # Visit every tab: panes are composed lazily inside their TabPane.
         for tab in ("home", "chat", "agents", "logs", "settings"):

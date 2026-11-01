@@ -1,15 +1,13 @@
-"""Logs tab — captured log stream with level filter, pause, clear and search.
+"""Logs tab — the server's log stream with level filter, pause, clear and search.
 
-Self-contained: it installs the :class:`LogBridge` on mount (routing logging
-into this pane and muting terminal spam) and removes it on unmount, so the app
-needs no knowledge of logging. The app forwards the F2/F3/F4 keys and the
-matching ``/`` commands to the public methods here.
+The app hands it the server's entries with :meth:`LogsPane.add`, and forwards the
+F2/F3/F4 keys and the matching ``/`` commands to the public methods here.
 """
 
-from __future__ import annotations
-
 import logging
+import time
 from collections import deque
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from textual.app import ComposeResult
@@ -17,10 +15,17 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input, RichLog
 
 from ..format import LEVEL_CYCLE, log_line
-from ..logbridge import LogBridge
 
-_DRAIN_INTERVAL = 0.25
 _MAX_RECORDS = 5000
+
+
+def record_of(entry: Mapping[str, Any]) -> tuple[int, str]:
+    """A server log entry as ``(level, line)``, the line named as a console would."""
+    level = str(entry.get("level") or "INFO")
+    levelno = logging.getLevelName(level)
+    stamp = time.strftime("%H:%M:%S", time.localtime(float(entry.get("ts") or 0.0)))
+    line = f"{stamp} {level:<7} {entry.get('origin') or ''}: {entry.get('text') or ''}"
+    return (levelno if isinstance(levelno, int) else logging.INFO), line
 
 
 class LogsPane(Vertical):
@@ -28,7 +33,6 @@ class LogsPane(Vertical):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.bridge = LogBridge(maxlen=_MAX_RECORDS)
         # Retained history so filter/level changes can re-render past lines.
         self.records: deque[tuple[int, str]] = deque(maxlen=_MAX_RECORDS)
         self.min_level = logging.INFO
@@ -52,15 +56,6 @@ class LogsPane(Vertical):
             auto_scroll=True,
         )
 
-    def on_mount(self) -> None:
-        """Take over logging and start draining the capture buffer."""
-        self.bridge.install()
-        self.set_interval(_DRAIN_INTERVAL, self._drain)
-
-    def on_unmount(self) -> None:
-        """Hand logging back exactly as we found it."""
-        self.bridge.uninstall()
-
     # ── Capture / filtering ──────────────────────────────────────────────────
 
     def _matches(self, levelno: int, line: str) -> bool:
@@ -68,19 +63,14 @@ class LogsPane(Vertical):
             return False
         return self.search in line.lower() if self.search else True
 
-    def _drain(self) -> None:
-        buf = self.bridge.buffer
-        if not buf:
-            return
+    def add(self, entries: Iterable[Mapping[str, Any]]) -> None:
+        """Take in log entries as the server gives them."""
         logbox = self.query_one("#logbox", RichLog)
-        while buf:
-            try:
-                rec = buf.popleft()
-            except IndexError:
-                break
-            self.records.append(rec)
-            if not self.paused and self._matches(*rec):
-                logbox.write(log_line(*rec))
+        for entry in entries:
+            record = record_of(entry)
+            self.records.append(record)
+            if not self.paused and self._matches(*record):
+                logbox.write(log_line(*record))
 
     def _rerender(self) -> None:
         logbox = self.query_one("#logbox", RichLog)

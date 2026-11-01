@@ -28,6 +28,7 @@ from wactorz.client import (
     Dropped,
     EmptyMessageError,
     Frame,
+    LiveState,
     NoServerError,
     NotFoundError,
     NotOfferedError,
@@ -522,7 +523,7 @@ def test_the_client_holds_the_connection_and_every_other_thing_is_an_area() -> N
     # A new area adds no method here, so `Client` does not grow with the API.
     public = {name for name in vars(Client) if not name.startswith("_")}
 
-    assert public == {"close", "events", "from_env", "open", "request", "server"}
+    assert public == {"close", "events", "from_env", "open", "request", "server", "url"}
 
 
 def test_the_socket_address_follows_the_scheme() -> None:
@@ -543,3 +544,62 @@ def test_the_package_imports_only_the_standard_library_and_aiohttp() -> None:
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 names = [node.module]
             assert not [n for n in names if n.split(".")[0] not in allowed], path.name
+
+
+class TestLiveState:
+    def test_a_snapshot_fills_it_and_a_patch_keeps_what_it_leaves_out(self) -> None:
+        live = LiveState()
+        live.apply(
+            Frame(
+                "full_snapshot",
+                {"state": {"agents": [{"name": "a"}], "nodes": [], "total_cost_usd": 1.5}},
+            )
+        )
+        live.apply(Frame("patch", {"state": {"agents": [{"name": "b"}]}}))
+
+        assert [agent["name"] for agent in live.agents] == ["b"]
+        assert live.total_cost_usd == 1.5  # a missing total is not a zero
+        assert live.connected
+
+    def test_the_broker_and_the_servers_vitals_are_followed(self) -> None:
+        live = LiveState()
+        live.apply(Frame("mqtt_status", {"connected": True}))
+        live.apply(Frame("server_event", {"topic": "system/host", "payload": {"cpu": 3.0}}))
+        live.apply(Frame("server_event", {"topic": "agents/x/chat", "payload": {"cpu": 9.0}}))
+
+        assert live.broker_connected
+        assert live.host == {"cpu": 3.0}
+
+    def test_the_socket_going_and_coming_back_is_followed(self) -> None:
+        live = LiveState()
+        live.apply(Reconnected())
+        assert live.connected
+        live.apply(Disconnected())
+        assert not live.connected
+
+    def test_what_is_not_state_changes_nothing(self) -> None:
+        live = LiveState()
+        live.apply(Dropped(3))
+        live.apply(Frame("patch", {"state": {"agents": "nonsense"}}))
+
+        assert live.agents == []
+
+
+class TestTheSystem:
+    async def test_the_spend_and_its_limit(self, wz: Client) -> None:
+        cost = await wz.system.cost()
+
+        assert cost.spend_usd >= 0
+        assert cost.period
+
+    async def test_the_logs(self, wz: Client) -> None:
+        logging.getLogger("wactorz.test").warning("a line for the client")
+
+        assert isinstance(await wz.system.logs(limit=5), list)
+
+    async def test_the_server_says_its_upload_limits_and_model(self, wz: Client) -> None:
+        server = await wz.server()
+
+        assert server.upload_max_bytes == uploads.config.UPLOAD_MAX_BYTES
+        assert server.uploads_per_message == uploads.MAX_PER_MESSAGE
+        assert server.llm_provider

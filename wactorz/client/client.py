@@ -12,6 +12,7 @@ from .files import Files
 from .frames import Event
 from .questions import Questions
 from .stream import Listener, Stream
+from .system import System
 from .transport import DEFAULT_TIMEOUT_S, Transport
 
 #: Where `Client.from_env` finds the server and its key. Not the server's own
@@ -26,6 +27,11 @@ class Server:
 
     version: str
     uploads: bool
+    #: The most a stored file may be, and how many may go with one message.
+    upload_max_bytes: int = 0
+    uploads_per_message: int = 0
+    llm_provider: str = ""
+    llm_model: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -44,6 +50,7 @@ class Client:
         self.files = Files(self._transport)
         self.chat = Chat(self._transport, self._stream, self.files)
         self.questions = Questions(self._transport)
+        self.system = System(self._transport)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Client":
@@ -55,7 +62,12 @@ class Client:
         return cls(url, api_key=env.get(KEY_VARIABLE, ""))
 
     def __repr__(self) -> str:
-        return f"Client({self._transport.url!r})"
+        return f"Client({self.url!r})"
+
+    @property
+    def url(self) -> str:
+        """The server this client talks to."""
+        return self._transport.url
 
     async def __aenter__(self) -> "Client":
         await self.open()
@@ -85,9 +97,14 @@ class Client:
     async def server(self) -> Server:
         """The server's version and what it offers."""
         config = await self.request("GET", "/api/config")
+        uploads, llm = config.get("uploads") or {}, config.get("llm") or {}
         return Server(
             version=str(config.get("version") or ""),
-            uploads=bool((config.get("uploads") or {}).get("enabled")),
+            uploads=bool(uploads.get("enabled")),
+            upload_max_bytes=int(uploads.get("max_bytes") or 0),
+            uploads_per_message=int(uploads.get("max_per_message") or 0),
+            llm_provider=str(llm.get("provider") or ""),
+            llm_model=str(llm.get("model") or ""),
             raw=config,
         )
 

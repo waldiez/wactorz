@@ -4,16 +4,12 @@ Every value goes through :func:`~wactorz.tui.format.mask_secret` or
 :func:`~wactorz.tui.format.plain`; nothing here may print a credential.
 """
 
-from __future__ import annotations
-
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
-from ...config import CONFIG
-from ...core.paths import resolve_state_dir
 from ..context import Snapshot, TUIContext
-from ..format import mask_secret, plain
+from ..format import plain
 
 
 def _row(label: str, value: str) -> str:
@@ -21,56 +17,32 @@ def _row(label: str, value: str) -> str:
     return f"    [b]{label:<14}[/] {value}"
 
 
-def _llm_lines(snap: Snapshot) -> list[str]:
-    """Provider, model, key state and the spend cap."""
+def _llm_lines(snap: Snapshot, ctx: TUIContext) -> list[str]:
+    """Provider, model and the spend cap."""
     limit = (
-        f"[green]${snap.cost_limit_usd:.2f}[/] / {CONFIG.llm_cost_limit_period}"
+        f"[green]${snap.cost_limit_usd:.2f}[/] / {snap.cost_period}, "
+        f"${snap.period_spend_usd:.2f} spent"
         if snap.cost_limit_usd > 0
         else "[dim]disabled[/]"
     )
     return [
         "  [yellow]LLM[/]",
-        _row("provider", plain(CONFIG.llm_provider)),
-        _row("model", plain(CONFIG.llm_model)),
-        _row("api key", mask_secret(CONFIG.llm_api_key)),
+        _row("provider", plain(ctx.llm_provider)),
+        _row("model", plain(ctx.llm_model)),
         _row("cost limit", limit),
-        _row("ollama url", plain(CONFIG.ollama_url)),
     ]
 
 
-def _mqtt_lines() -> list[str]:
-    """Broker endpoint and credentials state."""
-    username = plain(CONFIG.mqtt_username) if CONFIG.mqtt_username else "[dim](anonymous)[/]"
+def _server_lines(ctx: TUIContext) -> list[str]:
+    """What the server says about itself: only what it gives any client."""
+    server = ctx.server
+    home_assistant = (server.raw.get("ha") or {}).get("url") or ""
     return [
-        "  [yellow]MQTT[/]",
-        _row("host", plain(CONFIG.mqtt_host)),
-        _row("port", plain(CONFIG.mqtt_port)),
-        _row("ws port", plain(CONFIG.ws_port)),
-        _row("username", username),
-        _row("password", mask_secret(CONFIG.mqtt_password)),
-    ]
-
-
-def _integration_lines() -> list[str]:
-    """Home Assistant and the chat integrations."""
-    return [
-        "  [yellow]Home Assistant[/]",
-        _row("url", plain(CONFIG.ha_url)),
-        _row("token", mask_secret(CONFIG.ha_token)),
-        "",
-        "  [yellow]Integrations[/]",
-        _row("discord", mask_secret(CONFIG.discord_token)),
-        _row("telegram", mask_secret(CONFIG.telegram_token)),
-    ]
-
-
-def _runtime_lines() -> list[str]:
-    """How this process itself is configured."""
-    return [
-        "  [yellow]Runtime[/]",
-        _row("interface", plain(CONFIG.interface)),
-        _row("api key", mask_secret(CONFIG.api_key)),
-        _row("state dir", plain(resolve_state_dir())),
+        "  [yellow]Server[/]",
+        _row("address", plain(ctx.address)),
+        _row("version", plain(server.version)),
+        _row("uploads", "on" if server.uploads else "off"),
+        _row("home assistant", plain(home_assistant)),
     ]
 
 
@@ -81,19 +53,15 @@ class SettingsPane(VerticalScroll):
         """A single body Static, rewritten on every refresh."""
         yield Static(id="settings-body")
 
-    def refresh_view(self, snap: Snapshot, _ctx: TUIContext, /) -> None:
-        """Re-render the config readout from the live CONFIG singleton."""
+    def refresh_view(self, snap: Snapshot, ctx: TUIContext, /) -> None:
+        """Re-render the readout from what the server reports."""
         body = "\n".join(
             [
-                "  [dim]read-only — reflects the running config[/]",
+                "  [dim]read-only — what the server reports[/]",
                 "",
-                *_llm_lines(snap),
+                *_llm_lines(snap, ctx),
                 "",
-                *_mqtt_lines(),
-                "",
-                *_integration_lines(),
-                "",
-                *_runtime_lines(),
+                *_server_lines(ctx),
             ]
         )
         self.query_one("#settings-body", Static).update(body)

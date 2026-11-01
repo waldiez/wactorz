@@ -1,10 +1,10 @@
 """Wactorz TUI — a Textual app: tabbed monitor + chat over the actor system."""
 
-from __future__ import annotations
-
+import argparse
 import asyncio
+import os
+import sys
 from pathlib import Path
-from typing import Any
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -12,11 +12,10 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Input, Static, TabbedContent, TabPane
 
-from .. import config
-from ..web import uploads
+from ..client import Attachment, Client, ClientError, NoServerError
 from .attachments import Staged, describe, examine
 from .command import CommandInput
-from .context import TUIContext, TUIView, create_context
+from .context import TUIContext, TUIView
 from .meta import SUBTITLE, VERSION
 from .panes import (
     AgentsPane,
@@ -65,11 +64,11 @@ class WactorzTUI(App):
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
-    def __init__(self, context: TUIContext | None = None) -> None:
+    def __init__(self, context: TUIContext) -> None:
         super().__init__()
         self.register_theme(WACTORZ_THEME)
         self.theme = "wactorz"
-        self.ctx = context or TUIContext()
+        self.ctx = context
         self._snap = Snapshot()
         self._views: tuple[TUIView, ...] = ()
         self.logs: LogsPane | None = None
@@ -107,7 +106,7 @@ class WactorzTUI(App):
                 id="cmd",
                 # Mirrors the dashboard, which offers no drop zone when uploads
                 # are off: a dropped path is then just text.
-                accept_files=config.UPLOADS_ENABLED,
+                accept_files=self.ctx.server.uploads,
             )
             yield Static(self._render_hints(), id="keyhints")
             yield Static("", id="statusbar")
@@ -124,6 +123,7 @@ class WactorzTUI(App):
         self.set_interval(_REFRESH_INTERVAL, self._refresh)
         self.run_worker(self._refresh(), exclusive=False)
         self.run_worker(self._restore_chat(), exclusive=False)
+        self.run_worker(self._follow(), exclusive=False)
         self.query_one("#cmd", Input).focus()
 
     # ── Refresh loop ─────────────────────────────────────────────────────────
@@ -142,15 +142,23 @@ class WactorzTUI(App):
 
     def _render_status(self) -> str:
         s = self._snap
+        link = "[green]●[/]" if s.connected else "[red]○[/]"
         broker = "[green]●[/]" if s.broker_connected else "[red]○[/]"
         return (
             f"[{NODE}]agents {s.agent_count}[/] │ "
             f"[{NODE}]nodes {s.node_count}[/] │ "
             f"[green]cost ${s.cost_usd:.2f}[/] │ "
             f"CPU {s.host.cpu_pct:.0f}% │ "
-            f"broker {broker} {self.ctx.broker} │ "
+            f"{link} {self.ctx.address} │ broker {broker} │ "
             f"[dim]{self.ctx.llm_model}[/]"
         )
+
+    async def _follow(self) -> None:
+        """Stay with the server, for the state and the logs."""
+        try:
+            await self.ctx.follow(self.query_one(LogsPane).add)
+        except ClientError as exc:
+            self.notify(f"Connection ended: {exc}", severity="error", timeout=10)
 
     # ── Chat history ─────────────────────────────────────────────────────────
 
@@ -226,7 +234,7 @@ class WactorzTUI(App):
         self.run_worker(self._stage(event.paths, event.text), exclusive=False)
 
     async def _stage(self, paths: list[Path], text: str) -> None:
-        checked = await asyncio.to_thread(examine, paths)
+        checked = await asyncio.to_thread(examine, paths, self.ctx.server.upload_max_bytes)
         if checked is None:
             # Not files after all — a path someone copied. Type it, as a paste would.
             lines = text.splitlines()
@@ -237,8 +245,9 @@ class WactorzTUI(App):
         for item in accepted:
             if item.path in known:
                 continue
-            if len(self._staged) >= uploads.MAX_PER_MESSAGE:
-                skipped.append(f"{item.name} (over {uploads.MAX_PER_MESSAGE} files)")
+            most = self.ctx.server.uploads_per_message
+            if most and len(self._staged) >= most:
+                skipped.append(f"{item.name} (over {most} files)")
                 continue
             self._staged.append(item)
             known.add(item.path)
@@ -286,16 +295,16 @@ class WactorzTUI(App):
     async def _chat_worker(self, text: str, staged: list[Staged]) -> None:
         chat = self.query_one(ChatPane)
         self.query_one(TabbedContent).active = "chat"
-        records: list[dict[str, Any]] = []
+        stored: list[Attachment] = []
         if staged:
-            records, failed = await self.ctx.store_attachments(staged)
+            stored, failed = await self.ctx.store_attachments(staged)
             if failed:
                 self.notify("Could not attach: " + ", ".join(failed), severity="warning", timeout=5)
-        chat.add_user(text, records)
+        chat.add_user(text, [{"name": file.name, "size": file.size} for file in stored])
         chat.begin_reply(self.ctx.attribution(text))
         try:
-            async for chunk in self.ctx.chat_stream(text, records):
-                chat.stream(chunk)
+            async for part in self.ctx.chat_stream(text, stored):
+                chat.stream(part.text, part.agent)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Any agent-side failure is shown in the transcript, not raised.
             chat.stream(f"\n[error] {exc}")
@@ -332,16 +341,33 @@ class WactorzTUI(App):
             self.notify(f"unknown command: /{cmd}", severity="warning", timeout=3)
 
 
-async def run_async(context: TUIContext | None = None) -> None:
-    """Async entry point — run the TUI on the current event loop."""
-    if context is None:
-        context = await create_context()
+async def run_async(context: TUIContext) -> None:
+    """Connect ``context`` and run the TUI on the current event loop."""
+    await context.start()
     await WactorzTUI(context).run_async()
 
 
-def run(context: TUIContext | None = None) -> None:
-    """Blocking entry point.
+async def _attach(client: Client) -> None:
+    async with client:
+        await run_async(TUIContext(client))
 
-    Delegate to run_async (to make sure a context is always available).
-    """
-    asyncio.run(run_async(context))
+
+def _parsed_url(argv: list[str] | None) -> str | None:
+    parser = argparse.ArgumentParser(
+        prog="wactorz-tui",
+        description="Attach to a running Wactorz. The key comes from WACTORZ_API_KEY.",
+    )
+    parser.add_argument("--url", help="the server, as http://host:8888 (default: WACTORZ_URL)")
+    return parser.parse_args(argv).url
+
+
+def run(argv: list[str] | None = None) -> None:
+    """``wactorz-tui``: attach to a server. Says why and exits if that cannot be done."""
+    url = _parsed_url(argv)
+    try:
+        environ = {**os.environ, "WACTORZ_URL": url} if url else None
+        asyncio.run(_attach(Client.from_env(environ)))
+    except NoServerError as exc:
+        sys.exit(f"wactorz-tui: {exc}. Pass --url or set WACTORZ_URL.")
+    except ClientError as exc:
+        sys.exit(f"wactorz-tui: {exc}")

@@ -1,489 +1,205 @@
-"""Data access for the TUI.
+"""What the TUI knows, all of it from a running server through `wactorz.client`.
 
-Wraps the live actor system when the TUI is launched in-process, and degrades
-gracefully to host-only stats (psutil) when run standalone for UI work. Every
-accessor is defensive: a half-built or absent system never crashes the UI.
+Nothing here reaches into the actors. A server on this machine and one elsewhere
+are the same to the panes: the socket keeps `LiveState` current, and a refresh
+tick only reads it.
 """
 
-from __future__ import annotations
-
-import asyncio
 import getpass
-import inspect
 import logging
 import socket
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from ..agents.llm.attachments import to_blocks
-from ..agents.lookup import MAIN_ACTOR_NAME
-from ..app import build_system
-from ..cli import get_args
-from ..config import CONFIG
-from ..core.persistence import chat_turn_recorded, get_db
-from ..core.turns import turn_scope
-from ..monitoring.log_redaction import redact
-from ..orchestration import TUI
-from ..web import uploads
-from ..web.chat import agent_id_of, turn_attribution
-from .attachments import Staged, store_staged
+from ..client import (
+    Attachment,
+    Client,
+    ClientError,
+    Disconnected,
+    Frame,
+    LiveState,
+    Part,
+    Server,
+)
+from .attachments import Staged
 from .snapshot import HostStats, Snapshot
-
-if TYPE_CHECKING:
-    from wactorz.core.actor import Actor
-    from wactorz.core.registry import ActorSystem
-    from wactorz.orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
 #: How many chat_log rows the chat tab restores on start: the page the
 #: dashboard's own history request asks for when it names no limit.
 HISTORY_LIMIT = 200
+#: How many log lines the logs tab opens with.
+LOG_BACKLOG = 500
+#: How many log lines are remembered to tell a repeat by: more than one backlog holds.
+LOG_REMEMBERED = 2 * LOG_BACKLOG
+#: Seconds between reads of the period's spend and limit, which the socket does not carry.
+COST_EVERY_S = 15.0
+MAIN = "main"
 
-
-class _NetCounters(Protocol):  # pylint: disable=too-few-public-methods
-    """The two psutil ``net_io_counters()`` fields the TUI reads.
-
-    Spelled out here so the signature does not need psutil, which is an
-    optional dependency.
-    """
-
-    bytes_recv: int
-    bytes_sent: int
+LogEntries = list[dict[str, Any]]
 
 
 @runtime_checkable
 class TUIView(Protocol):  # pylint: disable=too-few-public-methods
-    """A pane refreshed from the periodic :class:`Snapshot`.
+    """What a snapshot-fed pane must implement.
 
     The parameters are positional-only, so a pane that ignores one can name it
     ``_snap`` / ``_ctx`` without breaking structural conformance.
     """
 
-    def refresh_view(self, snap: Snapshot, ctx: TUIContext, /) -> None:
+    def refresh_view(self, snap: Snapshot, ctx: "TUIContext", /) -> None:
         """Re-render this pane from the latest snapshot."""
 
 
+def host_stats(reported: dict[str, Any]) -> HostStats:
+    """The server's vitals as the panes read them."""
+    return HostStats(
+        cpu_pct=float(reported.get("cpu") or 0.0),
+        mem_used_mb=float(reported.get("mem_used_mb") or 0.0),
+        mem_total_mb=float(reported.get("mem_total_mb") or 0.0),
+    )
+
+
 class TUIContext:
-    """Bridges the TUI to the running system (or nothing, when standalone)."""
+    """One server, as the panes see it. `start` before use."""
 
-    def __init__(
-        self,
-        *,
-        main_actor: Actor | None = None,
-        system: ActorSystem | None = None,
-        orchestrator: Orchestrator | None = None,
-    ) -> None:
-        self.main_actor = main_actor
-        self.system = system
-        self.orchestrator = orchestrator
-        self.registry = system.registry if system else None
-
+    def __init__(self, client: Client) -> None:
+        self.client = client
+        self.state = LiveState()
+        self.server = Server(version="", uploads=False)
         self.user = getpass.getuser()
         try:
             self.host = socket.gethostname()
         except OSError:
             self.host = "localhost"
+        self._period_spend = 0.0
+        self._cost_limit = 0.0
+        self._cost_period = ""
+        self._cost_read_at = 0.0
+        #: The log lines already handed on, so a reread of the backlog repeats none.
+        self._logged: OrderedDict[tuple[object, object, object], None] = OrderedDict()
 
-        self._started = time.monotonic()
-        self._net_last: tuple[float, int, int] | None = None  # (t, recv, sent)
-
-    @property
-    def has_system(self) -> bool:
-        """Whether this runs over a system, rather than standalone for UI work."""
-        return any(x is not None for x in (self.main_actor, self.system, self.orchestrator))
-
-    # ── Identity / config (cheap, read once per render) ──────────────────────
+    async def start(self) -> None:
+        """Read what does not change while connected. A refusal here ends the start."""
+        self.server = await self.client.server()
 
     @property
     def llm_model(self) -> str:
-        """Configured LLM model, or an em-dash when unset."""
-        return CONFIG.llm_model or "—"
+        """The server's model, or an em-dash when unset."""
+        return self.server.llm_model or "—"
 
     @property
     def llm_provider(self) -> str:
-        """Configured LLM provider, or an em-dash when unset."""
-        return CONFIG.llm_provider or "—"
+        """The server's model provider, or an em-dash when unset."""
+        return self.server.llm_provider or "—"
 
     @property
-    def broker(self) -> str:
-        """Configured MQTT broker as ``host:port``."""
-        return f"{CONFIG.mqtt_host}:{CONFIG.mqtt_port}"
+    def address(self) -> str:
+        """The server this terminal is attached to."""
+        return self.client.url
 
     # ── Chat ─────────────────────────────────────────────────────────────────
 
     def attribution(self, text: str) -> str:
-        """Which agent a turn belongs to: the label it gets here, and its chat_log rows.
-
-        With a system attached this is the dashboard's own rule, so a turn typed
-        here lands in the same thread as one typed in the browser. Standalone
-        there is nothing to route to, and a mention is taken at its word.
-        """
-        mentioned = text[1:].split()[0] if text.startswith("@") and text[1:].strip() else ""
-        if self.main_actor is None:
-            return mentioned or MAIN_ACTOR_NAME
-        try:
-            return turn_attribution(text)
-        except Exception:  # pylint: disable=broad-exception-caught
-            # A bare "@" has no name to split off; label it as the fallback does.
-            return mentioned or MAIN_ACTOR_NAME
+        """Who a turn looks addressed to, until the server says who answered it."""
+        if text.startswith("@") and text[1:].strip():
+            return text[1:].split()[0]
+        return MAIN
 
     async def history(self, limit: int = HISTORY_LIMIT) -> list[dict[str, Any]]:
-        """The latest chat_log rows, oldest first, for the chat tab to restore.
-
-        The table the dashboard rebuilds its threads from, so a conversation had
-        in either shows up in both. Empty when standalone or before a database is
-        open, and a failed read is an empty tab rather than a broken one.
-        """
-        db = get_db() if self.has_system else None
-        if db is None:
-            return []
+        """The latest chat_log rows, oldest first, for the chat tab to restore."""
         try:
-            rows = await asyncio.to_thread(db.query_chat_log, limit=limit)
-        except Exception:  # pylint: disable=broad-exception-caught
+            rows = await self.client.chat.history(limit=limit)
+        except ClientError:
             logger.warning("[tui] could not read the chat history", exc_info=True)
             return []
         return list(reversed(rows))
 
-    async def store_attachments(
-        self, staged: list[Staged]
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        """Store dropped files as uploads: the records for the turn, and what failed."""
-        records: list[dict[str, Any]] = []
+    async def store_attachments(self, staged: list[Staged]) -> tuple[list[Attachment], list[str]]:
+        """Store dropped files on the server: what is stored, and what failed."""
+        stored: list[Attachment] = []
         failed: list[str] = []
         for item in staged:
             try:
-                records.append(await asyncio.to_thread(store_staged, item))
-            except (OSError, ValueError) as exc:
+                stored.append(await self.client.files.upload(item.path))
+            except (OSError, ClientError) as exc:
                 failed.append(f"{item.name} ({exc})")
-        return records, failed
+        return stored, failed
 
-    async def chat_stream(
-        self, text: str, attachments: list[dict[str, Any]] | None = None
-    ) -> AsyncIterator[str]:
-        """Yield reply chunks for a user message, one piece at a time.
+    def chat_stream(self, text: str, attachments: list[Attachment]) -> AsyncIterator[Part]:
+        """Say ``text`` and yield what comes back until the turn ends."""
+        return self.client.chat.send(text, attachments=attachments)
 
-        A message naming an agent goes to main, which routes it to that agent,
-        here or on a node. Everything else, commands included, goes to the
-        orchestrator as a turn from this operator surface, the way the other
-        surfaces send theirs. Standalone, with no system attached, it says so.
+    # ── What the panes render ────────────────────────────────────────────────
 
-        Both halves of the turn are stored here, the way the dashboard's socket
-        stores its own: marked as recorded, so an agent that also stores the
-        turns it answers does not write this one a second time, and stored with
-        the attachments, which only this side knows about.
+    async def _backlog(self) -> LogEntries:
+        """The log lines the server still holds."""
+        try:
+            return await self.client.system.logs(limit=LOG_BACKLOG)
+        except ClientError:
+            logger.warning("[tui] could not read the logs", exc_info=True)
+            return []
+
+    def _unseen(self, entries: LogEntries) -> LogEntries:
+        """``entries`` less those already handed on."""
+        fresh: LogEntries = []
+        for entry in entries:
+            key = (entry.get("ts"), entry.get("origin"), entry.get("text"))
+            if key not in self._logged:
+                self._logged[key] = None
+                fresh.append(entry)
+        while len(self._logged) > LOG_REMEMBERED:
+            self._logged.popitem(last=False)
+        return fresh
+
+    async def follow(self, on_logs: Callable[[LogEntries], None]) -> None:
+        """Keep the state and the logs current for as long as the connection lasts.
+
+        The backlog is read once the socket is up, and again each time it comes
+        back: it is the only record of what was logged while nothing was listening.
+        What arrives on the socket meanwhile waits its turn, so order holds, and
+        what is in both is shown once.
         """
-        if not self.has_system:
-            yield "(no system attached — standalone UI)"
-            return
-
-        agent = self.attribution(text)
-        # Set inside the task that runs this turn, so the mark and the turn id
-        # follow the call into the agent and no other turn sees them.
-        chat_turn_recorded.set(True)
-        with turn_scope():
-            await _record("user", text, agent, attachments)
-            said: list[str] = []
-            try:
-                async for chunk in _reply(
-                    self.orchestrator, self.main_actor, text, attachments or []
-                ):
-                    said.append(chunk)
-                    yield chunk
-            except Exception as exc:
-                said.append(f"\n[error] {exc}")
-                await _record("assistant", "".join(said), agent)
-                raise
-            await _record("assistant", "".join(said), agent)
-
-    # ── Snapshot ─────────────────────────────────────────────────────────────
+        behind = True
+        async for event in self.client.events():
+            self.state.apply(event)
+            if isinstance(event, Disconnected):
+                behind = True
+            if behind and self.state.connected:
+                behind = False
+                on_logs(self._unseen(await self._backlog()))
+            if isinstance(event, Frame) and event.type == "app_log":
+                on_logs(self._unseen(list(event.raw.get("entries") or ())))
 
     async def snapshot(self) -> Snapshot:
-        """Sample the domain and the host into one refresh tick."""
-        snap = Snapshot()
-        await self._fill_agents(snap)
-        self._fill_cost(snap)
-        snap.broker_connected = self._broker_connected()
-        snap.host = self._host_stats()
-        return snap
-
-    async def _fill_agents(self, snap: Snapshot) -> None:
-        """Populate agents/nodes from the live actor, else from the registry."""
-        if self.main_actor is not None:
-            snap.agents = await self._actor_agents()
-            snap.nodes = self._actor_nodes()
-            self._enrich_protected(snap.agents)
-        elif self.registry is not None:
-            snap.agents = self._registry_agents()
-
-    async def _actor_agents(self) -> list[dict]:
-        """``list_agents()`` off the main actor — arbitrary agent code.
-
-        MainActor's is a coroutine, but a custom actor may expose a plain
-        method, so await only what is actually awaitable.
-        """
-        lister = _zero_arg_method(self.main_actor, "list_agents")
-        if lister is None:
-            return []
-        try:
-            # it seems that pylint cannot see the callable through the getattr lookup
-            # in _zero_arg_method, even with the cast; basedpyright types it fine.
-            result = lister()  # pylint: disable=not-callable
-            if inspect.isawaitable(result):
-                result = await result
-            return list(result or [])
-        except Exception:  # pylint: disable=broad-exception-caught
-            return []
-
-    def _actor_nodes(self) -> list[dict]:
-        """``list_nodes()`` off the main actor — arbitrary agent code.
-
-        Sync by contract (MainActor.list_nodes): there is no loop to await on
-        here, so an actor that made it a coroutine is skipped rather than
-        leaving an un-awaited coroutine in the snapshot.
-        """
-        lister = _sync_zero_arg_method(self.main_actor, "list_nodes")
-        if lister is None:
-            return []
-        try:
-            result = lister()
-            return list(result or [])
-        except Exception:  # pylint: disable=broad-exception-caught
-            return []
-
-    def _registry_agents(self) -> list[dict]:
-        """Standalone fallback: name every actor the registry knows about."""
-        registry = self.registry
-        if registry is None:
-            return []
-        try:
-            return [{"name": a.name, "state": "running"} for a in registry.all_actors()]
-        except Exception:  # pylint: disable=broad-exception-caught
-            return []
-
-    def _fill_cost(self, snap: Snapshot) -> None:
-        """Read the process-wide LLM spend counters, if that module loaded."""
-        # Local import: llm_agent pulls in the provider stack, which the
-        # standalone UI has no reason to load.
-        try:
-            from ..agents.llm_agent import (  # pylint: disable=import-outside-toplevel
-                get_global_cost_info,
-            )
-
-            info = get_global_cost_info()
-        except (ImportError, AttributeError):
-            return
-        snap.cost_usd = _as_float(info.get("spend"))
-        snap.cost_limit_usd = _as_float(info.get("limit_usd"))
-
-    def _enrich_protected(self, agents: list[dict]) -> None:
-        """get_status() omits the protected flag — read it off the live actor."""
-        registry = self.registry
-        if registry is None:
-            return
-        for agent in agents:
-            if "protected" in agent:
-                continue
-            try:
-                actor = registry.find_by_name(agent.get("name", ""))
-            except Exception:  # pylint: disable=broad-exception-caught
-                actor = None
-            if actor is not None:
-                agent["protected"] = bool(getattr(actor, "protected", False))
-
-    def _broker_connected(self) -> bool:
-        """True when the system holds an MQTT client that isn't reporting down."""
-        system = self.system
-        if system is None:
-            return False
-        client = getattr(system, "_mqtt_client", None)
-        if client is None:
-            return False
-        # Be permissive: presence of a client => connected unless it says otherwise.
-        return bool(getattr(client, "connected", True))
-
-    def _host_stats(self) -> HostStats:
-        """Sample CPU/RAM/network/uptime. Empty stats when psutil is absent."""
-        stats = HostStats()
-        try:
-            import psutil  # pylint: disable=import-outside-toplevel
-        except ImportError:
-            return stats
-        try:
-            stats.cpu_pct = psutil.cpu_percent(interval=None)
-            stats.cpu_cores = psutil.cpu_count(logical=True) or 0
-            memory = psutil.virtual_memory()
-            stats.ram_used_gb = (memory.total - memory.available) / 1024**3
-            stats.ram_total_gb = memory.total / 1024**3
-            stats.uptime_s = time.time() - psutil.boot_time()
-            self._fill_net_rates(
-                stats,
-                psutil.net_io_counters(),  # pyright: ignore[reportArgumentType]
-            )
-        except (OSError, AttributeError):
-            # psutil raises OSError subclasses on restricted hosts (containers,
-            # sandboxes) and returns None counters on exotic platforms.
-            pass
-        return stats
-
-    def _fill_net_rates(self, stats: HostStats, io: _NetCounters) -> None:
-        """Turn cumulative byte counters into per-second rates."""
-        now = time.monotonic()
-        if self._net_last is not None:
-            then, recv, sent = self._net_last
-            elapsed = max(now - then, 1e-6)
-            stats.net_down_bps = max(0.0, (io.bytes_recv - recv) / elapsed)
-            stats.net_up_bps = max(0.0, (io.bytes_sent - sent) / elapsed)
-        self._net_last = (now, io.bytes_recv, io.bytes_sent)
-
-
-async def _reply(
-    orchestrator: Orchestrator | None,
-    main: object | None,
-    text: str,
-    attachments: list[dict[str, Any]],
-) -> AsyncIterator[str]:
-    """The answer to one turn, as the chunks the transcript shows.
-
-    Main takes a message that names an agent, since routing one is its; the
-    orchestrator takes the rest. Without an orchestrator, main takes all of it.
-    """
-    if main is not None and (text.startswith("@") or orchestrator is None):
-        async for chunk in _from_main(main, text, attachments):
-            yield chunk
-        return
-    if orchestrator is None:
-        yield "(chat unavailable)"
-        return
-    unsent = _unsent_note(text, attachments, can_attach=True)
-    if unsent:
-        yield unsent
-    blocks = await _blocks(attachments) if attachments and not unsent else []
-    async for chunk in orchestrator.handle_turn_stream(
-        text, channel=TUI, attachments=blocks or None
-    ):
-        yield str(chunk)
-
-
-async def _from_main(
-    actor: object, text: str, attachments: list[dict[str, Any]]
-) -> AsyncIterator[str]:
-    """Main's own answer to one turn, as the chunks the transcript shows."""
-    stream = getattr(actor, "process_user_input_stream", None)
-    reply = getattr(actor, "process_user_input", None)
-    unsent = _unsent_note(text, attachments, can_attach=stream is not None)
-    if unsent:
-        yield unsent
-
-    if stream is not None:
-        blocks = await _blocks(attachments) if attachments and not unsent else []
-        chunks = stream(text, attachments=blocks) if blocks else stream(text)
-        async for chunk in chunks:
-            if isinstance(chunk, dict):
-                note = chunk.get("system_msg")
-                if note:
-                    yield f"\n[{note}]"
-                continue
-            yield str(chunk)
-        return
-
-    if reply is not None:
-        yield str(await reply(text))
-        return
-
-    yield "(chat unavailable on this actor)"
-
-
-def _unsent_note(text: str, attachments: list[dict[str, Any]], *, can_attach: bool) -> str:
-    """Say which files did not go with the turn, as the dashboard does, or ``""``.
-
-    Main reads attachments only on the turn it answers itself. A command and an
-    ``@mention`` go through its command path, which takes text, so a file sent
-    with either would otherwise vanish while the reply read as though it had
-    been seen.
-    """
-    if not attachments:
-        return ""
-    if text.startswith("/"):
-        why = "a command does not take attachments"
-    elif text.startswith("@"):
-        why = "a message to one agent does not take attachments here"
-    elif not can_attach:
-        why = "this agent takes text only"
-    else:
-        return ""
-    names = ", ".join(str(item.get("name") or "attachment") for item in attachments)
-    return f"[note] {names} not sent — {why}.\n"
-
-
-async def _blocks(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Content blocks for the model, read from the stored files off the event loop."""
-    return await asyncio.to_thread(to_blocks, attachments, uploads.read_bytes)
-
-
-async def _record(
-    role: str, content: str, agent: str, attachments: list[dict[str, Any]] | None = None
-) -> None:
-    """Store one half of a turn in chat_log, redacted as the dashboard's copy is.
-
-    Best-effort: a turn that could not be stored is still a turn the person had,
-    and the reply must not fail over it.
-    """
-    db = get_db()
-    if db is None or not (content or attachments):
-        return
-    try:
-        await asyncio.to_thread(
-            db.write_chat_log,
-            ts=time.time(),
-            agent_name=agent,
-            agent_id=agent_id_of(agent),
-            role=role,
-            content=redact(content),
-            attachments=attachments or None,
+        """The state as it stands, for one refresh tick."""
+        await self._read_cost()
+        state = self.state
+        return Snapshot(
+            agents=state.agents,
+            nodes=state.nodes,
+            cost_usd=state.total_cost_usd,
+            period_spend_usd=self._period_spend,
+            cost_limit_usd=self._cost_limit,
+            cost_period=self._cost_period,
+            connected=state.connected,
+            broker_connected=state.broker_connected,
+            host=host_stats(state.host),
         )
-    except Exception:  # pylint: disable=broad-exception-caught
-        logger.warning("[tui] chat_log write failed", exc_info=True)
 
-
-def _zero_arg_method(obj: object, name: str) -> Callable[[], Any] | None:
-    """A callable, no-argument attribute of ``obj``, or None if it has none.
-
-    The actor is duck-typed here (custom actors need not implement everything),
-    so the lookup goes through getattr; returning it behind this signature is
-    what lets both type checkers see a plain callable at the call sites.
-    """
-    method = getattr(obj, name, None)
-    if not callable(method):
-        return None
-    return cast("Callable[[], Any]", method)
-
-
-def _sync_zero_arg_method(obj: object, name: str) -> Callable[[], Any] | None:
-    """Like :func:`_zero_arg_method`, but None for a coroutine function.
-
-    For sync call sites: there is no loop to await on, so an actor that made
-    the method async is skipped rather than leaving an un-awaited coroutine
-    in the snapshot.
-    """
-    method = _zero_arg_method(obj, name)
-    if method is None or inspect.iscoroutinefunction(method):
-        return None
-    return method
-
-
-def _as_float(value: object) -> float:
-    """Coerce a cost counter to a float, treating junk and None as zero."""
-    try:
-        return float(value or 0.0)  # pyright: ignore[reportArgumentType]
-    except (TypeError, ValueError):
-        return 0.0
-
-
-async def create_context() -> TUIContext:
-    """Build a context from the CLI args, wiring up a real actor system."""
-    args = get_args()
-    args.interface = "cli"
-    system, main_actor, _db, orchestrator = await build_system(args)
-    return TUIContext(main_actor=main_actor, system=system, orchestrator=orchestrator)
+    async def _read_cost(self) -> None:
+        """Reread the period's spend and limit when due. A failure waits for the next time."""
+        now = time.monotonic()
+        if self._cost_read_at and now - self._cost_read_at < COST_EVERY_S:
+            return
+        self._cost_read_at = now
+        try:
+            cost = await self.client.system.cost()
+        except ClientError:
+            return
+        self._period_spend = cost.spend_usd
+        self._cost_limit = cost.limit_usd or 0.0
+        self._cost_period = cost.period

@@ -1,13 +1,11 @@
-"""Agents tab — a live table of local actors and their vitals."""
-
-from __future__ import annotations
+"""Agents tab — a live table of the server's agents and their vitals."""
 
 from textual.widgets import DataTable
 
 from ..context import Snapshot, TUIContext
-from ..format import human_duration, state_text
+from ..format import state_text
 
-_COLUMNS = ("agent", "state", "type", "msgs", "restarts", "uptime", "node", "")
+_COLUMNS = ("agent", "state", "task", "msgs", "cost", "node", "")
 
 
 class AgentsPane(DataTable):
@@ -25,10 +23,9 @@ class AgentsPane(DataTable):
             self.add_row(
                 a.get("name", "?"),
                 state_text(str(a.get("state", "?"))),
-                a.get("agent_type", "core"),
-                str(a.get("messages_processed", 0)),
-                str(a.get("restart_count", 0)),
-                human_duration(a.get("uptime", 0) or 0),
+                str(a.get("task") or "idle"),
+                str(a.get("messages_processed") or 0),
+                f"${float(a.get('cost_usd') or 0.0):.4f}",
                 a.get("node") or "local",
                 "🔒" if a.get("protected") else "",
             )

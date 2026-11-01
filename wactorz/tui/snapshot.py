@@ -5,15 +5,11 @@ from dataclasses import dataclass, field
 
 @dataclass
 class HostStats:
-    """Machine vitals sampled once per refresh tick (psutil, when available)."""
+    """The server's own vitals, as it last reported them."""
 
     cpu_pct: float = 0.0
-    cpu_cores: int = 0
-    ram_used_gb: float = 0.0
-    ram_total_gb: float = 0.0
-    net_down_bps: float = 0.0
-    net_up_bps: float = 0.0
-    uptime_s: float = 0.0
+    mem_used_mb: float = 0.0
+    mem_total_mb: float = 0.0
 
 
 @dataclass
@@ -22,8 +18,14 @@ class Snapshot:
 
     agents: list[dict] = field(default_factory=list)
     nodes: list[dict] = field(default_factory=list)
+    #: All the model spend the server has seen.
     cost_usd: float = 0.0
+    #: The spend in the current period, which is what ``cost_limit_usd`` limits.
+    period_spend_usd: float = 0.0
     cost_limit_usd: float = 0.0
+    cost_period: str = ""
+    #: Whether this terminal's connection to the server is up.
+    connected: bool = False
     broker_connected: bool = False
     host: HostStats = field(default_factory=HostStats)
 

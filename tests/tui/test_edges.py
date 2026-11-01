@@ -13,14 +13,14 @@ from types import SimpleNamespace
 import pytest
 from textual.widgets import Button, Input, RichLog, TabbedContent
 
+from tests.tui.fake import context_over
 from wactorz.tui.app import WactorzTUI
-from wactorz.tui.context import TUIContext
 from wactorz.tui.panes import LogsPane
 
 
 @pytest.fixture(name="app")
 def app_fixture() -> WactorzTUI:
-    return WactorzTUI(TUIContext())
+    return WactorzTUI(context_over())
 
 
 # ── F-keys ──────────────────────────────────────────────────────────────────
@@ -82,26 +82,6 @@ async def test_an_empty_command_reports_unknown(app: WactorzTUI) -> None:
 # ── logs pane internals ─────────────────────────────────────────────────────
 
 
-async def test_a_buffer_drained_concurrently_does_not_raise(
-    app: WactorzTUI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The drain timer and a clear can interleave; popleft() may lose the race.
-    async with app.run_test() as pilot:
-        logs = pilot.app.query_one(LogsPane)
-        logs.bridge.buffer.append((logging.INFO, "one"))
-
-        class _Vanishing:
-            def __bool__(self) -> bool:
-                return True
-
-            def popleft(self) -> None:
-                raise IndexError("emptied under us")
-
-        monkeypatch.setattr(logs.bridge, "buffer", _Vanishing())
-        logs._drain()  # must not raise
-        assert not logs.records
-
-
 async def test_rerendering_replays_only_matching_records(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         logs = pilot.app.query_one(LogsPane)
@@ -120,10 +100,9 @@ async def test_resuming_replays_what_arrived_while_paused(app: WactorzTUI) -> No
     async with app.run_test() as pilot:
         logs = pilot.app.query_one(LogsPane)
         logs.toggle_pause()
-        logs.bridge.buffer.append((logging.INFO, "buffered"))
-        logs._drain()
+        logs.add([{"level": "INFO", "text": "buffered"}])
         logs.toggle_pause()  # resume re-renders the retained history
-        assert logs.records[-1][1] == "buffered"
+        assert "buffered" in logs.records[-1][1]
 
 
 async def test_an_unrelated_button_is_ignored(app: WactorzTUI) -> None:
@@ -155,16 +134,6 @@ async def test_an_unrelated_input_does_not_change_the_filter(app: WactorzTUI) ->
         assert logs.search == ""
 
 
-async def test_the_bridge_is_removed_when_the_pane_unmounts(app: WactorzTUI) -> None:
-    async with app.run_test() as pilot:
-        logs = pilot.app.query_one(LogsPane)
-        bridge = logs.bridge
-        assert bridge._installed is True
-        await logs.remove()
-        await pilot.pause()
-        assert bridge._installed is False
-
-
 # ── module entry point ──────────────────────────────────────────────────────
 
 
@@ -172,4 +141,4 @@ def test_the_module_entry_point_imports_cleanly() -> None:
     # `python -m wactorz.tui` — importing must not start an event loop.
     import wactorz.tui.__main__ as entry  # pylint: disable=import-outside-toplevel
 
-    assert entry.run_async is not None
+    assert entry.run is not None

@@ -29,6 +29,7 @@ from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
 from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.cli import get_args
+from wactorz.client import ClientError
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation, own_tasks
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
@@ -428,6 +429,14 @@ class InterfaceError(StartupError):
             f"unknown interface {interface!r}: use cli, tui, rest, discord, whatsapp, "
             f"telegram or {HEADLESS}"
         )
+
+    @classmethod
+    def tui_needs_the_monitor(cls) -> "InterfaceError":
+        return cls("the tui interface talks to the monitor, so it cannot run with --no-monitor")
+
+    @classmethod
+    def tui_could_not_connect(cls, why: object) -> "InterfaceError":
+        return cls(f"the tui could not connect to this process's monitor: {why}")
 
     @classmethod
     def needs_the_tui_extra(cls) -> "InterfaceError":
@@ -1002,27 +1011,19 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
         _install_signal_handlers()
 
 
-async def _run_tui(
-    system: Any, main_actor: Any, orchestrator: "Orchestrator", companion_runs: list[Any]
-) -> None:
-    """Run the terminal UI over the system this process has already built.
-
-    Handed that system rather than left to find one: the TUI's own entry point
-    builds a system when it is started on its own, and started from here that
-    would be a second one in the same process — a second main actor, and broker
-    connections under client ids the first set already holds, so each set would
-    knock the other off the broker whenever it reconnected.
-    """
+async def _run_tui(port: int, api_key: str, companion_runs: list[Any]) -> None:
+    """Run the terminal UI as a client of the monitor this process is serving."""
     try:
-        from wactorz.tui.app import run_async  # optional dependency: the tui extra (textual)
-        from wactorz.tui.context import TUIContext  # same package, imported with it
+        from wactorz.tui.hosted import run_hosted  # optional dependency: the tui extra (textual)
     except ImportError as exc:
         for run in companion_runs:
             run.close()  # never started, so never awaited
         raise InterfaceError.needs_the_tui_extra() from exc
     bots = [asyncio.create_task(run) for run in companion_runs]
     try:
-        await run_async(TUIContext(main_actor=main_actor, system=system, orchestrator=orchestrator))
+        await run_hosted(port, api_key)
+    except ClientError as exc:
+        raise InterfaceError.tui_could_not_connect(exc) from exc
     finally:
         for bot in bots:
             bot.cancel()
@@ -1063,7 +1064,9 @@ async def _run_interface(
         iface = CLIInterface(orchestrator, main_actor)
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "tui":
-        await _run_tui(system, main_actor, orchestrator, _run_all(companions))
+        if getattr(args, "no_monitor", False):
+            raise InterfaceError.tui_needs_the_monitor()
+        await _run_tui(args.monitor_port, CONFIG.api_key, _run_all(companions))
     elif interface == "rest" and main_actor is not None:
         port = args.port or CONFIG.port
         iface = RESTInterface(

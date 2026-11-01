@@ -1,8 +1,6 @@
 """`python -m wactorz.tui`."""
 
-from .app import run_async
+from .app import run
 
 if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(run_async())
+    run()

@@ -84,10 +84,14 @@ class ChatPane(VerticalScroll):
         self.scroll_end(animate=False)
         return reply
 
-    def stream(self, chunk: str) -> None:
-        """Append a chunk to the in-flight reply, updating it in place."""
+    def stream(self, chunk: str, agent: str = "") -> None:
+        """Append a chunk to the in-flight reply, updating it in place.
+
+        ``agent`` is who said it, which only the server knows for certain.
+        """
         # A chunk can arrive without begin_reply() when a caller streams cold.
         reply = self._reply if self._reply is not None else self.begin_reply()
+        self._label = agent or self._label
         self._buffer += chunk
         reply.update(self._compose_line(self._buffer))
         self.scroll_end(animate=False)

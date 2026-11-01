@@ -8,18 +8,20 @@ key event proves that still works.
 # pylint: disable=missing-function-docstring,protected-access
 # pyright: reportAttributeAccessIssue=false
 
+import dataclasses
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from textual import events
 from textual.pilot import Pilot
 from textual.widgets import Input, Static, TabbedContent
 
-from wactorz import config
+from tests.tui.fake import FakeClient, context_over, part
+from wactorz.client import Attachment, Client, Part, TurnInterruptedError, UnauthorizedError
 from wactorz.tui.app import TAB_IDS, WactorzTUI, run, run_async
 from wactorz.tui.attachments import Staged
 from wactorz.tui.context import TUIContext
@@ -38,13 +40,14 @@ class _Ctx(TUIContext):
         fail: bool = False,
         history: list[dict[str, Any]] | None = None,
     ) -> None:
-        super().__init__()
+        super().__init__(cast(Client, FakeClient()))
+        self.server = context_over().server
         self._snap = snap if snap is not None else Snapshot()
         self._chunks = chunks
         self._fail = fail
         self._stored = history or []
         self.asked: list[str] = []
-        self.attached: list[list[dict[str, Any]]] = []
+        self.attached: list[list[Attachment]] = []
 
     async def snapshot(self) -> Snapshot:
         if self._fail:
@@ -54,22 +57,18 @@ class _Ctx(TUIContext):
     async def history(self, limit: int = 200) -> list[dict[str, Any]]:
         return list(self._stored)
 
-    async def store_attachments(
-        self, staged: list[Staged]
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        records = [
-            {"id": "0" * 32, "name": item.name, "mime": "application/pdf", "size": item.size}
-            for item in staged
-        ]
-        return records, []
+    async def store_attachments(self, staged: list[Staged]) -> tuple[list[Attachment], list[str]]:
+        return [
+            Attachment("0" * 32, item.name, "application/pdf", item.size) for item in staged
+        ], []
 
-    async def chat_stream(
-        self, text: str, attachments: list[dict[str, Any]] | None = None
-    ) -> AsyncIterator[str]:
+    async def chat_stream(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, text: str, attachments: list[Attachment]
+    ) -> AsyncIterator[Part]:
         self.asked.append(text)
-        self.attached.append(list(attachments or []))
+        self.attached.append(list(attachments))
         for chunk in self._chunks:
-            yield chunk
+            yield part(chunk, agent="")
 
 
 @pytest.fixture(name="ctx")
@@ -448,7 +447,7 @@ async def test_the_staged_files_go_with_the_next_message(app: WactorzTUI, pdf: P
         await _submit(pilot, "summarise this")
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()
-        assert [[a["name"] for a in turn] for turn in pilot.app.ctx.attached] == [["report.pdf"]]
+        assert [[a.name for a in turn] for turn in pilot.app.ctx.attached] == [["report.pdf"]]
         assert not _tray(pilot).display
         chat = pilot.app.query_one(ChatPane)
         assert any("report.pdf" in str(w.content) for w in chat.query(".chat-user"))
@@ -464,11 +463,10 @@ async def test_detach_takes_the_staged_files_off(app: WactorzTUI, pdf: Path) -> 
         assert pilot.app.ctx.attached == [[]]
 
 
-async def test_with_uploads_off_a_dropped_path_is_just_text(
-    monkeypatch: pytest.MonkeyPatch, pdf: Path
-) -> None:
-    monkeypatch.setattr(config, "UPLOADS_ENABLED", False)
-    async with WactorzTUI(_Ctx()).run_test() as pilot:
+async def test_with_uploads_off_a_dropped_path_is_just_text(pdf: Path) -> None:
+    context = _Ctx()
+    context.server = dataclasses.replace(context.server, uploads=False)
+    async with WactorzTUI(context).run_test() as pilot:
         await _paste(pilot, str(pdf))
         assert pilot.app.query_one("#cmd", Input).value == str(pdf)
         assert not _tray(pilot).display
@@ -484,38 +482,55 @@ async def test_run_async_uses_the_context_it_is_given(monkeypatch: pytest.Monkey
         started.append(self.ctx)
 
     monkeypatch.setattr(WactorzTUI, "run_async", _fake_run)
-    ctx = TUIContext()
+    ctx = context_over()
     await run_async(ctx)
     assert started == [ctx]
 
 
-async def test_run_async_builds_a_context_when_none_is_given(
+async def test_the_server_says_who_answered_whoever_was_addressed() -> None:
+    client = FakeClient(parts=(part("sure", agent="catalog"),))
+    async with WactorzTUI(context_over(client)).run_test() as pilot:
+        await _submit(pilot, "@cat list")
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        replies = [str(w.content) for w in pilot.app.query_one(ChatPane).query(".chat-reply")]
+        assert any("catalog" in reply and "sure" in reply for reply in replies)
+
+
+async def test_a_turn_cut_off_says_so_in_the_transcript() -> None:
+    client = FakeClient(parts=(part("half an"),))
+    client.chat.fails_with = TurnInterruptedError()
+    async with WactorzTUI(context_over(client)).run_test() as pilot:
+        await _submit(pilot, "hi")
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        replies = [str(w.content) for w in pilot.app.query_one(ChatPane).query(".chat-reply")]
+        assert any("connection dropped" in reply for reply in replies)
+
+
+async def test_a_connection_that_ends_for_good_is_said(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def refused(_self: TUIContext, _on_logs: Any) -> None:
+        raise UnauthorizedError("http://server.test")
+
+    monkeypatch.setattr(TUIContext, "follow", refused)
+    notified: list[str] = []
+    monkeypatch.setattr(WactorzTUI, "notify", lambda _self, text, **_: notified.append(text))
+    async with WactorzTUI(context_over()).run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        assert any("refused the key" in text for text in notified)
+
+
+def test_wactorz_tui_with_no_server_says_how_to_name_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from wactorz.tui import app as app_mod  # pylint: disable=import-outside-toplevel
+    monkeypatch.delenv("WACTORZ_URL", raising=False)
 
-    made = TUIContext()
-
-    async def _create() -> TUIContext:
-        return made
-
-    started = []
-
-    async def _fake_run(self: WactorzTUI) -> None:
-        started.append(self.ctx)
-
-    monkeypatch.setattr(app_mod, "create_context", _create)
-    monkeypatch.setattr(WactorzTUI, "run_async", _fake_run)
-    await run_async()
-    assert started == [made]
+    with pytest.raises(SystemExit, match="--url"):
+        run([])
 
 
-def test_run_drives_the_async_entry_point(monkeypatch: pytest.MonkeyPatch) -> None:
-    from wactorz.tui import app as app_mod  # pylint: disable=import-outside-toplevel
+def test_wactorz_tui_says_why_it_could_not_attach(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WACTORZ_API_KEY", "k")
 
-    seen = []
-    monkeypatch.setattr(app_mod.asyncio, "run", seen.append)
-    ctx = TUIContext()
-    run(ctx)
-    assert len(seen) == 1
-    seen[0].close()  # never awaited; close it so there is no warning
+    with pytest.raises(SystemExit, match="not available"):
+        run(["--url", "http://127.0.0.1:9"])

@@ -55,12 +55,13 @@ FUTURE: if an extension might need a teardown ordering or prerequisite like
 from __future__ import annotations
 
 import importlib
-import importlib.metadata
 import logging
 import pkgutil
 from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
+
+from .. import installed
 
 if TYPE_CHECKING:
     from aiohttp.web import Application
@@ -174,7 +175,7 @@ def _from_entry_points(taken: set[str], *, refresh: bool = False) -> list[Extens
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         log.warning("[ext] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []

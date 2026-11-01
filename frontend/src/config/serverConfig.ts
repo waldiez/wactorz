@@ -22,7 +22,7 @@
 import { emit } from "../events";
 import { apiUrl, requestJson } from "../io/api";
 import { safeStorage } from "../safeStorage";
-import { SIGN_OUT_KEY, UPLOADS_KEY } from "./keys";
+import { BLOCKED_PACKAGES_KEY, SIGN_OUT_KEY, UPLOADS_KEY } from "./keys";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
@@ -106,6 +106,14 @@ registerConfigEntry(SIGN_OUT_KEY, c =>
 );
 registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
+);
+
+// Core entry — the installed packages left out because WACTORZ_EXTENSIONS does not
+// name them. Only the server sets it, and naming one clears the notice.
+registerConfigEntry(
+    BLOCKED_PACKAGES_KEY,
+    c => ((c.extensions as Record<string, unknown> | undefined)?.blocked as string[] | undefined)?.join(","),
+    { clearWhenAbsent: true },
 );
 
 /** Fetch `/api/config` and seed every registered client-side key from it. Whether

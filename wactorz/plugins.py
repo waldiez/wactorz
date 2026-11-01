@@ -3,8 +3,8 @@
 A developer with their own actor class or a function declared with
 :func:`wactorz.agent` makes it part of the system without forking ``app.py``:
 
-- as a ``wactorz.agents`` entry point in their package, so ``pip install``
-  is the whole of the registration;
+- as a ``wactorz.agents`` entry point in their package, loaded once the package
+  is named in ``WACTORZ_EXTENSIONS`` (see :mod:`wactorz.installed`);
 - named in ``WACTORZ_AGENTS``, a comma-separated list of ``package.module:attr``
   targets, for a deployment configured rather than packaged;
 - passed to :func:`wactorz.run`, for a script.
@@ -19,7 +19,6 @@ path from it would run whatever that path reached.
 from __future__ import annotations
 
 import importlib
-import importlib.metadata
 import inspect
 import logging
 from collections.abc import Iterable, Iterator
@@ -27,6 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import installed
 from .agents.function_agent import AgentSpec, FunctionAgent, agent_name_from, spec_of
 from .config import CONFIG
 from .core.actor import Actor
@@ -393,7 +393,7 @@ def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, Agen
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         logger.warning("[plugins] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []

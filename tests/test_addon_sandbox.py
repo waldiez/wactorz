@@ -184,3 +184,15 @@ def test_every_option_has_a_row_in_the_docs(addon: str, docs: str) -> None:
     text = (ROOT / docs).read_text(encoding="utf-8")
 
     assert [name for name in options if f"| `{name}` |" not in text] == []
+
+
+@pytest.mark.parametrize("addon", ADDONS)
+def test_the_extensions_option_reaches_the_variable_wactorz_reads(addon: str) -> None:
+    config = yaml.safe_load(_file(addon, "config.yaml"))
+    target = config["schema"]["deploy_targets"][0]
+    run_sh = _file(addon, "run.sh")
+
+    assert config["options"]["extensions"] == ""
+    assert (config["schema"]["extensions"], target["extensions"]) == ("str?", "str?")
+    assert 'export WACTORZ_EXTENSIONS="${WACTORZ_EXTENSIONS}"' in run_sh
+    assert "broker_tls_port extensions; do" in run_sh

@@ -1040,6 +1040,7 @@ class InstallerAgent(Actor):
             password=password,
             tls_ca=tls.ca if tls is not None and enabled else None,
             check_hostname=bool(tls is not None and tls.check_hostname),
+            extensions=target.extensions,
         )
         credentials = bool(username or password)
         remote = f"{home}/wactorz/.env"

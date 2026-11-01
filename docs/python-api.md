@@ -318,7 +318,7 @@ with the actor.
 ### `wactorz.plugins`
 
 `discover()` finds every agent the deployment brings — `wactorz.agents` entry
-points, `WACTORZ_AGENTS`, and whatever `register()` was given — as `AgentPlugin`
+points of packages named in `WACTORZ_EXTENSIONS`, `WACTORZ_AGENTS`, and whatever `register()` was given — as `AgentPlugin`
 objects with a `build(name=, persistence_dir=, llm_provider=, options=)` method.
 `for_target("pkg.mod:attr")` is what a `type: "module"` spawn config resolves
 through, and finds registered targets only.

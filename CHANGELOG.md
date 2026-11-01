@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Reachy installation uses an opt-in strict recipe policy; other agents keep their existing best-effort startup and package approval controls.
 
+### Changed
+
+- **Installed packages load only when named.** Extensions, agents and pipelines registered as
+  entry points were loaded from anything installed, outside the safety check, and an agent's
+  requirements install packages too. Now a package is loaded only when its distribution is in
+  `WACTORZ_EXTENSIONS` (`WACTORZ_EXTENSIONS=wactorz-mlops,wactorz-tts`, or `*` for everything
+  installed, as before). What Wactorz ships always loads, and so do targets in `WACTORZ_AGENTS`
+  and `WACTORZ_PIPELINES`. A package left out is not imported, and is named once in the log, with
+  the line to add, and on the Overview. **To upgrade:** if you rely on a package's entry points,
+  add it to `WACTORZ_EXTENSIONS`; under Home Assistant, the `extensions` option. A node reads its
+  own list: set `DEPLOY_<NODE>_EXTENSIONS` on main, or `extensions` on the add-on's deploy target,
+  and run `/deploy` again.
+
 ### Added
 
 - **Recorded readings can be let go after a while, except what a model learned from.**

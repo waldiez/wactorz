@@ -141,16 +141,18 @@ kernel already uses the selector loop.
 ## Or register it, and start `wactorz` as usual
 
 For a deployment that runs the `wactorz` command, name the agent instead of
-writing a script. Three ways, all equivalent:
+writing a script:
 
 | How | Where | For |
 | --- | ----- | --- |
 | `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:Sink` | the environment | a configured deployment |
-| `[project.entry-points."wactorz.agents"]` in `pyproject.toml` | your package | anything `pip install`ed |
-| `[project.entry-points."wactorz.extensions"]` in `pyproject.toml` | your package | a server extension (routes, `/api/config` values) loaded like those in `wactorz/ext/`; see the extensions guide |
+| `[project.entry-points."wactorz.agents"]` in `pyproject.toml` | your package, named in `WACTORZ_EXTENSIONS` | an installed package |
+| `[project.entry-points."wactorz.extensions"]` in `pyproject.toml` | your package, named in `WACTORZ_EXTENSIONS` | a server extension (routes, `/api/config` values) loaded like those in `wactorz/ext/`; see the extensions guide |
 | `wactorz.run(agents=[...])` or `serve(...)` | a script | development |
 
-The target must be importable from where `wactorz` starts: a package that is
+A package's entry points load only once its distribution is in
+`WACTORZ_EXTENSIONS` (`*` for all); installing it is not enough. The target must be
+importable from where `wactorz` starts: a package that is
 installed, or a folder on `PYTHONPATH`. One that is not is reported at startup
 and left out. A registered agent is supervised, listed by `@catalog list`,
 restored after a restart, and may be spawned under another name with a
@@ -185,7 +187,7 @@ the same name, so give an agent's module a name of its own (`imu_detector.py`
 rather than `agent.py`) when several will share a node.
 
 A node that has the agent installed itself -- the package in its environment
-and the target in `WACTORZ_AGENTS` there, or a `wactorz.agents` entry point --
+and the target in `WACTORZ_AGENTS` there, or a `wactorz.agents` entry point of a package in the node's `WACTORZ_EXTENSIONS` --
 builds it from that instead, and is sent no code; that is how to run code that
 cannot follow the rule. A node from before this release takes no code from
 main, and is refused the move until it is deployed again.
@@ -446,7 +448,7 @@ Wiring is checked when the pipeline is declared: a step or rule listening on a
 topic nothing in the pipeline publishes, and not named in `inputs`, raises
 `ValueError` before anything starts. The first step may listen to the outside
 world without saying so. A pipeline declared at module level is found through
-`WACTORZ_PIPELINES=mypkg.flows:watch`, a `wactorz.pipelines` entry point, or
+`WACTORZ_PIPELINES=mypkg.flows:watch`, a `wactorz.pipelines` entry point (of a package named in `WACTORZ_EXTENSIONS`), or
 `wactorz.run(pipelines_=[watch])`.
 
 ## From chat

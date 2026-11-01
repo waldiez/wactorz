@@ -13,6 +13,7 @@ from typing import Any
 from aiohttp import web
 from aiohttp.web import Response
 
+from .. import installed
 from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
 from . import cost, origins, probes, questions, runtime
 from .metrics import known_nodes
@@ -191,6 +192,8 @@ async def config_handler(request: web.Request) -> Response:
         # with no key there is nothing to sign out of at all.
         "auth": {"canSignOut": bool(CONFIG.api_key) and not origins.from_supervisor(request)},
         "ws_url": ws_url,
+        # Names of packages left out at start, so the page can say how to load one.
+        "extensions": {"blocked": installed.blocked()},
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),
     # namespaced by extension name.

@@ -198,6 +198,11 @@ export WACTORZ_RETENTION_OUTBOX_DAYS="${WACTORZ_RETENTION_OUTBOX_DAYS}"
 WACTORZ_NODE_SIGNING=$(get_config_safe 'node_signing' 'enforce')
 export WACTORZ_NODE_SIGNING="${WACTORZ_NODE_SIGNING}"
 
+# The installed packages whose extensions, agents and pipelines are loaded: their
+# distribution names, comma separated, or `*` for all.
+WACTORZ_EXTENSIONS=$(get_config_safe 'extensions' '')
+export WACTORZ_EXTENSIONS="${WACTORZ_EXTENSIONS}"
+
 # ── Remote deploy targets ─────────────────────────────────────────────────────
 # A list of objects in options.json, flattened into the DEPLOY_TARGETS +
 # DEPLOY_<NAME>_* variables wactorz/config.py reads. SSH credentials are
@@ -218,7 +223,7 @@ if [ -f "$options_file" ]; then
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password broker_tls broker_tls_port; do
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password broker_tls broker_tls_port extensions; do
                 deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" "$options_file")
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"

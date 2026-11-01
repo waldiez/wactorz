@@ -25,8 +25,8 @@ frontend/src/
 
 At startup the monitor calls `setup_all(app)`, which auto-discovers every module
 or package under `wactorz/ext/` that exposes a `setup(app)` hook, and every
-extension an installed package registers under the `wactorz.extensions` entry
-point, and wires them in. `collect_public_config(app)` gathers each extension's
+extension registered under the `wactorz.extensions` entry point by an installed
+package named in `WACTORZ_EXTENSIONS`, and wires them in. `collect_public_config(app)` gathers each extension's
 non-secret browser config and merges it into `/api/config`. Nothing in core
 references a specific extension.
 
@@ -92,9 +92,10 @@ The registry itself is on `app[contract.ACTOR_REGISTRY]` (set by core before
 
 ### From another package
 
-An extension does not have to live in this repository. Any package that is
-`pip install`ed beside Wactorz can register one, free or commercial, and it is
-loaded exactly like a module under `wactorz/ext/`, after the built-ins:
+An extension does not have to live in this repository. Any package installed
+beside Wactorz can register one, free or commercial, and once it is named in
+`WACTORZ_EXTENSIONS` it is loaded exactly like a module under `wactorz/ext/`, after
+the built-ins:
 
 ```toml
 # pyproject.toml of the other package
@@ -109,6 +110,26 @@ extension's `__deps__` refers to. A name a built-in extension already uses is
 refused with a log line, so a package cannot stand in for one; a package that
 fails to import, or has no `setup()`, is logged and skipped like a broken module
 under `wactorz/ext/`. Restart Wactorz after installing or removing such a package.
+
+### Enabling a package
+
+Loading a package runs its code in the server, so being installed is not enough:
+an agent's own requirements install packages too. Name the ones you trust, by
+distribution name, or use `*` to load everything installed:
+
+```bash
+WACTORZ_EXTENSIONS=wactorz-mlops,wactorz-tts
+```
+
+The setting covers all three things a package can register: `wactorz.extensions`,
+`wactorz.agents` and `wactorz.pipelines`. An unlisted package is not imported at
+all; it is named once in the log, with the line to add, and on the Overview. The
+modules under `wactorz/ext/` always load.
+
+A node reads its own `WACTORZ_EXTENSIONS`. `/deploy` rewrites the node's `.env`, so
+set it on main as `DEPLOY_<NODE>_EXTENSIONS`. On a node the setting decides which
+agents it can build. Under Home Assistant it is the `extensions` option, on the
+add-on and on each deploy target.
 
 ### Requirements
 
@@ -266,7 +287,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 ## Checklist
 
 - [ ] Backend `setup()` registers routes under `/api/<ext>/…`
-- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`
+- [ ] A packaged extension is named in `[project.entry-points."wactorz.extensions"]`, and its docs say to add the distribution to `WACTORZ_EXTENSIONS`
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload

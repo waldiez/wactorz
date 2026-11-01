@@ -223,3 +223,25 @@
   color: #bbf7d0;
   background: rgba(34, 211, 160, 0.08);
 }
+
+/* Installed packages the server left out: read once, then dismissed. */
+.af-blocked-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.af-blocked-dismiss {
+  flex: none;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}

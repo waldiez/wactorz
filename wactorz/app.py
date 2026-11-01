@@ -674,7 +674,7 @@ async def build_system(
         )
 
     # The agents this deployment brings -- WACTORZ_AGENTS, wactorz.agents entry
-    # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
+    # points of listed packages, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
     recorded = placed_by(stored_spawn_registry(_db))

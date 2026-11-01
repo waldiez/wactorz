@@ -56,7 +56,7 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Start only the monitor and the agents this deployment brings (WACTORZ_AGENTS, "
-            "wactorz.agents entry points): no orchestrator, catalogue or installer, so no "
+            "wactorz.agents entry points of packages in WACTORZ_EXTENSIONS): no orchestrator, catalogue or installer, so no "
             "model is needed. Same as WACTORZ_MINIMAL=1."
         ),
     )

@@ -84,7 +84,8 @@ def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] 
             f"it is built from {target or 'a target it does not name'}, which that node has "
             f"not said it has, and its code could not be sent with it. Redeploy the node so it "
             f"takes the code from main, or install the package there and name the agent in "
-            f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
+            f"WACTORZ_AGENTS, or list it as a wactorz.agents entry point of a package named in "
+            f"that node's WACTORZ_EXTENSIONS"
         )
     return (
         f"it is a {kind} agent, built into this server, and a node runs only an "

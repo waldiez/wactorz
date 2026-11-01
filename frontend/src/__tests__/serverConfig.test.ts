@@ -11,6 +11,7 @@ import {
     seedKeyFromServer,
     registerConfigEntry,
 } from "../config/serverConfig";
+import { BLOCKED_PACKAGES_KEY } from "../config/keys";
 
 describe("seedKeyFromServer", () => {
     beforeEach(() => localStorage.clear());
@@ -202,5 +203,27 @@ describe("loadServerConfig", () => {
 
         stop();
         expect(told).toBe(1);
+    });
+});
+
+describe("the left-out packages", () => {
+    beforeEach(() => localStorage.clear());
+    afterEach(() => vi.unstubAllGlobals());
+
+    const answer = (blocked: string[]): void => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(() => Promise.resolve(new Response(JSON.stringify({ extensions: { blocked } })))),
+        );
+    };
+
+    it("are kept, and cleared once the server stops naming them", async () => {
+        answer(["acme", "other"]);
+        await seedServerConfig();
+        expect(localStorage.getItem(BLOCKED_PACKAGES_KEY)).toBe("acme,other");
+
+        answer([]);
+        await seedServerConfig();
+        expect(localStorage.getItem(BLOCKED_PACKAGES_KEY)).toBeNull();
     });
 });

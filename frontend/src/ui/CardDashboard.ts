@@ -324,6 +324,7 @@ export class CardDashboard {
         setHaNavUrl(this.root, this.haUrl);
         setSignOutVisible(this.root);
         setAttachVisible(this.root);
+        this._overview.renderBlockedNotice();
     }
 
     private _wireEvents(): void {

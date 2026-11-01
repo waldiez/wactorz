@@ -21,6 +21,7 @@ import {
     type AgentAction,
 } from "./cards";
 import { el, list, listItem, testId } from "../dom";
+import { buildBlockedNotice, BLOCKED_NOTICE_ID } from "./blockedNotice";
 import { buildNodeCard, type NodeTrend } from "./nodeCard";
 import type { Point } from "./trend";
 import type { TrendKind } from "./trendPanel";
@@ -62,6 +63,10 @@ export class OverviewView {
     /** Build the full overview element: host bar, stat cards, wactor grid and nodes panel. */
     build(): HTMLElement {
         const root = el("div", "af-overview");
+        const blocked = buildBlockedNotice();
+        if (blocked) {
+            root.appendChild(blocked);
+        }
 
         const [cpu, memUsed, memTotal] = this.host.hostStats();
         root.appendChild(buildHostBar(cpu, memUsed, memTotal));
@@ -75,6 +80,18 @@ export class OverviewView {
         panels.append(this._buildWactorPanel(), this._buildNodesPanel());
         root.appendChild(panels);
         return root;
+    }
+
+    /** Show the notice of left-out packages once the server has said (no-op if not mounted). */
+    renderBlockedNotice(): void {
+        const overview = this.host.root.querySelector<HTMLElement>(".af-overview");
+        if (!overview || overview.querySelector(`#${BLOCKED_NOTICE_ID}`)) {
+            return;
+        }
+        const blocked = buildBlockedNotice();
+        if (blocked) {
+            overview.prepend(blocked);
+        }
     }
 
     /** Re-render the summary stat cards in place (no-op if not mounted). */

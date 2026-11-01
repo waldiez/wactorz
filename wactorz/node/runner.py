@@ -357,7 +357,8 @@ class NodeRunner:
             target = config.get("target") or "a target it does not name"
             reason = (
                 f"this node cannot build {target}: install its package here and name it in "
-                "WACTORZ_AGENTS, or list it as a wactorz.agents entry point"
+                "WACTORZ_AGENTS, or list it as a wactorz.agents entry point of a package named in "
+                "this node's WACTORZ_EXTENSIONS"
             )
             logger.error("[runner] Not starting '%s': %s", name, reason)
             await self._log_to_dashboard(

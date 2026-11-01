@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OverviewView, type OverviewHost } from "../ui/overview/overview";
+import { BLOCKED_PACKAGES_KEY } from "../config/keys";
 import type { AgentInfo, RemoteNode } from "../types/agent";
 import type { StatCardData, AgentAction } from "../ui/overview/cards";
 import type { TrendKind } from "../ui/overview/trendPanel";
@@ -263,5 +264,37 @@ describe("a card's state for its dot", () => {
         view.patchCard(agent("worker", { state: "stopped" }));
 
         expect(card().dataset["state"]).toBe("stopped");
+    });
+});
+
+describe("OverviewView left-out packages", () => {
+    beforeEach(() => localStorage.clear());
+
+    it("adds the notice to a mounted overview when the server says, once", () => {
+        const host = makeHost();
+        const view = new OverviewView(host);
+        host.root.append(view.build());
+        localStorage.setItem(BLOCKED_PACKAGES_KEY, "acme");
+
+        view.renderBlockedNotice();
+        view.renderBlockedNotice();
+
+        expect(host.root.querySelectorAll("[role=status]")).toHaveLength(1);
+    });
+
+    it("builds the notice with the overview once the name is known", () => {
+        localStorage.setItem(BLOCKED_PACKAGES_KEY, "acme");
+
+        expect(new OverviewView(makeHost()).build().textContent).toContain("acme");
+    });
+
+    it("does nothing with no overview mounted or nothing to say", () => {
+        const host = makeHost();
+        const view = new OverviewView(host);
+        view.renderBlockedNotice();
+        host.root.append(view.build());
+        view.renderBlockedNotice();
+
+        expect(host.root.querySelector("[role=status]")).toBeNull();
     });
 });

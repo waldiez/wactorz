@@ -49,6 +49,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `sandbox_node` | `false` | Run a node of the add-on's own, as a second user, where code the model writes runs instead of beside the add-on's secrets. Needs `node_accounts` or `mosquitto_embedded`. See [A sandbox for code the model writes](#a-sandbox-for-code-the-model-writes). |
 | `node_topics` | *(empty)* | Extra data topics every node's agents may use on the embedded broker, beyond `custom/`, `sensors/`, `home/`, `schedule/` and reading `homeassistant/state_changes/`. Comma-separated topic filters; `read:` before one makes it read-only, e.g. `zigbee2mqtt/#, read:weather/#`. |
 | `broker_accounts` | *(empty)* | Other accounts on the embedded broker that keep all of it once a node is deployed, comma-separated. An account not named there, other than this addon's own, then has no access. |
+| `extensions` | (empty) | Installed packages whose extensions, agents and pipelines are loaded: their distribution names, comma separated, or `*` for all. Blank loads none; what the add-on ships always loads. A deploy target has its own `extensions`, for what that node loads. |
 | `node_signing` | `enforce` | What a deployed node does with a command that is not signed for it: `enforce` refuses it, `warn` acts on it and tells you in chat. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
@@ -126,7 +127,7 @@ deploy_targets:
     broker: 192.168.1.10
 ```
 
-Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`), `broker_user`, `broker_password`, `broker_tls` (`auto`, `on` or `off`; see [Encrypted connections to nodes](#encrypted-connections-to-nodes-tls)), `broker_tls_port` (default `8883`) and `ssh_port` (default `22`).
+Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`), `broker_user`, `broker_password`, `broker_tls` (`auto`, `on` or `off`; see [Encrypted connections to nodes](#encrypted-connections-to-nodes-tls)), `broker_tls_port` (default `8883`), `ssh_port` (default `22`) and `extensions` (the node's own list of packages to load).
 
 `user`, `key` and `password` are the **SSH** login. `broker_user` and
 `broker_password` are the node's **broker** account, and are separate on

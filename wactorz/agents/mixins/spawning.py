@@ -509,7 +509,7 @@ class SpawnMixin(_Host):
         """Spawn an agent this deployment brings, named by its ``target`` import path.
 
         Only a target registered as a plugin -- a ``wactorz.agents`` entry
-        point, ``WACTORZ_AGENTS``, or ``wactorz.run(agents=...)`` -- is spawned.
+        point of a package named in ``WACTORZ_EXTENSIONS``, ``WACTORZ_AGENTS``, or ``wactorz.run(agents=...)`` -- is spawned.
         A spawn config can be model-authored, and resolving an arbitrary
         ``package.module:attr`` from one would run whatever that path reached.
         ``options`` in the config reach the actor's constructor, or a decorated
@@ -520,7 +520,8 @@ class SpawnMixin(_Host):
         if plugin is None:
             logger.error(
                 "[%s] Cannot spawn %r: target %r is not a registered agent. Name it in "
-                "WACTORZ_AGENTS, list it as a wactorz.agents entry point, or pass it to "
+                "WACTORZ_AGENTS, list it as a wactorz.agents entry point of a package named in "
+                "WACTORZ_EXTENSIONS, or pass it to "
                 "wactorz.run(agents=...).",
                 self.name,
                 name,

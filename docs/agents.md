@@ -684,13 +684,13 @@ in the catalogue until asked for.
 
 ### Registering it
 
-Three ways in, all equivalent once the system is up:
+Three ways in, all equivalent once the system is up (a package's entry points load once it is named in `WACTORZ_EXTENSIONS`):
 
 | How | Where | For |
 | --- | ----- | --- |
 | `wactorz.run(agents=[detect, MyAgent], web=True)` | a script | development, a single deployment |
 | `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:MyAgent wactorz` | the environment | a configured deployment |
-| `[project.entry-points."wactorz.agents"]` in your package's `pyproject.toml` | the package | anything `pip install`ed |
+| `[project.entry-points."wactorz.agents"]` in your package's `pyproject.toml` | the package, named in `WACTORZ_EXTENSIONS` | an installed package |
 
 A registered agent is supervised at startup, listed by `@catalog list`, and
 restored from the spawn registry after a restart. A spawn config may also name

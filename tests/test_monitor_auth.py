@@ -203,9 +203,9 @@ class TestWarningAboutAShortKey:
         assert "openssl rand" in warning
 
     def test_it_names_the_gap_the_throttle_does_not_close(self) -> None:
-        # The form is throttled; a request carrying the key as a header is not.
-        # That is the reason to replace the key rather than rely on the counter.
+        # The count is per address, so many addresses get as many tries. That is
+        # the reason to replace the key rather than rely on the counter.
         warning = auth.weak_key_warning("short")
 
         assert warning is not None
-        assert "header" in warning
+        assert "per address" in warning

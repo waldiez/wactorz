@@ -12,7 +12,6 @@ logged in are the same state) and why the origin gate is enough — see
 `auth.UNGUARDED_PATHS`.
 """
 
-import hmac
 import logging
 import secrets
 
@@ -186,7 +185,9 @@ async def login_page_handler(request: web.Request) -> Response:
         logger.info("[auth] signed in with the startup link")
         raise response
 
-    if auth.is_authorized(request, CONFIG.api_key):
+    # Not the header's key: this page needs none, so answering one here would
+    # be a way to test guesses that nothing counts.
+    if auth.needs_no_key(request, CONFIG.api_key):
         raise web.HTTPFound(target)
     message = (
         "That sign-in link has been used or has expired."
@@ -212,7 +213,7 @@ async def login_submit_handler(request: web.Request) -> Response:
     form = await request.post()
     presented = str(form.get("key", ""))
     target = auth.safe_next(str(form.get("next", "/")))
-    caller = origins.client_address(request) or "an unknown address"
+    caller = origins.client_address(request) or throttle.UNKNOWN_ADDRESS
 
     throttle.throttle.prune()
     waiting = throttle.throttle.retry_after(caller)
@@ -222,7 +223,7 @@ async def login_submit_handler(request: web.Request) -> Response:
         logger.warning("[auth] sign-in refused, %s must wait %.0fs", caller, waiting)
         return _page(target, _wait_message(waiting), status=429)
 
-    if not CONFIG.api_key or not hmac.compare_digest(presented, CONFIG.api_key):
+    if not CONFIG.api_key or not auth.key_matches(presented, CONFIG.api_key):
         # No detail about which part was wrong, and the same page either way.
         throttle.throttle.record_failure(caller)
         logger.warning("[auth] failed sign-in from %s", caller)

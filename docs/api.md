@@ -680,7 +680,7 @@ reply. A name that is not a single word is refused with `400`.
 #### Authentication
 
 Set `API_KEY` in `.env` to require a key on **every** route except the probes. Both
-`X-API-Key` and `Authorization: Bearer` are accepted. With no key set the API is
+`X-API-Key` and `Authorization: Bearer` are accepted. A wrong key is counted per address with the sign-in form's: a growing wait, then 15 minutes locked out, answered `429` with `Retry-After`, the right key included. With no key set the API is
 open, which is why the default bind is loopback:
 
 ```bash

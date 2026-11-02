@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_S = 60.0
 #: Seconds between pings on the socket, which is how a dead link is noticed.
 HEARTBEAT_S = 30.0
+#: A key refused for a while: not a final no, so a stream keeps trying through it.
+TOO_MANY_ATTEMPTS = 429
 
 _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 
@@ -134,7 +136,7 @@ class Transport:
             return RefusedError(self.url, said)
         if status == 404:
             return NotFoundError(path, said) if isinstance(body, dict) else NotOfferedError(path)
-        if status >= 500:
+        if status >= 500 or status == TOO_MANY_ATTEMPTS:
             return UnavailableError(self.url, said)
         return RejectedError(status, said)
 

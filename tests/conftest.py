@@ -21,6 +21,7 @@ from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
 from wactorz.node import state as node_state
 from wactorz.web import runtime as web_runtime
+from wactorz.web import throttle
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +86,16 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     the default.
     """
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_key_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test an allowance of its own for wrong keys.
+
+    The running server's throttle is one object per process and every test client
+    calls from the same address, so wrong keys in one test would refuse the next.
+    """
+    monkeypatch.setattr(throttle, "throttle", throttle.LoginThrottle())
 
 
 #: The settings that put broker connections on TLS.

@@ -11,6 +11,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **A wrong API key in a header is throttled like one on the sign-in form.** `X-API-Key` and `Authorization: Bearer` now spend
+  the form's allowance per address: a growing wait, then 15 minutes locked out, answered `429` with `Retry-After`. While it
+  lasts, the right key from that address is refused too, so check scripts holding an old key. `GET /login` no longer tests a
+  header's key, and a key that is not ASCII is refused rather than answered with a 500.
+
 - **Installed packages load only when named.** Extensions, agents and pipelines registered as
   entry points were loaded from anything installed, outside the safety check, and an agent's
   requirements install packages too. Now a package is loaded only when its distribution is in

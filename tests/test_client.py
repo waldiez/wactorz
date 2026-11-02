@@ -44,7 +44,7 @@ from wactorz.client import stream as stream_module
 from wactorz.client.stream import Listener
 from wactorz.core.identity import derive_actor_id
 from wactorz.ext import tts
-from wactorz.web import answers, chat, questions, runtime, uploads
+from wactorz.web import answers, chat, questions, runtime, throttle, uploads
 from wactorz.web.app import build_app
 
 KEY = "a-key-long-enough-for-these-tests"
@@ -136,6 +136,15 @@ class TestAskingTheServer:
         async with Client(str(server.make_url("")), api_key="wrong") as wz:
             with pytest.raises(UnauthorizedError):
                 await wz.server()
+
+    async def test_a_key_locked_out_for_now_is_unavailable_rather_than_refused(
+        self, wz: Client
+    ) -> None:
+        for _ in range(throttle.LOCKOUT_AFTER):
+            throttle.throttle.record_failure("127.0.0.1")
+
+        with pytest.raises(UnavailableError, match="Too many"):
+            await wz.server()
 
     async def test_a_route_the_server_lacks_says_so_rather_than_returning_a_page(
         self, wz: Client

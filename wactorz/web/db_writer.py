@@ -122,7 +122,10 @@ class DbWriter:
         self._wake: asyncio.Event | None = None
         self._closing = False
         self._dropped_since_warning = 0
-        self._warned_at = 0.0
+        #: When the last warning was said; None before the first. Not 0: the clock
+        #: counts from the machine's boot, so on one booted under a minute ago a
+        #: start at 0 would hold back the first warning too.
+        self._warned_at: float | None = None
 
     # ── Handing work over (on the event loop) ──────────────────────────────
 
@@ -261,7 +264,7 @@ class DbWriter:
         chat_metrics.ROWS_DROPPED.inc()
         self._dropped_since_warning += 1
         now = time.monotonic()
-        if now - self._warned_at >= WARN_EVERY_S:
+        if self._warned_at is None or now - self._warned_at >= WARN_EVERY_S:
             logger.warning(
                 "[db-writer] the chat log is falling behind: %s turn(s) not kept "
                 "(the page showed them), latest from %r",

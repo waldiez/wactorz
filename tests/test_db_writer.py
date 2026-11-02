@@ -145,9 +145,17 @@ class TestAFullChatLane:
 
         assert _contents(db) == ["12345"]
 
+    @pytest.mark.parametrize("since_boot", [5.0, 100_000.0])
     async def test_dropping_many_says_so_once_a_while(
-        self, db: WactorzDB, caplog: pytest.LogCaptureFixture
+        self,
+        db: WactorzDB,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        since_boot: float,
     ) -> None:
+        # The clock counts from the machine's boot: on one booted seconds ago, as a
+        # CI runner or a Pi just started can be, the first drop is said all the same.
+        monkeypatch.setattr(db_writer.time, "monotonic", lambda: since_boot)
         writer = DbWriter(max_rows=1)
 
         with caplog.at_level(logging.WARNING, logger="wactorz.web.db_writer"):

@@ -9,7 +9,6 @@ rather than by what the request claims.
 
 import asyncio
 import io
-import threading
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -19,6 +18,7 @@ import pytest
 from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from tests.loop_watch import LoopWatch
 from wactorz import config
 from wactorz.web import api_uploads, uploads
 from wactorz.web.app import build_app
@@ -181,33 +181,11 @@ class TestStoringAFile:
         assert resp.status == 400
 
 
-class _LoopWatch:
-    """Says whether the event loop could run while a disk call was in progress.
-
-    The call clears a flag and waits for a coroutine on the loop to set it again.
-    Made on a thread, that happens at once; made on the loop's own thread, the
-    coroutine never gets to run and the wait runs out.
-    """
-
-    def __init__(self) -> None:
-        self._ran = threading.Event()
-        self.seen: list[bool] = []
-
-    def during(self) -> None:
-        self._ran.clear()
-        self.seen.append(self._ran.wait(timeout=10))
-
-    async def tick(self) -> None:
-        while True:
-            self._ran.set()
-            await asyncio.sleep(0.001)
-
-
 class TestTheDiskIsTouchedOffTheEventLoop:
     async def test_an_upload_writes_while_the_loop_runs(
         self, client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        watch = _LoopWatch()
+        watch = LoopWatch()
         real = api_uploads._write  # pyright: ignore[reportPrivateUsage]
 
         def _write(handle: Any, chunk: bytes) -> None:
@@ -228,7 +206,7 @@ class TestTheDiskIsTouchedOffTheEventLoop:
         self, client: TestClient[Any, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         file_id = str((await (await _put(client, PNG)).json())["id"])
-        watch = _LoopWatch()
+        watch = LoopWatch()
         real = api_uploads._read_meta  # pyright: ignore[reportPrivateUsage]
 
         def _read_meta(path: Path) -> dict[str, Any]:

@@ -8,7 +8,6 @@ Covers three recent features:
 """
 
 import json
-import sqlite3
 import tempfile
 import types
 import unittest
@@ -21,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # real aiohttp Response objects, read via _payload() below.
 from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
 from wactorz.core import agent_reset
+from wactorz.core.persistence.db import WactorzDB
 from wactorz.web import api_actors, cost, events, runtime
 
 ensure_importable("openai")
@@ -179,17 +179,12 @@ class PersistCostTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_kv_db(entries: list[dict]) -> object:
-    """Return a minimal db stub backed by in-memory SQLite with kv_store rows."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
+def _make_kv_db(entries: list[dict]) -> WactorzDB:
+    """A real database in memory, holding these kv_store rows."""
+    db = WactorzDB(":memory:")
     for e in entries:
-        conn.execute(
-            "INSERT INTO kv_store (agent, key, value) VALUES (?, ?, ?)",
-            (e["agent"], e["key"], json.dumps(e["value"])),
-        )
-    conn.commit()
-    return types.SimpleNamespace(conn=conn)
+        db.kv_set(e["agent"], e["key"], e["value"])
+    return db
 
 
 def _close_installed_db(original: object) -> None:
@@ -205,6 +200,9 @@ def _close_installed_db(original: object) -> None:
     """
     installed = runtime.db
     if installed is None or installed is original:
+        return
+    if isinstance(installed, WactorzDB):
+        installed.close()
         return
     conn = getattr(installed, "conn", None)
     if conn is not None:
@@ -279,17 +277,16 @@ class HistoricalCostTest(unittest.TestCase):
         self.assertAlmostEqual(total, 0.04, places=6)
 
     def test_ignores_malformed_rows(self):
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
-        conn.execute(
-            "INSERT INTO kv_store VALUES (?, ?, ?)", ("broken", "_final_cost", "not-valid-json{{{")
+        db = _make_kv_db(
+            [{"agent": "ok", "key": "_final_cost", "value": {"name": "ok", "cost_usd": 0.02}}]
         )
-        conn.execute(
-            "INSERT INTO kv_store VALUES (?, ?, ?)",
-            ("ok", "_final_cost", json.dumps({"name": "ok", "cost_usd": 0.02})),
-        )
-        conn.commit()
-        runtime.db = types.SimpleNamespace(conn=conn)
+        # Written past kv_set, which would refuse it: a row an older version left.
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, 0)",
+                ("broken", "_final_cost", "not-valid-json{{{"),
+            )
+        runtime.db = db
         runtime.state["agents"] = {}
 
         total = cost.historical_cost_usd(self._live_names())

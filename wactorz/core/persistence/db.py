@@ -346,6 +346,21 @@ class WactorzDB:
                 return row[0]
         return default
 
+    @_serialised
+    def kv_values(self, key: str) -> list[tuple[str, Any]]:
+        """Every agent's value for ``key``, as ``(agent, value)``; a value that is not JSON as stored."""
+        rows = self.conn.execute(
+            "SELECT agent, value FROM kv_store WHERE key=?",
+            (key,),
+        ).fetchall()
+        found: list[tuple[str, Any]] = []
+        for agent, raw in rows:
+            try:
+                found.append((str(agent), json.loads(raw)))
+            except (json.JSONDecodeError, TypeError):
+                found.append((str(agent), raw))
+        return found
+
     def kv_delete(self, agent: str, key: str) -> None:
         """Remove one key for one agent. Missing keys are not an error."""
         with self.transaction() as conn:

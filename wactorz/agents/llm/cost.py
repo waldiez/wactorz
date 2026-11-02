@@ -8,7 +8,6 @@ that stub either must patch them here — the re-export in ``llm_agent`` is a
 separate binding and patching it does not reach this code.
 """
 
-import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -55,12 +54,8 @@ def _known_persisted_cost_total(db) -> float:
     """Best available durable lifetime cost, used only for one-time migration."""
     total = 0.0
     try:
-        rows = db.conn.execute("SELECT value FROM kv_store WHERE key = '_final_cost'").fetchall()
-        for row in rows:
+        for _agent, value in db.kv_values("_final_cost"):
             try:
-                value = row[0]
-                if isinstance(value, str):
-                    value = json.loads(value)
                 if isinstance(value, dict):
                     total += float(value.get("cost_usd") or 0.0)
             except Exception as exc:

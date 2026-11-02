@@ -21,12 +21,14 @@ Nothing here reads configuration or touches aiohttp — it is a set of ids with
 ages, so it can be tested for what it is.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -77,6 +79,11 @@ class SessionStore:
         self._tokens: dict[str, float] = {}
         self._path: Path | None = None
         self._secret = b""
+        #: Each copy written is numbered as it is taken, on the loop; a write on a
+        #: thread that finds a newer copy already on disk leaves it there.
+        self._writing = threading.Lock()
+        self._taken = 0
+        self._written = 0
 
     def bind(self, state_dir: str | Path, api_key: str) -> None:
         """Keep sessions in `state_dir`, and load the ones already there.
@@ -122,7 +129,31 @@ class SessionStore:
         self._tokens = {token: at for token, at in stored.items() if now - at < self._ttl}
 
     def _save(self) -> None:
-        """Write the store out, atomically and readable only by this user.
+        """Write the store out now, for a caller with no event loop to keep free."""
+        self._write_copy(*self._copy())
+
+    async def _saved(self) -> None:
+        """Write the store out on a thread.
+
+        The copy is taken here, on the loop that owns the dict, and written on a
+        thread. Two writes may finish in either order; the older is then skipped,
+        so the file is never left holding less than was last saved.
+        """
+        await asyncio.to_thread(self._write_copy, *self._copy())
+
+    def _copy(self) -> tuple[int, dict[str, float]]:
+        self._taken += 1
+        return self._taken, dict(self._tokens)
+
+    def _write_copy(self, number: int, tokens: dict[str, float]) -> None:
+        with self._writing:
+            if number < self._written:
+                return
+            self._write(tokens)
+            self._written = number
+
+    def _write(self, tokens: dict[str, float]) -> None:
+        """Write ``tokens`` out, atomically and readable only by this user.
 
         Opened at 0600 rather than chmod-ed afterwards: creating it at the
         umask's permissions and narrowing them after leaves a window where the
@@ -134,7 +165,7 @@ class SessionStore:
         try:
             fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w") as handle:
-                json.dump(self._tokens, handle)
+                json.dump(tokens, handle)
             # Replaced rather than written in place, so a crash mid-write leaves
             # the previous file whole instead of a truncated one nobody can read.
             tmp.replace(self._path)
@@ -144,9 +175,19 @@ class SessionStore:
 
     def create(self, now: float | None = None) -> str:
         """Start a session and return the id the cookie will carry."""
+        session_id = self._start(now)
+        self._save()
+        return session_id
+
+    async def started(self) -> str:
+        """Start a session, as `create` does, writing the file on a thread."""
+        session_id = self._start(None)
+        await self._saved()
+        return session_id
+
+    def _start(self, now: float | None) -> str:
         session_id = secrets.token_hex(_ID_BYTES)
         self._tokens[self._token(session_id)] = time.time() if now is None else now
-        self._save()
         return session_id
 
     def is_valid(self, session_id: str, now: float | None = None) -> bool:
@@ -179,6 +220,11 @@ class SessionStore:
         if self._tokens.pop(self._token(session_id), None) is not None:
             self._save()
 
+    async def ended(self, session_id: str) -> None:
+        """End one session, as `revoke` does, writing the file on a thread."""
+        if self._tokens.pop(self._token(session_id), None) is not None:
+            await self._saved()
+
     def revoke_all(self) -> int:
         """End every session, returning how many there were.
 
@@ -189,6 +235,13 @@ class SessionStore:
         count = len(self._tokens)
         self._tokens.clear()
         self._save()
+        return count
+
+    async def all_ended(self) -> int:
+        """End every session, as `revoke_all` does, writing the file on a thread."""
+        count = len(self._tokens)
+        self._tokens.clear()
+        await self._saved()
         return count
 
     def __len__(self) -> int:

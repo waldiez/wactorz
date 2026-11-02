@@ -5,7 +5,7 @@ actor. ``config_handler`` is also where each extension's non-secret browser
 config is merged in.
 """
 
-import json
+import asyncio
 import logging
 import math
 import time
@@ -52,7 +52,7 @@ async def nodes_handler(_request: web.Request) -> Response:
 
 async def cost_handler(_request: web.Request) -> Response:
     """Return spend and message totals for the cost widget."""
-    return web.json_response(get_global_cost_info())
+    return web.json_response(await asyncio.to_thread(get_global_cost_info))
 
 
 async def cost_limit_handler(request: web.Request) -> Response:
@@ -65,7 +65,7 @@ async def cost_limit_handler(request: web.Request) -> Response:
             return web.json_response(
                 {"error": "period must be daily, weekly, or monthly"}, status=400
             )
-        set_cost_limit(limit_usd, period)
+        await asyncio.to_thread(set_cost_limit, limit_usd, period)
         return web.json_response({"ok": True, "limit_usd": limit_usd, "period": period})
     except Exception as exc:
         # Our own words, not the exception's. A caller needs to know what to
@@ -81,12 +81,16 @@ async def cost_limit_handler(request: web.Request) -> Response:
 async def cost_reset_handler(_request: web.Request) -> Response:
     """Zero the current spend period without touching the lifetime ledger."""
     try:
-        info = reset_global_cost()
+        info = await asyncio.to_thread(reset_global_cost)
         # Clear the in-memory lifetime ledger so max() doesn't pin the display
         # to pre-reset values for the rest of this process lifetime.
         cost.lifetime_cost.clear()
         if runtime.db is not None:
             try:
+                # On the loop, straight after the clear, until ledger writes share
+                # one ordered path: awaited, a metrics write landing in between
+                # would be banked in memory and then deleted from disk with the
+                # old ledger, and lost at the next restart.
                 runtime.db.kv_delete("_system", cost.LIFETIME_LEDGER_KEY)
             except Exception:
                 logger.debug("[api] Could not clear the lifetime ledger", exc_info=True)
@@ -148,8 +152,13 @@ async def chat_log_handler(request: web.Request) -> Response:
     except ValueError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     try:
-        rows = runtime.db.query_chat_log(
-            agent_name=agent, agent_id=agent_id, role=role, since=since, limit=limit
+        rows = await asyncio.to_thread(
+            runtime.db.query_chat_log,
+            agent_name=agent,
+            agent_id=agent_id,
+            role=role,
+            since=since,
+            limit=limit,
         )
         return web.json_response([with_question(row) for row in rows])
     except Exception:
@@ -247,83 +256,66 @@ async def config_handler(request: web.Request) -> Response:
 
 
 async def feed_handler(_request: web.Request) -> Response:
-    """Return recent chat events for the UI feed, with REAL persisted timestamps.
+    """Recent chat turns for the activity feed, oldest first, each at the time it happened.
 
-    Previously this read from kv_store.conversation_history, which is just a
-    JSON list with no timestamps — so each entry got `i` (the loop index) as
-    its timestamp and the frontend re-dated them to "now - i*delta", causing
-    timestamps to reset on every page reload / restart.
-
-    Now we read from the chat_log table, which has a real `ts REAL` column
-    written at the moment each turn happens. Falls back to the legacy
-    kv_store path only if chat_log is empty (e.g. a freshly upgraded DB
-    where nothing has been written yet) so existing users still see their
-    pre-upgrade history on first launch.
+    Read from the chat log, whose rows carry a real time; a database with no
+    chat log rows yet falls back to the conversations agents kept, with times
+    made up in order (`_feed_items`). Read on a thread: the database is a file.
     """
     if runtime.db is None:
         return web.json_response([])
     try:
-        # Primary path — persistent chat_log with real timestamps.
-        try:
-            rows = runtime.db.query_chat_log(limit=50)
-        except Exception as exc:
-            logger.warning("[feed] chat_log query failed: %s", exc)
-            rows = []
-
-        if rows:
-            # query_chat_log returns newest-first; the frontend expects
-            # chronological (oldest-first) so the latest message ends up
-            # at the bottom of the feed.
-            rows = list(reversed(rows))
-            items = [
-                {
-                    "type": "chat",
-                    "label": str(r.get("content", "")),
-                    "agentName": r.get("agent_name", ""),
-                    "role": r.get("role", ""),
-                    "timestamp": float(r.get("ts", 0.0)),  # REAL Unix time, not an index
-                    "_seq": i,
-                    "_agent": r.get("agent_name", ""),
-                }
-                for i, r in enumerate(rows)
-            ]
-            return web.json_response(items)
-
-        # Fallback — legacy kv_store path. Keeps old DBs displaying *something*
-        # until new chat turns start populating chat_log. Synthesises a
-        # timestamp by anchoring the last entry to "now" and walking backwards
-        # in 1-second steps, so at least entries are ordered consistently.
-        kv_rows = runtime.db.conn.execute(
-            "SELECT agent, value FROM kv_store WHERE key='conversation_history'"
-        ).fetchall()
-        items = []
-        now = time.time()
-        for agent_name, value in kv_rows:
-            try:
-                history = json.loads(value)
-                visible = [
-                    m
-                    for m in history
-                    if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-                ]
-                n = len(visible)
-                for i, msg in enumerate(visible):
-                    items.append(
-                        {
-                            "type": "chat",
-                            "label": str(msg.get("content", "")),
-                            "agentName": agent_name,
-                            "role": msg.get("role", ""),
-                            # Synthesised but at least monotonic and anchored
-                            # to a real wall-clock value, not a bare index.
-                            "timestamp": now - (n - 1 - i),
-                            "_seq": i,
-                            "_agent": agent_name,
-                        }
-                    )
-            except Exception:  # noqa: S110  # synthesised sample rows; a gap is not worth a log
-                pass
-        return web.json_response(items[-50:])
+        return web.json_response(await asyncio.to_thread(_feed_items))
     except Exception as exc:
         logger.warning("[feed] handler failed: %s", exc)
         return web.json_response([])
+
+
+def _feed_items() -> list[dict[str, Any]]:
+    """The feed's rows from the database. Run on a thread."""
+    db = runtime.db
+    if db is None:
+        return []
+    try:
+        rows = db.query_chat_log(limit=50)
+    except Exception as exc:
+        logger.warning("[feed] chat_log query failed: %s", exc)
+        rows = []
+    if rows:
+        # Newest first from the query; the feed shows the latest at the bottom.
+        return [
+            {
+                "type": "chat",
+                "label": str(r.get("content", "")),
+                "agentName": r.get("agent_name", ""),
+                "role": r.get("role", ""),
+                "timestamp": float(r.get("ts", 0.0)),
+                "_seq": i,
+                "_agent": r.get("agent_name", ""),
+            }
+            for i, r in enumerate(reversed(rows))
+        ]
+    # What agents kept has no times: anchored to now and walked back a second a
+    # turn, so the order at least holds.
+    items: list[dict[str, Any]] = []
+    now = time.time()
+    for agent_name, history in db.kv_values("conversation_history"):
+        if not isinstance(history, list):
+            continue
+        visible = [
+            m for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        ]
+        n = len(visible)
+        items.extend(
+            {
+                "type": "chat",
+                "label": str(msg.get("content", "")),
+                "agentName": agent_name,
+                "role": msg.get("role", ""),
+                "timestamp": now - (n - 1 - i),
+                "_seq": i,
+                "_agent": agent_name,
+            }
+            for i, msg in enumerate(visible)
+        )
+    return items[-50:]

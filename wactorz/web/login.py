@@ -181,7 +181,7 @@ async def login_page_handler(request: web.Request) -> Response:
     code = request.query.get("code", "")
     if code and sessions.codes.redeem(code):
         response = web.HTTPFound(target)
-        _set_session_cookie(request, response, sessions.store.create())
+        _set_session_cookie(request, response, await sessions.store.started())
         logger.info("[auth] signed in with the startup link")
         raise response
 
@@ -233,14 +233,14 @@ async def login_submit_handler(request: web.Request) -> Response:
     # and aiohttp wants an HTTPException raised rather than returned.
     throttle.throttle.record_success(caller)
     response = web.HTTPFound(target)
-    _set_session_cookie(request, response, sessions.store.create())
+    _set_session_cookie(request, response, await sessions.store.started())
     logger.info("[auth] signed in from %s", caller)
     raise response
 
 
 async def logout_handler(request: web.Request) -> Response:
     """End this browser's session and return to the form."""
-    sessions.store.revoke(request.cookies.get(auth.SESSION_COOKIE, ""))
+    await sessions.store.ended(request.cookies.get(auth.SESSION_COOKIE, ""))
     response = web.HTTPFound("/login")
     response.del_cookie(auth.SESSION_COOKIE, path="/")
     raise response
@@ -253,7 +253,7 @@ async def logout_everywhere_handler(request: web.Request) -> Response:
     everyone out is this, and not a credential change that would also break
     every script, probe and integration at the same moment.
     """
-    ended = sessions.store.revoke_all()
+    ended = await sessions.store.all_ended()
     logger.info("[auth] all sessions ended (%d)", ended)
     response = web.HTTPFound("/login")
     response.del_cookie(auth.SESSION_COOKIE, path="/")

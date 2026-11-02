@@ -319,6 +319,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The dashboard's routes read and write the database off the event loop.** The chat log, the feed, an agent's
+  history and the agent list, the spend figures, its limit and its reset, and signing in and out all touched SQLite
+  or the sessions file inside the request handler, pausing every actor while the disk answered; they now run on a
+  thread, except the lifetime ledger's delete on a spend reset, kept beside the clear it goes with. Reads that went straight to the shared connection, past its lock, now take it, so they no longer run in the
+  middle of another thread's write. What a broker message writes as it arrives, and the snapshot the dashboard is
+  sent, are not changed yet.
 - **An upload no longer holds every agent while it is written.** The attachment routes wrote and read the disk
   inside the request handler, so a large file on a slow disk paused every actor in the process, the broker's keepalive
   included. Every disk step now runs on a thread.

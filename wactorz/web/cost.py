@@ -5,8 +5,8 @@ Owns the in-memory lifetime ledger (hydrated once from SQLite) and the
 first, then the actor's own metrics, then the persisted final value.
 """
 
-import json
 import logging
+from collections.abc import Mapping
 
 from . import runtime
 
@@ -106,21 +106,17 @@ def historical_cost_usd(live_names: set) -> float:
     if runtime.db is None:
         return 0.0
     try:
-        rows = runtime.db.conn.execute(
-            "SELECT value FROM kv_store WHERE key = '_final_cost'"
-        ).fetchall()
-        total = 0.0
-        for row in rows:
-            try:
-                entry = json.loads(row[0])
-                if entry.get("name") not in live_names:
-                    total += entry.get("cost_usd", 0.0)
-            except Exception as exc:
-                logger.debug("[cost] a deleted agent's cost row was skipped: %s", exc)
+        entries = runtime.db.kv_values("_final_cost")
     except Exception:
         return 0.0
-    else:
-        return total
+    total = 0.0
+    for _agent, entry in entries:
+        try:
+            if entry.get("name") not in live_names:
+                total += entry.get("cost_usd", 0.0)
+        except Exception as exc:
+            logger.debug("[cost] a deleted agent's cost row was skipped: %s", exc)
+    return total
 
 
 def historical_messages(live_names: set) -> int:
@@ -128,21 +124,35 @@ def historical_messages(live_names: set) -> int:
     if runtime.db is None:
         return 0
     try:
-        rows = runtime.db.conn.execute(
-            "SELECT agent, value FROM kv_store WHERE key = '_messages_processed'"
-        ).fetchall()
-        total = 0
-        for agent_name, value in rows:
-            if agent_name not in live_names:
-                try:
-                    entry = json.loads(value)
-                    total += entry.get("count", 0)
-                except Exception as exc:
-                    logger.debug("[cost] a deleted agent's call-count row was skipped: %s", exc)
+        entries = runtime.db.kv_values("_messages_processed")
     except Exception:
         return 0
-    else:
-        return total
+    total = 0
+    for agent_name, entry in entries:
+        if agent_name not in live_names:
+            try:
+                total += entry.get("count", 0)
+            except Exception as exc:
+                logger.debug("[cost] a deleted agent's call-count row was skipped: %s", exc)
+    return total
+
+
+def final_costs() -> dict[str, float]:
+    """Every agent's persisted _final_cost, by agent name: one read for a whole list of cards."""
+    if runtime.db is None:
+        return {}
+    try:
+        entries = runtime.db.kv_values("_final_cost")
+    except Exception as exc:
+        logger.debug("[cost] the final costs could not be read: %s", exc)
+        return {}
+    found: dict[str, float] = {}
+    for agent, entry in entries:
+        try:
+            found[agent] = float(entry["cost_usd"])
+        except (TypeError, ValueError, KeyError):
+            continue
+    return found
 
 
 def _final_cost_from_db(name: str):
@@ -150,21 +160,19 @@ def _final_cost_from_db(name: str):
     if runtime.db is None or not name:
         return None
     try:
-        row = runtime.db.conn.execute(
-            "SELECT value FROM kv_store WHERE agent=? AND key='_final_cost'",
-            (name,),
-        ).fetchone()
-        if row:
-            return json.loads(row[0]).get("cost_usd")
+        entry = runtime.db.kv_get(name, "_final_cost")
+        if isinstance(entry, dict):
+            return entry.get("cost_usd")
     except Exception as exc:
         logger.debug("[cost] the final cost of %r could not be read: %s", name, exc)
     return None
 
 
-def actor_cost(actor, ag: dict):
+def actor_cost(actor, ag: dict, stored: Mapping[str, float] | None = None):
     """Return the most accurate cost available.
 
-    MQTT-derived first, then live object, then SQLite.
+    MQTT-derived first, then live object, then SQLite: from ``stored`` when the
+    caller read every final cost already (`final_costs`), else one read here.
     """
     mqtt_cost = ag.get("cost_usd")
     if mqtt_cost is not None:
@@ -172,7 +180,10 @@ def actor_cost(actor, ag: dict):
     live_cost = getattr(actor, "total_cost_usd", None)
     if live_cost:
         return round(live_cost, 6)
-    return _final_cost_from_db(getattr(actor, "name", ""))
+    name = getattr(actor, "name", "")
+    if stored is not None:
+        return stored.get(name)
+    return _final_cost_from_db(name)
 
 
 def best_cost(ag, actor, name: str) -> float:

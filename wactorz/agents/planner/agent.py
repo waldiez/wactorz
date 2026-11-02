@@ -21,6 +21,7 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
+from ...core import topic_bus
 from ...core.actor import Actor, Message, MessageType
 from ...core.addresses import MAIN_NODE, Address
 from ..llm_agent import LLMProvider, accumulate_global_cost
@@ -273,9 +274,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         left behind by a dead agent would offer a topic nobody publishes.
         """
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus and self._registry:
                 live = {Address(a.name, MAIN_NODE) for a in self._registry.all_actors()}
                 # Add remotely-running agents from main's known_nodes
@@ -469,9 +468,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         """Live topic samples, so generated code uses real field names."""
         topic_schema_ctx = ""
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 sample_lines = []
                 for contract in bus.registry.all_contracts():

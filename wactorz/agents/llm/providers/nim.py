@@ -60,7 +60,7 @@ class NIMProvider(LLMProvider):
         api_key: str | None = None,
         base_url: str = NIM_BASE_URL,
     ):
-        import openai
+        import openai  # optional dependency: the `openai` extra
 
         self.model = model
         self.base_url = base_url

@@ -7,7 +7,9 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...core import topic_bus
 from ...core.mqtt import mqtt_client
+from ...core.topic_bus import StreamWindow, TopicContract
 
 if TYPE_CHECKING:
     pass
@@ -80,9 +82,7 @@ def _register_with_topic_bus(api: Any, actor: Any, topic: str) -> None:
     delivery.
     """
     try:
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return
         existing = bus.registry.get(api.name, api.actor_id, getattr(actor, "_node", None))
@@ -265,8 +265,6 @@ class StreamsMixin(_Host):
                 if w.absent_for(60):
                     await agent.alert('Sensor stopped publishing!')
         """
-        from ...core.topic_bus import StreamWindow, get_topic_bus
-
         # One window per topic per agent. Generated code calls this from a
         # process loop as readily as from setup, and a fresh window each tick
         # opens a broker connection each tick and reads an empty buffer every
@@ -277,7 +275,7 @@ class StreamsMixin(_Host):
 
         w = None
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 w = bus.make_window(
                     topic, seconds=seconds, max_size=max_size, event_time=event_time
@@ -367,8 +365,6 @@ class StreamsMixin(_Host):
         if isinstance(subscribes, str):
             subscribes = [subscribes]
 
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
         # Each call adds to what is already known rather than replacing it, from
         # two sources: what the spawn config declared before any code ran, and
         # what an earlier call declared. Replacing lost both — an agent spawned
@@ -393,7 +389,7 @@ class StreamsMixin(_Host):
             actor_id=self.actor_id,
             node=getattr(self._actor, "_node", None),
         )
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus:
             bus.register_contract(contract)
         # Also include in manifest so remote agents and planner can see it
@@ -410,9 +406,7 @@ class StreamsMixin(_Host):
             for o in opps:
                 print(f"Can receive data from {o['producer']} via {o['topic']}")
         """
-        from ...core.topic_bus import get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return []
         pairs = bus.registry.find_wiring_opportunities()

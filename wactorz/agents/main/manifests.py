@@ -26,6 +26,7 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from ...core import topic_bus
 from ...core.addresses import MAIN_NODE, Address, node_of
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
@@ -36,6 +37,7 @@ from ...core.mqtt import (
     user_properties,
 )
 from ...core.node_publications import admit, signed_stamp
+from ...core.topic_bus import TopicContract
 from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
@@ -352,10 +354,8 @@ class ManifestRegistry:
         are folded over the declared schema because they are what the code
         actually puts on the wire.
         """
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if not bus or not name or name == "?":
                 return
             observed = data.get("observed_samples", {}) or {}
@@ -387,10 +387,8 @@ class ManifestRegistry:
     @staticmethod
     def _drop_contract(name: str, actor_id: str | None = None, node: str | None = None) -> None:
         """Stop the planner seeing a deleted agent as a wiring target."""
-        from ...core.topic_bus import get_topic_bus
-
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 bus.unregister(name, actor_id, node)
         except Exception as exc:
@@ -408,9 +406,7 @@ class ManifestRegistry:
         owner would attribute one agent's fields to another.
         """
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 found = bus.registry.producers_of(topic)
                 return sorted(found, key=lambda c: bool(c.node) and node_of(c.node) != MAIN_NODE)

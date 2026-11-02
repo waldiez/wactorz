@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from ...core import topic_bus
 from ...core.persistence import get_db
 from .awaitable import AwaitableDict, AwaitableList, awaitable_frame
 
@@ -49,9 +50,7 @@ class QueriesMixin(_Host):
             await agent.publish_world_state('person_present', {'present': True, 'zone': 'kitchen'})
             await agent.publish_world_state('energy', {'kwh': 2.3, 'cost': 0.45})
         """
-        from ...core.topic_bus import get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus:
             await bus.state_hub.publish_agent_data(self.name, key, data)
         else:

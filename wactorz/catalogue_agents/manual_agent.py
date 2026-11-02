@@ -775,7 +775,7 @@ def _find_manual_candidates(agent, device: str) -> list[str]:
     De-duplicates while preserving order.
     """
     try:
-        import httpx
+        import httpx  # optional dependency: installed with the recipe
     except ImportError:
         return []
 
@@ -912,7 +912,7 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
     off and switch engines instead.
     """
     try:
-        import httpx
+        import httpx  # optional dependency: installed with the recipe
     except ImportError:
         return []
 
@@ -1142,7 +1142,7 @@ async def _fetch_public(agent, client, url: str) -> tuple[int, str, bytes] | Non
 
 async def _download_pdf(agent, url: str) -> bytes | None:
     try:
-        import httpx
+        import httpx  # optional dependency: installed with the recipe
     except ImportError:
         await agent.log("httpx is not installed — cannot download PDF")
         return None

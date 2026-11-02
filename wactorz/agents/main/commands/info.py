@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ...._version import __version__
+from ....core import topic_bus
 from ....core.artifacts import ArtifactError, ArtifactStore, human_size, summary
 from ....core.compatibility import compatible
 from ....core.paths import resolve_state_dir
@@ -332,9 +333,7 @@ async def show_mqtt_status(ctx: CommandContext, _argument: str) -> str:
 async def show_bus(ctx: CommandContext, _argument: str) -> str:
     """TopicBus registry: contracts, data flows, wiring pairs."""
     try:
-        from ....core.topic_bus import get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return "TopicBus not initialised."
         summary = bus.registry.summary()

@@ -27,6 +27,7 @@ import traceback
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
+from ...core import topic_bus
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
 from ...core.paths import resolve_state_dir
@@ -455,9 +456,7 @@ class DynamicAgent(Actor):
     def _unregister_from_bus(self) -> None:
         """Drop this agent's contracts so stale ones do not accumulate."""
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 bus.unregister(self.name, self.actor_id, self._node)
                 logger.debug("[%s] Unregistered from TopicBus", self.name)

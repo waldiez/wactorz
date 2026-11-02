@@ -91,7 +91,7 @@ class DiscordInterface:
 
     async def run(self) -> None:
         try:
-            import discord
+            import discord  # optional dependency: the `discord` extra
         except ImportError:
             logger.error(  # noqa: TRY400  # the ImportError is the whole diagnosis
                 "discord.py not installed. Run: pip install discord.py"

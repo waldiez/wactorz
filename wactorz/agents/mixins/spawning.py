@@ -39,6 +39,7 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from ...core import topic_bus
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
 from ...core.addresses import MAIN_NODE, agent_name_error
 from ...core.artifacts import ArtifactError, ArtifactStore, pinned_in
@@ -47,6 +48,7 @@ from ...core.paths import agent_state_dir, resolve_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements, pending_restart
 from ...core.state_codec import decode_state
+from ...core.topic_bus import TopicContract
 from ...core.topics import topic_name_error
 from ...plugins import for_target
 from ..dependency_install import InstallOutcome, outcome_from_result
@@ -733,10 +735,8 @@ class SpawnMixin(_Host):
 
         if actor is not None and (config.get("publishes") or config.get("subscribes")):
             try:
-                from ...core.topic_bus import TopicContract, get_topic_bus
-
                 contract = TopicContract.from_spawn_config({**config, "actor_id": actor.actor_id})
-                bus = get_topic_bus()
+                bus = topic_bus.get_topic_bus()
                 if bus:
                     bus.register_contract(contract)
                     logger.info(

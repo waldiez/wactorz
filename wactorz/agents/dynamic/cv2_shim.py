@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def resilient_cv2_module(agent_name: str) -> Any | None:
     """A stand-in `cv2` module whose VideoCapture retries, or None if cv2 is absent."""
     try:
-        import cv2 as real_cv2
+        import cv2 as real_cv2  # optional dependency: the `vision` extra
     except ImportError:
         return None
 

@@ -23,6 +23,7 @@ from typing import Any
 
 from ..._version import __version__
 from ...config import NODE_SIGNING
+from ...core import topic_bus
 from ...core.actor import derive_actor_id
 from ...core.compatibility import compatible
 from ...core.identity import given_actor_id
@@ -36,6 +37,7 @@ from ...core.mqtt import (
     user_properties,
 )
 from ...core.node_publications import Stamp, admit, signed_stamp
+from ...core.topic_bus import TopicContract
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
 from .spawn_registry import SpawnRegistry
@@ -930,13 +932,11 @@ class NodeManager:
         have been true, so it is used where there is nothing better and never
         over a manifest-derived contract.
         """
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
         host = self.host
         if host is None:
             return
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if not bus:
                 return
             spawn_registry = host._get_spawn_registry()

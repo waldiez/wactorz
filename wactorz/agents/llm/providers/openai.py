@@ -26,7 +26,7 @@ class OpenAIProvider(LLMProvider):
     def __init__(
         self, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None
     ):
-        import openai
+        import openai  # optional dependency: the `openai` extra
 
         # Two calls rather than a conditional `**{...}`: unpacking a dict of
         # unknown keys means a type checker cannot tell which parameter each

@@ -33,6 +33,7 @@ from .actor import (
 )
 from .mqtt_publisher import MQTTPublisher
 from .paths import resolve_state_dir
+from .topic_bus import init_topic_bus
 
 logger = logging.getLogger(__name__)
 
@@ -1149,8 +1150,6 @@ class ActorSystem:
         )
 
         # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────
-        from .topic_bus import init_topic_bus
-
         self.topic_bus = init_topic_bus(
             mqtt_client=self._mqtt_client,
             mqtt_broker=self._mqtt_broker,

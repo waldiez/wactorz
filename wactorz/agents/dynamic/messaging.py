@@ -8,11 +8,13 @@ import uuid
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ...core import topic_bus
 from ...core.actor import ReplyError, ask_through
 from ...core.addresses import MAIN_NODE, Address, parse
 from ...core.agent_directory import AgentDirectory
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
+from ...core.topic_bus import TopicContract
 from ...core.topics import reply_topic, task_by_name_topic, task_topic
 from ..lookup import find_main_actor
 
@@ -115,9 +117,7 @@ class MessagingMixin(_Host):
         # Uses TopicContract.update_observed() — a proper dataclass field,
         # not monkey-patched attributes.
         try:
-            from ...core.topic_bus import TopicContract, get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 existing = bus.registry.get(
                     self.name, self.actor_id, getattr(self._actor, "_node", None)

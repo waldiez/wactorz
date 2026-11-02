@@ -106,8 +106,8 @@ class GeminiProvider(LLMProvider):
         model: str = "gemini-2.5-flash",
         api_key: str | None = None,
     ):
-        from google import genai
-        from google.genai import types as genai_types
+        from google import genai  # optional dependency: the `google` extra
+        from google.genai import types as genai_types  # optional dependency: the `google` extra
 
         self.model_name = model
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()

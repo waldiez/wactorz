@@ -35,6 +35,7 @@ from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir, resolve_state_dir, set_state_dir
 from wactorz.core.state_lock import StateInUseError, StateLock
+from wactorz.core.topic_bus import init_topic_bus
 from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
 from wactorz.monitoring.log_buffer import install as install_log_buffer
@@ -489,8 +490,6 @@ async def build_system(
     # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
     # Must be done here because cli bypasses system.start() and goes directly
     # to system.supervisor.start() — so we initialise the bus manually.
-    from wactorz.core.topic_bus import init_topic_bus
-
     system.topic_bus = init_topic_bus(
         mqtt_client=system._mqtt_client,
         mqtt_broker=args.mqtt_broker or CONFIG.mqtt_host,

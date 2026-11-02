@@ -511,7 +511,7 @@ def _text(
     ``font``, ``align`` (``"left"`` or ``"center"``), ``tight`` (no inner
     margin) and ``space_after`` (points after each paragraph).
     """
-    from pptx.enum.text import (
+    from pptx.enum.text import (  # optional dependency: installed with the recipe
         MSO_ANCHOR,
         PP_ALIGN,
     )  # optional dependency: installed with the recipe

@@ -300,7 +300,7 @@ def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
     Falls back to ValueError if not, with a hint to use structured form.
     """
     try:
-        from croniter import croniter
+        from croniter import croniter  # optional dependency: the `cron` extra
     except ImportError as e:
         raise ScheduleError.no_croniter() from e
     try:

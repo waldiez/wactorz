@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from ..monitoring import actor_metrics
 from ..monitoring.agent_metrics import RecentDurations
-from . import models
+from . import models, topic_bus
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
@@ -47,7 +47,7 @@ from .questions import (
 )
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
-from .topic_bus import StreamWindow, get_topic_bus
+from .topic_bus import StreamWindow
 from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
@@ -732,9 +732,7 @@ class Actor(ABC):
         # Remove this agent's TopicContract so the planner doesn't wire
         # against topics from stopped/deleted/replaced agents.
         try:
-            from .topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 bus.unregister(self.name, self.actor_id, self._node)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
@@ -1838,7 +1836,7 @@ class Actor(ABC):
         existing = self._windows.get(topic)
         if existing is not None:
             return existing
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus is not None:
             made = bus.make_window(topic, seconds=seconds, max_size=max_size, event_time=event_time)
         else:

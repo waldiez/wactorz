@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
+from ...core import topic_bus
 from ...core.addresses import MAIN_NODE
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
@@ -1459,9 +1460,7 @@ class Migration:
         # would publish a manifest missing them — breaking auto-wiring.
         live_contract: dict[str, Any] = {}
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 c = bus.registry.at(agent_name, MAIN_NODE)
                 if c is not None:

@@ -16,8 +16,11 @@ _RELOAD_CWD = Path.cwd()
 def start_reloader(logger: logging.Logger) -> None:
     """Watch wactorz/ for source changes and restart the process via os.execv."""
     try:
-        from watchdog.events import FileSystemEvent, FileSystemEventHandler
-        from watchdog.observers import Observer
+        from watchdog.events import (  # optional dependency: the `dev` extra
+            FileSystemEvent,
+            FileSystemEventHandler,
+        )
+        from watchdog.observers import Observer  # optional dependency: the `dev` extra
 
         class _RestartHandler(FileSystemEventHandler):
             def __init__(self) -> None:

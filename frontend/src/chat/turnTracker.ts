@@ -95,9 +95,10 @@ export class TurnTracker {
         this._notify();
     }
 
-    /** A piece of the reply of the agent `from` (an id) arrived: the turn it answers is alive. */
-    chunk(from: string): void {
-        if (this._agent !== null && from === this._agent) {
+    /** A piece of the reply of the agent `from` (an id), answering the message `turnId`,
+     *  arrived: the turn it answers is alive. */
+    chunk(from: string, turnId = ""): void {
+        if (this._owns(from, turnId)) {
             this._arm();
         }
     }
@@ -112,11 +113,26 @@ export class TurnTracker {
         }
     }
 
-    /** The reply of the agent `from` (an id) ended, streamed or in one message: its turn is over. */
-    ended(from: string): void {
-        if (this._agent !== null && from === this._agent) {
+    /** The reply of the agent `from` (an id), answering the message `turnId`, ended, streamed,
+     *  in one message, or as the turn's own end: its turn is over. */
+    ended(from: string, turnId = ""): void {
+        if (this._owns(from, turnId)) {
             this._finish();
         }
+    }
+
+    /**
+     * Whether a frame from the agent `from`, answering the message `turnId`, belongs
+     * to the turn under way. By the turn when the frame names one: a turn given up
+     * on may still answer late, and its frames must neither end nor extend the
+     * turn sent after it to the same agent. By the agent for a frame that names
+     * none, from a server that does not say.
+     */
+    private _owns(from: string, turnId: string): boolean {
+        if (this._agent === null) {
+            return false;
+        }
+        return turnId ? this._inFlight?.id === turnId : from === this._agent;
     }
 
     /**

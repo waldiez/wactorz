@@ -110,11 +110,12 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-send-message`      | DashboardChat → app.ts (IOManager)                             | `{ id, content, target, name, answerer, attachments }` (ids)           |
 | `af-feed-push`         | IOManager / app.ts / ui/chatIngress → CardDashboard            | `{ item: FeedItem }`                                                   |
 | `af-chat-message`      | ui/chatIngress → DashboardChat                                 | `{ msg: ChatMessage }`                                                 |
-| `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text }`                                       |
-| `af-stream-end`        | IOManager → DashboardChat                                      | `{ text, from, agentId }`                                              |
+| `af-stream-chunk`      | IOManager → DashboardChat                                      | `{ chunk, from, agentId, text, turnId }`                               |
+| `af-stream-end`        | IOManager → DashboardChat                                      | `{ text, from, agentId, turnId }`                                      |
 | `af-socket`            | io/connection → DashboardChat                                  | `{ open }`                                                             |
 | `af-turn`              | DashboardChat → iobar                                          | `{ agent, queued }`                                                    |
 | `af-turn-reached`      | WSClient → DashboardChat                                       | `{ id, agentId, name }` (the agent the person's message `id` reached)  |
+| `af-turn-ended`        | WSClient → DashboardChat                                       | `{ turnId, agentId }` (the turn answering message `turnId` is over)    |
 | `af-config-loaded`     | config/serverConfig → CardDashboard                            | _(none)_                                                               |
 | `af-connection-status` | io/connection → CardDashboard                                  | `{ status: "live" \| "connecting" \| "disconnected" }`                 |
 | `af-attachment-added`  | DropZone / chatIobar → DashboardChat                           | `{ attachment }`                                                       |

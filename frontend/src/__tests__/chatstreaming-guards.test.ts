@@ -169,3 +169,25 @@ describe("two agents of one name streaming at once", () => {
         expect(thread.querySelector("[data-testid='message-from']")?.textContent).toBe("weather");
     });
 });
+
+describe("the working row of a turn", () => {
+    it("is not ended by a late piece of a turn of the same agent given up on before it", () => {
+        const ui = new ChatStreamUI(makeHost());
+        ui.awaiting("weather", "weather", "weather", "m2");
+
+        ui.onChunk({ chunk: "late", from: "weather", agentId: "weather", text: "late", turnId: "m1" });
+        expect(ui.isAwaiting).toBe(true);
+
+        ui.onChunk({ chunk: "now", from: "weather", agentId: "weather", text: "now", turnId: "m2" });
+        expect(ui.isAwaiting).toBe(false);
+    });
+
+    it("is ended by agent by a frame that names no turn", () => {
+        const ui = new ChatStreamUI(makeHost());
+        ui.awaiting("weather", "weather", "weather", "m2");
+
+        ui.onEnd({ text: "", from: "weather", agentId: "weather" });
+
+        expect(ui.isAwaiting).toBe(false);
+    });
+});

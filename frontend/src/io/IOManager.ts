@@ -42,19 +42,19 @@ export class IOManager {
     setWSClient(ws: WSClient): void {
         this._ws = ws;
 
-        ws.on("streamChunk", (chunk, from, _ts, agentId) => {
-            const key = streamKey(agentId, from);
+        ws.on("streamChunk", (chunk, from, _ts, agentId, turnId) => {
+            const key = streamKey(agentId, from, turnId);
             this._streams.append(key, chunk);
             // The reply so far travels with the piece, so this is the one place a
             // stream is put together.
-            emit("af-stream-chunk", { chunk, from, agentId, text: this._streams.text(key) });
+            emit("af-stream-chunk", { chunk, from, agentId, text: this._streams.text(key), turnId });
         });
 
-        ws.on("streamEnd", (from, agentId) => {
+        ws.on("streamEnd", (from, agentId, turnId) => {
             // The socket names a sender for every frame, the addressed agent for
             // one without, so only that agent's buffer is taken and concurrent
             // streams never merge.
-            const text = this._streams.take(streamKey(agentId, from));
+            const text = this._streams.take(streamKey(agentId, from, turnId));
             // A stream_end with no streamed text (e.g. agents that reply via a
             // single non-streamed `chat` frame) must NOT create a feed row —
             // that produced a phantom empty bubble attributed to the default name.
@@ -64,7 +64,7 @@ export class IOManager {
                     item: { type: "chat", label: text, agentName: from, timestamp: Date.now() },
                 });
             }
-            emit("af-stream-end", { text, from, agentId });
+            emit("af-stream-end", { text, from, agentId, turnId });
         });
     }
 

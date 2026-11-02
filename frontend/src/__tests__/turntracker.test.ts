@@ -57,6 +57,37 @@ describe("a turn", () => {
         expect(states.map(s => s.agent)).toEqual(["weather", null]);
     });
 
+    it("is not ended or kept alive by a turn of the same agent given up on before it", () => {
+        // The tracker gives up on a turn that goes quiet; that turn may still answer,
+        // late, while the next turn to the same agent is under way. Its frames name
+        // their turn, so they neither end nor extend the one after it.
+        const { turns, delivered } = tracker();
+        turns.request(send("first", "weather", "m1"));
+        turns.request(send("second", "weather", "m2"));
+        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS + 1);
+        expect(delivered).toEqual(["m1", "m2"]);
+
+        turns.chunk("weather", "m1");
+        turns.ended("weather", "m1");
+        expect(turns.state.agent).toBe("weather");
+
+        // The second turn's own pieces are what keep it alive.
+        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS / 2);
+        turns.chunk("weather", "m2");
+        vi.advanceTimersByTime(TURN_IDLE_TIMEOUT_MS / 2 + 1);
+        expect(turns.state.agent).toBe("weather");
+        turns.ended("weather", "m2");
+        expect(turns.state.agent).toBeNull();
+    });
+
+    it("ends by agent for a frame that names no turn, from a server that does not say", () => {
+        const { turns } = tracker();
+        turns.request(send("hi", "weather", "m1"));
+
+        turns.ended("weather", "");
+        expect(turns.state.agent).toBeNull();
+    });
+
     it("is not ended or kept alive by another agent", () => {
         const { turns } = tracker();
         turns.request(send("hi", "weather"));

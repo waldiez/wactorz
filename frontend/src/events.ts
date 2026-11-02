@@ -45,12 +45,14 @@ export interface AppEventMap {
      *  stamps with the gateway's id is that agent's. */
     /** A piece of `from`'s streamed reply, and the reply so far (`text`); `agentId` is
      *  the thread it is in. */
-    "af-stream-chunk": { chunk: string; from: string; agentId: string; text: string };
+    "af-stream-chunk": { chunk: string; from: string; agentId: string; text: string; turnId: string };
     /** `from`'s streamed reply ended; `text` is all of it, empty when nothing came. */
-    "af-stream-end": { text: string; from: string; agentId: string };
+    "af-stream-end": { text: string; from: string; agentId: string; turnId: string };
     /** The server says which agent the person's message `id` reached: `agentId`, called
      *  `name`. A mention can reach an agent other than the thread it was typed in. */
     "af-turn-reached": { id: string; agentId: string; name: string };
+    /** The turn answering the person's message `turnId`, to the agent `agentId`, is over. */
+    "af-turn-ended": { turnId: string; agentId: string };
     /** The socket to the server opened or closed: whether a message can go out now.
      *  Not `af-connection-status`, which needs the server's broker link too. */
     "af-socket": { open: boolean };

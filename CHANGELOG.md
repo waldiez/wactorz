@@ -319,6 +319,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Two turns of one agent no longer run together on the page.** After the page gave up on a turn that had gone
+  quiet, the next message to the same agent could start while the first was still answering; the late reply was merged
+  into the new one's bubble, and its end let the next queued message go too early. Each reply now belongs to the
+  message it answers, as the server already says on every frame.
 - **A broker message no longer waits on the disk.** The chat log rows kept for every chat turn, from the page and from
   agents, and the lifetime cost ledger saved on every metrics message, were written inside the message's handling,
   pausing every actor; one writer now keeps them, in order, on a thread, with chat turns written in batches. A reset

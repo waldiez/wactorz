@@ -466,8 +466,19 @@ export function rawFeedItem(
 
 /** A chat frame from the socket, as a message. */
 export function socketMessage(...frame: Parameters<ChatHandler>): ChatMessage {
-    const [content, from, timestampMs, to, source, surface, surfaceLabel, brain, threadId, addressChoice] =
-        frame;
+    const [
+        content,
+        from,
+        timestampMs,
+        to,
+        source,
+        surface,
+        surfaceLabel,
+        brain,
+        threadId,
+        addressChoice,
+        turnId,
+    ] = frame;
     return {
         id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
@@ -480,5 +491,6 @@ export function socketMessage(...frame: Parameters<ChatHandler>): ChatMessage {
         ...(surfaceLabel ? { surfaceLabel } : {}),
         ...(brain ? { brain } : {}),
         ...(addressChoice ? { addressChoice } : {}),
+        ...(turnId ? { turnId } : {}),
     };
 }

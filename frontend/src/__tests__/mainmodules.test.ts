@@ -112,7 +112,7 @@ describe("tombstoneWiped", () => {
 
 describe("socketMessage", () => {
     it("keeps what the frame said, and leaves out what it did not", () => {
-        const msg = socketMessage("hi", "main", 5, "user", "", "", "", "", "t1", null);
+        const msg = socketMessage("hi", "main", 5, "user", "", "", "", "", "t1", null, "");
 
         expect(msg).toMatchObject({ from: "main", to: "user", content: "hi", threadId: "t1" });
         expect(msg).not.toHaveProperty("source");
@@ -120,13 +120,13 @@ describe("socketMessage", () => {
     });
 
     it("gives every message an id of its own, even in one millisecond", () => {
-        const frame = ["hi", "main", 5, "user", "", "", "", "", "", null] as const;
+        const frame = ["hi", "main", 5, "user", "", "", "", "", "", null, ""] as const;
 
         expect(socketMessage(...frame).id).not.toBe(socketMessage(...frame).id);
     });
 
     it("carries the frame's extras", () => {
-        const msg = socketMessage("hi", "main", 5, "user", "cli", "voice", "Kitchen", "gpt", "t", null);
+        const msg = socketMessage("hi", "main", 5, "user", "cli", "voice", "Kitchen", "gpt", "t", null, "");
 
         expect(msg).toMatchObject({ source: "cli", surface: "voice", surfaceLabel: "Kitchen", brain: "gpt" });
     });

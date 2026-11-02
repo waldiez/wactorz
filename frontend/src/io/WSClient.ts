@@ -28,10 +28,18 @@ export type ChatHandler = (
     brain: string,
     threadId: string,
     addressChoice: AddressChoice | null,
+    turnId: string,
 ) => void;
-/** A piece of a streamed reply; `agentId` is the thread it is in. */
-export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number, agentId: string) => void;
-export type StreamEndHandler = (from: string, agentId: string) => void;
+/** A piece of a streamed reply; `agentId` is the thread it is in, `turnId` the
+ *  person's message it answers ("" from a server that does not say). */
+export type StreamChunkHandler = (
+    chunk: string,
+    from: string,
+    timestampMs: number,
+    agentId: string,
+    turnId: string,
+) => void;
+export type StreamEndHandler = (from: string, agentId: string, turnId: string) => void;
 /** A live `server_event` frame carrying a topic-addressed payload, and for a chat
  *  message the thread the server says it is in. */
 export type ServerEventHandler = (topic: string, payload: unknown, threadId: string) => void;
@@ -116,8 +124,8 @@ function told(type: unknown, data: Record<string, unknown>): boolean {
             });
             return true;
         case "turn_end":
-            // For clients that follow a turn to its end. The page shows a reply as
-            // it arrives and has nothing to do here.
+            // The turn is over, however it ended: the one ending every turn has.
+            emit("af-turn-ended", { turnId: asStr(data["turn_id"]), agentId: asStr(data["agent_id"]) });
             return true;
         case "app_log":
             // Records the server wrote since the last frame.
@@ -430,6 +438,9 @@ export class WSClient {
         const from = rawFrom === IO_GATEWAY ? MAIN_AGENT : rawFrom;
         const ts = toMs(data["timestamp"]);
         const agentId = asStr(data["agent_id"]);
+        // Which of the person's messages the frame answers: two turns of one agent
+        // may overlap, and only this tells their frames apart.
+        const turnId = asStr(data["turn_id"]);
 
         if (data["type"] === "chat") {
             this._emit(
@@ -444,11 +455,12 @@ export class WSClient {
                 asStr(data["brain"]),
                 agentId,
                 addressChoiceOf(data),
+                turnId,
             );
         } else if (data["type"] === "stream_chunk") {
-            this._emit("streamChunk", asStr(data["content"]), from, ts, agentId);
+            this._emit("streamChunk", asStr(data["content"]), from, ts, agentId, turnId);
         } else if (data["type"] === "stream_end") {
-            this._emit("streamEnd", from, agentId);
+            this._emit("streamEnd", from, agentId, turnId);
         }
     }
 

@@ -74,6 +74,8 @@ export class ChatStreamUI {
     private _awaitingName = "";
     /** The thread the turn waited on was sent to. */
     private _awaitingThread = "";
+    /** The person's message the outstanding turn answers, or "" when not known. */
+    private _awaitingTurn = "";
     private _waitingRow: HTMLElement | null = null;
     private _row: HTMLElement | null = null;
     private _body: HTMLElement | null = null;
@@ -98,8 +100,9 @@ export class ChatStreamUI {
     /** A turn is on the wire to the thread `threadId`: show that the agent `id`,
      *  called `name`, is working until it answers, or the turn ends without an
      *  answer (the tracker says so). */
-    awaiting(name: string, id: string, threadId: string): void {
+    awaiting(name: string, id: string, threadId: string, turnId = ""): void {
         this._awaiting = id;
+        this._awaitingTurn = turnId;
         this._awaitingName = name;
         this._awaitingThread = threadId;
         this._showWaiting();
@@ -126,9 +129,13 @@ export class ChatStreamUI {
      *
      * `from` (a `streamKey`) omitted entirely — a dropped connection, a failed
      * send — ends it unconditionally, because in those cases no reply is coming
-     * for anyone.
+     * for anyone. A frame that names its turn ends only that turn's wait: a turn
+     * given up on may answer late, while the agent works on the next one.
      */
-    endWait(from?: string | null): void {
+    endWait(from?: string | null, turnId = ""): void {
+        if (turnId && this._awaitingTurn && turnId !== this._awaitingTurn) {
+            return;
+        }
         if (from === undefined || this._awaiting === null || from === null || from === this._awaiting) {
             this._awaiting = null;
             this._clearWaiting();
@@ -166,12 +173,12 @@ export class ChatStreamUI {
     }
 
     /** Latch the reply target on the first chunk, then keep the reply so far. */
-    onChunk(detail: { chunk: string; from: string; agentId: string; text: string }): void {
+    onChunk(detail: { chunk: string; from: string; agentId: string; text: string; turnId?: string }): void {
         const { text: soFar } = detail;
-        const from = streamKey(detail.agentId, detail.from);
+        const from = streamKey(detail.agentId, detail.from, detail.turnId);
         // The first token answers the question the row was asking -- but only
         // for the agent that sent it.
-        this.endWait(from);
+        this.endWait(streamKey(detail.agentId, detail.from), detail.turnId);
         if (!this._streams.has(from)) {
             const sent = this.host.lastSentTarget();
             this._senders.set(from, detail.from);
@@ -197,12 +204,12 @@ export class ChatStreamUI {
 
     /** Commit the ended reply as a message; swap its row for rendered markdown
      *  (a concurrent stream's row stays put). */
-    onEnd(detail: { text: string; from: string; agentId: string }): void {
-        const from = streamKey(detail.agentId, detail.from);
+    onEnd(detail: { text: string; from: string; agentId: string; turnId?: string }): void {
+        const from = streamKey(detail.agentId, detail.from, detail.turnId);
         // Ends the wait on every ending, including one that produced no tokens
         // at all -- an error or a stop -- which would otherwise leave the row
         // waiting for something that is no longer coming.
-        this.endWait(from);
+        this.endWait(streamKey(detail.agentId, detail.from), detail.turnId);
         this._streams.take(from);
         const shown = stripActionBlocks(detail.text);
         const text = shown.trim() ? shown : "";

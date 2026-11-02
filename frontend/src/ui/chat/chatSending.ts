@@ -38,8 +38,8 @@ export interface SendingHost {
     redrawThread(): void;
     /** The "working" row. */
     work: {
-        /** Show the agent `name` working on `thread`, as `answerer`. */
-        awaiting(name: string, answerer: string, thread: string): void;
+        /** Show the agent `name` working on `thread`, as `answerer`, on the person's message `turnId`. */
+        awaiting(name: string, answerer: string, thread: string, turnId: string): void;
         /** Whether it shows. */
         isAwaiting(): boolean;
         /** Stop showing it. */
@@ -117,7 +117,7 @@ export class ChatSending {
         // by main, so claiming the target is working would name the wrong agent
         // and wait for a reply that is never attributed to it.
         if (!send.content.startsWith("/")) {
-            this.host.work.awaiting(send.name, send.answerer, send.target);
+            this.host.work.awaiting(send.name, send.answerer, send.target, send.id);
         }
         emit("af-send-message", send);
     }
@@ -142,7 +142,7 @@ export class ChatSending {
         this.host.log.move(id, agentId, name);
         this.address(name, agentId);
         if (this.host.work.isAwaiting()) {
-            this.host.work.awaiting(name, agentId, agentId);
+            this.host.work.awaiting(name, agentId, agentId, id);
         }
         if (was.threadId === this.host.target().id) {
             this.host.setTarget(agentId);

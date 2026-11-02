@@ -566,8 +566,8 @@ describe("the app", () => {
     });
 
     it("handles the app-event listeners", () => {
-        emit("af-stream-end", { text: "done", from: "A", agentId: "a" });
-        emit("af-stream-end", { text: "", from: "A", agentId: "a" }); // !text → return
+        emit("af-stream-end", { text: "done", from: "A", agentId: "a", turnId: "" });
+        emit("af-stream-end", { text: "", from: "A", agentId: "a", turnId: "" }); // !text → return
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
         emit("af-send-message", {
             id: "s1",

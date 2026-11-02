@@ -13,8 +13,8 @@ const agentInfo: AgentInfo = { id: "a1", name: "alpha", state: "running", protec
 interface FakeWS {
     send: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
-    chunkCb?: (chunk: string, from: string, timestampMs?: number, agentId?: string) => void;
-    endCb?: (from: string, agentId?: string) => void;
+    chunkCb?: (chunk: string, from: string, timestampMs?: number, agentId?: string, turnId?: string) => void;
+    endCb?: (from: string, agentId?: string, turnId?: string) => void;
 }
 
 function makeWS(sendResult = true): FakeWS {
@@ -125,6 +125,26 @@ describe("IOManager streaming", () => {
         expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main" });
         expect(lastEvent("tts-notify")).toBeUndefined();
         expect(lastEvent("af-feed-push")).toBeUndefined();
+    });
+
+    it("keeps two overlapping turns of one agent apart, by the turn each answers", () => {
+        const io = new IOManager();
+        const ws = makeWS();
+        io.setWSClient(ws as unknown as WSClient);
+
+        ws.chunkCb!("late ", "weather", 1, "w", "m1");
+        ws.chunkCb!("fresh", "weather", 2, "w", "m2");
+        ws.chunkCb!("answer", "weather", 3, "w", "m1");
+        ws.endCb!("weather", "w", "m1");
+
+        expect(lastEvent("af-stream-end")?.detail).toEqual({
+            text: "late answer",
+            from: "weather",
+            agentId: "w",
+            turnId: "m1",
+        });
+        ws.endCb!("weather", "w", "m2");
+        expect(lastEvent("af-stream-end")?.detail.text).toBe("fresh");
     });
 
     it("keeps the replies of two agents of one name apart, by their ids", () => {

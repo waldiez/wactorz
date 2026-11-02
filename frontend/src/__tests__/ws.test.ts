@@ -171,6 +171,7 @@ describe("WSClient", () => {
             "",
             "",
             null,
+            "",
         );
     });
 
@@ -186,7 +187,7 @@ describe("WSClient", () => {
         // Offered with nothing to re-send, there is nothing to pick.
         ws().emit("message", { data: JSON.stringify({ ...frame, choices: ["counter@pi"] }) });
 
-        expect(chatSpy.mock.calls.map(call => call.at(-1))).toEqual([
+        expect(chatSpy.mock.calls.map(call => call.at(-2))).toEqual([
             { addresses: ["counter@pi", "counter@pc"], retryOf: "m-7" },
             null,
         ]);
@@ -238,7 +239,36 @@ describe("WSClient", () => {
         ws().emit("message", {
             data: JSON.stringify({ type: "stream_chunk", content: "part", from: "main" }),
         });
-        expect(spy).toHaveBeenCalledWith("part", "main", expect.any(Number), "");
+        expect(spy).toHaveBeenCalledWith("part", "main", expect.any(Number), "", "");
+    });
+
+    it("hands on the turn each frame answers, and says when a turn is over", () => {
+        const c = new WSClient();
+        const chat = vi.fn();
+        const chunk = vi.fn();
+        const end = vi.fn();
+        const ended: unknown[] = [];
+        const stop = listen("af-turn-ended", detail => ended.push(detail));
+        c.on("chat", chat);
+        c.on("streamChunk", chunk);
+        c.on("streamEnd", end);
+        c.connect("ws://localhost/ws");
+
+        const turn = { from: "counter", agent_id: "c1", turn_id: "m7" };
+        for (const frame of [
+            { type: "chat", content: "Hi", ...turn },
+            { type: "stream_chunk", content: "x", ...turn },
+            { type: "stream_end", ...turn },
+            { type: "turn_end", ...turn },
+        ]) {
+            ws().emit("message", { data: JSON.stringify(frame) });
+        }
+        stop();
+
+        expect(chat.mock.calls[0]!.at(-1)).toBe("m7");
+        expect(chunk.mock.calls[0]!.at(-1)).toBe("m7");
+        expect(end).toHaveBeenCalledWith("counter", "c1", "m7");
+        expect(ended).toEqual([{ turnId: "m7", agentId: "c1" }]);
     });
 
     it("calls onStreamEnd for type='stream_end'", () => {
@@ -247,7 +277,7 @@ describe("WSClient", () => {
         c.on("streamEnd", spy);
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "stream_end", from: "main" }) });
-        expect(spy).toHaveBeenCalledWith("main", "");
+        expect(spy).toHaveBeenCalledWith("main", "", "");
     });
 
     it("hands on the thread each frame names, by its agent's id", () => {
@@ -270,9 +300,9 @@ describe("WSClient", () => {
         ];
         frames.forEach(f => ws().emit("message", { data: JSON.stringify(f) }));
 
-        expect(chat.mock.calls[0]!.at(-2)).toBe("on-pi");
-        expect(chunk.mock.calls[0]!.at(-1)).toBe("on-pi");
-        expect(end).toHaveBeenCalledWith("counter", "on-pi");
+        expect(chat.mock.calls[0]!.at(-3)).toBe("on-pi");
+        expect(chunk.mock.calls[0]!.at(-2)).toBe("on-pi");
+        expect(end).toHaveBeenCalledWith("counter", "on-pi", "");
         expect(relayed).toHaveBeenCalledWith("agents/r/chat", {}, "on-pi");
     });
 

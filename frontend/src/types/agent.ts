@@ -210,6 +210,8 @@ export interface ChatMessage {
     channel?: string;
     /** A name the person used fits more than one agent: the addresses to pick from. */
     addressChoice?: AddressChoice;
+    /** The id of the person's message this answers, when the server says. */
+    turnId?: string;
     /** The person's message waits to go out: for a turn under way to end, or for the
      *  connection. Unset once it is sent. */
     queued?: boolean;

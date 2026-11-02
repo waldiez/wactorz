@@ -88,7 +88,8 @@ export class DashboardChat {
             }
         },
         work: {
-            awaiting: (name, answerer, thread) => this._streamUI.awaiting(name, answerer, thread),
+            awaiting: (name, answerer, thread, turnId) =>
+                this._streamUI.awaiting(name, answerer, thread, turnId),
             isAwaiting: () => this._streamUI.isAwaiting,
             endWait: () => this._streamUI.endWait(),
         },
@@ -594,8 +595,8 @@ export class DashboardChat {
             // nothing to do with.
             const sender = senderOf(msg);
             if (sender) {
-                this._streamUI.endWait(sender);
-                this._sending.turns.ended(sender);
+                this._streamUI.endWait(sender, msg.turnId);
+                this._sending.turns.ended(sender, msg.turnId);
             }
             const voiceTarget = voiceThreadTarget(stored, this.chatTargetName, [
                 ...this.host.agents.values(),
@@ -614,6 +615,9 @@ export class DashboardChat {
 
         this._listeners.on("af-turn-reached", detail =>
             this._sending.reached(detail.id, detail.agentId, detail.name),
+        );
+        this._listeners.on("af-turn-ended", detail =>
+            this._sending.turns.ended(detail.agentId, detail.turnId),
         );
 
         this._listeners.on("af-reset-chat", detail => {
@@ -645,11 +649,11 @@ export class DashboardChat {
         this._listeners.on("af-socket", detail => this._sending.turns.connection(detail.open));
         this._listeners.on("af-stream-chunk", detail => {
             this._streamUI.onChunk(detail);
-            this._sending.turns.chunk(streamKey(detail.agentId, detail.from));
+            this._sending.turns.chunk(streamKey(detail.agentId, detail.from), detail.turnId);
         });
         this._listeners.on("af-stream-end", detail => {
             this._streamUI.onEnd(detail);
-            this._sending.turns.ended(streamKey(detail.agentId, detail.from));
+            this._sending.turns.ended(streamKey(detail.agentId, detail.from), detail.turnId);
         });
     }
 }

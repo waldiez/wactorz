@@ -319,6 +319,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Blobs arriving at once keep within their shared disk cap.** A node or main receiving blobs checked what had
+  arrived so far, so a second blob could start while the first was still small, and the two could end up holding up
+  to twice the cap. Each blob now holds what it announced from its first chunk, one that would not fit is refused, and a
+  chunk larger than the protocol's, or a blob growing past what it announced, is dropped.
 - **Query values outside their range are refused, not obeyed or crashed on.** `/api/chats?limit=-1` sent the whole chat
   log, since SQLite reads a negative limit as none, and a `limit` or `since` that was not a number answered `500`; both
   now answer `400` saying which value. A time past the year 9999 on the data and trial routes (`until=1e20`) answered

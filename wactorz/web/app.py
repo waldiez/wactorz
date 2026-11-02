@@ -33,6 +33,8 @@ from . import (
     api_uploads,
     auth,
     chat,
+    cost,
+    db_writer,
     log_stream,
     login,
     metrics,
@@ -292,6 +294,11 @@ async def main(exit_on_failure: bool = False) -> None:
 
     origins.log_mode()
     origins.warn_loopback_proxies()
+    # Read once, on a thread, before the first message can arrive: the ledger,
+    # so banking spend never reads it on the loop, and the totals the dashboard
+    # is sent, so its first snapshot is not empty.
+    await cost.load_lifetime()
+    await cost.refresh_totals()
     app = build_app()
 
     runner = web.AppRunner(app)
@@ -334,6 +341,9 @@ async def main(exit_on_failure: bool = False) -> None:
         # port stays bound until the process exits, so an embedding application
         # that stops the monitor cannot start it again.
         await runner.cleanup()
+        # Last, once nothing can queue more: what is queued is written, or said
+        # to be lost, before the process closes the database after this returns.
+        await db_writer.writer.close()
 
 
 def cli_main() -> None:

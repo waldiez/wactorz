@@ -6,13 +6,13 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, NamedTuple
 
 from .json_value import encode
 from .migrations import stamp_new_database
@@ -132,6 +132,18 @@ class ClosedError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("WactorzDB connection is closed")
+
+
+class ChatRow(NamedTuple):
+    """One chat turn to keep, as `WactorzDB.write_chat_logs` takes it."""
+
+    ts: float
+    agent_name: str
+    agent_id: str
+    role: str
+    content: str
+    attachments: list[dict[str, Any]] | None = None
+    session_id: str = ""
 
 
 class WactorzDB:
@@ -524,20 +536,29 @@ class WactorzDB:
         chip should still say what was attached even once the file behind it is
         gone.
         """
+        self.write_chat_logs(
+            [ChatRow(ts, agent_name, agent_id, role, content, attachments, session_id)]
+        )
+
+    def write_chat_logs(self, rows: Sequence[ChatRow]) -> None:
+        """Persist several chat turns in one transaction: all of them, or none."""
         with self.transaction() as conn:
-            conn.execute(
+            conn.executemany(
                 "INSERT INTO chat_log "
                 "(ts, agent_name, agent_id, role, content, session_id, attachments) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    ts,
-                    agent_name,
-                    agent_id,
-                    role,
-                    content,
-                    session_id,
-                    json.dumps(attachments) if attachments else "",
-                ),
+                [
+                    (
+                        row.ts,
+                        row.agent_name,
+                        row.agent_id,
+                        row.role,
+                        row.content,
+                        row.session_id,
+                        json.dumps(row.attachments) if row.attachments else "",
+                    )
+                    for row in rows
+                ],
             )
 
     def clear_chat_log(self, agent_name: str | None = None, agent_id: str | None = None) -> int:
@@ -615,7 +636,8 @@ class WactorzDB:
             params.append(float(since))
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY ts DESC LIMIT ?"
+        # Then by id: two turns kept with one time keep the order they were written in.
+        sql += " ORDER BY ts DESC, id DESC LIMIT ?"
         params.append(int(limit))
         rows = self.conn.execute(sql, params).fetchall()
         # rows are sqlite3.Row because connect() set row_factory; coerce to dict

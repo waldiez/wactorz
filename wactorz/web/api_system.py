@@ -82,18 +82,10 @@ async def cost_reset_handler(_request: web.Request) -> Response:
     """Zero the current spend period without touching the lifetime ledger."""
     try:
         info = await asyncio.to_thread(reset_global_cost)
-        # Clear the in-memory lifetime ledger so max() doesn't pin the display
-        # to pre-reset values for the rest of this process lifetime.
-        cost.lifetime_cost.clear()
-        if runtime.db is not None:
-            try:
-                # On the loop, straight after the clear, until ledger writes share
-                # one ordered path: awaited, a metrics write landing in between
-                # would be banked in memory and then deleted from disk with the
-                # old ledger, and lost at the next restart.
-                runtime.db.kv_delete("_system", cost.LIFETIME_LEDGER_KEY)
-            except Exception:
-                logger.debug("[api] Could not clear the lifetime ledger", exc_info=True)
+        # Cleared in memory now, and in SQLite after any save already queued, so
+        # neither a save before the reset nor one after it is lost or undone.
+        cost.reset_lifetime()
+        await cost.settled_totals()
         return web.json_response({"ok": True, **info})
     except Exception:
         # A failure here is the database's, not the caller's, and a sqlite

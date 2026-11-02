@@ -20,8 +20,9 @@ from wactorz.core import mqtt, pip
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
 from wactorz.node import state as node_state
+from wactorz.web import cost as web_cost
+from wactorz.web import db_writer, throttle
 from wactorz.web import runtime as web_runtime
-from wactorz.web import throttle
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +87,13 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     the default.
     """
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_db_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a writer of its own, so nothing one queued is written in another."""
+    monkeypatch.setattr(db_writer, "writer", db_writer.DbWriter())
+    monkeypatch.setattr(web_cost, "_stored", web_cost.StoredTotals())
 
 
 @pytest.fixture(autouse=True)

@@ -64,6 +64,7 @@ And, for what the dashboard does not show:
 | `wactorz_ws_connections` | Dashboard WebSocket connections open now |
 | `wactorz_chat_first_reply_seconds{kind}` | Time from a chat message reaching the server to the first words of its reply, what a person notices while an answer streams in. `kind` is where it went: `command`, `local` (an agent in this process, main among them), `remote` (an agent on a node) or `unrouted` |
 | `wactorz_chat_turn_duration_seconds{kind}` | Time from a chat message reaching the server to its reply being complete. A turn the person stops is not counted |
+| `wactorz_chat_log_rows_dropped_total` | Chat turns shown on the page but not kept in the chat log, because its writer had more queued than it holds |
 | `wactorz_agent_task_duration_seconds{agent,outcome}` | Time a generated agent's `handle_task` took, by how it ended: `completed`, `failed` or `timed_out` |
 | `wactorz_agent_process_duration_seconds{agent}` | Time one cycle of a generated agent's `process()` took, whether it returned or raised |
 | `wactorz_agent_process_timeouts_total{agent}` | `process()` cycles still running when their time ran out |

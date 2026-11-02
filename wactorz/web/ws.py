@@ -17,8 +17,9 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from ..core.persistence import chat_turn_recorded
+from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
-from . import answers, chat, events, lifecycle, origins, runtime, uploads
+from . import answers, chat, cost, db_writer, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 #: The conversation, on the console. Its own name rather than this module's:
@@ -194,6 +195,7 @@ async def totals_broadcaster(interval: float = TOTALS_INTERVAL_S) -> None:
         if not runtime.ws_clients or runtime.hard_resetting:
             continue
         try:
+            await cost.refresh_totals()
             await broadcast({"type": "patch", "state": events.snapshot()})
         except Exception as exc:
             # A failed tick must not end the loop, or totals stop updating for
@@ -229,7 +231,7 @@ def _persist_chat(
     content: str,
     attachments: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Best-effort write to chat_log, and a line on the console. Never raises into the WS path.
+    """Queue a chat_log row, and say the turn on the console. Never raises into the WS path.
 
     Filed under the agent the turn belongs to.
     """
@@ -237,20 +239,21 @@ def _persist_chat(
         log_chat_turn(role, content, owner.name)
     if runtime.db is None or not (content or attachments):
         return
-    try:
-        runtime.db.write_chat_log(
+    # Handed to the writer, which keeps it on a thread, in order with every other
+    # chat turn. Timed now, as it happens, not when the disk gets to it.
+    db_writer.writer.chat(
+        ChatRow(
             ts=time.time(),
             agent_name=owner.name,
             agent_id=owner.agent_id,
             role=role,
-            attachments=attachments,
             # The log outlives the conversation and is readable through the
             # API, so it gets the same treatment as the log file: a user can
             # still type a credential even where no command accepts one.
             content=redact(content),
+            attachments=attachments,
         )
-    except Exception as exc:
-        logger.warning("[ws] chat_log write failed: %s", exc)
+    )
 
 
 class TurnReplies:
@@ -528,6 +531,7 @@ async def handle_command(cmd: dict[str, Any]) -> None:
                     "timestamp": time.time(),
                 }
             )
+            await cost.settled_totals()
             await broadcast(
                 {
                     "type": events.DELETE_AGENT_FRAME,

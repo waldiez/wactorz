@@ -319,12 +319,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A broker message no longer waits on the disk.** The chat log rows kept for every chat turn, from the page and from
+  agents, and the lifetime cost ledger saved on every metrics message, were written inside the message's handling,
+  pausing every actor; one writer now keeps them, in order, on a thread, with chat turns written in batches. A reset
+  of the spend is ordered after any save already queued, so neither is lost or undone. Under a flood the writer keeps
+  up to a set number and size of chat rows; past that a turn is shown but not kept, counted as
+  `wactorz_chat_log_rows_dropped_total` and said in the log. At shutdown it writes what is queued for up to ten seconds. The
+  headline totals are read on a thread too, refreshed on chat, every 15 seconds and before a reset or a deletion is
+  shown, and turns with one time are read back in the order they were written.
 - **The dashboard's routes read and write the database off the event loop.** The chat log, the feed, an agent's
   history and the agent list, the spend figures, its limit and its reset, and signing in and out all touched SQLite
   or the sessions file inside the request handler, pausing every actor while the disk answered; they now run on a
-  thread, except the lifetime ledger's delete on a spend reset, kept beside the clear it goes with. Reads that went straight to the shared connection, past its lock, now take it, so they no longer run in the
-  middle of another thread's write. What a broker message writes as it arrives, and the snapshot the dashboard is
-  sent, are not changed yet.
+  thread. Reads that went straight to the shared connection, past its lock, now take it, so they no longer run in the
+  middle of another thread's write.
 - **An upload no longer holds every agent while it is written.** The attachment routes wrote and read the disk
   inside the request handler, so a large file on a slow disk paused every actor in the process, the broker's keepalive
   included. Every disk step now runs on a thread.

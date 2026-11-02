@@ -408,7 +408,7 @@ async def reset_handler(request: web.Request) -> Response:
             # Clear the in-memory lifetime cost ledger + global accumulator too, or
             # the headline total re-pins to the old high-water once _hard_resetting
             # clears and heartbeats resume (mirrors /api/cost/reset).
-            cost.lifetime_cost.clear()
+            cost.reset_lifetime()
             try:
                 llm_cost.reset_global_cost()
             except Exception as exc:
@@ -431,6 +431,7 @@ async def reset_handler(request: web.Request) -> Response:
         restored = events.rebuild_from_registry(runtime.registry)
         if restored:
             logger.info("[reset] restored %d running agent(s) to the dashboard", restored)
+        await cost.settled_totals()
         await ws.broadcast(
             {
                 "type": "reset",
@@ -479,7 +480,7 @@ async def reset_handler(request: web.Request) -> Response:
             if aid:
                 cost.forget_lifetime_cost(aid)
         else:
-            cost.lifetime_cost.clear()
+            cost.reset_lifetime()
             try:
                 llm_cost.reset_global_cost()
             except Exception as exc:
@@ -529,6 +530,7 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
 
+    await cost.settled_totals()
     await ws.broadcast(
         {
             "type": "reset",

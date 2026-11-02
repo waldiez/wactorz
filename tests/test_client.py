@@ -43,6 +43,7 @@ from wactorz.client import chat as chat_module
 from wactorz.client import stream as stream_module
 from wactorz.client.stream import Listener
 from wactorz.core.identity import derive_actor_id
+from wactorz.core.persistence.db import ChatRow
 from wactorz.ext import tts
 from wactorz.web import answers, chat, questions, runtime, throttle, uploads
 from wactorz.web.app import build_app
@@ -68,6 +69,10 @@ class _Db:
 
     def write_chat_log(self, **row: Any) -> None:
         self.rows.append(row)
+
+    def write_chat_logs(self, rows: "list[ChatRow]") -> None:
+        for row in rows:
+            self.write_chat_log(**row._asdict())
 
     def query_chat_log(self, **_query: Any) -> list[dict[str, Any]]:
         return [{"role": row["role"], "content": row["content"]} for row in self.rows]

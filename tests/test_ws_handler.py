@@ -22,7 +22,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.identity import derive_actor_id
-from wactorz.web import events, runtime, ws
+from wactorz.core.persistence.db import ChatRow
+from wactorz.web import db_writer, events, runtime, ws
 
 
 class _Registry:
@@ -54,6 +55,10 @@ class _Db:
 
     def write_chat_log(self, **kwargs: Any) -> None:
         self.rows.append(kwargs)
+
+    def write_chat_logs(self, rows: "list[ChatRow]") -> None:
+        for row in rows:
+            self.write_chat_log(**row._asdict())
 
 
 @pytest.fixture(name="db")
@@ -160,10 +165,13 @@ class TestChatTurnAttribution:
         async with client.ws_connect("/ws") as socket:
             await _opening(socket)
             await socket.send_str(json.dumps(frame))
-            for _ in range(50):
+            # The row goes through the writer, a thread hop later: generous, for a
+            # loaded runner, and settled after so a batch half written is whole.
+            for _ in range(500):
                 if db.rows:
                     break
                 await asyncio.sleep(0.01)
+            await db_writer.writer.settled()
 
     async def test_a_mention_attributes_the_turn_to_that_agent(
         self, client: TestClient[Any, Any], db: _Db
@@ -252,6 +260,8 @@ class TestChatTurnAttribution:
                 await asyncio.sleep(0.05)
 
         route.assert_not_called()
+        # Waited for: with nothing to wait for, "not stored" would hold for a row still queued.
+        await db_writer.writer.settled()
         assert not db.rows
 
     async def test_a_malformed_frame_does_not_drop_the_connection(
@@ -351,6 +361,7 @@ class TestANameSeveralAgentsShare:
         assert reply["content"] == "More than one."
         assert reply["choices"] == ["counter@pi", "counter@pc"]
         assert reply["retry_of"] == "m-7"
+        await db_writer.writer.settled()
         assert [row["content"] for row in db.rows if row["role"] == "assistant"] == [
             "More than one."
         ]
@@ -584,4 +595,5 @@ class TestProvingTheConnectionIsAlive:
             await socket.send_str(json.dumps({"type": "ping"}))
             await _frames(socket, 1)
 
+        await db_writer.writer.settled()
         assert not db.rows

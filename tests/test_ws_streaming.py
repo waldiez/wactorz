@@ -20,7 +20,8 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.identity import derive_actor_id
-from wactorz.web import answers, chat, runtime, ws
+from wactorz.core.persistence.db import ChatRow
+from wactorz.web import answers, chat, db_writer, runtime, ws
 
 
 class _Registry:
@@ -44,6 +45,10 @@ class _Db:
         if self.fail:
             raise OSError("disk full")
         self.rows.append(kwargs)
+
+    def write_chat_logs(self, rows: "list[ChatRow]") -> None:
+        for row in rows:
+            self.write_chat_log(**row._asdict())
 
 
 @pytest.fixture(name="db")
@@ -256,6 +261,7 @@ class TestAFailingSocket:
         finished, _ = await asyncio.wait({waiter}, timeout=5)
         assert waiter in finished
 
+        await db_writer.writer.settled()
         assert [(r["role"], r["content"]) for r in db.rows] == [
             ("user", "@main hi"),
             ("assistant", "kept"),
@@ -316,6 +322,7 @@ async def test_overlapping_turns_store_their_own_replies(
 ) -> None:
     await _overlapping_turns(client, monkeypatch)
 
+    await db_writer.writer.settled()
     assert [(r["agent_name"], r["content"]) for r in db.rows if r["role"] == "assistant"] == [
         ("catalog", "catalog says"),
         ("main", "main one, main two"),

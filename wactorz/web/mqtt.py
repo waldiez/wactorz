@@ -23,8 +23,9 @@ from ..core.mqtt import (
     session_kwargs,
 )
 from ..core.outbound import numbered
+from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
-from . import events, relay, runtime, ws
+from . import cost, db_writer, events, relay, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ async def _dispatch(topic: str, payload: str) -> None:
         # A patch only adds and updates, so a snapshot that no longer names the
         # agent still leaves its card on screen. This is the frame that removes
         # it, and the same one the REST and WebSocket delete paths send.
+        await cost.settled_totals()
         await ws.broadcast(
             {
                 "type": events.DELETE_AGENT_FRAME,
@@ -131,6 +133,8 @@ async def _dispatch(topic: str, payload: str) -> None:
 
     metric = event.get("metric", "")
     log_event = None if metric == "heartbeat" else event
+    if metric == "chat":
+        await cost.refresh_totals()
     # Totals are the only part of a snapshot that queries the database, so they
     # are not rebuilt for every broker message. `chat` is the exception: it is
     # the frame that follows an agent spending money, it is driven by user
@@ -165,14 +169,17 @@ async def _dispatch(topic: str, payload: str) -> None:
                 # wherever the row is shown; /api/chats gives a row the ledger
                 # still knows its buttons back (`questions.asked_in`).
                 stored = numbered(push["content"], push.get("options") or (), reply_hint=False)
-                runtime.db.write_chat_log(
-                    ts=push.get("timestamp", time.time()),
-                    agent_name=agent_name,
-                    agent_id=push["thread_id"],
-                    role=role,
-                    # Same treatment as the WS path: an agent can quote back
-                    # something a user typed, and this row outlives the turn.
-                    content=redact(stored),
+                # The event's own time, kept: queued, it is written a little later.
+                db_writer.writer.chat(
+                    ChatRow(
+                        ts=push.get("timestamp", time.time()),
+                        agent_name=agent_name,
+                        agent_id=push["thread_id"],
+                        role=role,
+                        # Same treatment as the WS path: an agent can quote back
+                        # something a user typed, and this row outlives the turn.
+                        content=redact(stored),
+                    )
                 )
         except Exception as exc:
             logger.debug("[chat-bridge] persist failed: %s", exc)

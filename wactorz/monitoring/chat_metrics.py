@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from prometheus_client import Histogram
+from prometheus_client import Counter, Histogram
 
 #: Where a turn went: a slash command, the orchestrator (a message that names
 #: no agent), an agent in this process named with ``@``, an agent on a node, or
@@ -48,8 +48,14 @@ TURN_DURATION = Histogram(
     registry=None,
 )
 
+ROWS_DROPPED = Counter(
+    "wactorz_chat_log_rows_dropped",
+    "Chat turns shown on the page but not kept in the chat log, because its writer was full.",
+    registry=None,
+)
+
 #: What a registry serving `/metrics` registers.
-COLLECTORS = (FIRST_REPLY, TURN_DURATION)
+COLLECTORS = (FIRST_REPLY, TURN_DURATION, ROWS_DROPPED)
 
 Send = Callable[..., Awaitable[Any]]
 

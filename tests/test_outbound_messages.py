@@ -34,9 +34,10 @@ from wactorz.core.outbound import (
     numbered,
     pick_option,
 )
+from wactorz.core.persistence.db import ChatRow
 from wactorz.interfaces.chat.outbound import Outbox, PendingChoices, Sender
 from wactorz.interfaces.chat_interfaces import build_social_companions
-from wactorz.web import answers, events, mqtt, relay, runtime, ws
+from wactorz.web import answers, db_writer, events, mqtt, relay, runtime, ws
 
 # ── the vocabulary ───────────────────────────────────────────────────────────
 
@@ -552,11 +553,12 @@ class TestTheDashboardShowsTheQuestion:
         rows: list[dict[str, Any]] = []
 
         class _DB:
-            def write_chat_log(self, **row: Any) -> None:
-                rows.append(row)
+            def write_chat_logs(self, batch: "list[ChatRow]") -> None:
+                rows.extend(row._asdict() for row in batch)
 
         monkeypatch.setattr(runtime, "db", _DB())
         await mqtt.handle_message("agents/agent-1/chat", _telegram_frame())
+        await db_writer.writer.settled()
         (row,) = rows
         assert row["agent_name"] == "hvac"
         assert row["role"] == "assistant"

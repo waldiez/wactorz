@@ -6,6 +6,7 @@ database call it makes wrapped in a `LoopWatch`.
 """
 
 import asyncio
+import json
 import threading
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -19,7 +20,7 @@ from wactorz.agents.llm import cost as llm_cost
 from wactorz.core.persistence import PickleStore
 from wactorz.core.persistence.db import WactorzDB
 from wactorz.core.persistence.stores import install_stores
-from wactorz.web import cost, runtime
+from wactorz.web import cost, db_writer, mqtt, runtime
 from wactorz.web.app import build_app
 from wactorz.web.sessions import SessionStore
 
@@ -131,27 +132,27 @@ async def test_setting_the_spend_limit_writes_off_the_loop(
     assert watch.seen and all(watch.seen), "kv_set held the event loop"
 
 
-async def test_a_reset_deletes_the_ledger_with_nothing_landing_in_between(
+async def test_a_reset_undoes_saves_before_it_and_keeps_those_after(
     client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The ledger's memory is cleared and its row deleted in one step of the loop:
-    # a metrics write in between would be deleted from disk and kept in memory.
-    monkeypatch.setattr(cost, "lifetime_cost", {"agent": 1.0})
-    cleared_when_deleted: list[bool] = []
-    real = db.kv_delete
+    # Ledger saves and the reset's delete go through one ordered writer: a save
+    # queued before the reset is deleted with it, and one queued after survives a
+    # restart rather than being deleted by a reset that finished later.
+    monkeypatch.setattr(cost, "lifetime_cost", {})
+    monkeypatch.setattr(cost, "lifetime_loaded", True)
+    cost.record_lifetime_cost("before", 1.0)
 
-    def kv_delete(agent: str, key: str) -> None:
-        if key == cost.LIFETIME_LEDGER_KEY:
-            cleared_when_deleted.append(threading.current_thread() is threading.main_thread())
-        real(agent, key)
-
-    monkeypatch.setattr(db, "kv_delete", kv_delete)
-
-    response = await client.post("/api/cost/reset")
+    reset = asyncio.ensure_future(client.post("/api/cost/reset"))
+    await asyncio.sleep(0)
+    cost.record_lifetime_cost("after", 2.0)
+    response = await reset
+    await db_writer.writer.settled()
 
     assert response.status == 200, await response.text()
-    assert cleared_when_deleted == [True], "the ledger was deleted off the loop, after an await"
-    assert cost.lifetime_cost == {}
+    assert db.kv_get("_system", cost.LIFETIME_LEDGER_KEY) in ({"after": 2.0}, None)
+    assert cost.lifetime_cost in ({"after": 2.0}, {})
+    stored = db.kv_get("_system", cost.LIFETIME_LEDGER_KEY) or {}
+    assert stored == cost.lifetime_cost, "what is kept on disk is what is held in memory"
 
 
 def test_the_spend_seed_reads_final_costs_through_the_lock(db: WactorzDB) -> None:
@@ -264,3 +265,36 @@ class TestSessions:
         again = SessionStore()
         again.bind(tmp_path, "a-key")
         assert again.is_valid(first) and again.is_valid(second)
+
+
+class TestWhatABrokerMessageWrites:
+    """Written by the one writer, on its thread, and never inside the dispatch."""
+
+    async def test_an_agents_chat_is_kept_off_the_loop_at_the_time_it_carries(
+        self, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        watch = _watched(monkeypatch, db, "write_chat_logs")
+        frame = json.dumps({"from": "worker", "content": "all done", "timestamp": 1234.5})
+
+        await _while_watching(watch, mqtt.handle_message("agents/a1/chat", frame))
+        await _while_watching(watch, db_writer.writer.settled())
+
+        (row,) = db.query_chat_log(agent_name="worker")
+        assert row["ts"] == 1234.5, "queued, the row keeps the time the event happened"
+        assert watch.seen == [True]
+
+    async def test_banked_spend_is_saved_off_the_loop(
+        self, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            runtime, "state", {**runtime.state, "agents": {"a1": {"name": "worker"}}}
+        )
+        monkeypatch.setattr(cost, "lifetime_cost", {})
+        monkeypatch.setattr(cost, "lifetime_loaded", True)
+        watch = _watched(monkeypatch, db, "kv_set")
+
+        await mqtt.handle_message("agents/a1/metrics", json.dumps({"cost_usd": 0.25}))
+        await _while_watching(watch, db_writer.writer.settled())
+
+        assert db.kv_get("_system", cost.LIFETIME_LEDGER_KEY) == {"a1": 0.25}
+        assert watch.seen and all(watch.seen)

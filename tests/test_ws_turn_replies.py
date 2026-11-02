@@ -13,7 +13,8 @@ from typing import Any, cast
 import pytest
 from aiohttp import web
 
-from wactorz.web import chat, runtime
+from wactorz.core.persistence.db import ChatRow
+from wactorz.web import chat, db_writer, runtime
 from wactorz.web.ws import TurnReplies
 
 MAIN = chat.TurnOwner("main", "11111111-1111-4111-8111-111111111111")
@@ -41,6 +42,10 @@ class _Db:
 
     def write_chat_log(self, **row: Any) -> None:
         self.rows.append((row["role"], row["content"], row["agent_name"], row["agent_id"]))
+
+    def write_chat_logs(self, rows: "list[ChatRow]") -> None:
+        for row in rows:
+            self.write_chat_log(**row._asdict())
 
 
 @pytest.fixture(name="db")
@@ -89,6 +94,7 @@ async def test_a_turn_that_ends_does_not_end_another(db: _Db) -> None:
     await deploy.chunk("[OK] live")
     await deploy.end()
 
+    await db_writer.writer.settled()
     assert db.rows == [("assistant", "[deploy] Deploying...[OK] live", "main", MAIN.agent_id)]
     ends = [frame["from"] for frame in socket.frames if frame["type"] == "stream_end"]
     assert ends == ["catalog", "main"]
@@ -107,6 +113,7 @@ async def test_each_turn_is_attributed_to_its_own_agent(db: _Db) -> None:
         ("chat", "catalog", CATALOG.agent_id),
         ("stream_end", "main", MAIN.agent_id),
     ]
+    await db_writer.writer.settled()
     assert db.rows == [
         ("assistant", "'timeseries-collector' spawned", "catalog", CATALOG.agent_id),
         ("assistant", "thinking", "main", MAIN.agent_id),
@@ -122,6 +129,7 @@ async def test_two_turns_of_one_agent_store_a_reply_each(db: _Db) -> None:
     await first.end()
     await second.end()
 
+    await db_writer.writer.settled()
     assert [row[1] for row in db.rows] == ["one", "two"]
 
 
@@ -134,6 +142,7 @@ async def test_a_streamed_reply_is_stored_once_even_if_the_socket_has_gone(db: _
     await turn.end()
     await turn.end()
 
+    await db_writer.writer.settled()
     assert db.rows == [("assistant", "said before it went", "main", MAIN.agent_id)]
 
 
@@ -144,4 +153,5 @@ async def test_an_offer_carries_the_addresses_and_what_a_pick_sends_again(db: _D
 
     assert socket.frames[0]["choices"] == ["tally@pi", "tally@main"]
     assert socket.frames[0]["retry_of"] == "m1"
+    await db_writer.writer.settled()
     assert [row[1] for row in db.rows] == ["Which one?"]

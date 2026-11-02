@@ -11,7 +11,6 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..agents.llm.cost import get_global_alltime_cost
 from ..core import outbound
 from ..core.questions import QUESTIONS_LEAF
 from . import chat, cost, runtime
@@ -532,11 +531,9 @@ def node_online(last_seen: float, threshold: float = 45.0) -> bool:
 def snapshot(include_totals: bool = True) -> dict[str, Any]:
     """Render the dashboard state for a websocket client.
 
-    Everything here reads from ``runtime.state`` — in memory, cheap — **except**
-    the two headline totals, which are the only part that touches the database.
-    Resolving them costs one query per agent whose cost is not in an MQTT frame
-    (``best_cost`` falls through to the ``_final_cost`` row), plus two full scans
-    of ``kv_store``.
+    Everything here is read from memory: ``runtime.state``, and for the headline
+    totals what the database last held (`cost.stored_totals`), which a caller
+    refreshes on a thread (`cost.refresh_totals`) when it needs it current.
 
     ``include_totals=False`` omits them, for callers on a hot path. The browser
     keeps whatever it last received: ``WSClient._applyStatePatch`` assigns each
@@ -608,10 +605,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # the counter accrued its spend at call time). Use it as a third floor so the
     # headline never drops below money already spent — and so it can never read
     # lower than the "this period" spend shown beside it.
-    try:
-        alltime_cost = get_global_alltime_cost()
-    except Exception:
-        alltime_cost = 0.0
+    alltime_cost = cost.stored_totals().alltime
     total_cost = max(
         live_cost + cost.historical_cost_usd(live_names),
         cost.lifetime_cost_total(),

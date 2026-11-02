@@ -25,7 +25,8 @@ import pytest
 
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.nodes import NodeManager
-from wactorz.web import mqtt, runtime
+from wactorz.core.persistence.db import ChatRow
+from wactorz.web import db_writer, mqtt, runtime
 
 
 class _Db:
@@ -36,6 +37,10 @@ class _Db:
 
     def write_chat_log(self, **kwargs: Any) -> None:
         self.rows.append(kwargs)
+
+    def write_chat_logs(self, rows: "list[ChatRow]") -> None:
+        for row in rows:
+            self.write_chat_log(**row._asdict())
 
 
 class _Registry:
@@ -334,6 +339,7 @@ class TestAnAgentsMessageToTheUserIsPersisted:
             "agents/a1/chat", json.dumps({"from": "worker", "content": "all done"})
         )
 
+        await db_writer.writer.settled()
         assert len(db.rows) == 1
         assert db.rows[0]["role"] == "assistant"
         assert db.rows[0]["agent_name"] == "worker"
@@ -347,6 +353,7 @@ class TestAnAgentsMessageToTheUserIsPersisted:
             "agents/a1/chat", json.dumps({"from": "worker", "content": "using password=hunter2"})
         )
 
+        await db_writer.writer.settled()
         assert "hunter2" not in db.rows[0]["content"]
 
     async def test_an_empty_message_is_not_stored(
@@ -354,6 +361,7 @@ class TestAnAgentsMessageToTheUserIsPersisted:
     ) -> None:
         await mqtt.handle_message("agents/a1/chat", json.dumps({"from": "worker", "content": ""}))
 
+        await db_writer.writer.settled()
         assert not db.rows
 
     async def test_a_failing_database_does_not_break_the_broker_loop(

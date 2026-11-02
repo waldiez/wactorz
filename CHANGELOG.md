@@ -319,6 +319,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A speech service that never answers no longer holds the server's start.** The voice list is read as
+  the server starts, and now gives up after 30 seconds, leaving the list empty as when the service is
+  unreachable.
 - **A page that could not read its settings still finds its voices.** It used what an earlier visit
   stored, so a browser that had never loaded them stayed silent; now it asks the server. The page
   also reads `/api/config` once, and no longer shows "disconnected" for a moment while connecting.

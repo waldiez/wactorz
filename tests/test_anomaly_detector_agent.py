@@ -9,6 +9,7 @@ placed with `time.mktime`.
 """
 
 import asyncio
+import threading
 import time
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from pathlib import Path
@@ -16,8 +17,9 @@ from typing import Any
 
 import pytest
 
+from tests.loop_watch import LoopWatch
 from tests.programs import program_namespace
-from wactorz.core.persistence.db import WactorzDB
+from wactorz.core.persistence.db import ClosedError, WactorzDB
 
 NS = program_namespace("anomaly_detector_agent.py")
 Baseline = NS["EntityBaseline"]
@@ -541,13 +543,38 @@ class TestRebuilding:
         self, agent: _Agent, clock: _Clock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         class _Closed:
-            @property
-            def conn(self) -> Any:
-                raise RuntimeError("closed")
+            def transaction(self) -> Any:
+                raise ClosedError()
 
         monkeypatch.setitem(NS, "get_db", _Closed)
 
         assert await NS["_discover_entities"](agent) == []
+
+    async def test_the_store_is_read_off_the_loop(
+        self, agent: _Agent, clock: _Clock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        db = WactorzDB(tmp_path / "wactorz.db")
+        try:
+            db.write_sensor_batch([(TEN, "sensors/a", "sensor.a", "t", 1.0, "", "", "", "")])
+            watch = LoopWatch()
+            real = NS["_entity_ids"]
+
+            def read(store: Any) -> list[str]:
+                watch.during()
+                return real(store)
+
+            monkeypatch.setitem(NS, "_entity_ids", read)
+            monkeypatch.setitem(NS, "get_db", lambda: db)
+            ticker = asyncio.create_task(watch.tick())
+            try:
+                found = await NS["_discover_entities"](agent)
+            finally:
+                ticker.cancel()
+        finally:
+            db.close()
+
+        assert found == ["sensor.a"]
+        assert watch.seen == [True]
 
 
 # ── The subscriber ─────────────────────────────────────────────────────────────
@@ -756,3 +783,34 @@ class TestCommands:
     def test_ages_read_in_the_unit_that_fits(self, age: float, said: str, clock: _Clock) -> None:
         assert NS["_format_age"](TEN - age) == said
         assert NS["_format_age"](0) == "never"
+
+
+def test_listing_the_entities_waits_for_a_write_in_progress(tmp_path: Path) -> None:
+    # The connection is shared, so a read that skipped its lock would read through,
+    # or trip over, another thread's transaction half done.
+    db = WactorzDB(tmp_path / "wactorz.db")
+    inside, finish = threading.Event(), threading.Event()
+
+    def write() -> None:
+        with db.transaction():
+            db.write_ha_state(TEN, "light.desk", "off", "on")
+            inside.set()
+            finish.wait(timeout=10)
+
+    try:
+        writer = threading.Thread(target=write)
+        writer.start()
+        assert inside.wait(timeout=10)
+        seen: list[list[str]] = []
+        reader = threading.Thread(target=lambda: seen.append(NS["_entity_ids"](db)))
+        reader.start()
+        reader.join(timeout=0.5)
+        waited = reader.is_alive()
+        finish.set()
+        writer.join(timeout=10)
+        reader.join(timeout=10)
+    finally:
+        db.close()
+
+    assert waited, "the read went ahead of the open transaction"
+    assert seen == [["light.desk"]]

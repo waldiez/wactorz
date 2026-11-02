@@ -319,6 +319,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The anomaly detector lists entities off the event loop and through the database's lock.** It read the time-series
+  tables on the agent's loop, straight from the shared connection, which could also run in the middle of another
+  thread's write.
 - **Two turns of one agent no longer run together on the page.** After the page gave up on a turn that had gone
   quiet, the next message to the same agent could start while the first was still answering; the late reply was merged
   into the new one's bubble, and its end let the next queued message go too early. Each reply now belongs to the

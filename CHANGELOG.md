@@ -319,6 +319,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An upload no longer holds every agent while it is written.** The attachment routes wrote and read the disk
+  inside the request handler, so a large file on a slow disk paused every actor in the process, the broker's keepalive
+  included. Every disk step now runs on a thread.
 - **Blobs arriving at once keep within their shared disk cap.** A node or main receiving blobs checked what had
   arrived so far, so a second blob could start while the first was still small, and the two could end up holding up
   to twice the cap. Each blob now holds what it announced from its first chunk, one that would not fit is refused, and a

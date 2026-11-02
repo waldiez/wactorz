@@ -66,11 +66,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # Python < 3.9 — should not happen in this codebase
-    ZoneInfo = None  # type: ignore[assignment]
+from zoneinfo import ZoneInfo
 
 from ..core.actor import Actor, Message, MessageType
 from .lookup import find_main_actor
@@ -202,7 +198,7 @@ def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
     """
     candidates = [spec_tz, user_tz]
     for cand in candidates:
-        if cand and ZoneInfo is not None:
+        if cand:
             try:
                 return ZoneInfo(cand)
             except Exception:

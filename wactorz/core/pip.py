@@ -6,6 +6,7 @@ was sent says it imports. Both take their list from a payload off the broker, so
 the rule about what a name may look like has to be the same in both places.
 """
 
+import ctypes
 import importlib
 import importlib.metadata
 import importlib.util
@@ -262,8 +263,6 @@ def is_root() -> bool:
     it may write anywhere.
     """
     if os.name == "nt":
-        import ctypes  # local: the shell32 call below is the only Windows-only code here
-
         try:
             return ctypes.windll.shell32.IsUserAnAdmin() != 0  # pyright: ignore[reportAttributeAccessIssue]
         except Exception:

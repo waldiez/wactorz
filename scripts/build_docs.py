@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import http.server
+import json
 import os
 import re
 import shutil
@@ -394,7 +395,6 @@ def build(site_dir: Path = SITE) -> None:
         print(f"  landing  → static/docs/index.html  (v{version})")
 
     # Write versions.json with the current release
-    import json
 
     versions = [
         {"version": "latest", "title": "latest", "aliases": ["stable"]},
@@ -639,9 +639,8 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
             path = path.split("?", 1)[0].split("#", 1)[0]
             result = super().translate_path(path)
             # serve index.html for bare directory paths
-            from pathlib import Path as P
 
-            p = P(result)
+            p = Path(result)
             if p.is_dir():
                 idx = p / "index.html"
                 if idx.exists():

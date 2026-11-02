@@ -14,6 +14,7 @@ gets scheduled: a blocked loop starves it, an offloaded call does not.
 
 import asyncio
 import socket
+import time
 import types
 from collections.abc import Awaitable
 
@@ -55,7 +56,6 @@ class _BlockingTwilio:
 
     def _create(self, **kwargs):
         self.calls.append(kwargs)
-        import time
 
         time.sleep(_BLOCK)
 
@@ -98,7 +98,6 @@ class TestHostLookup:
         from wactorz.interfaces import chat_interfaces
 
         def _slow(_host: str) -> str:
-            import time
 
             time.sleep(_BLOCK)
             return "10.0.0.5"

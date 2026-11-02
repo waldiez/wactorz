@@ -7,6 +7,7 @@ subscribes with one call and the connection is closed when the actor stops.
 """
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -145,7 +146,6 @@ class TestSubscribe:
     async def test_a_plain_function_is_run_off_the_event_loop(
         self, broker: FakeBroker, probe: Probe
     ) -> None:
-        import threading
 
         threads: list[str] = []
 

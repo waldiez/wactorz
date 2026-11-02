@@ -12,7 +12,9 @@ Configure in pyproject.toml:
 """
 
 import hashlib
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -40,8 +42,6 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
     """Return the detected package-manager command prefix."""
     pkg_json = frontend_dir / "package.json"
     try:
-        import json
-
         data = json.loads(pkg_json.read_text())
         pm = data.get("packageManager", "")
         if pm.startswith("bun"):
@@ -57,8 +57,6 @@ def _pkg_manager(frontend_dir: Path) -> list[str]:
 
 def _pm_available(pm: list[str]) -> bool:
     """Return True if the package-manager executable is on PATH."""
-    import shutil
-
     return shutil.which(pm[0]) is not None
 
 

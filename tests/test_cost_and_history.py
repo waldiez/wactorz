@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 import types
 import unittest
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
@@ -650,12 +651,11 @@ class _SerializedKV:
 
 
 def _fixed_datetime(y, mo, d):
-    from datetime import datetime as _dt
 
-    class _DT(_dt):
+    class _DT(datetime):
         @classmethod
         def now(cls, tz=None):
-            return _dt(y, mo, d, 12, 0, 0, tzinfo=tz)
+            return datetime(y, mo, d, 12, 0, 0, tzinfo=tz)
 
     return _DT
 

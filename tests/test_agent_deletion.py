@@ -22,6 +22,7 @@ the monitor all purge, so a delete completes even when one of them is down.
 """
 
 import json
+import uuid
 from typing import Any
 
 import pytest
@@ -606,7 +607,6 @@ def test_the_runner_derives_the_same_id_as_the_server() -> None:
     than holding two copies to each other: the id keys a held broker session
     and every registry entry, so a change to it strands both.
     """
-    import uuid
 
     name = "kitchen-collector"
     node_copy = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))

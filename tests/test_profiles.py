@@ -4,6 +4,7 @@ its own agents."""
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import os
 import sys
@@ -160,7 +161,6 @@ class TestServe:
         assert seen == {"handle_signals": True, "configure_logging": True, "port": 9100}
 
     def test_the_package_exports_the_library_surface(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import inspect
 
         import wactorz
 

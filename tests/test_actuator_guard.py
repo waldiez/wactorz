@@ -1,6 +1,8 @@
 """Tests for the actuator post-resolution guard (filter_unrequested_actions)
 and the request-derived color/brightness detection."""
 
+import json
+
 from wactorz.agents.home_assistant_actuator_agent import ActuatorAction
 from wactorz.agents.one_off_actuator_agent import (
     OneOffActuatorAgent,
@@ -137,11 +139,10 @@ def test_parse_actions_fenced_still_works():
 
 
 def test_parse_actions_garbage_still_raises():
-    import json as _json
 
     import pytest
 
-    with pytest.raises(_json.JSONDecodeError):
+    with pytest.raises(json.JSONDecodeError):
         _bare_agent("x")._parse_actions_json("no json at all")
 
 

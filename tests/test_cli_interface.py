@@ -14,6 +14,7 @@ own modules, so these run on a checkout installed with `[dev]` alone.
 """
 
 import asyncio
+import builtins
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -567,7 +568,6 @@ class TestReadingAPrompt:
         interpreter exit — the reason stopping the CLI used to need several
         Ctrl-Cs.
         """
-        import builtins
 
         original = builtins.input
         builtins.input = lambda _prompt="": "typed"
@@ -577,7 +577,6 @@ class TestReadingAPrompt:
             builtins.input = original
 
     async def test_an_eof_cancels_rather_than_returning_a_value(self) -> None:
-        import builtins
 
         def _eof(_prompt: str = "") -> str:
             raise EOFError

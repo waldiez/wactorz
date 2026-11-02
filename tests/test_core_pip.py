@@ -10,6 +10,7 @@ It is ordered by how little of the host it disturbs, and nothing else says so.
 """
 
 import ast
+import ctypes
 import importlib
 import sys
 from collections.abc import Callable
@@ -206,7 +207,6 @@ class TestWhoWeAre:
     ) -> None:
         # No uid there; shell32 answers the equivalent question.
         monkeypatch.setattr(pip.os, "name", "nt")
-        import ctypes
 
         class _Shell32:
             @staticmethod
@@ -223,7 +223,6 @@ class TestWhoWeAre:
         """The safe direction: the install takes the contained path rather than
         assuming it may write anywhere."""
         monkeypatch.setattr(pip.os, "name", "nt")
-        import ctypes
 
         class _Broken:
             @staticmethod

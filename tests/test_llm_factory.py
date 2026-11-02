@@ -1,7 +1,9 @@
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
 import importlib.util
+import re
 import sys
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -118,8 +120,6 @@ def test_env_name_falls_back_when_unset_or_empty(monkeypatch):
 def test_known_sites_matches_the_sites_actually_read():
     """The list is hand-maintained; this is what catches a site added to the
     code and forgotten here, which would reject a legitimate override."""
-    import re
-    from pathlib import Path
 
     from wactorz.llm_factory import KNOWN_SITES
 

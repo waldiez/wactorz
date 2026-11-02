@@ -10,6 +10,8 @@ until the cookie work lands, so a guarded install answers 401 at the door rather
 than serving a page that loads and then fails every call it makes.
 """
 
+import dataclasses
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -119,7 +121,6 @@ class TestEverySeverIsCovered:
     """
 
     def test_the_refusal_runs_at_the_process_root(self) -> None:
-        from pathlib import Path
 
         source = Path("wactorz/app.py").read_text(encoding="utf-8")
 
@@ -128,7 +129,6 @@ class TestEverySeverIsCovered:
     def test_the_monitor_keeps_its_own_check(self) -> None:
         # `wactorz-monitor` is its own console script and never goes through
         # `app.py`, so both entry points need it.
-        from pathlib import Path
 
         source = Path("wactorz/web/app.py").read_text(encoding="utf-8")
 
@@ -142,7 +142,6 @@ def _with_key(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     and the middleware imports it inside the function, so replacing the module
     attribute is what it sees.
     """
-    import dataclasses
 
     from wactorz import config
 

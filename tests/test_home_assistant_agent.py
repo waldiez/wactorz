@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -1373,8 +1374,6 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
             self.assertEqual(
                 await self._classify(_FailingCompleteLLM(), "list areas"), "list_areas"
             )
-
-        import asyncio
 
         asyncio.run(run())
 

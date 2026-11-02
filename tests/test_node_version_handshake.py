@@ -24,6 +24,7 @@ whose parser had never heard of the flag and dropped it.
 import asyncio
 import shlex
 import time
+from importlib.metadata import entry_points
 from typing import Any
 
 import pytest
@@ -315,7 +316,6 @@ class TestMigratingToANode:
 
 class TestTheNodeCommand:
     def test_it_is_a_console_script_of_its_own(self) -> None:
-        from importlib.metadata import entry_points
 
         scripts = {ep.name: ep.value for ep in entry_points(group="console_scripts")}
         assert scripts.get("wactorz-node") == "wactorz.node.cli:main"

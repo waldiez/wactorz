@@ -9,6 +9,8 @@ looks like nothing at all from the outside.
 
 import asyncio
 import json
+import signal
+from argparse import Namespace
 from collections.abc import AsyncIterator, Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -299,7 +301,6 @@ class TestStartingTheProcess:
 
     @staticmethod
     def _args(**over: Any) -> Any:
-        from argparse import Namespace
 
         base = {
             "node": "rpi",
@@ -339,7 +340,6 @@ class TestStartingTheProcess:
         assert (built[0].node_name, built[0].broker, built[0].port) == ("rpi", "broker.lan", 8883)
 
     def test_it_can_be_stopped_by_a_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import signal
 
         from wactorz.node import cli as node_cli
 

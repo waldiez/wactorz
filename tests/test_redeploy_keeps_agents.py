@@ -14,6 +14,7 @@ is not treated as the node going away; when the flag lifts, the miss counters
 are reset so the new node's empty first heartbeats do not finish the job.
 """
 
+import inspect
 import time
 from typing import Any, cast
 
@@ -168,7 +169,6 @@ class TestWhenTheRedeployEnds:
 
 class TestTheDeployBracketsTheRestart:
     def test_it_marks_before_killing_and_unmarks_after_the_wait(self) -> None:
-        import inspect
 
         source = inspect.getsource(InstallerAgent._node_deploy)
         mark = source.index("_mark_redeploying")
@@ -178,7 +178,6 @@ class TestTheDeployBracketsTheRestart:
         assert mark < kill < wait < unmark
 
     def test_a_deploy_that_fails_part_way_unmarks_too(self) -> None:
-        import inspect
 
         source = inspect.getsource(InstallerAgent._node_deploy)
         handler = source.index("except Exception as e:")

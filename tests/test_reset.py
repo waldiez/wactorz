@@ -16,7 +16,9 @@ Covers:
 
 import json
 import logging
+import re
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -144,7 +146,6 @@ class ResetLogsTest(unittest.TestCase):
         The lock has to be probed from another thread: handlers use an RLock, so
         the thread that leaked it could re-acquire it and see nothing wrong.
         """
-        import threading
 
         from wactorz.reset import reset_logs
 
@@ -850,7 +851,6 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
         kept. If a new .supervise("x") is added, either mark it protected or add
         it to HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
-        import re
 
         app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
         src_txt = app_src.read_text(encoding="utf-8", errors="ignore")

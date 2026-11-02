@@ -319,6 +319,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A reset no longer holds every agent while it clears the disk.** The dashboard's reset cleared the chat log, metrics,
+  spawns, state, logs or everything inside the request, pausing every actor for as long as the disk took; it now runs on
+  a thread. The agents running here forget their copies first, so one writing while the disk is cleared writes nothing
+  the reset meant to remove, and chat turns still queued for the log are written before the chat is cleared, not after.
 - **The anomaly detector lists entities off the event loop and through the database's lock.** It read the time-series
   tables on the agent's loop, straight from the shared connection, which could also run in the middle of another
   thread's write.

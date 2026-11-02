@@ -29,7 +29,7 @@ from ..core.agent_reset import (
     reset_live,
 )
 from ..core.node_signing import signed_publish_kwargs
-from . import cost, events, lifecycle, node_reset, runtime, ws
+from . import cost, db_writer, events, lifecycle, node_reset, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -404,13 +404,19 @@ async def reset_handler(request: web.Request) -> Response:
                 # attribute was a no-op (the registry is read via recall()).
             # Everything, whatever agent was named: the agents were all stopped
             # above, and records kept for some would be a half-wiped install.
-            _reset.reset_all(None)
+            # Chat turns still queued for the log are from before the reset: written
+            # after the wipe, they would bring those turns back.
+            await db_writer.writer.settled()
+            # On a thread: the wipe is the disk's. What runs meanwhile cannot bring
+            # the old state back: the agents that went are stopped, and those kept
+            # had their memory cleared above.
+            await asyncio.to_thread(_reset.reset_all, None)
             # Clear the in-memory lifetime cost ledger + global accumulator too, or
             # the headline total re-pins to the old high-water once _hard_resetting
             # clears and heartbeats resume (mirrors /api/cost/reset).
             cost.reset_lifetime()
             try:
-                llm_cost.reset_global_cost()
+                await asyncio.to_thread(llm_cost.reset_global_cost)
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
             runtime.state["agents"].clear()
@@ -441,8 +447,20 @@ async def reset_handler(request: web.Request) -> Response:
             }
         )
         return web.json_response({"status": "ok", "scope": "all", "agent": None, "nodes": {}})
+    if scope in LIVE_SCOPES:
+        # Before the wipe, which runs on a thread: an agent here holds a copy of
+        # its own and writes it back on its next turn, persist or heartbeat, so it
+        # forgets first, and whatever it writes while the disk is cleared is
+        # already the cleared state.
+        for actor in list(runtime.registry.all_actors()) if runtime.registry is not None else []:
+            if target.covers(actor):
+                reset_live(actor, scope)
     if scope == "chat":
-        _reset.reset_chat(agent, actor_id=target.actor_id, on_main=target.on_main)
+        # As for everything: queued turns land before the wipe, not after it.
+        await db_writer.writer.settled()
+        await asyncio.to_thread(
+            _reset.reset_chat, agent, actor_id=target.actor_id, on_main=target.on_main
+        )
     elif scope == "state":
         # An agent forgets its state only once it starts again: what it read at
         # start is in memory, and its next persist writes it back. So each is
@@ -454,11 +472,13 @@ async def reset_handler(request: web.Request) -> Response:
                 actor.name, lambda name=actor.name: _reset.reset_agent_state(name)
             )
         if not agent:
-            _reset._reset_all_pickles()
+            await asyncio.to_thread(_reset._reset_all_pickles)
         elif target.on_main:
-            _reset.reset_agent_state(agent)
+            await asyncio.to_thread(_reset.reset_agent_state, agent)
     elif scope == "metrics":
-        _reset.reset_metrics(agent, node=target.history_node, on_main=target.on_main)
+        await asyncio.to_thread(
+            _reset.reset_metrics, agent, node=target.history_node, on_main=target.on_main
+        )
         live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
         # The headline total is max(live + historical, lifetime ledger).
         # reset_metrics cleared the kv ledger, but the in-memory cost.lifetime_cost
@@ -482,7 +502,7 @@ async def reset_handler(request: web.Request) -> Response:
         else:
             cost.reset_lifetime()
             try:
-                llm_cost.reset_global_cost()
+                await asyncio.to_thread(llm_cost.reset_global_cost)
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
     elif scope == "spawns":
@@ -491,21 +511,17 @@ async def reset_handler(request: web.Request) -> Response:
         # clearing the registry left desired_state behind and a runner reconnect
         # reconciled the agents straight back.
         await lifecycle.purge_spawn_reconcile(agent, target.actor_id)
-        _reset.reset_spawns(agent, actor_id=target.actor_id)
+        await asyncio.to_thread(_reset.reset_spawns, agent, actor_id=target.actor_id)
     elif scope == "logs":
-        _reset.reset_logs()
+        await asyncio.to_thread(_reset.reset_logs)
         # The activity feed mirrors the log files we just truncated, so drop the
         # in-memory entries too — otherwise the UI keeps showing stale lines.
         runtime.state["log_feed"].clear()
 
     nodes: dict[str, str] = {}
     if scope in LIVE_SCOPES:
-        # The disk is cleared. The agents running in this process hold copies of
-        # their own and write them back on their next turn, persist or heartbeat
-        # unless those go too, and an agent on a node keeps its copy there.
-        for actor in list(runtime.registry.all_actors()) if runtime.registry is not None else []:
-            if target.covers(actor):
-                reset_live(actor, scope)
+        # The disk is cleared, and the agents here forgot before it was. An agent
+        # on a node keeps its copy there, so the node is told too.
         main_actor = find_main_actor(runtime.registry)
         if main_actor is not None:
             nodes = await node_reset.reset_on_nodes(

@@ -8,19 +8,22 @@ database call it makes wrapped in a `LoopWatch`.
 import asyncio
 import json
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from tests.loop_watch import LoopWatch
+from wactorz import reset as reset_module
 from wactorz.agents.llm import cost as llm_cost
 from wactorz.core.persistence import PickleStore
-from wactorz.core.persistence.db import WactorzDB
+from wactorz.core.persistence.db import ChatRow, WactorzDB
 from wactorz.core.persistence.stores import install_stores
-from wactorz.web import cost, db_writer, mqtt, runtime
+from wactorz.web import api_reset, cost, db_writer, mqtt, runtime
 from wactorz.web.app import build_app
 from wactorz.web.sessions import SessionStore
 
@@ -298,3 +301,91 @@ class TestWhatABrokerMessageWrites:
 
         assert db.kv_get("_system", cost.LIFETIME_LEDGER_KEY) == {"a1": 0.25}
         assert watch.seen and all(watch.seen)
+
+
+class TestAReset:
+    """Its wipe runs on a thread, after the agents running here have forgotten."""
+
+    @pytest.mark.parametrize(
+        ("scope", "wipe"),
+        [
+            ("chat", "reset_chat"),
+            ("metrics", "reset_metrics"),
+            ("spawns", "reset_spawns"),
+            ("logs", "reset_logs"),
+            ("state", "_reset_all_pickles"),
+            ("all", "reset_all"),
+        ],
+    )
+    async def test_its_wipe_runs_off_the_loop(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, scope: str, wipe: str
+    ) -> None:
+        monkeypatch.setattr(runtime, "registry", None)
+        watch = LoopWatch()
+        # Stands in for the wipe, which would clear this machine's logs.
+        monkeypatch.setattr(reset_module, wipe, lambda *_a, **_k: watch.during())
+
+        response = await _while_watching(watch, client.post("/api/reset", json={"scope": scope}))
+
+        assert response.status == 200, await response.text()
+        assert watch.seen == [True], f"{wipe} held the event loop"
+
+    @pytest.mark.parametrize(
+        ("scope", "wipe"), [("chat", "reset_chat"), ("metrics", "reset_metrics")]
+    )
+    async def test_the_agents_here_forget_before_the_disk_is_cleared(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, scope: str, wipe: str
+    ) -> None:
+        # Cleared after, an agent writing in the meantime would put its old copy
+        # back on the disk the wipe had just emptied.
+        class _Registry:
+            def all_actors(self) -> list[Any]:
+                return [SimpleNamespace(name="counter", actor_id="c1", protected=False)]
+
+            def find_by_name(self, _name: str) -> None:
+                return None
+
+        order: list[str] = []
+        monkeypatch.setattr(runtime, "registry", _Registry())
+        monkeypatch.setattr(
+            api_reset, "reset_live", lambda actor, _scope: order.append(f"forgot {actor.name}")
+        )
+        monkeypatch.setattr(reset_module, wipe, lambda *_a, **_k: order.append("wiped"))
+
+        response = await client.post("/api/reset", json={"scope": scope})
+
+        assert response.status == 200, await response.text()
+        assert order == ["forgot counter", "wiped"]
+
+    @pytest.mark.parametrize(("scope", "wipe"), [("chat", "reset_chat"), ("all", "reset_all")])
+    async def test_turns_still_queued_for_the_log_land_before_the_wipe(
+        self,
+        client: TestClient,
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
+        scope: str,
+        wipe: str,
+    ) -> None:
+        # Written after the wipe, a turn from before the reset would come back.
+        monkeypatch.setattr(runtime, "registry", None)
+        kept_when_wiped: list[int] = []
+        monkeypatch.setattr(
+            reset_module, wipe, lambda *_a, **_k: kept_when_wiped.append(len(db.query_chat_log()))
+        )
+        real_write = db.write_chat_logs
+
+        def slow_write(rows: list[ChatRow]) -> None:
+            # A slow disk: the write is still under way when a wipe that did not
+            # wait for it begins. Never a reason to fail when the wipe waits.
+            time.sleep(0.3)
+            real_write(rows)
+
+        monkeypatch.setattr(db, "write_chat_logs", slow_write)
+        db_writer.writer.chat(
+            ChatRow(ts=1.0, agent_name="main", agent_id="main", role="user", content="before")
+        )
+
+        response = await client.post("/api/reset", json={"scope": scope})
+
+        assert response.status == 200, await response.text()
+        assert kept_when_wiped == [1], "the queued turn was written after the wipe, or not at all"

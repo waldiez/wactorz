@@ -319,6 +319,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The browser keeps only the dashboard's shell for offline use.** Its service worker stored every page it
+  saw except under `/api/`, so chat history and settings fetched by their bare names (`/chats`, `/config`) stayed in
+  the browser's cache, which no sign-out clears. It now stores only the page, its assets and its icons, and the
+  first load after this update deletes what it kept before. The docs are no longer available offline.
 - **A directory artifact cannot write outside its folder on Windows.** Unpacking refused `..` and absolute
   paths only as Linux reads them, so a crafted archive naming `..\x` or `C:\x` could land outside the folder on
   Windows. A name with a backslash or a `:` is now refused when unpacked, and when a directory is stored, so an

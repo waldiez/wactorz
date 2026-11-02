@@ -264,6 +264,12 @@ class ArtifactError(Exception):
     def archive_unreadable(cls, member: str) -> "ArtifactError":
         return cls(f"the archive cannot give {member!r}")
 
+    @classmethod
+    def unportable_name(cls, path: Path) -> "ArtifactError":
+        return cls(
+            f"{path} has a name with a backslash or a ':', which Windows reads as a path; rename it"
+        )
+
     # ── The store itself ──────────────────────────────────────────────────
 
     @classmethod
@@ -1189,13 +1195,31 @@ def unpack_directory(archive: Path, target: Path) -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _plain_parts(name: str) -> tuple[str, ...] | None:
+    """The parts of the archive path ``name``, or None unless each is a plain name.
+
+    Judged by the name, the same on every system: a backslash is a separator on
+    Windows and a ``:`` names a drive or a file's hidden stream there, so a name
+    that is harmless on Linux could climb out of the folder where Windows unpacks.
+    """
+    relative = PurePosixPath(name)
+    if relative.is_absolute():
+        return None
+    parts = relative.parts
+    if any(part in {".", ".."} or "\\" in part or ":" in part for part in parts):
+        return None
+    return parts
+
+
 def _unpack_member(tar: tarfile.TarFile, member: tarfile.TarInfo, into: Path) -> None:
-    relative = PurePosixPath(member.name)
-    if relative.is_absolute() or ".." in relative.parts:
+    parts = _plain_parts(member.name)
+    if parts is None:
         raise ArtifactError.archive_outside(member.name)
-    if not relative.parts:
+    if not parts:
         return
-    destination = into.joinpath(*relative.parts)
+    destination = into.joinpath(*parts)
+    if not destination.resolve().is_relative_to(into.resolve()):
+        raise ArtifactError.archive_outside(member.name)
     if member.isdir():
         destination.mkdir(parents=True, exist_ok=True)
         return
@@ -1312,6 +1336,10 @@ def _write_tar(directory: Path, out: IO[bytes]) -> None:
     with tarfile.open(fileobj=out, mode="w|", format=tarfile.PAX_FORMAT) as tar:
         for path in _entries(directory):
             relative = path.relative_to(directory).as_posix()
+            # Refused here rather than where it is unpacked: stored, it could not
+            # be unpacked on every system that may be asked to.
+            if not _plain_parts(relative):
+                raise ArtifactError.unportable_name(path)
             info = tarfile.TarInfo(relative)
             info.mtime = 0
             info.uid = info.gid = 0

@@ -319,6 +319,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A directory artifact cannot write outside its folder on Windows.** Unpacking refused `..` and absolute
+  paths only as Linux reads them, so a crafted archive naming `..\x` or `C:\x` could land outside the folder on
+  Windows. A name with a backslash or a `:` is now refused when unpacked, and when a directory is stored, so an
+  artifact that could not be unpacked everywhere is not kept; rename such a file before adding its directory.
 - **A speech service that never answers no longer holds the server's start.** The voice list is read as
   the server starts, and now gives up after 30 seconds, leaving the list empty as when the service is
   unreachable.

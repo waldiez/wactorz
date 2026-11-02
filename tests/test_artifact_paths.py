@@ -9,6 +9,7 @@ directory it unpacks to, unpacked once and only ever inside where it belongs.
 import asyncio
 import hashlib
 import io
+import sys
 import tarfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -113,6 +114,13 @@ class TestUnpacking:
             ("../outside", tarfile.REGTYPE),
             ("/etc/passwd", tarfile.REGTYPE),
             ("inside/../../outside", tarfile.REGTYPE),
+            # Windows reads these as paths out of the folder, or onto another drive.
+            ("..\\outside", tarfile.REGTYPE),
+            ("inside\\..\\..\\outside", tarfile.REGTYPE),
+            ("C:\\outside", tarfile.REGTYPE),
+            ("C:outside", tarfile.REGTYPE),
+            ("\\\\server\\share\\outside", tarfile.REGTYPE),
+            ("inside/file.txt:hidden", tarfile.REGTYPE),
             ("link", tarfile.SYMTYPE),
             ("hard", tarfile.LNKTYPE),
             ("device", tarfile.CHRTYPE),
@@ -131,6 +139,19 @@ class TestUnpacking:
         assert not target.exists()
         assert not (tmp_path / "outside").exists()
         assert list((tmp_path / "unpacked").iterdir()) == [], "nothing half unpacked is left"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot name a file so")
+    @pytest.mark.parametrize("name", ["12:00.csv", "back\\slash.txt"])
+    def test_a_directory_with_a_name_windows_reads_as_a_path_is_not_stored(
+        self, store: ArtifactStore, tmp_path: Path, name: str
+    ) -> None:
+        root = a_directory(tmp_path)
+        (root / "vocab" / name).write_text("x", encoding="utf-8")
+
+        with pytest.raises(ArtifactError, match="rename it"):
+            store.add(root, "tokenizer")
+
+        assert [p for p in store.objects.iterdir() if p.name.endswith(".part")] == []
 
     def test_removing_the_artifact_removes_what_it_unpacked_to(
         self, store: ArtifactStore, tmp_path: Path

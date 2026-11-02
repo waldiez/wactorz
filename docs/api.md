@@ -213,7 +213,7 @@ Query the persistent chat log table. Query parameters:
 | `agent` | filter by agent name: every agent that went by it |
 | `role` | filter by role (`user` or `assistant`) |
 | `since` | Unix timestamp float — only newer rows |
-| `limit` | max rows (default 200, max 1000) |
+| `limit` | max rows, from 1 (default 200; more than 1000 sends 1000); anything else is refused with `400` |
 
 An agent's question is stored as its words with the options numbered under them. A row that
 is a question the ledger still knows (`GET /api/questions`) carries it, so the dashboard can

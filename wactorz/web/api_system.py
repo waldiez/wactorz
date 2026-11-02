@@ -7,6 +7,7 @@ config is merged in.
 
 import json
 import logging
+import math
 import time
 from typing import Any
 
@@ -19,6 +20,10 @@ from . import cost, origins, panels, probes, questions, runtime
 from .metrics import known_nodes
 
 logger = logging.getLogger(__name__)
+
+#: Rows ``GET /api/chats`` sends when not told, and the most it sends.
+DEFAULT_CHAT_ROWS = 200
+MAX_CHAT_ROWS = 1000
 
 
 async def readiness_handler(_request: web.Request) -> Response:
@@ -138,8 +143,11 @@ async def chat_log_handler(request: web.Request) -> Response:
         agent = request.rel_url.query.get("agent")
         agent_id = request.rel_url.query.get("agent_id")
         role = request.rel_url.query.get("role")
-        since = float(request.rel_url.query["since"]) if "since" in request.rel_url.query else None
-        limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
+        since = _since(request.rel_url.query.get("since"))
+        limit = _chat_limit(request.rel_url.query.get("limit"))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    try:
         rows = runtime.db.query_chat_log(
             agent_name=agent, agent_id=agent_id, role=role, since=since, limit=limit
         )
@@ -147,6 +155,43 @@ async def chat_log_handler(request: web.Request) -> Response:
     except Exception:
         logger.exception("[api] chat log query failed")
         return web.json_response({"error": "Could not read the chat log"}, status=500)
+
+
+class _BadChatQueryError(ValueError):
+    """A query value ``GET /api/chats`` cannot use, and why."""
+
+    @classmethod
+    def not_a_limit(cls) -> "_BadChatQueryError":
+        return cls(f"'limit' is a whole number from 1 (at most {MAX_CHAT_ROWS} are sent)")
+
+    @classmethod
+    def not_a_time(cls) -> "_BadChatQueryError":
+        return cls("'since' is Unix seconds")
+
+
+def _chat_limit(raw: str | None) -> int:
+    """How many rows to send: at most ``MAX_CHAT_ROWS``. SQLite reads a negative limit as none."""
+    if raw is None or raw == "":
+        return DEFAULT_CHAT_ROWS
+    try:
+        value = int(raw)
+    except ValueError:
+        raise _BadChatQueryError.not_a_limit() from None
+    if value < 1:
+        raise _BadChatQueryError.not_a_limit()
+    return min(value, MAX_CHAT_ROWS)
+
+
+def _since(raw: str | None) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise _BadChatQueryError.not_a_time() from None
+    if not math.isfinite(value):
+        raise _BadChatQueryError.not_a_time()
+    return value
 
 
 async def config_handler(request: web.Request) -> Response:

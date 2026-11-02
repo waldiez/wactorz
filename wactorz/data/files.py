@@ -48,6 +48,11 @@ _LEVEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]*$")
 _PART = re.compile(r"^(?P<hour>\d{2})(?:-(?P<part>\d{4}))?\.parquet$")
 
 
+#: The last moment a date can hold (9999-12-31 23:59:59 UTC), as Unix seconds: an
+#: hour is filed by its date, so a time past it has nowhere to be found.
+LAST_SECOND = 253402300799.0
+
+
 class DataError(ValueError):
     """Data could not be filed or found, and why."""
 
@@ -61,6 +66,10 @@ class DataError(ValueError):
     @classmethod
     def no_event_time(cls, row: Mapping[str, Any]) -> DataError:
         return cls(f"a row has no event time 'ts': {sorted(row)}")
+
+    @classmethod
+    def out_of_range(cls, start: float, end: float) -> DataError:
+        return cls(f"[{start}, {end}) is not a window of Unix seconds from 0 to {LAST_SECOND:.0f}")
 
 
 def data_root(state_dir: str | os.PathLike[str]) -> Path:
@@ -104,6 +113,8 @@ def files_for(root: Path, source: str, start: float, end: float) -> list[Path]:
     Found by walking the directories that exist rather than every hour in the
     window, so a sparse source over a long window costs what it holds.
     """
+    if not (0 <= start <= LAST_SECOND and 0 <= end <= LAST_SECOND):
+        raise DataError.out_of_range(start, end)
     base = source_dir(root, source)
     if not base.is_dir() or end <= start:
         return []

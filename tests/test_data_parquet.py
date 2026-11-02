@@ -6,6 +6,7 @@ overlaps, unifies their columns, and keeps the rows inside the window, oldest
 first. ``docs/design/data-storage.md`` is the decision these pin.
 """
 
+import math
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -143,6 +144,13 @@ class TestTheFrame:
         assert table.num_rows == 0
         assert table.schema == EMPTY_SCHEMA
         assert files_for(root, "sensors/none", T0, T0 + 10) == []
+
+    @pytest.mark.parametrize(("start", "end"), [(T0, 1e20), (-1.0, T0), (T0, math.inf)])
+    def test_a_window_no_date_holds_is_refused_rather_than_overflowing(
+        self, root: Path, start: float, end: float
+    ) -> None:
+        with pytest.raises(DataError, match="Unix seconds"):
+            files_for(root, "sensors/imu", start, end)
 
     def test_only_the_hours_the_window_overlaps_are_read(self, root: Path) -> None:
         writer = Writer(root, "sensors/imu")

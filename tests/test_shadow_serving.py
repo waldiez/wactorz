@@ -711,6 +711,16 @@ class TestTheTrialRoutes:
 
         assert answer.status == 400
 
+    @pytest.mark.parametrize(
+        "params", [{"until": "1e20"}, {"since": "inf"}, {"since": "-1"}, {"until": "nan"}]
+    )
+    async def test_the_trial_refuses_a_time_no_date_holds(
+        self, client: Any, params: dict[str, str]
+    ) -> None:
+        answer = await client.get("/api/models/imu/trial", params=params)
+
+        assert answer.status == 400
+
     async def test_without_a_shadow_there_is_no_trial_unless_a_window_is_given(
         self, client: TestClient, later: float, store: ArtifactStore, state: Path
     ) -> None:

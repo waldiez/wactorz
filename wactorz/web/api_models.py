@@ -29,6 +29,7 @@ thread rather than holding the event loop.
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -51,7 +52,7 @@ from ..core.persistence.stores import get_db
 from ..core.pointer_moves import DEFAULT_LIMIT, history
 from ..core.provenance import Provenance
 from ..core.shadow_trial import compare, outcomes_of, series
-from ..data.files import DataError, data_root
+from ..data.files import LAST_SECOND, DataError, data_root
 from . import runtime
 
 #: Who a move made here is recorded as made by.
@@ -328,13 +329,14 @@ async def trials_handler(request: web.Request) -> web.Response:
 
 
 def _moment(raw: str | None) -> float | bool | None:
-    """``raw`` as Unix seconds; None when unsaid; False when it is not a time."""
+    """``raw`` as Unix seconds; None when unsaid; False when it is not a time a date can hold."""
     if raw is None or raw == "":
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         return False
+    return value if math.isfinite(value) and 0 <= value <= LAST_SECOND else False
 
 
 def _points(raw: str | None) -> int | None:

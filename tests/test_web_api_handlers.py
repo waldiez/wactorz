@@ -165,6 +165,35 @@ class TestChatLogAndFeed:
 
         assert [r["content"] for r in rows] == ["new"]
 
+    @pytest.mark.parametrize(
+        ("params", "words"),
+        [
+            # SQLite reads a negative LIMIT as no limit at all.
+            ({"limit": "-1"}, "'limit'"),
+            ({"limit": "0"}, "'limit'"),
+            ({"limit": "many"}, "'limit'"),
+            ({"since": "soon"}, "'since'"),
+            ({"since": "nan"}, "'since'"),
+        ],
+    )
+    async def test_a_bad_ask_is_refused(
+        self, client: TestClient, db: WactorzDB, params: dict[str, str], words: str
+    ) -> None:
+        response = await client.get("/api/chats", params=params)
+
+        assert response.status == 400
+        assert words in (await response.json())["error"]
+
+    async def test_at_most_a_thousand_rows_are_sent(
+        self, client: TestClient, db: WactorzDB
+    ) -> None:
+        for n in range(1005):
+            db.write_chat_log(float(n), "main", "user", str(n), agent_id=derive_actor_id("main"))
+
+        rows = await (await client.get("/api/chats", params={"limit": "5000"})).json()
+
+        assert len(rows) == 1000
+
     async def test_one_agents_history_is_asked_for_by_its_id(
         self, client: TestClient, db: WactorzDB
     ) -> None:
@@ -281,10 +310,15 @@ class TestChatLogAndFeed:
 
         assert [r for r in rows if "question" in r] == []
 
-    async def test_a_bad_query_is_a_500_without_details(
-        self, client: TestClient, db: WactorzDB
+    async def test_a_failed_read_is_a_500_without_details(
+        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        resp = await client.get("/api/chats", params={"since": "yesterday"})
+        def _broken(**_filters: object) -> list[dict[str, object]]:
+            raise RuntimeError("disk I/O error at /secret/state/wactorz.db")
+
+        monkeypatch.setattr(db, "query_chat_log", _broken)
+
+        resp = await client.get("/api/chats")
 
         assert resp.status == 500
         assert await resp.json() == {"error": "Could not read the chat log"}

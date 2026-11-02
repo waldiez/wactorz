@@ -15,7 +15,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.paths import resolve_state_dir
-from wactorz.data import data_root
+from wactorz.data import DataError, data_root, parquet
 from wactorz.data.cli import main
 from wactorz.data.parquet import Writer
 from wactorz.web.app import build_app
@@ -85,6 +85,9 @@ class TestTheRoutes:
         ("path", "params", "words"),
         [
             ("/api/data/sensors/imu/left/profile", {"since": "soon"}, "Unix seconds"),
+            # Past the last moment a date holds: refused, rather than overflowing into a 500.
+            ("/api/data/sensors/imu/left/profile", {"until": "1e20"}, "Unix seconds"),
+            ("/api/data/sensors/imu/left/series", {"column": "x", "until": "1e20"}, "Unix seconds"),
             ("/api/data/sensors/imu/left/profile", {"since": T0, "until": T0 - 1}, "comes after"),
             ("/api/data/-x/profile", {}, "cannot name a source"),
         ],
@@ -96,6 +99,37 @@ class TestTheRoutes:
 
         assert response.status == 400
         assert words in (await response.json())["error"]
+
+    @pytest.mark.parametrize(
+        ("path", "params", "status"),
+        [
+            # A window ending in the first day, its start unsaid: it starts at 0, not
+            # before, and is answered as any other window over nothing.
+            ("/api/data/sensors/none/profile", {"until": "1"}, 200),
+            ("/api/data/sensors/none/series", {"column": "x", "until": "1"}, 404),
+        ],
+    )
+    async def test_a_window_ending_in_the_first_day_is_one(
+        self, client: TestClient, recorded: Path, path: str, params: dict[str, str], status: int
+    ) -> None:
+        response = await client.get(path, params=params)
+
+        assert response.status == status, await response.text()
+
+    async def test_a_window_reading_refuses_is_a_400(
+        self, client: TestClient, recorded: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _refuse(*_args: object, **_kwargs: object) -> object:
+            raise DataError.out_of_range(-1.0, 1.0)
+
+        monkeypatch.setattr(parquet, "frame", _refuse)
+
+        for path, params in (
+            ("/api/data/sensors/imu/left/profile", {}),
+            ("/api/data/sensors/imu/left/series", {"column": "x"}),
+        ):
+            response = await client.get(path, params=params)
+            assert response.status == 400, path
 
     async def test_a_source_with_nothing_is_an_empty_card(
         self, client: TestClient, recorded: Path

@@ -23,7 +23,7 @@ from aiohttp import web
 
 from ..config import DATA_RETENTION_DAYS
 from ..core.paths import resolve_state_dir
-from ..data.files import DataError, check_source, data_root, summaries
+from ..data.files import LAST_SECOND, DataError, check_source, data_root, summaries
 
 #: How far back a profile looks when the window is unsaid.
 DEFAULT_WINDOW_S = 24 * 3600.0
@@ -41,7 +41,7 @@ class _BadQueryError(ValueError):
 
     @classmethod
     def not_seconds(cls, name: str) -> _BadQueryError:
-        return cls(f"'{name}' is Unix seconds")
+        return cls(f"'{name}' is Unix seconds, from 0 to {LAST_SECOND:.0f}")
 
     @classmethod
     def ends_first(cls) -> _BadQueryError:
@@ -60,18 +60,22 @@ def _seconds(request: web.Request, name: str) -> float | None:
         value = float(raw)
     except ValueError:
         raise _BadQueryError.not_seconds(name) from None
-    if not math.isfinite(value) or value < 0:
+    if not math.isfinite(value) or not 0 <= value <= LAST_SECOND:
         raise _BadQueryError.not_seconds(name)
     return value
 
 
 def _window(request: web.Request) -> tuple[float, float]:
-    """The window asked for: ``[since, until)``, the last day ending now when unsaid."""
+    """The window asked for: ``[since, until)``, the last day ending now when unsaid.
+
+    An unsaid start begins no earlier than 0, so a window ending in the first day
+    still is one.
+    """
     since, until = _seconds(request, "since"), _seconds(request, "until")
     if until is None:
         until = time.time()
     if since is None:
-        since = until - DEFAULT_WINDOW_S
+        since = max(0.0, until - DEFAULT_WINDOW_S)
     if until <= since:
         raise _BadQueryError.ends_first()
     return since, until
@@ -115,6 +119,8 @@ async def series_handler(request: web.Request) -> web.Response:
         made = await asyncio.to_thread(drawn)
     except frames.SplitError as exc:
         return web.json_response({"error": str(exc)}, status=404)
+    except DataError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({"source": source, **made})
 
 
@@ -151,7 +157,10 @@ async def profile_handler(request: web.Request) -> web.Response:
             table = table.slice(0, MAX_ROWS)
         return frames.profile(table, source=source)
 
-    made = await asyncio.to_thread(card)
+    try:
+        made = await asyncio.to_thread(card)
+    except DataError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
     return web.json_response({**made, "since": since, "until": until})
 
 

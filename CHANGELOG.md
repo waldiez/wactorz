@@ -319,6 +319,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Query values outside their range are refused, not obeyed or crashed on.** `/api/chats?limit=-1` sent the whole chat
+  log, since SQLite reads a negative limit as none, and a `limit` or `since` that was not a number answered `500`; both
+  now answer `400` saying which value. A time past the year 9999 on the data and trial routes (`until=1e20`) answered
+  `500` from a date overflow; it is now a `400` too, and reading data refuses such a window wherever it is asked for.
 - **The browser keeps only the dashboard's shell for offline use.** Its service worker stored every page it
   saw except under `/api/`, so chat history and settings fetched by their bare names (`/chats`, `/config`) stayed in
   the browser's cache, which no sign-out clears. It now stores only the page, its assets and its icons, and the

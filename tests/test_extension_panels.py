@@ -41,7 +41,8 @@ def _use(monkeypatch: pytest.MonkeyPatch, *modules: Any) -> None:
 @pytest.fixture(name="script")
 def script_fixture(tmp_path: Path) -> Path:
     path = tmp_path / "panel.js"
-    path.write_text(SCRIPT)
+    # Bytes, so Windows writes no "\r\n": the server serves the file as it is.
+    path.write_bytes(SCRIPT.encode())
     return path
 
 

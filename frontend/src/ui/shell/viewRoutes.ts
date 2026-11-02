@@ -48,6 +48,8 @@ export class ViewRoutes {
     private _pending: Route | null = null;
     /** The views that can be opened: the built-in ones, and each extension's once registered. */
     private readonly _known = new Set<View>([...BUILTIN_VIEWS.map(v => v.key), SETTINGS_VIEW.key]);
+    /** Where each extension's view was last opened: its levels are its own to read. */
+    private readonly _levels = new Map<View, string[]>();
 
     constructor(private readonly host: ViewRoutesHost) {}
 
@@ -76,6 +78,7 @@ export class ViewRoutes {
         if (route.view === "inbox") {
             this.host.setInboxTab(route.path[0] ?? "");
         }
+        this._levels.set(route.view, route.path);
         this.host.setView(route.view);
     }
 
@@ -96,7 +99,14 @@ export class ViewRoutes {
     current(): Route {
         const view = this.host.view();
         const at = this._within(view);
-        return { view, path: at ? [at] : [] };
+        if (at) {
+            return { view, path: [at] };
+        }
+        return { view, path: this._builtIn(view) ? [] : (this._levels.get(view) ?? []) };
+    }
+
+    private _builtIn(view: View): boolean {
+        return view === SETTINGS_VIEW.key || BUILTIN_VIEWS.some(v => v.key === view);
     }
 
     /** Where within `view` the dashboard is, if the view keeps a level of its own. */

@@ -196,7 +196,7 @@ async def mqtt_listener() -> None:
                     # client of its own, and one it takes unwatched is not shown.
                     await _watch_main_nodes()
 
-                    for topic in runtime.MQTT_TOPICS:
+                    for topic in (*runtime.MQTT_TOPICS, *relay.followed()):
                         await client.subscribe(topic, qos=1)
 
                     await set_mqtt_status(True)

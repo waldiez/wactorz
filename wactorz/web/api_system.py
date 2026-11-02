@@ -15,7 +15,7 @@ from aiohttp.web import Response
 
 from .. import installed
 from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
-from . import cost, origins, probes, questions, runtime
+from . import cost, origins, panels, probes, questions, runtime
 from .metrics import known_nodes
 
 logger = logging.getLogger(__name__)
@@ -193,7 +193,7 @@ async def config_handler(request: web.Request) -> Response:
         "auth": {"canSignOut": bool(CONFIG.api_key) and not origins.from_supervisor(request)},
         "ws_url": ws_url,
         # Names of packages left out at start, so the page can say how to load one.
-        "extensions": {"blocked": installed.blocked()},
+        "extensions": {"blocked": installed.blocked(), "panels": panels.listed(request.app)},
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),
     # namespaced by extension name.

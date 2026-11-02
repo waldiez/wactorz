@@ -29,6 +29,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A package can add a tab to the dashboard.** An extension's optional `panel()` names an ES module
+  in its package; the dashboard loads it when the tab opens and calls `mount(root, host)`, where
+  `host` (version 1) reads and moves the tab's own place in the address, asks the server, listens to
+  topics the panel declares and shows notices. A tab is offered only for an extension that loaded,
+  which for a package means one named in `WACTORZ_EXTENSIONS`; on a phone it is in the More sheet.
+  docs/extensions.md says how.
+
 - **`wactorz.client`, a Python client for a running server (provisional).** Talks to the monitor's
   REST API and `/ws` from outside it: `Client.from_env()` reads `WACTORZ_URL` and `WACTORZ_API_KEY`,
   `chat.send()` follows a turn to its end with attachments, `files` stores and reads files,

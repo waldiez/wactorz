@@ -56,6 +56,9 @@ async def on_ready(app: web.Application) -> None:
 def actor_decorator(app: web.Application) -> Callable[[actor, dict], None] | None:
     """Return a per-actor payload enricher (or None to opt out)."""
 
+def panel(app: web.Application) -> Panel:
+    """A tab on the dashboard (see "A dashboard tab from a package")."""
+
 # Optional: declare ordering dependencies for on_ready().
 __deps__ = ["other-ext"]  # this on_ready() runs after other-ext's
 ```
@@ -68,6 +71,7 @@ __deps__ = ["other-ext"]  # this on_ready() runs after other-ext's
 | `public_config(app)`  | (optional) merged into `/api/config` at startup             |
 | `on_ready(app)`       | (optional) runs as `on_startup`, topo-sorted by `__deps__`  |
 | `actor_decorator(app)`| (optional) enriches each actor in the `/api/actors` payload |
+| `panel(app)`          | (optional) a dashboard tab, read after `setup()` succeeds   |
 
 ### Enriching the actors list
 
@@ -130,6 +134,67 @@ A node reads its own `WACTORZ_EXTENSIONS`. `/deploy` rewrites the node's `.env`,
 set it on main as `DEPLOY_<NODE>_EXTENSIONS`. On a node the setting decides which
 agents it can build. Under Home Assistant it is the `extensions` option, on the
 add-on and on each deploy target.
+
+### A dashboard tab from a package
+
+A package adds a tab without changing the dashboard: `panel()` names an ES module
+in the package, and the page loads it the first time the tab opens.
+
+```python
+from pathlib import Path
+
+from wactorz.ext import Panel
+
+
+def panel(app):
+    return Panel(
+        title="MLOps",
+        script=Path(__file__).parent / "panel.js",
+        icon="models",                # one of the dashboard's icons; "grid" otherwise
+        topics=("mlops/#",),          # relayed to the page for host.subscribe
+    )
+```
+
+```js
+// panel.js: one module, bundled if it needs more than one file.
+export const apiVersion = 1;
+
+export function mount(root, host) {
+    const heading = document.createElement("h2");
+    heading.textContent = "MLOps";
+    root.append(heading);
+    const stop = host.subscribe("mlops/+/state", (topic, payload) => { /* ... */ });
+    void host.request("/api/mlops/runs").then(answer => { /* answer.ok, answer.value */ });
+    return () => stop();              // called when another view opens
+}
+```
+
+`mount(root, host)` fills `root` and may return, or resolve to, a function that is
+called when another view opens; the tab is mounted again when it is opened again.
+`host` is the panel's whole view of the dashboard, version 1:
+
+| Member | What it does |
+|--------|--------------|
+| `apiVersion`, `name` | The interface's version, and the panel's name |
+| `route()`, `onRoute(fn)` | Where in the panel the address points: `#/mlops/runs/7` is `["runs", "7"]` |
+| `navigate(path)` | Move the address within the panel; a refresh and Back follow it |
+| `request(path, init?)` | JSON from the server with a timeout; answers `{ok: true, value}` or `{ok: false, error}`, never rejects |
+| `subscribe(filter, fn)` | Messages on a topic the page is sent: the dashboard's own, and the panel's `topics` |
+| `toast({title, message, type?})` | A notice; `type` is `info`, `warning` or `error` |
+
+What `onRoute` and `subscribe` start ends with the panel, and each returns a function
+that ends it sooner. A panel styles itself, inside `root`: it inherits the dashboard's
+text colour and font, and can read its CSS variables (`--af-text-dim`, `--af-focus`). A script that fails
+to load, exports no `mount`, was written for another `apiVersion` or throws says so in
+its own tab, and the rest of the dashboard is unaffected.
+
+**What a panel is trusted with.** It runs in the page with the signed-in session, so
+it can do whatever the dashboard can: as much as the package's code already can on
+the server. So a tab is offered only for an extension whose `setup()` succeeded,
+which for a package means one named in `WACTORZ_EXTENSIONS`. Its script is served at
+`/api/ext/<name>/panel.js`, behind the same key as the rest of the API. The extension's
+name is the tab's address, so it is lowercase letters, digits and `-`, and cannot be a
+built-in view's; a panel that breaks a rule is logged and left out.
 
 ### Requirements
 
@@ -291,6 +356,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload
+- [ ] Optional `panel()` names a `.js` module exporting `apiVersion` and `mount(root, host)`
 - [ ] Config is read from `os.getenv(…)`, not `wactorz.config.CONFIG`
 - [ ] Extension no-ops gracefully when its env var / dependency is absent
 - [ ] Frontend barrel exports a `register(config)` function; wires via the event bus

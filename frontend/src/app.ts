@@ -28,6 +28,7 @@ import { Connection } from "./io/connection";
 import { fetchQuestionLedger } from "./io/openQuestions";
 import { emit, Listeners } from "./events";
 import { WSClient } from "./io/WSClient";
+import { register as registerPanels, toastOptions } from "./ext/panels";
 import { register as registerTTS } from "./ext/tts";
 import { loadServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
@@ -99,6 +100,8 @@ export interface AppParts {
     readLedger: (apiBase: string) => Promise<QuestionLedger>;
     /** Boots the voice. */
     registerTTS: (config: TTSConfig) => () => void;
+    /** Adds the tabs of installed packages, with how to stop them. */
+    registerPanels: typeof registerPanels;
     /** The window-wide drop target for uploads, with how to remove it. */
     dropZone: (apiBase: string) => { destroy(): void };
 }
@@ -112,6 +115,7 @@ const REAL_PARTS: AppParts = {
     installSessionExpiry: onRevoked => installSessionExpiry(window, onRevoked),
     readLedger: fetchQuestionLedger,
     registerTTS,
+    registerPanels,
     dropZone: apiBase => new DropZone(apiBase),
 };
 
@@ -504,6 +508,8 @@ function wireAll(app: AppWiring): void {
 interface Running {
     /** Ends what the voice listens to, once it has booted. */
     stopVoice: (() => void) | null;
+    /** Ends the tabs of installed packages, once they have booted. */
+    stopPanels: (() => void) | null;
     /** The poll of the actor list; clearing 0 does nothing. */
     actorPoll: number;
     /** Global drag-and-drop upload overlay. Built after /api/config answers, since
@@ -525,7 +531,7 @@ function pollActors(app: AppWiring): number {
 }
 
 /** Read the server's config, then boot what depends on it. */
-function bootFromConfig(parts: AppParts, running: Running): void {
+function bootFromConfig(parts: AppParts, running: Running, ws: WSClient): void {
     // The HA URL is seeded from /api/config at startup (see config/serverConfig.ts);
     // the Devices nav link reads it from safeStorage. No token ever reaches the
     // browser. The broker address isn't seeded either — the browser never connects
@@ -539,6 +545,11 @@ function bootFromConfig(parts: AppParts, running: Running): void {
         }
         // Boot TTS after config is seeded: what it says decides whether to probe.
         running.stopVoice = parts.registerTTS({ apiBase: ingressBase(), configRead: read });
+        // The list of a package's tabs comes from the same answer.
+        running.stopPanels = parts.registerPanels({
+            frames: handler => ws.on("serverEvent", (topic, payload) => handler(topic, payload)),
+            toast: notice => toast.show(toastOptions(notice)),
+        });
         // Same reason, same moment: the server has now said whether it takes
         // uploads at all.
         if (uploadsEnabled()) {
@@ -573,7 +584,13 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
     wireGlobalErrors(aborting.signal);
     const router = parts.router();
     const ws = parts.ws();
-    const running: Running = { stopVoice: null, actorPoll: 0, dropZone: null, stopped: false };
+    const running: Running = {
+        stopVoice: null,
+        stopPanels: null,
+        actorPoll: 0,
+        dropZone: null,
+        stopped: false,
+    };
 
     // Ahead of the first request this makes: mounting the dashboard starts its
     // polling. A session that ended while the tab was closed refuses that one
@@ -598,7 +615,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
         void app.actorSync.refresh();
         running.actorPoll = pollActors(app);
         seedFeed(app.pushFeed);
-        bootFromConfig(parts, running);
+        bootFromConfig(parts, running, ws);
     }
 
     function stop(): void {
@@ -615,6 +632,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
         running.dropZone = null;
         app.listeners.off();
         running.stopVoice?.();
+        running.stopPanels?.();
         stopDucking();
         stopWatching();
         aborting.abort();

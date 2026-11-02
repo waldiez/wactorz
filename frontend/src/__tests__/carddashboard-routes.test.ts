@@ -152,6 +152,19 @@ describe("CardDashboard and the address", () => {
         expect(changes).toEqual([{ view: "experiments", path: [] }]);
     });
 
+    it("keeps the levels of an extension's view in the address, and returns to them", () => {
+        history.replaceState(null, "", "#/experiments/runs/7");
+        open();
+        cd.registerView("experiments", "grid", "Experiments", () => document.createElement("div"));
+
+        expect(changes.at(-1)).toEqual({ view: "experiments", path: ["runs", "7"] });
+        pressView("Feed");
+        pressView("Experiments");
+        expect(changes.at(-1)).toEqual({ view: "experiments", path: ["runs", "7"] });
+        emit("af-route", { view: "experiments", path: ["runs", "8"] });
+        expect(changes.at(-1)).toEqual({ view: "experiments", path: ["runs", "8"] });
+    });
+
     it("remembers an agent a link names even when it does not exist, and opens a real one next time", () => {
         history.replaceState(null, "", "#/chat/nobody-by-that-name");
         open();

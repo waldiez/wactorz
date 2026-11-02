@@ -17,6 +17,7 @@ from aiohttp.typedefs import Handler
 from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from ..core.paths import ensure_state_dir
+from ..ext import PANELS, setup_all
 from ..monitoring import http_metrics
 from . import (
     answers,
@@ -38,8 +39,10 @@ from . import (
     metrics_history,
     mqtt,
     origins,
+    panels,
     probes,
     questions,
+    relay,
     runtime,
     sessions,
     static_site,
@@ -228,9 +231,9 @@ def build_app() -> web.Application:
     # Extensions (wactorz/ext/): additive features register their own routes
     # and startup/teardown hooks here. Must run BEFORE the docs/static
     # catch-alls below, or the /{path:.+} route shadows extension routes.
-    from ..ext import setup_all
-
     setup_all(app)
+    relay.follow(topic for panel in app[PANELS].values() for topic in panel.topics)
+    app.router.add_get("/api/ext/{name}/panel.js", panels.script_handler)
 
     app.router.add_get("/docs", static_site.docs_redirect)
     app.router.add_get("/docs/", static_site.docs_handler)

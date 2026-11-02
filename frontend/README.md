@@ -27,6 +27,7 @@ frontend/
 │   ├── config/            # App-level config: fetches /api/config, seeds safeStorage
 │   │   └── serverConfig.ts
 │   ├── ext/               # Extensions — self-contained feature modules (mirrors backend wactorz/ext/)
+│   │   ├── panels/        # Packages' tabs: loads each one's script when it opens (PanelHost)
 │   │   └── tts/           # TTS extension: TTSManager, types, register()
 │   │       ├── index.ts
 │   │       ├── TTSManager.ts

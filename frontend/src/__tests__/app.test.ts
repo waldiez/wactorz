@@ -135,6 +135,7 @@ const fakeParts = (): Partial<AppParts> =>
         installSessionExpiry: fakeExpiry,
         readLedger: fakeLedger,
         registerTTS: vi.fn(),
+        registerPanels: vi.fn(),
         dropZone: () => ({ destroy: vi.fn() }),
     }) as unknown as Partial<AppParts>;
 
@@ -743,6 +744,35 @@ describe("the app", () => {
         await Promise.resolve();
 
         expect(registerTTS).not.toHaveBeenCalled();
+    });
+
+    it("adds the packages' tabs once the config is read, and ends them when it stops", async () => {
+        const stopPanels = vi.fn();
+        const registerPanels = vi.fn(() => stopPanels);
+        const second = createApp({ ...fakeParts(), registerPanels });
+
+        second.start();
+        await vi.waitFor(() => expect(registerPanels).toHaveBeenCalledTimes(1));
+        second.stop();
+
+        expect(stopPanels).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the packages' tabs every frame the socket relays", async () => {
+        const registerPanels = vi.fn((_services: Parameters<AppParts["registerPanels"]>[0]) => () => {});
+        const second = createApp({ ...fakeParts(), registerPanels });
+        second.start();
+        await vi.waitFor(() => expect(registerPanels).toHaveBeenCalled());
+        const heard = vi.fn();
+
+        // The fake socket keeps the last handler for an event, so this one is the panels'.
+        registerPanels.mock.calls[0]?.[0].frames(heard);
+        wsHandler("serverEvent")("mlops/a/state", { ok: true }, "");
+        registerPanels.mock.calls[0]?.[0].toast({ title: "Done", message: "Trained" });
+
+        expect(heard).toHaveBeenCalledWith("mlops/a/state", { ok: true });
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Done", type: "system" }));
+        second.stop();
     });
 
     it("stops watching for an ended session when it stops", () => {

@@ -400,3 +400,15 @@
   outline: 2px solid #38bdf8;
   outline-offset: 2px;
 }
+
+/* A package's tab. What is inside it is the package's own. */
+.af-ext-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.af-ext-panel-note {
+  color: var(--af-text-dim);
+}

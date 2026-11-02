@@ -15,8 +15,6 @@ and simply disappear; a few carry the wording the core uses on its own, such as
 an example topic, which a fragment replaces with one of its integration's.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 

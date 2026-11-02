@@ -13,8 +13,6 @@ If the broker password appears in the log, that is not a heuristic - the process
 was given that string and wrote it down.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from .run import Run

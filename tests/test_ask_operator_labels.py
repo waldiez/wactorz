@@ -7,8 +7,6 @@ answered. ``Actor.label`` writes a label as the agent's own, on main; a rule's
 happened.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 from collections.abc import Iterator

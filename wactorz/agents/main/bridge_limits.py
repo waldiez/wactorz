@@ -26,8 +26,6 @@ take a fresh allowance under an invented name: the limits are per node, and only
 signing makes a node's name its own.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from collections import OrderedDict

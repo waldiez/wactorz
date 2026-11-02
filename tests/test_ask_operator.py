@@ -11,8 +11,6 @@ No broker: the frames the agent publishes are recorded, and the answer is
 delivered by calling the subscription's callback the way the hub would.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

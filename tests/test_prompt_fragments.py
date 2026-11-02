@@ -8,8 +8,6 @@ mentions Home Assistant, so a model on an installation without one is never
 taught to answer about lights.
 """
 
-from __future__ import annotations
-
 import re
 from operator import attrgetter
 

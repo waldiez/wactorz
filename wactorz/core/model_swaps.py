@@ -16,8 +16,6 @@ twice over the broker is one node.
 Calls block on SQLite; from the event loop, go through ``asyncio.to_thread``.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from .pointer_moves import source_of

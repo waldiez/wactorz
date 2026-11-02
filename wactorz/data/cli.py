@@ -12,8 +12,6 @@ Reads the data directory under the state directory (``--state-dir``, else
 pyarrow, the ``data`` extra, for anything but ``sources``.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

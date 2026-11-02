@@ -12,8 +12,6 @@ the channels are stand-ins that record what they were handed, and the broker
 link is a recorder.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import time

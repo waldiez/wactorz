@@ -14,8 +14,6 @@ pyarrow is the ``data`` extra; this module imports it, so import the module
 where it is used, not at the top of something that must load without it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections import defaultdict

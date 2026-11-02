@@ -16,8 +16,6 @@ a spawn config can be written by the model, and resolving an arbitrary import
 path from it would run whatever that path reached.
 """
 
-from __future__ import annotations
-
 import importlib
 import inspect
 import logging

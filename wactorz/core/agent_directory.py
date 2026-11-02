@@ -11,8 +11,6 @@ agents send none, and nor does an agent on a node from before nodes said so.
 Such an agent is kept as one whose place is unknown, never taken for main's.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any, NamedTuple
 

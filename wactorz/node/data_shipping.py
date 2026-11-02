@@ -18,8 +18,6 @@ sent twice without need. What was sent and answered is kept in a small record
 beside the files. ``docs/design/data-storage.md`` is the decision.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json

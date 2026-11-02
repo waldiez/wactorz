@@ -8,8 +8,6 @@ The probe is deliberately tolerant rather than pinned to one name, so these
 tests describe each shape it has to survive.
 """
 
-from __future__ import annotations
-
 import asyncio
 import sys
 import types

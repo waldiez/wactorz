@@ -11,8 +11,6 @@ Only the planner can emit a robot command and a Home Assistant command from one
 sentence, so a request naming both belongs to it.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE

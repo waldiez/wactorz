@@ -10,8 +10,6 @@ This module makes the key the application deploys with, starts and stops the
 machine, and reads the node's side of things from inside it.
 """
 
-from __future__ import annotations
-
 import subprocess
 
 import asyncssh

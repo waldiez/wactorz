@@ -8,8 +8,6 @@ integrations fill (see ``assemble.py``). ``orchestrator_prompt`` and
 with everything configured gets and what the module-level constants hold.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from operator import attrgetter
 

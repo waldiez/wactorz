@@ -10,8 +10,6 @@ The offset generators are pure functions, so the cases are driven directly
 rather than through a robot.
 """
 
-from __future__ import annotations
-
 import asyncio
 import itertools
 import math

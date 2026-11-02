@@ -11,8 +11,6 @@ of (main's own agents, the ones nodes report), and `resolve` says what a name
 or an address finds among them.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from typing import NamedTuple
 

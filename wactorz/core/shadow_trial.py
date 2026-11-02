@@ -14,8 +14,6 @@ Nothing here reads a file or a database beyond the graph it is given: the
 pairs arrive as rows, from `wactorz.data.parquet.frame` or a test.
 """
 
-from __future__ import annotations
-
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence

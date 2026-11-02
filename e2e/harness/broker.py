@@ -10,8 +10,6 @@ Only ever this run's container. The suite never looks at port 1883 or at a
 broker it did not start, so it cannot unplug a developer's, or someone's house.
 """
 
-from __future__ import annotations
-
 import os
 import socket
 import subprocess

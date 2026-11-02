@@ -17,8 +17,6 @@ Every wait carries `what` - a phrase completing "timed out waiting for ...". A
 timeout with no subject is a failure that costs someone half an hour to place.
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable
 from typing import TypeVar

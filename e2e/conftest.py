@@ -12,8 +12,6 @@ A run that passes removes its directory under ``e2e/out``. One that fails keeps
 it: the backend's console, the broker's, and a browser trace.
 """
 
-from __future__ import annotations
-
 import shutil
 import sys
 from collections.abc import Iterator

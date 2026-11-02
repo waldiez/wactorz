@@ -20,8 +20,6 @@ would otherwise alter the pinned text without anyone asking it to, and a line
 per element keeps the diff readable.
 """
 
-from __future__ import annotations
-
 import difflib
 import json
 import os

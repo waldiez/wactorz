@@ -16,8 +16,6 @@ supervisor to restart. A host that can repair a program in place overrides
 :meth:`SubscriptionHub._record_failure` -- see the dynamic agent's listener.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

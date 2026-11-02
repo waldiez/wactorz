@@ -6,8 +6,6 @@ that adds a fragment adds it to this tuple; which of these an installation
 actually gets is decided where the system is built, from its configuration.
 """
 
-from __future__ import annotations
-
 from .assemble import PromptFragment
 from .home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 

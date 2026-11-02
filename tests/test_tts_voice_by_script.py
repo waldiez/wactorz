@@ -11,8 +11,6 @@ the part a later reader is most likely to mistake for a bug, so it is what these
 tests pin down.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

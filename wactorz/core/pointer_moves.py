@@ -19,8 +19,6 @@ the two writes.
 Calls block on SQLite; from the event loop, go through ``asyncio.to_thread``.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping
 from typing import Any

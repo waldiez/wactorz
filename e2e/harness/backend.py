@@ -11,8 +11,6 @@ Its whole console stream - stdout and stderr into one file, in order - is kept,
 because `a01` asserts on the order of two lines in it.
 """
 
-from __future__ import annotations
-
 import ctypes
 import os
 import signal

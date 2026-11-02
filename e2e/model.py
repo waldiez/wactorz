@@ -10,8 +10,6 @@ Kept as Python and not as JSON: the answers that start an agent carry its
 program, and a program is readable as a string here and not as one escaped line.
 """
 
-from __future__ import annotations
-
 import datetime
 import json
 

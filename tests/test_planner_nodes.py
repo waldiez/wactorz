@@ -10,8 +10,6 @@ now, that an agent reads its machine with psutil, and that a plan which cannot
 be built says so rather than spawning something to ask.
 """
 
-from __future__ import annotations
-
 import dataclasses
 from pathlib import Path
 from types import SimpleNamespace

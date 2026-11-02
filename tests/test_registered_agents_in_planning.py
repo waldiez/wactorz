@@ -6,8 +6,6 @@ nothing more declared than the decorator says. The IMU example is the agent
 under test, with a small model trained in the test.
 """
 
-from __future__ import annotations
-
 import importlib
 import json
 import sys

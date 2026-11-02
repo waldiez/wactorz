@@ -7,8 +7,6 @@ plumbing is stripped, an error reply is raised, an unknown agent and a silent
 one are errors too, and nothing is left waiting afterwards whatever happened.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path

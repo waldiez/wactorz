@@ -22,8 +22,6 @@ are the record as they are. The collector keeps writing the dashboard's live
 window to SQLite; this is the model loop's store.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

@@ -7,8 +7,6 @@ used on that path. The module-level constants hold each prompt rendered with
 every fragment.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from operator import attrgetter
 

@@ -6,8 +6,6 @@ Stripping happens at synthesis because that is the one point every spoken word
 crosses, whatever produced it.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE

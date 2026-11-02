@@ -1,7 +1,5 @@
 """Reachy help is discoverable, local, and usable without a robot connection."""
 
-from __future__ import annotations
-
 import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE

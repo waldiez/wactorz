@@ -15,8 +15,6 @@ Nothing here needs pyarrow: it works on the files and their names.
 ``docs/design/data-storage.md`` is the decision.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Iterable, Mapping, Sequence

@@ -17,8 +17,6 @@ command -- says which, with :meth:`Guard.allow` for the backend's console and
 :meth:`Guard.allow_on_the_page` for the page's, and everything else still counts.
 """
 
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
 from pathlib import Path

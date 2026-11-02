@@ -9,8 +9,6 @@ gathers nor shows Home Assistant's live context there, and that the same test
 that starts the Home Assistant agents is the one that decides.
 """
 
-from __future__ import annotations
-
 import dataclasses
 from pathlib import Path
 from typing import Any

@@ -10,8 +10,6 @@ touched. That is what lets the suite run on a machine where Wactorz is already
 running.
 """
 
-from __future__ import annotations
-
 import secrets
 import socket
 import time

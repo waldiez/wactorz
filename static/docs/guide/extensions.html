@@ -194,6 +194,9 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">actor</span><span class="p">,</span> <span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return a per-actor payload enricher (or None to opt out)."""</span>
 
+<span class="k">def</span><span class="w"> </span><span class="nf">panel</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Panel</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""A tab on the dashboard (see "A dashboard tab from a package")."""</span>
+
 <span class="c1"># Optional: declare ordering dependencies for on_ready().</span>
 <span class="n">__deps__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"other-ext"</span><span class="p">]</span>  <span class="c1"># this on_ready() runs after other-ext's</span>
 </code></pre></div>
@@ -222,6 +225,10 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <tr>
 <td><code>actor_decorator(app)</code></td>
 <td>(optional) enriches each actor in the <code>/api/actors</code> payload</td>
+</tr>
+<tr>
+<td><code>panel(app)</code></td>
+<td>(optional) a dashboard tab, read after <code>setup()</code> succeeds</td>
 </tr>
 </tbody>
 </table>
@@ -274,6 +281,85 @@ modules under <code>wactorz/ext/</code> always load.</p>
 set it on main as <code>DEPLOY_&lt;NODE&gt;_EXTENSIONS</code>. On a node the setting decides which
 agents it can build. Under Home Assistant it is the <code>extensions</code> option, on the
 add-on and on each deploy target.</p>
+<h3 id="a-dashboard-tab-from-a-package">A dashboard tab from a package</h3>
+<p>A package adds a tab without changing the dashboard: <code>panel()</code> names an ES module
+in the package, and the page loads it the first time the tab opens.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.ext</span><span class="w"> </span><span class="kn">import</span> <span class="n">Panel</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">panel</span><span class="p">(</span><span class="n">app</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">Panel</span><span class="p">(</span>
+        <span class="n">title</span><span class="o">=</span><span class="s2">"MLOps"</span><span class="p">,</span>
+        <span class="n">script</span><span class="o">=</span><span class="n">Path</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span> <span class="o">/</span> <span class="s2">"panel.js"</span><span class="p">,</span>
+        <span class="n">icon</span><span class="o">=</span><span class="s2">"models"</span><span class="p">,</span>                <span class="c1"># one of the dashboard's icons; "grid" otherwise</span>
+        <span class="n">topics</span><span class="o">=</span><span class="p">(</span><span class="s2">"mlops/#"</span><span class="p">,),</span>          <span class="c1"># relayed to the page for host.subscribe</span>
+    <span class="p">)</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="c1">// panel.js: one module, bundled if it needs more than one file.</span>
+<span class="k">export</span><span class="w"> </span><span class="kd">const</span><span class="w"> </span><span class="nx">apiVersion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">mount</span><span class="p">(</span><span class="nx">root</span><span class="p">,</span><span class="w"> </span><span class="nx">host</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">heading</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">document</span><span class="p">.</span><span class="nx">createElement</span><span class="p">(</span><span class="s2">"h2"</span><span class="p">);</span>
+<span class="w">    </span><span class="nx">heading</span><span class="p">.</span><span class="nx">textContent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"MLOps"</span><span class="p">;</span>
+<span class="w">    </span><span class="nx">root</span><span class="p">.</span><span class="nx">append</span><span class="p">(</span><span class="nx">heading</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">stop</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">host</span><span class="p">.</span><span class="nx">subscribe</span><span class="p">(</span><span class="s2">"mlops/+/state"</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">topic</span><span class="p">,</span><span class="w"> </span><span class="nx">payload</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="ow">void</span><span class="w"> </span><span class="nx">host</span><span class="p">.</span><span class="nx">request</span><span class="p">(</span><span class="s2">"/api/mlops/runs"</span><span class="p">).</span><span class="nx">then</span><span class="p">(</span><span class="nx">answer</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* answer.ok, answer.value */</span><span class="w"> </span><span class="p">});</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">stop</span><span class="p">();</span><span class="w">              </span><span class="c1">// called when another view opens</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><code>mount(root, host)</code> fills <code>root</code> and may return, or resolve to, a function that is
+called when another view opens; the tab is mounted again when it is opened again.
+<code>host</code> is the panel's whole view of the dashboard, version 1:</p>
+<table>
+<thead>
+<tr>
+<th>Member</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code>, <code>name</code></td>
+<td>The interface's version, and the panel's name</td>
+</tr>
+<tr>
+<td><code>route()</code>, <code>onRoute(fn)</code></td>
+<td>Where in the panel the address points: <code>#/mlops/runs/7</code> is <code>["runs", "7"]</code></td>
+</tr>
+<tr>
+<td><code>navigate(path)</code></td>
+<td>Move the address within the panel; a refresh and Back follow it</td>
+</tr>
+<tr>
+<td><code>request(path, init?)</code></td>
+<td>JSON from the server with a timeout; answers <code>{ok: true, value}</code> or <code>{ok: false, error}</code>, never rejects</td>
+</tr>
+<tr>
+<td><code>subscribe(filter, fn)</code></td>
+<td>Messages on a topic the page is sent: the dashboard's own, and the panel's <code>topics</code></td>
+</tr>
+<tr>
+<td><code>toast({title, message, type?})</code></td>
+<td>A notice; <code>type</code> is <code>info</code>, <code>warning</code> or <code>error</code></td>
+</tr>
+</tbody>
+</table>
+<p>What <code>onRoute</code> and <code>subscribe</code> start ends with the panel, and each returns a function
+that ends it sooner. A panel styles itself, inside <code>root</code>: it inherits the dashboard's
+text colour and font, and can read its CSS variables (<code>--af-text-dim</code>, <code>--af-focus</code>). A script that fails
+to load, exports no <code>mount</code>, was written for another <code>apiVersion</code> or throws says so in
+its own tab, and the rest of the dashboard is unaffected.</p>
+<p><strong>What a panel is trusted with.</strong> It runs in the page with the signed-in session, so
+it can do whatever the dashboard can: as much as the package's code already can on
+the server. So a tab is offered only for an extension whose <code>setup()</code> succeeded,
+which for a package means one named in <code>WACTORZ_EXTENSIONS</code>. Its script is served at
+<code>/api/ext/&lt;name&gt;/panel.js</code>, behind the same key as the rest of the API. The extension's
+name is the tab's address, so it is lowercase letters, digits and <code>-</code>, and cannot be a
+built-in view's; a panel that breaks a rule is logged and left out.</p>
 <h3 id="requirements">Requirements</h3>
 <ul>
 <li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
@@ -439,6 +525,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
 <li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>
+<li>[ ] Optional <code>panel()</code> names a <code>.js</code> module exporting <code>apiVersion</code> and <code>mount(root, host)</code></li>
 <li>[ ] Config is read from <code>os.getenv(…)</code>, not <code>wactorz.config.CONFIG</code></li>
 <li>[ ] Extension no-ops gracefully when its env var / dependency is absent</li>
 <li>[ ] Frontend barrel exports a <code>register(config)</code> function; wires via the event bus</li>

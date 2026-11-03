@@ -24,7 +24,15 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .files import DataError, files_for, hour_dir, hour_of, hour_start
+from .files import (
+    LAST_SECOND,
+    DataError,
+    files_for,
+    files_written_since,
+    hour_dir,
+    hour_of,
+    hour_start,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,14 +166,51 @@ def frame(
     the window holds nothing.
     """
     paths = files_for(root, source, start, end)
+    return _read(paths, columns, column=TS, start=start, end=end)
+
+
+def arrived_in(
+    root: Path,
+    source: str,
+    start: float,
+    end: float,
+    *,
+    columns: Sequence[str] | None = None,
+) -> pa.Table:
+    """The rows of ``source`` that arrived in ``[start, end)``, oldest event time first.
+
+    For what happened while something ran -- a shadow trial -- rather than what
+    happened in a stretch of the world's time: a reading sent late, backfilled
+    or replayed arrives in the window with an event time from before it, and is
+    here. Only the files written since ``start`` are read. ``columns`` as for
+    `frame`.
+    """
+    if not (0 <= start <= LAST_SECOND and 0 <= end <= LAST_SECOND):
+        raise DataError.out_of_range(start, end)
+    paths = files_written_since(root, source, start) if end > start else []
+    return _read(paths, columns, column=ARRIVED, start=start, end=end)
+
+
+def _read(
+    paths: Sequence[Path],
+    columns: Sequence[str] | None,
+    *,
+    column: str,
+    start: float,
+    end: float,
+) -> pa.Table:
+    """The rows of ``paths`` whose ``column`` is in ``[start, end)``, oldest event time first."""
     wanted = None if columns is None else list(dict.fromkeys([TS, *columns]))
     tables = []
     for path in paths:
         try:
+            names = set(pq.read_schema(path).names)
+            if column not in names:
+                continue
             table = pq.read_table(
                 path,
-                columns=_present(path, wanted),
-                filters=[(TS, ">=", float(start)), (TS, "<", float(end))],
+                columns=None if wanted is None else [name for name in wanted if name in names],
+                filters=[(column, ">=", float(start)), (column, "<", float(end))],
             )
         except (OSError, pa.ArrowException) as exc:
             logger.warning("[data] cannot read %s: %s", path, exc)
@@ -174,11 +219,3 @@ def frame(
     if not tables:
         return EMPTY_SCHEMA.empty_table()
     return pa.concat_tables(tables, promote_options="permissive").sort_by(TS)
-
-
-def _present(path: Path, wanted: list[str] | None) -> list[str] | None:
-    """Those of ``wanted`` the file at ``path`` has; None reads them all."""
-    if wanted is None:
-        return None
-    names = set(pq.read_schema(path).names)
-    return [name for name in wanted if name in names]

@@ -11,7 +11,8 @@ writes the result as an ``outcome`` node, so the trial is part of the model's
 record whichever way it ended.
 
 Nothing here reads a file or a database beyond the graph it is given: the
-pairs arrive as rows, from `wactorz.data.parquet.frame` or a test.
+pairs arrive as rows, from `wactorz.data.parquet.arrived_in` (the pairs that
+arrived while the trial ran, whatever their event time) or a test.
 """
 
 import json
@@ -213,6 +214,19 @@ def series(
         if 0 <= at < points:
             stretches[at].append(row)
     return [_bucket(since + (at + 0.5) * width, kept) for at, kept in enumerate(stretches)]
+
+
+def event_span(rows: Iterable[Mapping[str, Any]]) -> tuple[float, float] | None:
+    """The event times ``rows`` cover, as ``[since, until)``; None for no rows.
+
+    A trial is the pairs that arrived while it ran, whose event times may lie
+    anywhere: labels are matched, and the trial drawn, over these instead.
+    ``until`` lies just past the newest, so that it is inside.
+    """
+    times = [float(row["ts"]) for row in rows]
+    if not times:
+        return None
+    return min(times), max(times) + 1.0
 
 
 def outcome_id(name: str, shadow_version: int, since: float) -> str:

@@ -319,6 +319,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A shadow trial counts the readings that arrived while it ran, whatever their event time.** A trial was cut on its
+  pairs' event time, from when `shadow` was set, so readings a node sent after being offline, a backfill or a replay
+  of recorded data fell outside it and the trial showed none of them. It is now cut on when each pair arrived, in the
+  Models tab, `GET /api/models/{name}/trial` and the outcome written when a trial ends; labels are still matched on
+  each pair's event time, and the trial chart draws the pairs where they happened.
 - **A torch checkpoint with numpy arrays in it loads as a `state_dict`.** A checkpoint that keeps a normalisation, a
   threshold or a loss as numpy arrays beside the weights was refused by `load_model`, so the agent naming it did not
   start. Plain numeric arrays and scalars are now read with the tensors, still without running anything from the file;

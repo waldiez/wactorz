@@ -153,7 +153,7 @@ class ShadowServing:
         root = data_root(resolve_state_dir())
 
         def read() -> list[dict[str, Any]]:
-            return parquet.frame(root, f"shadow/{name}", since, until).to_pylist()
+            return parquet.arrived_in(root, f"shadow/{name}", since, until).to_pylist()
 
         try:
             rows = await asyncio.to_thread(read)

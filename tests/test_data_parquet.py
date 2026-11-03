@@ -7,14 +7,23 @@ first. ``docs/design/data-storage.md`` is the decision these pin.
 """
 
 import math
+import os
+import time
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
 
 from wactorz.data import DataError, data_root, event_time_of, files_for, hour_dir
-from wactorz.data.files import FROM_ARRIVAL, FROM_PAYLOAD, check_source, hour_start
-from wactorz.data.parquet import EMPTY_SCHEMA, Writer, frame, normalise
+from wactorz.data import files as data_files
+from wactorz.data.files import (
+    FROM_ARRIVAL,
+    FROM_PAYLOAD,
+    check_source,
+    files_written_since,
+    hour_start,
+)
+from wactorz.data.parquet import EMPTY_SCHEMA, Writer, arrived_in, frame, normalise
 
 #: 2025-10-09 08:53:20 UTC, inside hour 08.
 T0 = 1_760_000_000.0
@@ -109,6 +118,74 @@ class TestTheWriter:
         assert kept == {"ts": T0, "n": 3.0, "f": 2.5, "b": True, "s": "x", "nested": '{"a":[1]}'}
         with pytest.raises(DataError, match="no event time"):
             normalise({"x": 1})
+
+
+def late(ts: float, arrived: float, **fields: object) -> dict[str, object]:
+    """A reading that happened at ``ts`` and arrived at ``arrived``: sent late, backfilled or replayed."""
+    return {"ts": ts, "arrived": arrived, "time_source": FROM_PAYLOAD, **fields}
+
+
+class TestByArrival:
+    def test_rows_are_taken_by_when_they_arrived_oldest_event_first(self, root: Path) -> None:
+        now = time.time()
+        writer = Writer(root, "shadow/imu")
+        writer.append(late(T0 + 3 * HOUR, now - 60, n=0))  # arrived before the window
+        writer.append(late(T0 + 2 * HOUR, now + 1, n=1))
+        writer.append(late(T0, now + 2, n=2))  # a day's backlog, sent last
+        writer.append(late(T0 + HOUR, now + 30, n=3))  # arrived after the window
+        writer.flush()
+
+        table = arrived_in(root, "shadow/imu", now, now + 10)
+
+        assert table.column("n").to_pylist() == [2.0, 1.0]
+
+    def test_a_file_closed_before_the_window_is_not_read(self, root: Path) -> None:
+        now = time.time()
+        writer = Writer(root, "shadow/imu")
+        writer.append(late(T0, now + 1, n=1))
+        writer.flush()
+        (path,) = writer.written
+        # Closed before the window opened: nothing in it can have arrived since.
+        os.utime(path, (now - 3600, now - 3600))
+
+        assert files_written_since(root, "shadow/imu", now) == []
+        assert arrived_in(root, "shadow/imu", now, now + 10).num_rows == 0
+
+    def test_a_file_without_arrival_times_is_left_out(self, root: Path) -> None:
+        path = hour_dir(root, "shadow/imu", T0) / "09.parquet"
+        path.parent.mkdir(parents=True)
+        pq.write_table(EMPTY_SCHEMA.empty_table().drop_columns(["arrived"]), path)
+
+        assert arrived_in(root, "shadow/imu", 0, time.time() + 10).num_rows == 0
+
+    def test_nothing_is_an_empty_frame_and_a_backwards_window_reads_nothing(
+        self, root: Path
+    ) -> None:
+        now = time.time()
+        writer = Writer(root, "shadow/imu")
+        writer.append(late(T0, now + 1, n=1))
+        writer.flush()
+
+        assert arrived_in(root, "shadow/none", now, now + 10).schema == EMPTY_SCHEMA
+        assert arrived_in(root, "shadow/imu", now + 10, now).num_rows == 0
+
+    @pytest.mark.parametrize(("start", "end"), [(T0, 1e20), (-1.0, T0), (T0, math.inf)])
+    def test_a_window_no_date_holds_is_refused(self, root: Path, start: float, end: float) -> None:
+        with pytest.raises(DataError, match="Unix seconds"):
+            arrived_in(root, "shadow/imu", start, end)
+
+    def test_a_file_that_vanishes_while_looked_at_is_left_out(
+        self, root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        writer = Writer(root, "shadow/imu")
+        writer.append(late(T0, time.time(), n=1))
+        writer.flush()
+        (kept,) = writer.written
+        gone = kept.with_name("09.parquet")
+        # Listed, then removed before it is looked at (retention pruning beside the read).
+        monkeypatch.setattr(data_files, "hours_of", lambda *_: [(hour_start(T0), [gone, kept])])
+
+        assert files_written_since(root, "shadow/imu", 0) == [kept]
 
 
 class TestTheFrame:

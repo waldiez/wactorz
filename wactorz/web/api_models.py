@@ -51,7 +51,7 @@ from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.pointer_moves import DEFAULT_LIMIT, history
 from ..core.provenance import Provenance
-from ..core.shadow_trial import compare, outcomes_of, series
+from ..core.shadow_trial import compare, event_span, outcomes_of, series
 from ..data.files import LAST_SECOND, DataError, data_root
 from . import runtime
 
@@ -204,7 +204,7 @@ async def moves_handler(request: web.Request) -> web.Response:
 
 @dataclass(frozen=True)
 class _Window:
-    """The stretch of a trial a request asks about."""
+    """The stretch of a trial a request asks about: the time its pairs arrived in, not their event time."""
 
     name: str
     shadow: Pointer | None
@@ -239,7 +239,7 @@ async def _trial_window(request: web.Request) -> _Window | web.Response:
 
 
 async def _pairs(window: _Window) -> list[dict[str, Any]] | web.Response:
-    """The pairs kept over ``window``, or why they cannot be read."""
+    """The pairs that arrived in ``window``, or why they cannot be read."""
     try:
         from ..data import parquet  # optional dependency: the `data` extra
     except ModuleNotFoundError:
@@ -249,7 +249,7 @@ async def _pairs(window: _Window) -> list[dict[str, Any]] | web.Response:
     root = data_root(resolve_state_dir())
 
     def read() -> list[dict[str, Any]]:
-        table = parquet.frame(root, f"shadow/{window.name}", window.since, window.until)
+        table = parquet.arrived_in(root, f"shadow/{window.name}", window.since, window.until)
         return table.to_pylist()
 
     try:
@@ -279,9 +279,8 @@ async def trial_handler(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "persistence is not running, so no labels can be read"}, status=503
             )
-        intervals = await asyncio.to_thread(
-            Labels(db).effective, source, since=window.since, until=window.until
-        )
+        since, until = event_span(rows) or (window.since, window.until)
+        intervals = await asyncio.to_thread(Labels(db).effective, source, since=since, until=until)
     summary = compare(rows, intervals=intervals, positive=positive)
     return web.json_response(
         {
@@ -308,7 +307,8 @@ async def trial_series_handler(request: web.Request) -> web.Response:
     rows = await _pairs(window)
     if isinstance(rows, web.Response):
         return rows
-    buckets = series(rows, since=window.since, until=window.until, points=points)
+    since, until = event_span(rows) or (window.since, window.until)
+    buckets = series(rows, since=since, until=until, points=points)
     return web.json_response(
         {"name": window.name, "since": window.since, "until": window.until, "buckets": buckets}
     )

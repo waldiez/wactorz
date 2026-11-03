@@ -413,7 +413,7 @@ End the trial: unset `shadow`. The body is optional: `{"reason": "..."}` is kept
 
 ### `GET /api/models/{name}/trial`
 
-What the shadow trial shows: the pairs the serving agents kept, compared. By default the trial's own window, from when `shadow` was set to now; `since` and `until` (Unix seconds) choose another, and are the only way to read a trial that has ended. `source` and `positive` (label values, comma separated) add each side's precision and recall over the pairs a label of that source covers, as `GET /api/labels/effective` resolves them.
+What the shadow trial shows: the pairs the serving agents kept, compared. By default the trial's own window, from when `shadow` was set to now; `since` and `until` (Unix seconds) choose another, and are the only way to read a trial that has ended. The window is when the pairs arrived, not their event time: a reading sent late, backfilled or replayed during the trial is part of it, with whatever event time it carries. `source` and `positive` (label values, comma separated) add each side's precision and recall over the pairs a label of that source covers, as `GET /api/labels/effective` resolves them, matched on each pair's event time.
 
 **Response** `200 OK`
 ```json
@@ -434,7 +434,7 @@ What the shadow trial shows: the pairs the serving agents kept, compared. By def
 
 ### `GET /api/models/{name}/trial/series`
 
-The same pairs over time, for a chart: the window as above, cut into `points` stretches of equal length (120 unless said, at most 1000).
+The same pairs over time, for a chart: the pairs of the window as above, drawn at their event times, from the oldest to the newest cut into `points` stretches of equal length (120 unless said, at most 1000); with no pairs, the window itself.
 
 **Response** `200 OK`
 ```json

@@ -268,8 +268,11 @@ main does both in the agents that serve the model, as it hands every pointer cha
 the hot swap. When it ends, main reads the pairs back, compares them (agreement, the
 scores' difference, latencies, and precision and recall against the labels of a source
 when asked), writes an `outcome` node about the model saying how it ended and what it
-showed, and says so on the feed. `GET /api/models/{name}/trial` shows the comparison
-while a trial runs, or over any window; `/trials` lists the outcomes. The outcome
+showed, and says so on the feed. The trial's pairs are those that arrived while it ran,
+whatever their event time, so readings a node sends late, a backfill or a replay of
+recorded data count; labels are matched on each pair's event time.
+`GET /api/models/{name}/trial` shows the comparison while a trial runs, or over any
+window; `/trials` lists the outcomes. The outcome
 stands alone until the train step writes `model` nodes for `evaluated_by` to reach.
 
 Two cuts, for this step:

@@ -167,6 +167,26 @@ def hours_of(root: Path, source: str) -> list[tuple[float, list[Path]]]:
     return [(hour, sorted(paths)) for hour, paths in sorted(found.items())]
 
 
+def files_written_since(root: Path, source: str, since: float) -> list[Path]:
+    """Every file of ``source`` last written at or after ``since``, oldest hour first.
+
+    The files that can hold a row that arrived from ``since`` on, whatever its
+    event time: a row is written after it arrives, and a file is never written
+    again once it is closed. A file that vanishes while it is looked at is left
+    out.
+    """
+    found: list[Path] = []
+    for _, paths in hours_of(root, source):
+        for path in paths:
+            try:
+                written = path.stat().st_mtime
+            except OSError:
+                continue
+            if written >= since:
+                found.append(path)
+    return found
+
+
 def summary(root: Path, source: str) -> dict[str, Any]:
     """What ``source`` holds: its files and bytes, and the first and last hour, as the data tab shows."""
     hours = hours_of(root, source)

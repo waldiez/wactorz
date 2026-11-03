@@ -150,9 +150,13 @@ the profiler, the simulator's report, and a notebook.
 - `frame(source, start, end, columns=None)`: the readings of `source` over
   `[start, end)` in event time, as an Arrow table, read from the files whose
   hours overlap the window and filtered by `ts`; the last minutes come from
-  the SQLite window when the current hour's file is not closed yet. Pairs and
-  serving logs are read the same way, with `shadow/<model>` or
-  `serving/<model>` as the source.
+  the SQLite window when the current hour's file is not closed yet. Serving
+  logs are read the same way, with `serving/<model>` as the source.
+- `arrived_in(source, start, end, columns=None)`: the rows of `source` that
+  arrived in `[start, end)`, whatever their event time, read from the files
+  written since `start` and filtered by `arrived`. A shadow trial's pairs are
+  read this way, with `shadow/<model>` as the source: a trial is what the
+  shadow saw while it ran, readings sent late or replayed included.
 - `segments(frame, by=...)`: the frame cut into pieces, which every split groups
   on: `by="gap"` where event time jumps more than a threshold, `by="label"`
   along the intervals `labels.effective` gives for the source, `by="column"`

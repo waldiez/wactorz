@@ -404,14 +404,19 @@ def trials_fixture(host: _Host) -> ShadowServing:
     return ShadowServing(cast("SwapHost", host))
 
 
-def _pairs(state: Path, since: float, count: int) -> None:
-    """``count`` pairs of ``imu``'s trial from ``since``, agreeing on all but the last."""
+def _pairs(state: Path, since: float, count: int, *, events_from: float | None = None) -> None:
+    """``count`` pairs of ``imu``'s trial arriving from ``since``, agreeing on all but the last.
+
+    Their event times start at ``events_from``, for readings sent late or
+    replayed; at ``since`` when unsaid, for readings that arrive as they happen.
+    """
     writer = Writer(data_root(state), "shadow/imu")
+    events = since if events_from is None else events_from
     for i in range(count):
         same = i < count - 1
         writer.append(
             {
-                "ts": since + i,
+                "ts": events + i,
                 "arrived": since + i,
                 "time_source": "payload",
                 "input_sha256": "a" * 64,
@@ -477,6 +482,26 @@ class TestMainStartsAndEndsTheTrial:
         assert (outcome["pairs"], outcome["agreement"]) == (4, 0.75)
         assert (outcome["since"], outcome["until"]) == (was.moved_at, later)
         assert outcome["score"]["difference_mean"] == 0.5
+
+    async def test_the_outcome_counts_pairs_that_arrived_in_the_trial_whatever_their_event_time(
+        self,
+        later: float,
+        trials: ShadowServing,
+        store: ArtifactStore,
+        graph: Provenance,
+        state: Path,
+    ) -> None:
+        was = store.pointer("imu", "shadow")
+        assert was is not None
+        # A week of readings replayed during the trial, and two that arrived before it began.
+        _pairs(state, was.moved_at, 4, events_from=was.moved_at - 7 * 86400)
+        _pairs(state, was.moved_at - 50, 2)
+        store.clear("shadow", "imu", by="dashboard")
+
+        await trials.follow([("imu", "shadow", None, was)])
+
+        (outcome,) = outcomes_of(graph, "imu")
+        assert (outcome["pairs"], outcome["agreement"]) == (4, 0.75)
 
     async def test_a_promotion_ends_the_trial_as_won(
         self,
@@ -674,6 +699,55 @@ class TestTheTrialRoutes:
 
         assert body["labels"]["positives"] == 3
         assert body["labels"]["active"]["recall"] == 1.0
+
+    async def test_pairs_count_by_when_they_arrived_not_by_their_event_time(
+        self, client: TestClient, later: float, store: ArtifactStore, state: Path
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        # Sent late or replayed: arrived during the trial, with event times from a week before it.
+        _pairs(state, shadow.moved_at, 3, events_from=shadow.moved_at - 7 * 86400)
+        # Arrived before the trial began, with event times inside it (a device clock ahead).
+        _pairs(state, shadow.moved_at - 50, 2, events_from=shadow.moved_at + 10)
+
+        body = await (await client.get("/api/models/imu/trial")).json()
+
+        assert (body["pairs"], body["since"]) == (3, shadow.moved_at)
+        assert body["agreement"] == pytest.approx(2 / 3)
+
+    async def test_labels_are_matched_on_the_event_time_of_late_pairs(
+        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        week_before = shadow.moved_at - 7 * 86400
+        _pairs(state, shadow.moved_at, 3, events_from=week_before)
+        # A fault that lasted the first two readings of that week, and nothing after.
+        Labels(db).write(
+            source="left-wrist", start=week_before, end=week_before + 2, value="fault", actor="op"
+        )
+
+        body = await (
+            await client.get(
+                "/api/models/imu/trial", params={"source": "left-wrist", "positive": "fault"}
+            )
+        ).json()
+
+        assert (body["labels"]["labelled"], body["labels"]["positives"]) == (2, 2)
+
+    async def test_the_series_of_late_pairs_is_drawn_at_their_event_times(
+        self, client: TestClient, later: float, store: ArtifactStore, state: Path
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        week_before = shadow.moved_at - 7 * 86400
+        _pairs(state, shadow.moved_at, 3, events_from=week_before)
+
+        answer = await client.get("/api/models/imu/trial/series", params={"points": 3})
+
+        buckets = (await answer.json())["buckets"]
+        assert [b["pairs"] for b in buckets] == [1, 1, 1]
+        assert week_before <= buckets[0]["ts"] < buckets[-1]["ts"] < week_before + 3
 
     async def test_the_series_cuts_the_trial_into_stretches_of_time(
         self, client: Any, state: Path

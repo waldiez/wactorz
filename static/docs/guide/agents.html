@@ -908,7 +908,7 @@ plans, memory, notifications, diagnostics. <code>/help</code> on the dashboard l
 <tr>
 <td><code>await agent.load_model(key)</code></td>
 <td>async</td>
-<td>The artifact named <code>key</code>, loaded once: a dict of numpy arrays for <code>npz</code> and <code>safetensors</code>, an array for <code>npy</code>, an <code>onnxruntime.InferenceSession</code> for <code>onnx</code>, tensors for a <code>state_dict</code>, bytes for <code>raw</code>. A pickle, joblib file or whole torch module only with <code>allow_code=True</code></td>
+<td>The artifact named <code>key</code>, loaded once: a dict of numpy arrays for <code>npz</code> and <code>safetensors</code>, an array for <code>npy</code>, an <code>onnxruntime.InferenceSession</code> for <code>onnx</code>, the checkpoint for a <code>state_dict</code> (tensors, and numeric numpy arrays beside them), bytes for <code>raw</code>. A pickle, joblib file or whole torch module only with <code>allow_code=True</code></td>
 </tr>
 <tr>
 <td><code>agent.artifacts</code></td>

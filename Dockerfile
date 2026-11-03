@@ -9,7 +9,7 @@ ARG FLAVOUR=default
 # uv, at build time only: it turns uv.lock into the list the install below
 # checks every package against, and is never copied into the image. Pinned by
 # digest like the base. CI installs the uv this line names (.github/actions/setup-uv).
-FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
 # Each base is pinned by digest in a literal FROM line, so Dependabot proposes its
 # updates (.github/dependabot.yml) and every build starts from the same bytes.

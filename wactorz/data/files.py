@@ -167,13 +167,21 @@ def hours_of(root: Path, source: str) -> list[tuple[float, list[Path]]]:
     return [(hour, sorted(paths)) for hour, paths in sorted(found.items())]
 
 
+#: How much earlier than the moment it was written a file's time may say. The
+#: kernel stamps files from a coarse clock, a step behind the one `time.time`
+#: reads, and some filesystems keep whole seconds or two; a file written just
+#: after ``since`` must not be passed over for it. Reading a file too many costs
+#: nothing: its rows are filtered on their arrival anyway.
+WRITE_TIME_SLACK_S = 5.0
+
+
 def files_written_since(root: Path, source: str, since: float) -> list[Path]:
     """Every file of ``source`` last written at or after ``since``, oldest hour first.
 
     The files that can hold a row that arrived from ``since`` on, whatever its
     event time: a row is written after it arrives, and a file is never written
-    again once it is closed. A file that vanishes while it is looked at is left
-    out.
+    again once it is closed. A file's time is allowed `WRITE_TIME_SLACK_S` of
+    coarseness. A file that vanishes while it is looked at is left out.
     """
     found: list[Path] = []
     for _, paths in hours_of(root, source):
@@ -182,7 +190,7 @@ def files_written_since(root: Path, source: str, since: float) -> list[Path]:
                 written = path.stat().st_mtime
             except OSError:
                 continue
-            if written >= since:
+            if written >= since - WRITE_TIME_SLACK_S:
                 found.append(path)
     return found
 

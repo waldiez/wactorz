@@ -139,6 +139,19 @@ class TestByArrival:
 
         assert table.column("n").to_pylist() == [2.0, 1.0]
 
+    def test_a_file_whose_time_reads_a_little_before_the_window_is_still_read(
+        self, root: Path
+    ) -> None:
+        now = time.time()
+        writer = Writer(root, "shadow/imu")
+        writer.append(late(T0, now + 1, n=1))
+        writer.flush()
+        (path,) = writer.written
+        # Written after the window opened, stamped by a coarser clock a moment before it.
+        os.utime(path, (now - 1, now - 1))
+
+        assert arrived_in(root, "shadow/imu", now, now + 10).column("n").to_pylist() == [1.0]
+
     def test_a_file_closed_before_the_window_is_not_read(self, root: Path) -> None:
         now = time.time()
         writer = Writer(root, "shadow/imu")

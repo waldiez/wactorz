@@ -95,6 +95,11 @@ updates:
       # is a change of our own, not a version bump.
       - dependency-name: "mcp"
         update-types: ["version-update:semver-major"]
+      # The Reachy extra's speech-to-text is written against 3.x; a later major
+      # replaces the client API it calls, which is a change to that code, made
+      # with its author, not a version bump.
+      - dependency-name: "deepgram-sdk"
+        update-types: ["version-update:semver-major"]
       # Pinned exactly in the docs extra so the committed static/docs is
       # reproducible: a bump changes the generated HTML, so it is made by hand
       # together with `make docs-build`.

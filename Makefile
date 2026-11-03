@@ -170,6 +170,11 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 # $(MAKE) runs even under `make -n`, so a dry run would start the containers.
 tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' ci/tools/Dockerfile)
 
+# The broker the tests, the soak and the image smoke test start: compose.yaml's,
+# so the stack and every test run one release, and Dependabot moves it in one
+# pull request (the compose updater owns both compose files).
+broker-image = $(shell sed -n 's/^ *image: \(eclipse-mosquitto:.*\)$$/\1/p' compose.yaml)
+
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
 SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh infra/alertmanager/render-config.sh scripts/image-smoke.sh scripts/test-broker.sh e2e/stack/node/start.sh
@@ -231,7 +236,7 @@ image: ## Build the app image as CI does (the Debian upgrade stage never cached)
 
 image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both servers, no root, no set-id; an ultra image also imports what it adds
 	$(require-image)
-	scripts/image-smoke.sh "$(IMAGE)" "$(call tool-image,mosquitto)"
+	scripts/image-smoke.sh "$(IMAGE)" "$(broker-image)"
 
 # Fixable CRITICAL and HIGH findings fail. One that cannot be fixed here yet, such
 # as a new Debian fix the pinned base has not picked up, is accepted in
@@ -251,8 +256,8 @@ image-scan: ## Scan IMAGE for fixable CRITICAL/HIGH vulnerabilities (accepted on
 		--skip-db-update --ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 \
 		$(SCAN_ARGS) "$(IMAGE)"
 
-tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (ci/tools/Dockerfile)
-	@echo "$(call tool-image,$(NAME))"
+tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint (ci/tools/Dockerfile), or mosquitto (compose.yaml)
+	@echo "$(if $(filter mosquitto,$(NAME)),$(broker-image),$(call tool-image,$(NAME)))"
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
@@ -399,7 +404,7 @@ test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...
 # started for the run: the contract between them, exercised rather than pinned.
 # The ordinary suite refuses every broker connection, so these are skipped there.
 test-broker: ## Run the main-and-node tests over a real mosquitto, started for the run (needs Docker)
-	scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q
+	scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q
 
 # The same main and node, kept busy for DURATION seconds: agents spawned, asked
 # and deleted over and over, with what is left behind compared after every
@@ -408,7 +413,7 @@ test-broker: ## Run the main-and-node tests over a real mosquitto, started for t
 DURATION ?= 300
 soak: ## Keep a main and a node busy over a real mosquitto for DURATION seconds and fail on anything that only grows (needs Docker)
 	WACTORZ_SOAK_SECONDS=$(DURATION) WACTORZ_SOAK_REPORT=$(SOAK_REPORT) \
-		scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q -s -k soak
+		scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q -s -k soak
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

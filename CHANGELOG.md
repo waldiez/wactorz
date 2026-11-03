@@ -29,6 +29,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Charts zoom, mark what matters, and draw as points or lines.** Every chart's axes now label round values and
+  round local times, with faint gridlines, worked out again for a window zoomed into. The Models tab's trial charts and the
+  Overview's history charts offer Line, Points and Joined (a mostly empty chart starts as points), and zoom: drag across
+  a plot, or use the + / − / Reset buttons from a keyboard or on a phone; a double click goes back. A chart can also
+  show thresholds, shaded bands of time and marked points, each named in its legend. A package's tab gets the same
+  chart through `host.chart(series, options)`, which can ask the server for finer buckets of a window zoomed into.
 - **A model version says what it is judged on, and a shadow trial is judged by it.** `wactorz-artifacts add ...
   --positive fault` (or `judge NAME:V --positive fault` for a version already stored, `/artifacts judge` in chat)
   names the label values that count as what the model should flag. A trial then holds each side's answers against the

@@ -13,14 +13,31 @@
  */
 import { emit, listen } from "../../events";
 import { apiUrl, requestJson } from "../../io/api";
+import { LineChart, SERIES_COLORS, type ChartOptions, type Series } from "../../ui/charts";
 import {
     PANEL_API_VERSION,
+    type PanelChart,
+    type PanelChartOptions,
     type PanelEntry,
     type PanelHost,
     type PanelModule,
+    type PanelSeries,
     type PanelStop,
     type PanelToast,
 } from "./types";
+
+/** A panel's series with a color each: its own, else the next of the dashboard's. */
+export function colored(series: readonly PanelSeries[]): Series[] {
+    return series.map((s, i) => ({
+        ...s,
+        color: s.color ?? SERIES_COLORS[i % SERIES_COLORS.length] ?? "#3987e5",
+    }));
+}
+
+/** A panel's chart options with a format: its own, else the number as the reader's locale writes it. */
+export function formatted(options: PanelChartOptions): ChartOptions {
+    return { ...options, format: options.format ?? (v => v.toLocaleString()) };
+}
 
 /** Reads a panel's script. */
 export type PanelLoader = (url: string) => Promise<Partial<PanelModule>>;
@@ -215,6 +232,19 @@ export class PanelView {
                     }),
                 ),
             toast: notice => this.services.toast(notice),
+            chart: (series, options) => this._chart(visit, series, options),
+        };
+    }
+
+    /** The dashboard's chart for the panel mounted for `visit`, ended with that visit. */
+    private _chart(visit: object, series: PanelSeries[], options: PanelChartOptions): PanelChart {
+        const chart = new LineChart(colored(series), formatted(options));
+        const end = this._keep(visit, () => chart.destroy());
+        return {
+            element: chart.element,
+            update: (next, nextOptions) =>
+                chart.update(colored(next), nextOptions ? formatted(nextOptions) : undefined),
+            destroy: end,
         };
     }
 }

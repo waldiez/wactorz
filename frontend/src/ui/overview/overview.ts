@@ -23,7 +23,7 @@ import {
 import { el, list, listItem, testId } from "../dom";
 import { buildBlockedNotice, BLOCKED_NOTICE_ID } from "./blockedNotice";
 import { buildNodeCard, type NodeTrend } from "./nodeCard";
-import type { Point } from "./trend";
+import type { Point } from "../charts";
 import type { TrendKind } from "./trendPanel";
 
 export interface OverviewHost {

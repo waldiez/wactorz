@@ -14,17 +14,8 @@
  */
 import { button, dialog, el, pressed, testId, trapTab } from "../dom";
 import { fetchHistory, type HistoryRow } from "../../io/historyApi";
-import {
-    buildLineChart,
-    downsample,
-    levels,
-    perMinute,
-    samplesOf,
-    SERIES_COLORS,
-    type Format,
-    type Point,
-    type Series,
-} from "./trend";
+import { buildLineChart, downsample, SERIES_COLORS, type Format, type Point, type Series } from "../charts";
+import { levels, perMinute, samplesOf } from "./trend";
 
 /** Whose history the panel shows. */
 export type TrendKind = "agents" | "nodes";
@@ -193,6 +184,9 @@ export function buildCharts(specs: readonly ChartSpec[], rows: readonly HistoryR
                     title: spec.title,
                     format: spec.format,
                     ...(spec.fromZero !== undefined && { fromZero: spec.fromZero }),
+                    mode: "auto",
+                    modeToggle: true,
+                    zoom: true,
                 }),
             );
         }

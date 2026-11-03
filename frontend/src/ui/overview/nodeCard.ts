@@ -13,7 +13,8 @@
  */
 import type { NodeReadings, RemoteNode } from "../../types/agent";
 import { button, el, labelled, listItem, testId } from "../dom";
-import { buildSparkline, lastValue, SERIES_COLORS, type Point } from "./trend";
+import { lastValue, SERIES_COLORS, type Point } from "../charts";
+import { buildSparkline } from "./trend";
 
 /** A node's trends over the last hour, as its card draws them. */
 export interface NodeTrend {

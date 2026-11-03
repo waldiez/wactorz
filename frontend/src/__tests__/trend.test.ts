@@ -6,24 +6,26 @@ import { describe, it, expect } from "vitest";
 import {
     buildLegend,
     buildLineChart,
-    buildSparkline,
     ceiling,
     downsample,
     extent,
-    GAP_S,
     lastValue,
-    levels,
     nearest,
     pathData,
-    perMinute,
-    samplesOf,
     SERIES_COLORS,
     timeLabel,
     tooltipRows,
-    withGaps,
     type Point,
-    type Sample,
     type Series,
+} from "../ui/charts";
+import {
+    buildSparkline,
+    GAP_S,
+    levels,
+    perMinute,
+    samplesOf,
+    withGaps,
+    type Sample,
 } from "../ui/overview/trend";
 
 const at = (minute: number): number => 1_700_000_000 + minute * 60;
@@ -256,6 +258,9 @@ describe("buildLineChart", () => {
         expect(chart.querySelectorAll("path.af-trend-line").length).toBe(2);
         expect([...chart.querySelectorAll(".af-chart-axis span")].map(s => s.textContent)).toEqual([
             "200 ms",
+            "150 ms",
+            "100 ms",
+            "50 ms",
             "0 ms",
         ]);
         expect([...chart.querySelectorAll(".af-chart-legend-item")].map(i => i.textContent)).toEqual([
@@ -285,6 +290,9 @@ describe("buildLineChart", () => {
         const chart = buildLineChart(temps, { title: "temp", format: v => `${v}`, fromZero: false });
         expect([...chart.querySelectorAll(".af-chart-axis span")].map(s => s.textContent)).toEqual([
             "60",
+            "57.5",
+            "55",
+            "52.5",
             "50",
         ]);
     });

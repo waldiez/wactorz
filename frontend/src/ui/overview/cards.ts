@@ -11,7 +11,8 @@ import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "../../io/costApi";
 import { button, el, labelled, listItem, testId } from "../dom";
-import { buildSparkline, lastValue, type Point } from "./trend";
+import { lastValue, type Point } from "../charts";
+import { buildSparkline } from "./trend";
 
 /** Compact token count for the card meta line: 1234 → "1.2k", 1_200_000 → "1.2M". */
 function fmtTokens(n: number): string {

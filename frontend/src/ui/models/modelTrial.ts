@@ -13,7 +13,7 @@
 import type { PastTrial, ShadowTrial, TrialBucket, TrialSide } from "../../types/models";
 import { timeLabel } from "../../time";
 import { button, el, labelled, list, listItem } from "../dom";
-import { buildLineChart, SERIES_COLORS, type Point, type Series } from "../overview/trend";
+import { buildLineChart, SERIES_COLORS, type Point, type Series } from "../charts";
 import { judgedSection } from "./trialJudged";
 
 /** What the trial card shows, and what it can ask for. */
@@ -114,7 +114,8 @@ function chart(
     if (!lines.some(line => line.points.some(point => point.v !== null))) {
         return null;
     }
-    return buildLineChart(lines, { title, format, fromZero });
+    // A trial's stretches are often mostly empty, so `auto` draws its few inputs as points.
+    return buildLineChart(lines, { title, format, fromZero, mode: "auto", modeToggle: true, zoom: true });
 }
 
 /** The trial over time: its scores, when outputs carry one, and its latencies. */

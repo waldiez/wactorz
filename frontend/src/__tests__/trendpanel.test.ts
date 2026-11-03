@@ -104,6 +104,9 @@ describe("buildCharts", () => {
         const agents = charts.find(c => c.querySelector("figcaption")?.textContent === "Agents")!;
         expect([...agents.querySelectorAll(".af-chart-axis span")].map(s => s.textContent)).toEqual([
             "2",
+            "1.5",
+            "1",
+            "0.5",
             "0",
         ]);
     });

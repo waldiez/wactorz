@@ -181,12 +181,48 @@ called when another view opens; the tab is mounted again when it is opened again
 | `request(path, init?)` | JSON from the server with a timeout; answers `{ok: true, value}` or `{ok: false, error}`, never rejects |
 | `subscribe(filter, fn)` | Messages on a topic the page is sent: the dashboard's own, and the panel's `topics` |
 | `toast({title, message, type?})` | A notice; `type` is `info`, `warning` or `error` |
+| `chart(series, options)` | The dashboard's line chart, to place in `root`; returns `{element, update(series, options?), destroy()}` (below) |
 
-What `onRoute` and `subscribe` start ends with the panel, and each returns a function
-that ends it sooner. A panel styles itself, inside `root`: it inherits the dashboard's
+What `onRoute`, `subscribe` and `chart` start ends with the panel, and each returns a function
+(for `chart`, its `destroy`) that ends it sooner. A panel styles itself, inside `root`: it inherits the dashboard's
 text colour and font, and can read its CSS variables (`--af-text-dim`, `--af-focus`). A script that fails
 to load, exports no `mount`, was written for another `apiVersion` or throws says so in
 its own tab, and the rest of the dashboard is unaffected.
+
+**A chart.** `host.chart` draws what the dashboard's own charts draw, so a tab looks like
+the rest. A series is `{name, points: [{t, v}], color?, spread?}`, `t` in milliseconds since
+the epoch and `v` a number or `null` for a gap; `spread: [{t, lo, hi}]` shades each point's
+least and most, as a bucketed series (`GET /api/data/{source}/series`) gives them. The axes
+label round values and round local times, with a faint gridline at each, worked out again
+for any window zoomed into. Options:
+
+| Option | What it draws |
+|--------|---------------|
+| `title`, `format?` | The chart's name, also its name for a screen reader; how a value is written (the number as the reader's locale writes it when left out) |
+| `yLabel?`, `xLabel?` | What the values are, beside the value axis, and what runs along the bottom (time unless said); both join the chart's name for a screen reader |
+| `thresholds: [{value, label, color?}]` | A dashed level across the chart, kept in view, named in the legend |
+| `bands: [{from, to, label, tone?}]` | A stretch of time shaded across it, `tone` `warn` or `info`; its label on top and in the tooltip |
+| `marks: [{t, label, v?, shape?, color?}]` | A point in time marked in a `dot`, `square`, `triangle` or `diamond`, at height `v` or at the top; each kind counted in the legend |
+| `mode`, `modeToggle` | How points are drawn, `line` (broken at gaps), `points` or `joined`, or `auto` (points when most of the slots are empty); `modeToggle: true` offers the choice in the chart's header |
+| `zoom`, `onZoom(window)` | `zoom: true` lets a mouse drag across the plot, or the buttons, zoom into a window of its time; `onZoom` is asked for `{from, to}` (or `null` on reset) and may answer with series for it, such as finer buckets from the server, else the chart narrows to what it holds; if it rejects, the chart keeps what it holds and says the finer view could not be read |
+
+`chart` came within version 1, so a panel that may meet an older dashboard checks
+`typeof host.chart === "function"` first.
+
+A panel need not use it: `root` is the panel's own, to draw in with its own code or any
+library. The dashboard serves the panel one script and allows scripts from its own origin
+only, so a library is bundled into `panel.js`, its stylesheet inlined (inline styles and
+`<style>` are allowed; a stylesheet or a font from elsewhere is not), and nothing in it may
+need `eval` or `new Function`. Canvas, SVG, `data:` images and workers from `blob:` work. A
+chart of its own ends with the function `mount` returns, as anything else the panel starts.
+
+```js
+const chart = host.chart(
+    [{ name: "score", points }],
+    { title: "Pump 1", thresholds: [{ value: 0.22, label: "alarm" }], zoom: true, modeToggle: true },
+);
+root.append(chart.element);
+```
 
 **What a panel is trusted with.** It runs in the page with the signed-in session, so
 it can do whatever the dashboard can: as much as the package's code already can on

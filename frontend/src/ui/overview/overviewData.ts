@@ -13,7 +13,8 @@
 import type { NodeListing } from "../../types/agent";
 import { fetchAgentsField, fetchHistory, fetchNodes } from "../../io/historyApi";
 import type { NodeTrend } from "./nodeCard";
-import { levels, perMinute, samplesOf, type Point } from "./trend";
+import type { Point } from "../charts";
+import { levels, perMinute, samplesOf } from "./trend";
 
 /** How often the overview's trends are refreshed: about as often as the history is sampled. */
 export const REFRESH_MS = 60_000;

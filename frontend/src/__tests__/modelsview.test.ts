@@ -319,6 +319,29 @@ describe("the Models view", () => {
         expect(trialCard().textContent).toContain("shadow");
     });
 
+    it("offers each trial chart a choice of drawing and a zoom, drawing a mostly empty trial as points", async () => {
+        const buckets = [
+            bucket(1_760_000_000, 2, 3),
+            bucket(1_760_000_300, null, null),
+            bucket(1_760_000_600, null, null),
+            bucket(1_760_000_900, null, null),
+        ];
+        await open(
+            "#/models/hvac",
+            onTrial(
+                () => Response.json(FIGURES),
+                noPast,
+                () => Response.json({ buckets }),
+            ) as never,
+        );
+        await vi.waitFor(() => expect(trialCard().querySelectorAll("figure")).toHaveLength(2));
+
+        const groups = allByRole(trialCard(), "radiogroup", "Draw as");
+        expect(groups).toHaveLength(2);
+        expect(byRole(groups[0] as HTMLElement, "radio", "Points").getAttribute("aria-checked")).toBe("true");
+        expect(allByRole(trialCard(), "button", "Zoom in")).toHaveLength(2);
+    });
+
     it("judges the trial against the labels when its version says how", async () => {
         const side = {
             tp: 4,

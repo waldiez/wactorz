@@ -291,6 +291,52 @@ describe("a panel's view", () => {
             expect(using.toasts).toEqual([{ title: "Done", message: "Trained" }]);
         });
 
+        it("draws the dashboard's chart, coloring and formatting what the panel left out", async () => {
+            const { host } = await opened();
+            const t = 1_760_000_000_000;
+
+            const chart = host.chart(
+                [
+                    {
+                        name: "score",
+                        points: [
+                            { t, v: 1500 },
+                            { t: t + 60_000, v: 2500 },
+                        ],
+                    },
+                    { name: "limit", color: "#ff00ff", points: [{ t, v: 2000 }] },
+                ],
+                { title: "Score", thresholds: [{ value: 3000, label: "alarm" }], modeToggle: true },
+            );
+            document.body.appendChild(chart.element);
+
+            const lines = [...chart.element.querySelectorAll(".af-trend-line")].map(l =>
+                l.getAttribute("stroke"),
+            );
+            expect(lines).toEqual(["#3987e5", "#ff00ff"]);
+            expect(chart.element.querySelector(".af-chart-axis")?.textContent).toBe(
+                [3000, 2000, 1000, 0].map(v => v.toLocaleString()).join(""),
+            );
+            expect(chart.element.querySelectorAll('[role="radio"]')).toHaveLength(3);
+            chart.update([{ name: "score", points: [{ t, v: 1 }] }], {
+                title: "Again",
+                format: v => `${v} pt`,
+            });
+            expect(chart.element.querySelector(".af-chart-axis")?.textContent).toContain("pt");
+            chart.destroy();
+            expect(chart.element.isConnected).toBe(false);
+        });
+
+        it("ends every chart still drawn when the panel closes", async () => {
+            const { host } = await opened();
+            const chart = host.chart([{ name: "s", points: [{ t: 1, v: 1 }] }], { title: "S" });
+            document.body.appendChild(chart.element);
+
+            emit("af-view-changed", { view: "feed", path: [] });
+
+            expect(chart.element.isConnected).toBe(false);
+        });
+
         it("asks the server through the dashboard's client", async () => {
             const fetcher = vi.fn(() => Promise.resolve(new Response('{"runs": 2}')));
             vi.stubGlobal("fetch", fetcher);

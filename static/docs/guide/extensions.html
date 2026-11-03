@@ -346,13 +346,76 @@ called when another view opens; the tab is mounted again when it is opened again
 <td><code>toast({title, message, type?})</code></td>
 <td>A notice; <code>type</code> is <code>info</code>, <code>warning</code> or <code>error</code></td>
 </tr>
+<tr>
+<td><code>chart(series, options)</code></td>
+<td>The dashboard's line chart, to place in <code>root</code>; returns <code>{element, update(series, options?), destroy()}</code> (below)</td>
+</tr>
 </tbody>
 </table>
-<p>What <code>onRoute</code> and <code>subscribe</code> start ends with the panel, and each returns a function
-that ends it sooner. A panel styles itself, inside <code>root</code>: it inherits the dashboard's
+<p>What <code>onRoute</code>, <code>subscribe</code> and <code>chart</code> start ends with the panel, and each returns a function
+(for <code>chart</code>, its <code>destroy</code>) that ends it sooner. A panel styles itself, inside <code>root</code>: it inherits the dashboard's
 text colour and font, and can read its CSS variables (<code>--af-text-dim</code>, <code>--af-focus</code>). A script that fails
 to load, exports no <code>mount</code>, was written for another <code>apiVersion</code> or throws says so in
 its own tab, and the rest of the dashboard is unaffected.</p>
+<p><strong>A chart.</strong> <code>host.chart</code> draws what the dashboard's own charts draw, so a tab looks like
+the rest. A series is <code>{name, points: [{t, v}], color?, spread?}</code>, <code>t</code> in milliseconds since
+the epoch and <code>v</code> a number or <code>null</code> for a gap; <code>spread: [{t, lo, hi}]</code> shades each point's
+least and most, as a bucketed series (<code>GET /api/data/{source}/series</code>) gives them. The axes
+label round values and round local times, with a faint gridline at each, worked out again
+for any window zoomed into. Options:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>What it draws</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>title</code>, <code>format?</code></td>
+<td>The chart's name, also its name for a screen reader; how a value is written (the number as the reader's locale writes it when left out)</td>
+</tr>
+<tr>
+<td><code>yLabel?</code>, <code>xLabel?</code></td>
+<td>What the values are, beside the value axis, and what runs along the bottom (time unless said); both join the chart's name for a screen reader</td>
+</tr>
+<tr>
+<td><code>thresholds: [{value, label, color?}]</code></td>
+<td>A dashed level across the chart, kept in view, named in the legend</td>
+</tr>
+<tr>
+<td><code>bands: [{from, to, label, tone?}]</code></td>
+<td>A stretch of time shaded across it, <code>tone</code> <code>warn</code> or <code>info</code>; its label on top and in the tooltip</td>
+</tr>
+<tr>
+<td><code>marks: [{t, label, v?, shape?, color?}]</code></td>
+<td>A point in time marked in a <code>dot</code>, <code>square</code>, <code>triangle</code> or <code>diamond</code>, at height <code>v</code> or at the top; each kind counted in the legend</td>
+</tr>
+<tr>
+<td><code>mode</code>, <code>modeToggle</code></td>
+<td>How points are drawn, <code>line</code> (broken at gaps), <code>points</code> or <code>joined</code>, or <code>auto</code> (points when most of the slots are empty); <code>modeToggle: true</code> offers the choice in the chart's header</td>
+</tr>
+<tr>
+<td><code>zoom</code>, <code>onZoom(window)</code></td>
+<td><code>zoom: true</code> lets a mouse drag across the plot, or the buttons, zoom into a window of its time; <code>onZoom</code> is asked for <code>{from, to}</code> (or <code>null</code> on reset) and may answer with series for it, such as finer buckets from the server, else the chart narrows to what it holds; if it rejects, the chart keeps what it holds and says the finer view could not be read</td>
+</tr>
+</tbody>
+</table>
+<p><code>chart</code> came within version 1, so a panel that may meet an older dashboard checks
+<code>typeof host.chart === "function"</code> first.</p>
+<p>A panel need not use it: <code>root</code> is the panel's own, to draw in with its own code or any
+library. The dashboard serves the panel one script and allows scripts from its own origin
+only, so a library is bundled into <code>panel.js</code>, its stylesheet inlined (inline styles and
+<code>&lt;style&gt;</code> are allowed; a stylesheet or a font from elsewhere is not), and nothing in it may
+need <code>eval</code> or <code>new Function</code>. Canvas, SVG, <code>data:</code> images and workers from <code>blob:</code> work. A
+chart of its own ends with the function <code>mount</code> returns, as anything else the panel starts.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">chart</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">host</span><span class="p">.</span><span class="nx">chart</span><span class="p">(</span>
+<span class="w">    </span><span class="p">[{</span><span class="w"> </span><span class="nx">name</span><span class="o">:</span><span class="w"> </span><span class="s2">"score"</span><span class="p">,</span><span class="w"> </span><span class="nx">points</span><span class="w"> </span><span class="p">}],</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nx">title</span><span class="o">:</span><span class="w"> </span><span class="s2">"Pump 1"</span><span class="p">,</span><span class="w"> </span><span class="nx">thresholds</span><span class="o">:</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="nx">value</span><span class="o">:</span><span class="w"> </span><span class="mf">0.22</span><span class="p">,</span><span class="w"> </span><span class="nx">label</span><span class="o">:</span><span class="w"> </span><span class="s2">"alarm"</span><span class="w"> </span><span class="p">}],</span><span class="w"> </span><span class="nx">zoom</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nx">modeToggle</span><span class="o">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+<span class="p">);</span>
+<span class="nx">root</span><span class="p">.</span><span class="nx">append</span><span class="p">(</span><span class="nx">chart</span><span class="p">.</span><span class="nx">element</span><span class="p">);</span>
+</code></pre></div>
+
 <p><strong>What a panel is trusted with.</strong> It runs in the page with the signed-in session, so
 it can do whatever the dashboard can: as much as the package's code already can on
 the server. So a tab is offered only for an extension whose <code>setup()</code> succeeded,

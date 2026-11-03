@@ -7,6 +7,7 @@ nobody writes to: it changes by gaining a new version. See
 Usage
 -----
     wactorz-artifacts add PATH NAME [--format F] [--meta KEY=VALUE]... [--allow-code]
+                          [--positive VALUE]... [--label-source SOURCE]
     wactorz-artifacts list [NAME]
     wactorz-artifacts show REFERENCE
     wactorz-artifacts remove REFERENCE [--every-version]
@@ -15,6 +16,7 @@ Usage
     wactorz-artifacts shadow NAME:V [--reason TEXT]
     wactorz-artifacts promote NAME [--reason TEXT]
     wactorz-artifacts clear {active,shadow} NAME [--reason TEXT]
+    wactorz-artifacts judge REFERENCE (--positive VALUE... [--label-source SOURCE] | --clear)
 
 A reference is ``NAME:3`` for the third version, ``NAME:latest`` for the
 newest, ``NAME:active`` or ``NAME:shadow`` for the version a pointer names, and
@@ -33,6 +35,12 @@ ending does not say, as for a ``.pt`` file, which may hold a ``state_dict`` or
 a whole module. A directory is kept as one archive of it. Formats that run code
 when they load -- a pickle, a joblib file, a whole torch module -- are refused
 unless ``--allow-code`` is given.
+
+``--positive`` says what a version is judged on: the label values that count
+as a fault it should flag (`wactorz.core.judgement`). Each input is held
+against the labels of its own source, unless ``--label-source`` names one for
+all. A version added without it takes the previous version's; ``judge`` sets
+or changes it on a version already stored, and keeps what it replaced.
 
 Adding and removing work while the server runs.
 """
@@ -56,6 +64,7 @@ from wactorz.core.artifacts import (
     human_size,
     parse_reference,
 )
+from wactorz.core.judgement import KINDS, Judgement, JudgementError, declared
 from wactorz.core.paths import resolve_state_dir
 
 logger = logging.getLogger(__name__)
@@ -133,11 +142,15 @@ def _add(args: argparse.Namespace) -> None:
             format_name=args.format,
             metadata=_metadata(args.meta),
             allow_code=args.allow_code,
+            judged_on=_judgement(args),
         )
     except CodeRefusedError as exc:
         raise CliError.code_refused(exc) from exc
     logger.info("Stored %s (%s, %s)", artifact.pinned, artifact.format, _size(artifact.size))
     logger.info("in %s", store.root.resolve())
+    judgement = artifact.judgement
+    if judgement is not None:
+        logger.info("Judged on %s", _judged(judgement))
     if new_state_dir:
         logger.warning(
             "There was no state directory at %s, so a new one was made. Wactorz reads its "
@@ -199,6 +212,33 @@ def _clear(args: argparse.Namespace) -> None:
     logger.info("%s has no %s version now (was %s)", was.name, was.pointer, was.reference)
 
 
+def _judge(args: argparse.Namespace) -> None:
+    store = _store(args)
+    judgement = None if args.clear else _judgement(args)
+    if judgement is None and not args.clear:
+        raise JudgementError.no_positive()
+    judged = store.judge(args.reference, judgement)
+    if judged.judgement is None:
+        logger.info("%s is judged on nothing now", judged.reference)
+    else:
+        logger.info("%s is judged on %s", judged.reference, _judged(judged.judgement))
+
+
+def _judgement(args: argparse.Namespace) -> Judgement | None:
+    """What the command line says a version is judged on, or None when it says nothing."""
+    if not args.positive and not args.label_source:
+        return None
+    return declared(kind=args.kind, positive=args.positive, source=args.label_source, by="cli")
+
+
+def _judged(judgement: Judgement) -> str:
+    """``fault, bearing labels of each input's source``, as a line says it."""
+    values = ", ".join(judgement.positive)
+    where = f"the labels of {judgement.source}" if judgement.source else "each input's own source"
+    copied = f" (from version {judgement.from_version})" if judgement.from_version else ""
+    return f"{values} as positive, against {where}{copied}"
+
+
 def _remove(args: argparse.Namespace) -> None:
     for artifact in _store(args).remove(args.reference, every_version=args.every_version):
         logger.info("Removed %s", artifact.reference)
@@ -229,7 +269,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--state-dir", metavar="DIR", help="default: WACTORZ_STATE_DIR or ./state"
     )
 
-    add = commands.add_parser("add", parents=[state_dir], help="store a file or directory")
+    judging = argparse.ArgumentParser(add_help=False)
+    judging.add_argument(
+        "--positive",
+        action="append",
+        default=[],
+        metavar="VALUE",
+        help="a label value that counts as what the model should flag; repeatable",
+    )
+    judging.add_argument(
+        "--label-source",
+        metavar="SOURCE",
+        help="judge every input against this label source; default: each input's own",
+    )
+    judging.add_argument(
+        "--kind",
+        choices=KINDS,
+        default=KINDS[0],
+        help="how its answers are read (default: %(default)s)",
+    )
+
+    add = commands.add_parser("add", parents=[state_dir, judging], help="store a file or directory")
     add.add_argument("path", help="the file or directory to store")
     add.add_argument("name", help="the name to store it under; each add is a new version")
     add.add_argument("--format", choices=sorted(FORMATS), help="default: guessed from the ending")
@@ -274,6 +334,11 @@ def _build_parser() -> argparse.ArgumentParser:
     clear = commands.add_parser("clear", parents=[state_dir, reason], help="unset a pointer")
     clear.add_argument("pointer", choices=POINTERS, help="which pointer")
     clear.add_argument("name", help="the model")
+    judge = commands.add_parser(
+        "judge", parents=[state_dir, judging], help="say what a stored version is judged on"
+    )
+    judge.add_argument("reference", help="NAME:3, NAME:active, NAME:shadow or NAME:latest")
+    judge.add_argument("--clear", action="store_true", help="say it is judged on nothing")
     return parser
 
 
@@ -287,6 +352,7 @@ _COMMANDS = {
     "shadow": _shadow,
     "promote": _promote,
     "clear": _clear,
+    "judge": _judge,
 }
 
 
@@ -294,7 +360,7 @@ def _run(args: argparse.Namespace) -> Exception | None:
     """Do what ``args`` asks; the reason it could not, or None."""
     try:
         _COMMANDS[args.command](args)
-    except (ArtifactError, OSError) as exc:
+    except (ArtifactError, JudgementError, OSError) as exc:
         return exc
     return None
 

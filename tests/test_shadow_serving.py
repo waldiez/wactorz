@@ -29,6 +29,7 @@ from wactorz.agents.main.shadow_serving import ShadowServing
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import ArtifactStore, pinned
+from wactorz.core.judgement import declared
 from wactorz.core.labels import Labels
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import WactorzDB
@@ -37,6 +38,7 @@ from wactorz.core.shadow_trial import (
     CLEARED,
     PROMOTED,
     compare,
+    judgement_of_trial,
     outcomes_of,
     record_outcome,
     series,
@@ -503,6 +505,53 @@ class TestMainStartsAndEndsTheTrial:
         (outcome,) = outcomes_of(graph, "imu")
         assert (outcome["pairs"], outcome["agreement"]) == (4, 0.75)
 
+    async def test_the_outcome_is_judged_as_the_version_on_trial_declares(
+        self,
+        later: float,
+        trials: ShadowServing,
+        store: ArtifactStore,
+        graph: Provenance,
+        db: WactorzDB,
+        state: Path,
+    ) -> None:
+        was = store.pointer("imu", "shadow")
+        assert was is not None
+        store.judge("imu:2", declared(positive=["fault"], by="cli"))
+        _pairs(state, was.moved_at, 4)
+        Labels(db).write(source="left-wrist", start=was.moved_at, value="fault", actor="op")
+        store.clear("shadow", "imu", by="dashboard")
+
+        await trials.follow([("imu", "shadow", None, was)])
+
+        (outcome,) = outcomes_of(graph, "imu")
+        assert outcome["labels"]["from"] == "imu:2"
+        assert (outcome["labels"]["positives"], outcome["labels"]["shadow"]["recall"]) == (4, 1.0)
+
+    async def test_an_outcome_that_cannot_be_judged_is_still_compared(
+        self,
+        later: float,
+        trials: ShadowServing,
+        store: ArtifactStore,
+        graph: Provenance,
+        state: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        was = store.pointer("imu", "shadow")
+        assert was is not None
+        store.judge("imu:2", declared(positive=["fault"], by="cli"))
+        _pairs(state, was.moved_at, 2)
+
+        def broken(*_: Any, **__: Any) -> Any:
+            raise RuntimeError("the labels table is locked")
+
+        monkeypatch.setattr(main_side, "labels_for", broken)
+        store.clear("shadow", "imu", by="dashboard")
+
+        await trials.follow([("imu", "shadow", None, was)])
+
+        (outcome,) = outcomes_of(graph, "imu")
+        assert outcome["pairs"] == 2 and "labels" not in outcome
+
     async def test_a_promotion_ends_the_trial_as_won(
         self,
         later: float,
@@ -629,12 +678,31 @@ class TestTheComparison:
             _row(T0 + 10, {"score": 9}, None),  # unlabelled: left out
         ]
 
-        summary = compare(rows, intervals=labels.effective("left-wrist"), positive=["fault"])
+        summary = compare(
+            rows,
+            judgement=declared(positive=["fault"], source="left-wrist"),
+            labels={"left-wrist": labels.effective("left-wrist")},
+        )
 
         against = summary["labels"]
         assert (against["labelled"], against["positives"]) == (4, 2)
         assert (against["active"]["precision"], against["active"]["recall"]) == (0.5, 0.5)
         assert (against["shadow"]["precision"], against["shadow"]["recall"]) == (1.0, 1.0)
+
+    def test_the_version_the_pairs_name_most_is_asked_first(self, store: ArtifactStore) -> None:
+        store.judge("imu:1", declared(positive=["one"], by="cli"))
+        store.judge("imu:2", declared(positive=["two"], by="cli"))
+        rows = [{"shadow_version": 1}, {"shadow_version": 1}, {"shadow_version": 2}]
+
+        found = judgement_of_trial(store, "imu", rows, shadow=2)
+
+        assert found is not None and found[1] == "imu:1"
+        # Pairs naming no version leave it to the pointers: the shadow given, then active.
+        assert judgement_of_trial(store, "imu", [{}], shadow=2) == (
+            store.resolve("imu:2").judgement,
+            "imu:2",
+        )
+        assert judgement_of_trial(store, "imu", [{}]) == (store.resolve("imu:1").judgement, "imu:1")
 
     def test_an_outcome_is_about_the_model_and_written_once(self, graph: Provenance) -> None:
         summary = compare([_row(T0, {"score": 1}, {"score": 1})])
@@ -682,6 +750,116 @@ class TestTheTrialRoutes:
         assert (body["pairs"], body["since"], body["shadow"]["version"]) == (3, shadow.moved_at, 2)
         assert body["agreement"] == pytest.approx(2 / 3)
         assert "labels" not in body
+
+    async def test_a_declared_judgement_judges_the_trial_without_being_asked(
+        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        store.judge("imu:2", declared(positive=["fault"], by="cli"))
+        _pairs(state, shadow.moved_at, 3)
+        # Labelled under the pairs' own source: the trial finds them without a `source`.
+        Labels(db).write(source="left-wrist", start=shadow.moved_at, value="fault", actor="op")
+
+        body = await (await client.get("/api/models/imu/trial")).json()
+
+        against = body["labels"]
+        assert (against["from"], against["kind"], against["sources"]) == (
+            "imu:2",
+            "detector",
+            ["left-wrist"],
+        )
+        assert (against["positives"], against["active"]["recall"]) == (3, 1.0)
+        assert against["active"]["faults"]["seen"] == 1
+
+    async def test_a_past_window_is_judged_as_the_versions_that_ran_then(
+        self,
+        client: TestClient,
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        tmp_path: Path,
+        db: WactorzDB,
+    ) -> None:
+        was = store.pointer("imu", "shadow")
+        assert was is not None
+        store.judge("imu:2", declared(positive=["old-fault"], by="cli"))
+        _pairs(state, was.moved_at, 3)  # imu:2's trial
+        third = tmp_path / "imu-3.bin"
+        third.write_bytes(b"imu weights 3")
+        store.add(
+            third, "imu", format_name="raw", judged_on=declared(positive=["new-fault"], by="cli")
+        )
+        store.clear("shadow", "imu", by="dashboard")
+        store.move("shadow", "imu:3", by="dashboard")
+
+        body = await (
+            await client.get(
+                "/api/models/imu/trial", params={"since": was.moved_at, "until": was.moved_at + 10}
+            )
+        ).json()
+
+        assert (body["labels"]["from"], body["labels"]["positive"]) == ("imu:2", ["old-fault"])
+
+    async def test_the_active_versions_judgement_serves_when_the_shadow_has_none(
+        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        store.judge("imu:1", declared(positive=["fault"], by="cli"))
+        _pairs(state, shadow.moved_at, 2)
+
+        body = await (await client.get("/api/models/imu/trial")).json()
+
+        assert body["labels"]["from"] == "imu:1"
+        assert body["labels"]["unlabelled"] == 2
+
+    async def test_a_named_source_replaces_the_declared_one(
+        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        store.judge("imu:2", declared(positive=["fault"], by="cli"))
+        _pairs(state, shadow.moved_at, 2)
+        Labels(db).write(source="line-3", start=shadow.moved_at, value="fault", actor="op")
+
+        body = await (await client.get("/api/models/imu/trial", params={"source": "line-3"})).json()
+
+        assert (body["source"], body["labels"]["sources"]) == ("line-3", ["line-3"])
+        assert body["labels"]["judged_on"]["positive"] == ["fault"]
+
+    async def test_positive_values_that_are_not_labels_are_refused(
+        self, client: TestClient, later: float, store: ArtifactStore
+    ) -> None:
+        answer = await client.get("/api/models/imu/trial", params={"positive": "x" * 65})
+
+        assert answer.status == 400
+        assert "is not a label value" in (await answer.json())["error"]
+
+    async def test_without_persistence_a_declared_judgement_says_why_it_is_missing(
+        self,
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        shadow = store.pointer("imu", "shadow")
+        assert shadow is not None
+        store.judge("imu:2", declared(positive=["fault"], by="cli"))
+        _pairs(state, shadow.moved_at, 2)
+        monkeypatch.setattr(runtime, "db", None)
+        monkeypatch.setattr(api_models, "get_db", lambda: None)
+        client = TestClient(TestServer(build_app()))
+        await client.start_server()
+        try:
+            body = await (await client.get("/api/models/imu/trial")).json()
+            asked = await client.get("/api/models/imu/trial", params={"positive": "fault"})
+        finally:
+            await client.close()
+
+        assert "labels" not in body
+        assert body["labels_unavailable"] == "persistence is not running, so no labels can be read"
+        assert asked.status == 503
 
     async def test_labels_are_joined_when_a_source_and_its_positive_values_are_named(
         self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB

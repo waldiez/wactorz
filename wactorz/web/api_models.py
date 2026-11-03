@@ -31,7 +31,7 @@ import asyncio
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from aiohttp import web
@@ -46,12 +46,20 @@ from ..core.artifacts import (
     describe,
     name_error,
 )
+from ..core.judgement import Judgement, JudgementError, declared
+from ..core.judges import labels_for
 from ..core.labels import Labels
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.pointer_moves import DEFAULT_LIMIT, history
 from ..core.provenance import Provenance
-from ..core.shadow_trial import compare, event_span, outcomes_of, series
+from ..core.shadow_trial import (
+    compare,
+    event_span,
+    judgement_of_trial,
+    outcomes_of,
+    series,
+)
 from ..data.files import LAST_SECOND, DataError, data_root
 from . import runtime
 
@@ -261,8 +269,11 @@ async def _pairs(window: _Window) -> list[dict[str, Any]] | web.Response:
 async def trial_handler(request: web.Request) -> web.Response:
     """What the shadow trial of a model shows: its pairs compared over a window.
 
-    ``source`` and ``positive`` (label values, comma separated) add each side's
-    precision and recall over the pairs a label of that source covers.
+    The pairs are judged against the labels as the version on trial declares
+    (`wactorz.core.judgement`), else as the active version does. ``positive``
+    (label values, comma separated) judges them as a detector of those values
+    instead, and ``source`` names the one label source every input is judged
+    against, over the declaration's or each input's own.
     """
     window = await _trial_window(request)
     if isinstance(window, web.Response):
@@ -270,28 +281,68 @@ async def trial_handler(request: web.Request) -> web.Response:
     rows = await _pairs(window)
     if isinstance(rows, web.Response):
         return rows
-    source = (request.query.get("source") or "").strip()
-    positive = [v.strip() for v in (request.query.get("positive") or "").split(",") if v.strip()]
-    intervals = None
-    if source and positive:
+    judged = await _judgement(request, window, rows)
+    if isinstance(judged, web.Response):
+        return judged
+    judgement, judged_from = judged
+    labels = None
+    unavailable = None
+    if judgement is not None:
         db = runtime.db if runtime.db is not None else get_db()
-        if db is None:
-            return web.json_response(
-                {"error": "persistence is not running, so no labels can be read"}, status=503
-            )
-        since, until = event_span(rows) or (window.since, window.until)
-        intervals = await asyncio.to_thread(Labels(db).effective, source, since=since, until=until)
-    summary = compare(rows, intervals=intervals, positive=positive)
+        if db is not None:
+            labels = await asyncio.to_thread(labels_for, rows, judgement, Labels(db).effective)
+        elif judged_from == ASKED:
+            return web.json_response({"error": NO_LABELS}, status=503)
+        else:
+            unavailable = NO_LABELS
+    summary = compare(rows, judgement=judgement, labels=labels)
+    if "labels" in summary:
+        summary["labels"]["from"] = judged_from
     return web.json_response(
         {
             "name": window.name,
             "shadow": None if window.shadow is None else asdict(window.shadow),
             "since": window.since,
             "until": window.until,
-            "source": source or None,
+            "source": _source_asked(request),
             **summary,
+            **({"labels_unavailable": unavailable} if unavailable else {}),
         }
     )
+
+
+#: What ``labels.from`` says when the request named how to judge rather than a version.
+ASKED = "request"
+
+NO_LABELS = "persistence is not running, so no labels can be read"
+
+
+def _source_asked(request: web.Request) -> str | None:
+    """The label source the request names for every input, or None."""
+    return (request.query.get("source") or "").strip() or None
+
+
+async def _judgement(
+    request: web.Request, window: _Window, rows: list[dict[str, Any]]
+) -> tuple[Judgement | None, str] | web.Response:
+    """How the trial is judged, and who said so: the request's ``positive``, else what a version declares.
+
+    A ``source`` the request names replaces the declaration's, so a version can
+    be judged against labels filed under another name without changing it.
+    """
+    positive = [v.strip() for v in (request.query.get("positive") or "").split(",") if v.strip()]
+    source = _source_asked(request)
+    if positive:
+        try:
+            return declared(positive=positive, source=source, by=ASKED), ASKED
+        except JudgementError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+    shadow = window.shadow.version if window.shadow is not None else None
+    found = await asyncio.to_thread(judgement_of_trial, _store(), window.name, rows, shadow=shadow)
+    if found is None:
+        return None, ""
+    judgement, judged_from = found
+    return (replace(judgement, source=source) if source else judgement), judged_from
 
 
 async def trial_series_handler(request: web.Request) -> web.Response:

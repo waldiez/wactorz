@@ -355,7 +355,7 @@ A pointer's `holds` is false when the version it names no longer holds the bytes
 
 ### `GET /api/models/{name}`
 
-One model: every version, oldest first, with what was said of it when it was stored (`metadata`), and its pointers as above. `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
+One model: every version, oldest first, with what was said of it when it was stored (`metadata`), what it is judged on (`judged_on`, null when nothing says, and `judged_on_history`, what it was judged on before, each with who said so and when), and its pointers as above. `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
 
 ---
 
@@ -413,7 +413,7 @@ End the trial: unset `shadow`. The body is optional: `{"reason": "..."}` is kept
 
 ### `GET /api/models/{name}/trial`
 
-What the shadow trial shows: the pairs the serving agents kept, compared. By default the trial's own window, from when `shadow` was set to now; `since` and `until` (Unix seconds) choose another, and are the only way to read a trial that has ended. The window is when the pairs arrived, not their event time: a reading sent late, backfilled or replayed during the trial is part of it, with whatever event time it carries. `source` and `positive` (label values, comma separated) add each side's precision and recall over the pairs a label of that source covers, as `GET /api/labels/effective` resolves them, matched on each pair's event time.
+What the shadow trial shows: the pairs the serving agents kept, compared. By default the trial's own window, from when `shadow` was set to now; `since` and `until` (Unix seconds) choose another, and are the only way to read a trial that has ended. The window is when the pairs arrived, not their event time: a reading sent late, backfilled or replayed during the trial is part of it, with whatever event time it carries. Each pair is judged against the labels as the versions that answered it say they are judged (`wactorz-artifacts judge`): the shadow version the window's pairs name most often, else their active version, so a past window is judged as the versions that ran then; the pointers stand in only when the pairs name no version that says. Each pair is held against the labels of its own source (the device or topic its input came from), or of the one source the declaration names, as `GET /api/labels/effective` resolves them at the pair's event time. `positive` (label values, comma separated) judges the trial as a detector of those values instead, and `source` names the label source every pair is judged against, over the declaration's.
 
 **Response** `200 OK`
 ```json
@@ -423,12 +423,23 @@ What the shadow trial shows: the pairs the serving agents kept, compared. By def
  "versions": {"active": [3], "shadow": [4]},
  "latency": {"active": {"mean_ms": 1.2, "p95_ms": 2.9}, "shadow": {"mean_ms": 1.4, "p95_ms": 3.1}},
  "score": {"active_mean": 2.1, "shadow_mean": 2.0, "difference_mean": -0.1, "scored": 8640},
- "labels": {"labelled": 120, "positives": 9, "positive": ["fault"],
-            "active": {"tp": 7, "fp": 3, "fn": 2, "precision": 0.7, "recall": 0.78},
-            "shadow": {"tp": 8, "fp": 1, "fn": 1, "precision": 0.89, "recall": 0.89}}}
+ "labels": {"kind": "detector", "from": "imu-detector:4",
+            "judged_on": {"kind": "detector", "positive": ["fault"], "source": null, "by": "cli", "...": "..."},
+            "positive": ["fault"], "labelled": 120, "positives": 9, "unlabelled": 8520,
+            "sources": ["left-wrist"], "days": 1.0,
+            "active": {"tp": 7, "fp": 3, "fn": 2, "tn": 108, "precision": 0.7, "recall": 0.78, "f1": 0.74,
+                       "false_positive_rate": 0.027, "specificity": 0.973, "mcc": 0.72,
+                       "intervals": {"precision": [0.4, 0.89], "recall": [0.45, 0.94], "false_positive_rate": [0.009, 0.077]},
+                       "alarms_without_fault": 34, "alarms_per_day": 34.0,
+                       "faults": {"seen": 3, "caught": 3, "recall": 1.0, "recall_interval": [0.44, 1.0],
+                                  "delay_s": {"mean": 240.0, "median": 180.0, "max": 420.0}}},
+            "shadow": {"...": "the same figures"},
+            "mcnemar": {"active_only": 1, "shadow_only": 9, "p": 0.021, "better": "shadow"}}}
 ```
 
-`agreement` is the share of pairs where both sides answered alike; `flagged` how many inputs each side published something for; `score` is read from a `score` field in the outputs, over the pairs where both gave one. `404` when no shadow is set and no window is given, `400` for a bad `name`, `since` or `until`, `503` when the pairs cannot be read because the `data` extra is not installed, or when labels are asked for and persistence is not running.
+`labels` is there when the trial is judged. Per input: `tp`, `fp`, `fn` and `tn` over the inputs a label covers, and the rates from them; `mcc` is the Matthews correlation, honest when faults are rare. Per fault: a fault is a stretch a positive label holds, `seen` when an input fell inside it, caught when anything inside it was flagged; `delay_s` is from its start to the first flag. Per day: `alarms_without_fault` are flags where no positive label held, labelled or not, and `alarms_per_day` divides them by the days of event time the inputs span (null under an hour). `intervals` and `recall_interval` are 95% Wilson intervals. `mcnemar` compares the sides over the inputs exactly one judged rightly; `better` names a side only when `p` is below 0.05. `from` is the version whose declaration was used, or `request`. When a version says how to judge the trial but persistence is not running, `labels_unavailable` says so instead.
+
+`agreement` is the share of pairs where both sides answered alike; `flagged` how many inputs each side published something for; `score` is read from a `score` field in the outputs, over the pairs where both gave one. `404` when no shadow is set and no window is given, `400` for a bad `name`, `since` or `until`, `400` for `positive` values that are not label values, `503` when the pairs cannot be read because the `data` extra is not installed, or when `positive` is given and persistence is not running.
 
 ---
 
@@ -451,7 +462,7 @@ Every stretch is there, with `pairs` 0 and nulls where no input came, so a chart
 
 ### `GET /api/models/{name}/trials`
 
-The outcomes of the model's trials that ended, newest first: how each ended (`promoted` or `cleared`), the versions on either side, the window, and the comparison above as it stood then. `503` when persistence is not running.
+The outcomes of the model's trials that ended, newest first: how each ended (`promoted` or `cleared`), the versions on either side, the window, and the comparison above as it stood then, judged against the labels as they stood when it ended when a version said how (a label written later shows in `.../trial` with the trial's `since` and `until`, not here). `503` when persistence is not running.
 
 ---
 

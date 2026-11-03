@@ -29,7 +29,13 @@ from .info import (
     show_registry,
     show_topics,
 )
-from .models import activate_model, clear_model_pointer, promote_model, shadow_model
+from .models import (
+    activate_model,
+    clear_model_pointer,
+    judge_model,
+    promote_model,
+    shadow_model,
+)
 from .nodes import deploy_node, remove_node, restart_node, run_on_node, shutdown_node
 from .packages import manage_packages
 from .state import (
@@ -48,6 +54,7 @@ registry.add(activate_model)
 registry.add(shadow_model)
 registry.add(promote_model)
 registry.add(clear_model_pointer)
+registry.add(judge_model)
 registry.add(show_artifacts)
 registry.add(show_mqtt_status)
 registry.add(show_bus)

@@ -275,6 +275,36 @@ recorded data count; labels are matched on each pair's event time.
 window; `/trials` lists the outcomes. The outcome
 stands alone until the train step writes `model` nodes for `evaluated_by` to reach.
 
+### What a version is judged on
+
+A trial's agreement and scores say how the two versions differ, not which is
+right. The labels say what was true, and which labels count depends on the
+model, so a version declares it: `judged_on`, with a `kind` saying how an
+answer is read (`detector`: it flags an input by publishing something for it)
+and, for a detector, the label values that count as positive
+(`wactorz.core.judgement`). It is stored as a field of its own beside the
+version, not among the free-form metadata, so every step that judges a
+version reads the same thing: the trial now, an evaluation before a promotion
+and a drift check later. A version stored without one takes the previous
+version's, since a new version is usually judged as the last was; it can be
+set and changed later, because it is about the version and not its bytes, and
+each change keeps who made it and when.
+
+Each input is judged against the labels of its own source -- the device or
+topic it came from, which the pair records -- unless the declaration names one
+source for all. One source for a whole trial would judge a model serving
+several devices against one device's labels.
+
+A detector is judged per input (precision, recall, F1, the false-positive
+rate, the Matthews correlation), per fault (a stretch a positive label holds is
+caught when anything inside it was flagged, and the delay is from its start to
+the first flag) and per day (alarms where no fault was), because each answers
+a question an operator asks. Every rate carries a 95% Wilson interval, and
+McNemar's test over the inputs exactly one side judged rightly says whether
+the shadow is better or the difference could be chance. Each kind is one
+function in `wactorz.core.judges`; a kind added later adds a function, and no
+declaration already stored changes.
+
 Two cuts, for this step:
 
 - **Function agents only.** A program written from chat has side effects of its own,

@@ -34,6 +34,12 @@ version never moves a pointer: a move is its own act, with who made it and why.
 A version a pointer names cannot be removed until the pointer is moved off it.
 ``docs/design/model-pointers.md`` records the decision.
 
+A version may also say what it is judged on (`wactorz.core.judgement`): the
+labels a trial, and later an evaluation, holds its answers against. A version
+stored without one takes the previous version's, and it may be set or changed
+later, keeping who changed it and when; it is about the version, not its
+bytes, so it is the one thing about a version that changes.
+
 The index is changed under a lock on the store's directory, so a command adding
 a model while the server runs does not lose what either of them wrote. Under the
 same lock, each pointer change is appended to a journal beside the index, with
@@ -63,11 +69,16 @@ from typing import IO, Any, cast
 
 from . import torch_checkpoints
 from .atomic_io import write_text
+from .judgement import Judgement, JudgementError
+from .judgement import from_json as judgement_from_json
 from .model_contents import stored_contents
 from .state_lock import StateInUseError, StateLock
 from .torch_checkpoints import CheckpointRefusedError
 
 logger = logging.getLogger(__name__)
+
+#: How many earlier declarations of what a version is judged on are kept with it.
+JUDGEMENTS_KEPT = 20
 
 #: The directory, inside the state directory, that artifacts are kept in.
 STORE_DIRNAME = "..artifacts"
@@ -383,6 +394,20 @@ class Artifact:
     #: Where it came from and what it is: the source, the dataset, the code
     #: revision, its metrics. Whatever the one who added it said.
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: What it is judged on (`wactorz.core.judgement`), as stored; None when nothing says.
+    judged_on: dict[str, Any] | None = None
+    #: What it was judged on before, oldest first, each with who declared it and when.
+    judged_on_history: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def judgement(self) -> Judgement | None:
+        """`judged_on` read back, or None when nothing says or what is stored no longer reads."""
+        if self.judged_on is None:
+            return None
+        try:
+            return judgement_from_json(self.judged_on)
+        except JudgementError:
+            return None
 
     @property
     def reference(self) -> str:
@@ -641,12 +666,15 @@ class ArtifactStore:
         format_name: str | None = None,
         metadata: Mapping[str, Any] | None = None,
         allow_code: bool = False,
+        judged_on: Judgement | None = None,
     ) -> Artifact:
         """Store the file or directory at ``source`` as the next version of ``name``.
 
         ``format_name`` is guessed from the ending when not given; a file whose
         ending does not say must name it. A format that runs code is refused
-        unless ``allow_code``. Raises `ArtifactError` saying why it was refused.
+        unless ``allow_code``. ``judged_on`` is what the version is judged on;
+        without it, the previous version's is copied, saying from which. Raises
+        `ArtifactError` saying why it was refused.
         """
         path = Path(source)
         error = name_error(name)
@@ -680,7 +708,37 @@ class ArtifactStore:
                 "added_at": time.time(),
                 "metadata": dict(metadata or {}),
             }
+            kept = judged_on.to_json() if judged_on is not None else _inherited(versions)
+            if kept is not None:
+                entry["judged_on"] = kept
             versions.append(entry)
+            self._write_all(index, pointers)
+        return _artifact(name, entry)
+
+    def judge(self, reference: str, judged_on: Judgement | None) -> Artifact:
+        """Say what the version ``reference`` names is judged on, or with None that nothing does.
+
+        The declaration it replaces is kept in the version's history. Declaring
+        the same terms again changes nothing. Raises `ArtifactNotFoundError`
+        when no version is named, `ArtifactError` when the reference is not one.
+        """
+        name, selector = parse_reference(reference)
+        with self._locked():
+            index, pointers = self._read_all()
+            version = _resolve_in(index, pointers, name, selector, reference).version
+            entry = next(v for v in index[name] if v["version"] == version)
+            was = _artifact(name, entry)
+            if judged_on is None and was.judged_on is None:
+                return was
+            if judged_on is not None and judged_on.same_terms(was.judgement):
+                return was
+            if was.judged_on is not None:
+                history = [*was.judged_on_history, was.judged_on][-JUDGEMENTS_KEPT:]
+                entry["judged_on_history"] = history
+            if judged_on is None:
+                entry.pop("judged_on", None)
+            else:
+                entry["judged_on"] = judged_on.to_json()
             self._write_all(index, pointers)
         return _artifact(name, entry)
 
@@ -1013,6 +1071,10 @@ def _artifact(name: str, entry: Mapping[str, Any]) -> Artifact:
         runs_code=bool(entry["runs_code"]),
         added_at=float(entry["added_at"]),
         metadata=dict(entry.get("metadata") or {}),
+        judged_on=dict(entry["judged_on"]) if isinstance(entry.get("judged_on"), dict) else None,
+        judged_on_history=[
+            dict(h) for h in entry.get("judged_on_history") or [] if isinstance(h, dict)
+        ],
     )
 
 
@@ -1315,6 +1377,13 @@ _UNITS = ("KB", "MB", "GB")
 def describe(artifact: Artifact) -> dict[str, Any]:
     """``artifact`` as plain JSON, with its references."""
     return {**asdict(artifact), "reference": artifact.reference, "pinned": artifact.pinned}
+
+
+def _inherited(versions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """What the newest of ``versions`` is judged on, as a new version takes it, or None."""
+    if not versions or not isinstance(versions[-1].get("judged_on"), dict):
+        return None
+    return {**versions[-1]["judged_on"], "from_version": versions[-1]["version"]}
 
 
 def _check_state_dict(path: Path) -> None:

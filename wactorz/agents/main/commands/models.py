@@ -1,4 +1,4 @@
-"""Moving a model's pointers from chat: which version agents serve, and which is on trial.
+"""Moving a model's pointers from chat, and saying what a version is judged on.
 
 The pointers belong to the store (`wactorz.core.artifacts`); these verbs move
 them as `wactorz-artifacts` does, with ``by`` saying the move came from chat,
@@ -10,6 +10,7 @@ rather than at the watcher's next look. Listing stays with `/artifacts` in
 import asyncio
 
 from ....core.artifacts import ArtifactError, ArtifactStore, Pointer
+from ....core.judgement import JudgementError, declared
 from ....core.paths import resolve_state_dir
 from .dispatch import CommandContext, command
 from .groups import MODELS
@@ -111,3 +112,45 @@ async def clear_model_pointer(ctx: CommandContext, argument: str) -> str:
         return f"Cannot clear {which!r} of {name!r}: {exc}"
     await _announce(ctx)
     return f"{was.name} has no {was.pointer} version now (was {was.reference})."
+
+
+#: The word that says a version is judged on nothing.
+NOTHING = "none"
+
+JUDGE_USAGE = (
+    "Usage: /artifacts judge <name:version> <value>[,<value>...] [label source]"
+    f" -- or {NOTHING} instead of the values"
+)
+
+
+@command(
+    "/artifacts judge",
+    prefixes=("/artifacts judge ",),
+    summary="say what a model version is judged on",
+    group=MODELS,
+    forms=(
+        (
+            "/artifacts judge <name:version> <value>[,<value>...] [label source]",
+            "the label values that count as what it should flag",
+        ),
+        (f"/artifacts judge <name:version> {NOTHING}", "judge it on nothing"),
+    ),
+)
+async def judge_model(ctx: CommandContext, argument: str) -> str:
+    """``/artifacts judge <name:version> <value>[,<value>...] [label source]``."""
+    reference, rest = _split(argument)
+    values, source = _split(rest or "")
+    if not reference or not values:
+        return JUDGE_USAGE
+    try:
+        judgement = None if values == NOTHING else declared(positive=values, source=source, by=BY)
+        judged = await asyncio.to_thread(_store().judge, reference, judgement)
+    except (ArtifactError, JudgementError) as exc:
+        return f"Cannot judge {reference!r}: {exc}"
+    said = judged.judgement
+    if said is None:
+        return f"{judged.reference} is judged on nothing now."
+    where = f"the labels of {said.source}" if said.source else "each input's own source"
+    return (
+        f"{judged.reference} is judged on {', '.join(said.positive)} as positive, against {where}."
+    )

@@ -44,6 +44,10 @@ export function roleOf(node: Element): string {
     if (node instanceof HTMLInputElement) {
         return INPUT_ROLES[node.type] ?? "textbox";
     }
+    // A header cell heads its row when scoped to it, else its column.
+    if (node.tagName === "TH") {
+        return node.getAttribute("scope") === "row" ? "rowheader" : "columnheader";
+    }
     // A section is a region only once it is named.
     if (node.tagName === "SECTION") {
         return node.hasAttribute("aria-label") ? "region" : "";
@@ -51,11 +55,14 @@ export function roleOf(node: Element): string {
     return IMPLICIT_ROLES[node.tagName] ?? "";
 }
 
-/** The element's accessible name: its `aria-label`, else its label for an input, else its text. */
+/** The element's accessible name: its `aria-label`, else its label for an input, a table's caption, else its text. */
 export function nameOf(node: Element): string {
     const label = node.getAttribute("aria-label");
     if (label !== null) {
         return label.trim();
+    }
+    if (node instanceof HTMLTableElement && node.caption) {
+        return (node.caption.textContent ?? "").trim();
     }
     if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement) {
         const labelled =

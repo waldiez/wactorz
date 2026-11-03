@@ -24,13 +24,22 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ...core.artifacts import ArtifactError, ArtifactStore, Pointer
+from ...core.judges import labels_for
+from ...core.labels import Labels
 from ...core.paths import resolve_state_dir
 from ...core.persistence.stores import get_db
 from ...core.provenance import Provenance
-from ...core.shadow_trial import CLEARED, PROMOTED, compare, record_outcome
+from ...core.shadow_trial import (
+    CLEARED,
+    PROMOTED,
+    compare,
+    judgement_of_trial,
+    record_outcome,
+)
 from ...data.files import data_root
 
 if TYPE_CHECKING:
+    from ...core.persistence import WactorzDB
     from .artifact_service import Change
     from .hosts import SwapHost
 
@@ -118,7 +127,7 @@ class ShadowServing:
         if active is not None:
             active_version = active.previous if promoted else active.version
         by = active.by if promoted and active is not None else ""
-        summary = await self._compare(name, was.moved_at, until)
+        summary = await self._compare(name, was.moved_at, until, shadow=was.version)
         pairs = summary.get("pairs", 0)
         agreement = summary.get("agreement")
         shown = f"{pairs} pair(s)" + (
@@ -144,8 +153,14 @@ class ShadowServing:
         except Exception as exc:
             logger.warning("cannot record the outcome of %s's trial: %s", name, exc)
 
-    async def _compare(self, name: str, since: float, until: float) -> dict[str, Any]:
-        """What the pairs of ``name``'s trial over ``[since, until)`` show; counts alone without pyarrow."""
+    async def _compare(
+        self, name: str, since: float, until: float, *, shadow: int | None = None
+    ) -> dict[str, Any]:
+        """What the pairs of ``name``'s trial over ``[since, until)`` show; counts alone without pyarrow.
+
+        Judged against the labels as the version on trial, ``shadow``, else the
+        active one declares, when persistence is running to read them.
+        """
         try:
             from ...data import parquet  # optional dependency: the `data` extra
         except ModuleNotFoundError:
@@ -160,7 +175,14 @@ class ShadowServing:
         except Exception as exc:
             logger.warning("cannot read the pairs of %s's trial: %s", name, exc)
             return {**compare([]), "pairs_unavailable": str(exc)}
-        return compare(rows)
+        db = get_db()
+        if db is None:
+            return compare(rows)
+        try:
+            return await asyncio.to_thread(_judged, self.store, name, rows, shadow, db)
+        except Exception as exc:
+            logger.warning("cannot judge %s's trial against the labels: %s", name, exc)
+            return compare(rows)
 
     async def _say(self, message: str) -> None:
         """One line on the feed, as a pointer's move is one."""
@@ -172,3 +194,21 @@ class ShadowServing:
             f"agents/{host.actor_id}/logs",
             {"type": "model", "message": message, "timestamp": time.time()},
         )
+
+
+def _judged(
+    store: ArtifactStore,
+    name: str,
+    rows: list[dict[str, Any]],
+    shadow: int | None,
+    db: WactorzDB,
+) -> dict[str, Any]:
+    """The pairs compared, and judged against the labels when a version says how."""
+    found = judgement_of_trial(store, name, rows, shadow=shadow)
+    if found is None:
+        return compare(rows)
+    judgement, judged_from = found
+    labels = labels_for(rows, judgement, Labels(db).effective)
+    summary = compare(rows, judgement=judgement, labels=labels)
+    summary["labels"]["from"] = judged_from
+    return summary

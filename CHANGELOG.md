@@ -29,6 +29,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A model version says what it is judged on, and a shadow trial is judged by it.** `wactorz-artifacts add ...
+  --positive fault` (or `judge NAME:V --positive fault` for a version already stored, `/artifacts judge` in chat)
+  names the label values that count as what the model should flag. A trial then holds each side's answers against the
+  labels without being asked, each input against the labels of its own source unless `--label-source` names one, and
+  shows precision, recall, F1, the false-positive rate, false alarms per day, the faults caught and how soon, and the
+  Matthews correlation, each rate with its 95% interval, and whether the shadow is really better than the active
+  version or the difference could be chance (McNemar's test). They are in the Models tab's trial card, which also
+  says how to judge a model nothing says it of, in `GET /api/models/{name}/trial`, and in the outcome written when a
+  trial ends; the versions table says what each version is judged on. A version stored without it takes the previous
+  version's. `?positive=` judges a trial as asked, and `?source=` alone now replaces the declared source rather than
+  needing `positive` beside it.
 - **A package can add a tab to the dashboard.** An extension's optional `panel()` names an ES module
   in its package; the dashboard loads it when the tab opens and calls `mount(root, host)`, where
   `host` (version 1) reads and moves the tab's own place in the address, asks the server, listens to

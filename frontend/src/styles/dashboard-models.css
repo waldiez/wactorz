@@ -343,6 +343,83 @@ tr.shadow .af-model-role,
   font-size: 11px;
   color: var(--af-text-dim);
 }
+.af-trial-judged {
+  margin-top: 16px;
+}
+/* Two boxes side by side where they fit, one under the other where they do not. */
+.af-trial-judged-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px;
+}
+.af-trial-judged-box {
+  min-width: 0;
+  padding: 10px 14px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.af-trial-judged h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-trial-judged-basis {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--af-text-dim);
+}
+.af-trial-judged-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-trial-judged-table caption {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  padding-bottom: 6px;
+}
+.af-trial-judged-table th,
+.af-trial-judged-table td {
+  text-align: left;
+  padding: 5px 16px 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  vertical-align: top;
+}
+.af-trial-judged-table thead th {
+  border-top: none;
+  font-weight: 500;
+  color: var(--af-text-dim);
+}
+.af-trial-judged-table tbody th {
+  font-weight: 500;
+  cursor: help;
+}
+.af-trial-judged-table td {
+  width: 28%;
+  font-variant-numeric: tabular-nums;
+}
+.af-trial-interval {
+  display: block;
+  font-size: 11px;
+  color: var(--af-text-dim);
+}
+.af-trial-verdict {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-trial-judged code {
+  font-size: 11px;
+}
+.af-model-versions td.af-model-judged {
+  white-space: normal;
+  color: var(--af-text-dim);
+}
 /* A screen narrower than the table scrolls it sideways rather than breaking its words. */
 .af-model-versions-card {
   flex: 3 1 auto;

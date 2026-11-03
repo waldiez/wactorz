@@ -18,6 +18,7 @@ import { button, el, labelled, list, listItem } from "../dom";
 import { humanSize } from "../chat/uploads";
 import { timeLabel } from "../../time";
 import { pastTrials, trialCard, type TrialHost } from "./modelTrial";
+import { judgedOn } from "./trialJudged";
 
 /** What the detail needs from the view: to ask for a move. */
 export interface DetailHost {
@@ -145,6 +146,7 @@ function versionRow(detail: ModelDetail, version: ModelVersion, host: DetailHost
         el("td", "", version.runs_code ? `${version.format} (runs code)` : version.format),
         el("td", "", humanSize(version.size)),
         el("td", "af-model-said", said(version)),
+        el("td", "af-model-judged", version.judged_on ? judgedOn(version.judged_on) : ""),
         action,
     );
     return row;
@@ -156,7 +158,7 @@ function versionsTable(detail: ModelDetail, host: DetailHost): HTMLElement {
     const table = el("table", "af-model-versions");
     table.appendChild(el("caption", "", "Versions"));
     const head = el("tr");
-    for (const title of ["Version", "Added", "Made by", "Format", "Size", "Said of it", ""]) {
+    for (const title of ["Version", "Added", "Made by", "Format", "Size", "Said of it", "Judged on", ""]) {
         head.appendChild(el("th", "", title));
     }
     table.appendChild(el("thead")).appendChild(head);

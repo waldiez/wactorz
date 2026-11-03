@@ -14,6 +14,7 @@ import type { PastTrial, ShadowTrial, TrialBucket, TrialSide } from "../../types
 import { timeLabel } from "../../time";
 import { button, el, labelled, list, listItem } from "../dom";
 import { buildLineChart, SERIES_COLORS, type Point, type Series } from "../overview/trend";
+import { judgedSection } from "./trialJudged";
 
 /** What the trial card shows, and what it can ask for. */
 export interface TrialHost {
@@ -129,7 +130,7 @@ function charts(buckets: TrialBucket[]): HTMLElement[] {
 /** The figures and, when there is a series to draw, the charts under them. */
 function results(trial: ShadowTrial, buckets: TrialBucket[]): HTMLElement {
     const shown = el("div");
-    shown.appendChild(figures(trial));
+    shown.append(figures(trial), judgedSection(trial));
     const drawn = charts(buckets);
     if (drawn.length) {
         const row = el("div", "af-trial-charts");

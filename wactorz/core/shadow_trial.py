@@ -5,10 +5,10 @@ A trial is the stretch a model's ``shadow`` pointer stood on one version. Its
 pairs (`wactorz.agents.shadow_serving`) say what active and shadow answered to
 each input and how long each took. `compare` reduces them to what a decision
 needs: how often the two agreed, how far their scores sat apart, their
-latencies, and, over the inputs a label covers, each side's precision and
-recall against the label values that count as positive. `record_outcome`
-writes the result as an ``outcome`` node, so the trial is part of the model's
-record whichever way it ended.
+latencies, and, over the inputs a label covers, each side judged against the
+labels as the version declares (`wactorz.core.judges`). `record_outcome` writes
+the result as an ``outcome`` node, so the trial is part of the model's record
+whichever way it ended.
 
 Nothing here reads a file or a database beyond the graph it is given: the
 pairs arrive as rows, from `wactorz.data.parquet.arrived_in` (the pairs that
@@ -17,9 +17,13 @@ arrived while the trial ran, whatever their event time) or a test.
 
 import json
 import math
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+from .artifacts import ArtifactError, ArtifactStore
+from .judgement import Judgement
+from .judges import judge
 from .labels import Interval
 from .pointer_moves import source_of
 from .provenance import OUTCOME, Provenance, ProvNode, stable_id
@@ -71,61 +75,21 @@ def _latency(values: Sequence[float]) -> dict[str, float | None]:
     }
 
 
-def label_at(intervals: Sequence[Interval], ts: float) -> str | None:
-    """The label value holding at ``ts`` among ``intervals``, which do not overlap; None when none does."""
-    for interval in intervals:
-        if interval.start <= ts and (interval.end is None or ts < interval.end):
-            return interval.label.value
-    return None
-
-
-def _against_labels(
-    rows: Sequence[Mapping[str, Any]], intervals: Sequence[Interval], positive: set[str]
-) -> dict[str, Any]:
-    """Each side's precision and recall over the rows a label covers."""
-    counts = {"active": [0, 0, 0], "shadow": [0, 0, 0]}
-    labelled = positives = 0
-    for row in rows:
-        value = label_at(intervals, float(row["ts"]))
-        if value is None:
-            continue
-        labelled += 1
-        is_positive = value in positive
-        positives += int(is_positive)
-        for side in ("active", "shadow"):
-            flagged = row.get(f"{side}_output") not in (None, "")
-            tp, fp, fn = counts[side]
-            counts[side] = [
-                tp + int(flagged and is_positive),
-                fp + int(flagged and not is_positive),
-                fn + int(not flagged and is_positive),
-            ]
-    sides: dict[str, Any] = {}
-    for side, (tp, fp, fn) in counts.items():
-        sides[side] = {
-            "tp": tp,
-            "fp": fp,
-            "fn": fn,
-            "precision": (tp / (tp + fp)) if tp + fp else None,
-            "recall": (tp / (tp + fn)) if tp + fn else None,
-        }
-    return {"labelled": labelled, "positives": positives, "positive": sorted(positive), **sides}
-
-
 def compare(
     rows: Iterable[Mapping[str, Any]],
     *,
-    intervals: Sequence[Interval] | None = None,
-    positive: Iterable[str] = (),
+    judgement: Judgement | None = None,
+    labels: Mapping[str, Sequence[Interval]] | None = None,
 ) -> dict[str, Any]:
     """What the pairs ``rows`` show.
 
     ``agreement`` is the share of pairs where both sides answered alike:
     neither flagged, or both flagged with the same output. ``score`` is each
     side's mean ``score`` and the mean of shadow's minus active's, over the
-    pairs where both gave one. With ``intervals`` from `Labels.effective` and
-    the values that count as ``positive``, ``labels`` holds each side's
-    precision and recall over the pairs a label covers.
+    pairs where both gave one. With the ``judgement`` a version declares and
+    the ``labels`` of the sources its inputs are judged against (from
+    `Labels.effective`, by source), ``labels`` holds each side judged on them
+    (`wactorz.core.judges`).
     """
     kept = list(rows)
     agreed = 0
@@ -173,9 +137,8 @@ def compare(
             "scored": len(differences),
         },
     }
-    wanted = {str(value) for value in positive}
-    if intervals is not None and wanted:
-        summary["labels"] = _against_labels(kept, intervals, wanted)
+    if judgement is not None and labels is not None:
+        summary["labels"] = judge(kept, judgement, labels)
     return summary
 
 
@@ -227,6 +190,46 @@ def event_span(rows: Iterable[Mapping[str, Any]]) -> tuple[float, float] | None:
     if not times:
         return None
     return min(times), max(times) + 1.0
+
+
+def judgement_of_trial(
+    store: ArtifactStore,
+    name: str,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    shadow: int | None = None,
+) -> tuple[Judgement, str] | None:
+    """What ``name``'s trial is judged on, and the version that said so; None when none says.
+
+    The pairs say which versions answered them, so they decide: the shadow
+    version they name most often, then the active one, each as it declares
+    now. A window read after the trial, while another version is on trial, is
+    judged as the versions that ran then. The pointers -- ``shadow`` as given,
+    then where ``active`` stands -- are asked only when the pairs name no
+    version that says. A version that is gone is passed over.
+    """
+    kept = list(rows)
+    pointer = store.pointer(name, "active")
+    ordered = [
+        *_most_named(kept, "shadow_version"),
+        *_most_named(kept, "active_version"),
+        shadow,
+        pointer.version if pointer else None,
+    ]
+    for version in dict.fromkeys(v for v in ordered if v is not None):
+        try:
+            judgement = store.resolve(f"{name}:{version}").judgement
+        except ArtifactError:
+            continue
+        if judgement is not None:
+            return judgement, f"{name}:{version}"
+    return None
+
+
+def _most_named(rows: Sequence[Mapping[str, Any]], column: str) -> list[int]:
+    """The versions ``rows`` name in ``column``, the most named first, the newer first among equals."""
+    named = Counter(int(r[column]) for r in rows if r.get(column) is not None)
+    return sorted(named, key=lambda version: (-named[version], -version))
 
 
 def outcome_id(name: str, shadow_version: int, since: float) -> str:

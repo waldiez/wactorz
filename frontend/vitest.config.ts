@@ -8,7 +8,7 @@ import { defineConfig } from "vitest/config";
 // and functions share TARGET; branches trail (defensive guards + flag-gated
 // paths cover slower), so they keep a small offset.
 const TARGET = 97;
-const BRANCHES_FLOOR = TARGET - 5;
+const BRANCHES_FLOOR = TARGET - 4;
 
 export default defineConfig({
     // The test-id contract (testids.test.ts) reads the end-to-end harness, which

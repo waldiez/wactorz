@@ -28,6 +28,10 @@ const VERSION = (n: number) => ({
     metadata:
         n === 8 ? { description: "Autoencoder on supply-air temperature", source: "cli", f1: 0.86 } : {},
     reference: `hvac:${n}`,
+    judged_on:
+        n === 8
+            ? { kind: "detector", positive: ["fault"], source: null, by: "cli", at: 0, from_version: 7 }
+            : null,
 });
 const POINTER = (which: string, n: number, previous: number | null = null) => ({
     name: "hvac",
@@ -149,12 +153,15 @@ describe("the Models view", () => {
         ]);
         expect(model().textContent).toContain("Autoencoder on supply-air temperature");
         const v8 = byRole(model(), "table").querySelector("tbody tr")!;
-        expect([...v8.querySelectorAll("td")].slice(2, 6).map(td => td.textContent)).toEqual([
+        expect([...v8.querySelectorAll("td")].slice(2, 7).map(td => td.textContent)).toEqual([
             "cli",
             "onnx",
             "2 KB",
             "f1=0.86",
+            "fault labels of each input's source",
         ]);
+        const v7 = byRole(model(), "table").querySelectorAll("tbody tr")[1]!;
+        expect(v7.querySelectorAll("td")[6]?.textContent).toBe("");
         expect(byRole(model(), "list", "Pointer moves").textContent).toContain(
             "shadow → v8, by agent:controller",
         );
@@ -310,6 +317,55 @@ describe("the Models view", () => {
         const titles = [...trialCard().querySelectorAll("figcaption")].map(t => t.textContent);
         expect(titles).toEqual(["Score", "Latency"]);
         expect(trialCard().textContent).toContain("shadow");
+    });
+
+    it("judges the trial against the labels when its version says how", async () => {
+        const side = {
+            tp: 4,
+            fp: 1,
+            fn: 0,
+            tn: 20,
+            precision: 0.8,
+            recall: 1,
+            f1: 0.89,
+            false_positive_rate: 0.05,
+            specificity: 0.95,
+            mcc: 0.87,
+            intervals: { precision: [0.38, 0.96], recall: [0.51, 1], false_positive_rate: [0.01, 0.24] },
+            alarms_without_fault: 1,
+            alarms_per_day: 0.5,
+            faults: {
+                seen: 2,
+                caught: 2,
+                recall: 1,
+                recall_interval: [0.34, 1],
+                delay_s: { mean: 90, median: 90, max: 120 },
+            },
+        };
+        const labels = {
+            kind: "detector",
+            from: "hvac:8",
+            judged_on: VERSION(8).judged_on,
+            positive: ["fault"],
+            labelled: 25,
+            positives: 4,
+            unlabelled: 0,
+            sources: ["ahu-1"],
+            days: 2,
+            active: side,
+            shadow: side,
+            mcnemar: { active_only: 0, shadow_only: 0, p: 1, better: null },
+        };
+        await open("#/models/hvac", onTrial(() => Response.json({ ...FIGURES, labels })) as never);
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("Against the labels"));
+
+        const judged = byRole(trialCard(), "region", "Against the labels");
+        expect(judged.textContent).toContain("as hvac:8 declares · 25 of 25 inputs labelled · 2 faults seen");
+        expect(byRole(judged, "rowheader", "Recall").closest("tr")?.textContent).toBe(
+            "Recall1.000.51–1.001.000.51–1.00",
+        );
+        expect(judged.textContent).toContain("nothing tells them apart yet");
     });
 
     it("leaves out the score chart when no output carried one", async () => {

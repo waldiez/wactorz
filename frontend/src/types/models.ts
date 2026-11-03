@@ -29,6 +29,73 @@ export interface ModelVersion {
     metadata: Record<string, unknown>;
     /** `name:version`. */
     reference: string;
+    /** What it is judged on; absent or null when nothing says. */
+    judged_on?: Judgement | null;
+}
+
+/** What a version is judged on: the labels its answers are held against (`wactorz/core/judgement.py`). */
+export interface Judgement {
+    /** How its answers are read: a `detector` flags an input by publishing something for it. */
+    kind: string;
+    /** The label values that count as what it should flag. */
+    positive: string[];
+    /** The one label source every input is judged against; null for each input's own. */
+    source: string | null;
+    /** Who said so: `cli`, `chat`, `request`. */
+    by: string;
+    /** Seconds since the epoch. */
+    at: number;
+    /** The version it was copied from when this one was stored without one. */
+    from_version: number | null;
+}
+
+/** A rate's 95% interval, `[low, high]`, or null with nothing to count. */
+export type RateInterval = [number, number] | null;
+
+/** One side of a detector's trial, judged against the labels. */
+export interface DetectorSide {
+    tp: number;
+    fp: number;
+    fn: number;
+    tn: number;
+    precision: number | null;
+    recall: number | null;
+    f1: number | null;
+    false_positive_rate: number | null;
+    specificity: number | null;
+    /** The Matthews correlation, honest when faults are rare. */
+    mcc: number | null;
+    intervals: { precision: RateInterval; recall: RateInterval; false_positive_rate: RateInterval };
+    /** Alarms raised where no known fault was, and per day of the trial's event time. */
+    alarms_without_fault: number;
+    alarms_per_day: number | null;
+    /** Faults (stretches a positive label holds) the inputs fell in, and how many were caught, how soon. */
+    faults: {
+        seen: number;
+        caught: number;
+        recall: number | null;
+        recall_interval: RateInterval;
+        delay_s: { mean: number | null; median: number | null; max: number | null };
+    };
+}
+
+/** A trial judged against the labels, as its version declares or as the request asked. */
+export interface TrialJudged extends TrialSide<DetectorSide> {
+    kind: string;
+    /** The version whose declaration it was judged on (`hvac:8`), or `request`. */
+    from: string;
+    judged_on: Judgement;
+    positive: string[];
+    /** The inputs a label covered, those whose label counts as positive, and those none covered. */
+    labelled: number;
+    positives: number;
+    unlabelled: number;
+    /** The label sources the judged inputs were held against. */
+    sources: string[];
+    /** How many days of event time the inputs span. */
+    days: number;
+    /** Whether the two sides really differ, from the inputs only one judged rightly. */
+    mcnemar: { active_only: number; shadow_only: number; p: number; better: "active" | "shadow" | null };
 }
 
 /** Where one pointer stands, and the move that put it there. */
@@ -112,7 +179,10 @@ export interface TrialFigures {
         shadow_mean: number | null;
         difference_mean: number | null;
         scored: number;
-    };
+    }; /** Each side judged against the labels, when a version says what it is judged on. */
+    labels?: TrialJudged;
+    /** Why the labels could not be read, when a version said how to judge it. */
+    labels_unavailable?: string;
 }
 
 /** The trial under way, as `GET /api/models/{name}/trial` gives it. */

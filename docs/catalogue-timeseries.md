@@ -60,3 +60,8 @@ topic without its wildcards when it names none, filed under its event time with 
 arrival beside it. `wactorz-data sources`, `wactorz-data profile <source>` and
 `GET /api/data/{source}/profile` say what was recorded; `wactorz-data export` writes a
 window as one file for a notebook. The recorder needs the `data` extra (pyarrow).
+
+What is recorded is what the `trainer` library agent trains on: spawned with a recipe,
+a model's name and a source, it fits a new version on a window of the readings when
+sent a task, and sets it as the model's shadow when it beats the version served
+(`docs/library.md`, "Training a version"; `docs/design/train-step.md`).

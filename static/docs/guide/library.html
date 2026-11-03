@@ -469,6 +469,62 @@ library, once, off the event loop, the way that runs no code from the file:</p>
 <code>load_model</code> refuses them unless given <code>allow_code=True</code>. GGUF, TFLite, skops
 and directories are opened through <code>artifact_path</code> by the library that reads
 them. <code>me.artifacts</code> lists each model with its name, version, format and path.</p>
+<h2 id="training-a-version">Training a version</h2>
+<p>A version can be trained inside the loop rather than by a script you run: the
+<code>trainer</code> library agent, or <code>wactorz-train</code> from a terminal, runs a <em>recipe</em>
+you write on a window of recorded readings (<code>docs/design/train-step.md</code>). A
+recipe is a module, named by its importable name or its <code>.py</code> file (which may
+import the modules beside it), with two functions and an optional third:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># examples/imu_anomaly/recipe.py</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">train</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">settings</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Fit on an Arrow table from the loader; settings is what the run was given."""</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">column_stack</span><span class="p">([</span><span class="n">frame</span><span class="o">.</span><span class="n">column</span><span class="p">(</span><span class="n">axis</span><span class="p">)</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">()</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"ax"</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">)])</span>
+    <span class="k">return</span> <span class="n">fit</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>                       <span class="c1"># a mapping of numpy arrays</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">score</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">frame</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Figures on rows the model was not fitted on: a mapping of numbers, each named."""</span>
+    <span class="o">...</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"caught"</span><span class="p">:</span> <span class="n">caught</span><span class="p">,</span> <span class="s2">"false_alarms"</span><span class="p">:</span> <span class="n">false_alarms</span><span class="p">}</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">directory</span><span class="p">):</span>               <span class="c1"># optional: without it, arrays go as model.npz</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="n">directory</span> <span class="o">/</span> <span class="s2">"model.npz"</span>
+    <span class="n">np</span><span class="o">.</span><span class="n">savez</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">**</span><span class="n">model</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">path</span>
+</code></pre></div>
+
+<p>The frame carries a <code>label</code> column, the effective label at each row's event
+time, when the version compared against says what it is judged on, or when
+the run asks for it. Spawn the agent with the recipe, the model's name, the
+source and what a move depends on:</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn trainer {"recipe": "examples/imu_anomaly/recipe.py", "model": "imu-detector",
+                        "source": "sensors/imu", "metric": "caught", "margin": 0.02}
+</code></pre></div>
+
+<p>A task to it runs one training: <code>{"since": ..., "until": ..., "split": {"kind":
+"time_split", "at": ...}, "settings": {...}, "reason": "regime change at 14:02"}</code>,
+from chat, from a rule's <code>task</code> action or from another agent. What the task does
+not say takes the agent's options; the default window is the last week with its
+last fifth held out, and a split is <code>holdout</code>, <code>time_split</code>, <code>rolling_origin</code> or
+<code>leave_k_out</code>, as the loader makes them. The fit runs in a child process with
+the agent's <code>timeout_s</code> and <code>memory_mb</code>. The version is stored with the recipe's
+hash, the seed, the settings, the window, the split's manifest and the figures,
+and the pointer the agent is for (<code>pointer</code>, <code>shadow</code> unless said) moves only
+when the new version beats the one served by the margin on the same held-out
+rows, with the figures in the move's reason. <code>{"action": "status"}</code> says what is
+running or what the last run came to. From a terminal:</p>
+<div class="highlight"><pre><span></span><code>wactorz-train<span class="w"> </span>check<span class="w"> </span>examples/imu_anomaly/recipe.py
+wactorz-train<span class="w"> </span>run<span class="w"> </span>examples/imu_anomaly/recipe.py<span class="w"> </span>--model<span class="w"> </span>imu-detector<span class="w"> </span>--source<span class="w"> </span>sensors/imu<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--metric<span class="w"> </span>caught<span class="w"> </span>--margin<span class="w"> </span><span class="m">0</span>.02<span class="w"> </span>--split<span class="w"> </span>time:1760050920<span class="w"> </span>--reason<span class="w"> </span><span class="s2">"regime change at 14:02"</span>
+</code></pre></div>
+
+<p>Each run is an <code>action</code> in the provenance graph and each version a <code>model</code>
+node, with <code>produced</code>, <code>trained</code> and <code>led_to</code> edges, so <code>GET /api/labels</code> and
+the model's history say what a version learned from and why it was tried.</p>
 <h2 id="your-own-files">Your own files</h2>
 <p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
 directory under the state directory: for model weights, a checkpoint store, a

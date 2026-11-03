@@ -29,6 +29,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A model is trained inside the loop, and the version it makes says what it learned from.** The `trainer`
+  library agent (`@catalog spawn trainer {"recipe": "examples/imu_anomaly/recipe.py", "model": "imu-detector",
+  "source": "sensors/imu", "metric": "f1", "margin": 0.02}`) runs your recipe, a module with
+  `train(frame, settings)` and `score(model, frame)`, on a window of recorded readings when it is sent a task
+  (`{"since": ..., "until": ..., "split": {...}, "reason": "..."}`) from chat, a rule or another agent; the
+  default window is the last week with its last fifth held out, and `split` may be a cut at one moment, forward
+  folds or segments held out, none of which shuffles rows. The fit runs in a child process with a timeout and a
+  memory limit, so a recipe that hangs or grows is stopped without touching main. The version is stored with the
+  recipe's hash, the seed and settings, the window, the split's manifest, the figures on the held-out rows and
+  the version served scored on the same rows, and the `data` windows the retention sweep keeps; it inherits what
+  the previous version is judged on. The pointer the run is for, `shadow` unless said, moves only when the new
+  version beats the one served by the margin, with the figures in the move's reason; one that falls short is
+  stored and not moved, and the feed says by how much. Each run is an `action` in the provenance graph and each
+  version a `model` node, joined `produced` from the run, `trained` from every label the window held and
+  `led_to` the move it made; a run that failed is a failed action with its reason. A shadow trial's outcome now
+  reaches the model node of the version it tried. `wactorz-train run RECIPE --model NAME --source SOURCE
+  --metric f1 [--split time:AT] [--set shadow]` does the same from a terminal, writing the graph when the state
+  directory holds main's database, and `wactorz-train check RECIPE` says what a recipe defines.
+  `docs/design/train-step.md` records the decision, and `docs/design/promotion-policy.md` the one it leaves to
+  the next step: when a version on trial becomes the one served.
+
 - **Charts zoom, mark what matters, and draw as points or lines.** Every chart's axes now label round values and
   round local times, with faint gridlines, worked out again for a window zoomed into. The Models tab's trial charts and the
   Overview's history charts offer Line, Points and Joined (a mostly empty chart starts as points), and zoom: drag across

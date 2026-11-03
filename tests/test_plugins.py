@@ -128,7 +128,7 @@ class TestBuild:
 
 
 #: What the package brings of its own, found whatever a deployment names.
-BUILT_IN = {"recorder"}
+BUILT_IN = {"recorder", "trainer"}
 
 
 class TestDiscover:

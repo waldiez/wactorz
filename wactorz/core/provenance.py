@@ -66,12 +66,13 @@ PLANNED = "planned"
 RUNNING = "running"
 DONE = "done"
 CANCELLED = "cancelled"
+FAILED = "failed"
 UNDONE = "undone"
 
 #: The statuses a node of each kind may hold; its first is the one it starts with.
 STATUSES: dict[str, tuple[str, ...]] = {
     LABEL: (VALID, PARTLY_SUPERSEDED, SUPERSEDED, INVALIDATED),
-    ACTION: (PLANNED, RUNNING, DONE, CANCELLED, UNDONE, INVALIDATED),
+    ACTION: (PLANNED, RUNNING, DONE, CANCELLED, FAILED, UNDONE, INVALIDATED),
 }
 
 #: The statuses of any kind :data:`STATUSES` does not name.

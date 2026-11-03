@@ -10,7 +10,8 @@ runs no code from the file:
 
 - ``npz`` and ``npy`` with numpy, ``allow_pickle=False``: a dict of arrays, or one;
 - ``safetensors`` with ``safetensors.numpy``: a dict of arrays, no torch needed;
-- ``state_dict`` with ``torch.load(weights_only=True)``, on the CPU;
+- ``state_dict`` with ``torch.load(weights_only=True)``, on the CPU, admitting
+  plain numeric numpy arrays beside the tensors (`torch_checkpoints`);
 - ``onnx`` as an ``onnxruntime.InferenceSession``;
 - ``raw`` as the bytes themselves.
 
@@ -28,7 +29,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from . import torch_checkpoints
 from .artifacts import ArtifactError, ArtifactStore, pinned_in
+from .torch_checkpoints import CheckpointRefusedError
 
 
 class ModelError(ArtifactError):
@@ -50,6 +53,17 @@ class ModelError(ArtifactError):
     @classmethod
     def needs(cls, library: str) -> "ModelError":
         return cls(f"loading it needs {library}: pip install {library}")
+
+    @classmethod
+    def refused_checkpoint(
+        cls, entry: Mapping[str, Any], exc: CheckpointRefusedError
+    ) -> "ModelError":
+        return cls(
+            f"{entry.get('name')}:{entry.get('version')} cannot be read without running code "
+            f"({exc.reason}): save it with only tensors, numbers, containers and numeric numpy "
+            "arrays, or store it as --format torch with --allow-code if you would run its "
+            "maker's code"
+        )
 
     @classmethod
     def cannot_start(cls, agent: str, exc: ArtifactError) -> "ModelError":
@@ -103,7 +117,10 @@ def load(entry: Mapping[str, Any], *, allow_code: bool = False) -> Any:
     loader = _LOADERS.get(fmt)
     if loader is None:
         raise ModelError.no_loader(fmt)
-    return loader(path)
+    try:
+        return loader(path)
+    except CheckpointRefusedError as exc:
+        raise ModelError.refused_checkpoint(entry, exc) from exc
 
 
 def _numpy() -> Any:
@@ -142,7 +159,10 @@ def _torch() -> Any:
 
 
 def _state_dict(path: Path) -> Any:
-    return _torch().load(path, map_location="cpu", weights_only=True)
+    try:
+        return torch_checkpoints.load(path)
+    except ImportError as exc:
+        raise ModelError.needs("torch") from exc
 
 
 def _onnx(path: Path) -> Any:

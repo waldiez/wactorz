@@ -308,7 +308,7 @@ library, once, off the event loop, the way that runs no code from the file:
 | `npz` | a dict of numpy arrays (`allow_pickle=False`) |
 | `npy` | the numpy array (`allow_pickle=False`) |
 | `safetensors` | a dict of numpy arrays, through `safetensors.numpy` |
-| `state_dict` | the tensors, through `torch.load(weights_only=True)` on the CPU |
+| `state_dict` | what the checkpoint holds, through `torch.load(weights_only=True)` on the CPU: tensors, numbers and containers, and numeric numpy arrays beside them |
 | `onnx` | an `onnxruntime.InferenceSession` |
 | `raw` | the bytes |
 

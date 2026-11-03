@@ -51,6 +51,12 @@ ALLOWED_UNPICKLE_SITES = {
     # checked against the hash its spawn pinned, from an artifact an operator
     # stored with `--allow-code`.
     "core/models.py": 2,
+    # A torch checkpoint read with `weights_only=True`: torch's own restricted
+    # unpickler, which builds tensors, containers and numbers and refuses any
+    # other class. What it admits beyond torch's default is plain numeric numpy
+    # arrays and scalars, whose constructors run nothing from the file
+    # (`test_torch_checkpoints.py` pins that arrays of objects stay refused).
+    "core/torch_checkpoints.py": 1,
 }
 
 #: The modules whose `load` reads a file by unpickling it.

@@ -319,6 +319,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A torch checkpoint with numpy arrays in it loads as a `state_dict`.** A checkpoint that keeps a normalisation, a
+  threshold or a loss as numpy arrays beside the weights was refused by `load_model`, so the agent naming it did not
+  start. Plain numeric arrays and scalars are now read with the tensors, still without running anything from the file;
+  an array of objects, strings or dates, or any other class, stays refused, and the refusal says what the file asked
+  for. `wactorz-artifacts add --format state_dict` reads the file the same way where torch is installed and refuses one
+  agents could not load; without torch it stores it and says it went in unread. The `ml` extra now asks for torch 2.5
+  or later (torchvision 0.20), the first that can admit the arrays; on an older torch an agent's requirements bring, a
+  checkpoint holding arrays is refused saying which torch reads it.
 - **A reset no longer holds every agent while it clears the disk.** The dashboard's reset cleared the chat log, metrics,
   spawns, state, logs or everything inside the request, pausing every actor for as long as the disk took; it now runs on
   a thread. The agents running here forget their copies first, so one writing while the disk is cleared writes nothing

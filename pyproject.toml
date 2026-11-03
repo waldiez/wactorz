@@ -60,7 +60,7 @@ whatsapp  = ["twilio>=9.10.4"]
 # `torchvision` comes with `ultralytics` anyway. It is named so that the lockfile
 # can take it from the same place as `torch` (see `[tool.uv.sources]`, which
 # reaches only what is named here): the two are built against each other.
-ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "torchvision>=0.15.0", "numpy>=1.24.0"]
+ml        = ["ultralytics>=8.0.0", "torch>=2.5.0", "torchvision>=0.20.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
 tts       = ["edge-tts>=7.3.1"]
 cron      = ["croniter>=2.0.0"]

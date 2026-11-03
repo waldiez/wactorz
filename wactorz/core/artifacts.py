@@ -21,7 +21,9 @@ what they point at would not be in the tar.
 **Some formats run code when they load**: a pickle, a joblib file, a whole
 torch module. They are refused unless the caller allows them, and recorded as
 such, so that whatever loads one later can refuse it in turn. Every other
-format here is data: loading it runs nothing from the file.
+format here is data: loading it runs nothing from the file. A ``state_dict`` is
+read on its way in, as an agent will read it, where torch is installed: one the
+safe load refuses is refused here, rather than by the first agent to start.
 
 Two pointers may sit on a name, beside its versions: ``active``, the version
 agents serve, and ``shadow``, a version under trial that sees the same data and
@@ -46,7 +48,9 @@ import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
+import pickle
 import re
 import shutil
 import tarfile
@@ -57,9 +61,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import IO, Any, cast
 
+from . import torch_checkpoints
 from .atomic_io import write_text
 from .model_contents import stored_contents
 from .state_lock import StateInUseError, StateLock
+from .torch_checkpoints import CheckpointRefusedError
+
+logger = logging.getLogger(__name__)
 
 #: The directory, inside the state directory, that artifacts are kept in.
 STORE_DIRNAME = "..artifacts"
@@ -115,7 +123,12 @@ FORMATS: dict[str, Format] = {
         Format("safetensors", (".safetensors",), False, "tensors in safetensors"),
         Format("npz", (".npz",), False, "numpy arrays, loaded with allow_pickle=False"),
         Format("npy", (".npy",), False, "a numpy array, loaded with allow_pickle=False"),
-        Format("state_dict", (), False, "a torch state_dict, loaded with weights_only=True"),
+        Format(
+            "state_dict",
+            (),
+            False,
+            "a torch checkpoint of tensors and numeric arrays, loaded with weights_only=True",
+        ),
         Format("gguf", (".gguf",), False, "a GGUF model, as llama.cpp loads"),
         Format("tflite", (".tflite",), False, "a TensorFlow Lite model"),
         Format("skops", (".skops",), False, "a scikit-learn model saved with skops"),
@@ -222,6 +235,18 @@ class ArtifactError(Exception):
     @classmethod
     def metadata_not_json(cls, exc: Exception) -> "ArtifactError":
         return cls(f"its metadata is not JSON: {exc}")
+
+    @classmethod
+    def refused_checkpoint(cls, path: Path, exc: CheckpointRefusedError) -> "ArtifactError":
+        return cls(
+            f"{path} is not a state_dict agents can load without running code ({exc.reason}): "
+            "save it with only tensors, numbers, containers and numeric numpy arrays, or store "
+            "it as --format torch with --allow-code if you would run its maker's code"
+        )
+
+    @classmethod
+    def not_a_checkpoint(cls, path: Path, exc: Exception) -> "ArtifactError":
+        return cls(f"{path} is not a torch checkpoint: {exc}")
 
     @classmethod
     def directory_with_format(cls, path: Path) -> "ArtifactError":
@@ -632,6 +657,8 @@ class ArtifactStore:
         fmt = _format_for(path, format_name)
         if fmt.runs_code and not allow_code:
             raise CodeRefusedError.runs_code(path, fmt.description)
+        if fmt.name == "state_dict":
+            _check_state_dict(path)
         try:
             json.dumps(dict(metadata or {}))
         except (TypeError, ValueError) as exc:
@@ -1288,6 +1315,22 @@ _UNITS = ("KB", "MB", "GB")
 def describe(artifact: Artifact) -> dict[str, Any]:
     """``artifact`` as plain JSON, with its references."""
     return {**asdict(artifact), "reference": artifact.reference, "pinned": artifact.pinned}
+
+
+def _check_state_dict(path: Path) -> None:
+    """Refuse a state_dict agents could not load, or say it went in unread where torch is not installed."""
+    try:
+        checked = torch_checkpoints.check(path)
+    except CheckpointRefusedError as exc:
+        raise ArtifactError.refused_checkpoint(path, exc) from exc
+    except (RuntimeError, ValueError, OSError, EOFError, pickle.UnpicklingError) as exc:
+        raise ArtifactError.not_a_checkpoint(path, exc) from exc
+    if not checked:
+        logger.warning(
+            "%s is stored unread: torch is not installed here, so whether agents can load it "
+            "as a state_dict is found out when one starts",
+            path,
+        )
 
 
 def _format_for(path: Path, named: str | None) -> Format:

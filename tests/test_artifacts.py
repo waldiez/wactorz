@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import os
+import sys
 import tarfile
 import threading
 from pathlib import Path
@@ -130,9 +131,11 @@ class TestFormats:
         assert store.add(path, "m").format == expected
 
     def test_an_ending_that_does_not_say_must_be_named(
-        self, store: ArtifactStore, tmp_path: Path
+        self, store: ArtifactStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A .pt holds a state_dict or a whole module, and only one runs code.
+        # Without torch a state_dict is stored unread, so these bytes need not be one.
+        monkeypatch.setitem(sys.modules, "torch", None)
         path = tmp_path / "model.pt"
         path.write_bytes(b"x")
 

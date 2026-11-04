@@ -384,8 +384,9 @@ connection per actor that closes when the actor stops:</p>
 <code>INPUT_SCHEMA</code> and <code>OUTPUT_SCHEMA</code> on the class become the catalogue entry and
 the wiring a pipeline checks against; <code>AGENT_NAME</code> names it (default
 <code>PumpWatch</code> → <code>pump-watch</code>); <code>AUTOSTART = False</code> keeps it in the catalogue
-until asked for. A subclass that takes <code>llm_provider</code> in its constructor is
-given the system's model.</p>
+until asked for. A subclass whose constructor names <code>llm_provider</code> (its own,
+or one it hands <code>**kwargs</code> on to) is given the system's model; spawn options
+reach a constructor that names them or takes <code>**kwargs</code>.</p>
 <p>A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
 camera frame. Messages on one topic are handled one at a time, in order,

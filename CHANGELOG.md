@@ -29,6 +29,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **An agent reads what was said of the model version it serves.** `me.artifacts[key]["metadata"]` (and
+  `agent.artifacts` in a program) holds the version's `--meta` values, on main and on a node alike, so a detector's
+  threshold or a calibration constant can be kept with the version it belongs to; a shadow pass sees the version on
+  trial's. `wactorz-artifacts add` refuses more than 64 KiB of metadata, since it travels with every spawn that names
+  the version. A pointer moved between two versions that hold the same bytes now swaps the agents following it too,
+  on main and on nodes, so they serve the new version's number and metadata.
 - **Charts zoom, mark what matters, and draw as points or lines.** Every chart's axes now label round values and
   round local times, with faint gridlines, worked out again for a window zoomed into. The Models tab's trial charts and the
   Overview's history charts offer Line, Points and Joined (a mostly empty chart starts as points), and zoom: drag across

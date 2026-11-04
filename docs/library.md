@@ -316,7 +316,12 @@ library, once, off the event loop, the way that runs no code from the file:
 A pickle, a joblib file and a whole torch module run code when they load, so
 `load_model` refuses them unless given `allow_code=True`. GGUF, TFLite, skops
 and directories are opened through `artifact_path` by the library that reads
-them. `me.artifacts` lists each model with its name, version, format and path.
+them. `me.artifacts` lists each model with its name, version, format and path,
+and its `metadata`: what was said of the version when it was added
+(`--meta k_sigma=5`), so a threshold or a calibration constant can live with
+the version it belongs to. A version's metadata does not change once stored;
+a different threshold is a new version, which a trial can then compare. On a
+shadow pass, `me.artifacts` is the version on trial's, metadata included.
 
 ## Your own files
 

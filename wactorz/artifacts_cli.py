@@ -298,7 +298,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="say where it came from or how good it is: dataset=..., metric=0.93; repeatable",
+        help=(
+            "say where it came from, how good it is or what an agent reads with it: dataset=..., "
+            "metric=0.93, k_sigma=5; repeatable; reaches the agent as its metadata (64 KiB at most)"
+        ),
     )
     add.add_argument(
         "--allow-code",

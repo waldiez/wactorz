@@ -61,6 +61,12 @@ def store_fixture(state: Path, tmp_path: Path) -> ArtifactStore:
     return store
 
 
+def same_bytes_as_v1(store: ArtifactStore, tmp_path: Path) -> str:
+    """``imu:3``: v1's bytes again, said to have another threshold; its reference."""
+    weights = tmp_path / "imu-1.bin"
+    return store.add(weights, "imu", format_name="raw", metadata={"k_sigma": 6}).reference
+
+
 def readable(store: ArtifactStore, reference: str, **extra: Any) -> dict[str, Any]:
     """``reference`` pinned, with the path an agent on main reads it at."""
     entry = {**pinned(store.resolve(reference)), **extra}
@@ -467,6 +473,19 @@ class TestAgentsOnMainFollow:
         assert host.spawns["detector"]["artifacts"]["model"]["version"] == 2
         assert host.feed() == []
 
+    async def test_a_version_with_the_same_bytes_is_still_swapped_in(
+        self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance, tmp_path: Path
+    ) -> None:
+        _spawned(host, "detector", store, follows="active")
+        running = _Running("detector", readable(store, "imu:1", follows="active"))
+        host._registry.running["detector"] = running
+
+        await swap.follow([_move(store, graph, same_bytes_as_v1(store, tmp_path))])
+
+        ((_, entry),) = running.swapped
+        assert (entry["version"], entry["metadata"]) == (3, {"k_sigma": 6})
+        assert host.spawns["detector"]["artifacts"]["model"]["version"] == 3
+
     async def test_a_cleared_pointer_moves_nobody(
         self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance
     ) -> None:
@@ -619,6 +638,20 @@ class TestAgentsOnNodesFollow:
 
         assert swap.pending == {}
         assert swaps_of(graph, "imu") == []
+
+    async def test_a_version_with_the_same_bytes_is_still_sent(
+        self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance, tmp_path: Path
+    ) -> None:
+        _spawned(host, "detector", store, node="rpi", follows="active")
+
+        await swap.follow([_move(store, graph, same_bytes_as_v1(store, tmp_path))])
+
+        (command,) = host.commands("rpi")
+        assert (command["entry"]["version"], command["entry"]["metadata"]) == (3, {"k_sigma": 6})
+        assert host.spawns["detector"]["artifacts"]["model"]["version"] == 3
+        ((_, desired),) = host.desired
+        assert desired is not None
+        assert desired["artifacts"]["model"]["version"] == 3
 
     async def test_a_node_agent_already_on_the_version_is_not_asked(
         self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance

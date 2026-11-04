@@ -66,7 +66,7 @@ def store_fixture(state: Path, tmp_path: Path) -> ArtifactStore:
     for version in (1, 2):
         weights = tmp_path / f"imu-{version}.bin"
         weights.write_bytes(f"imu weights {version}".encode())
-        store.add(weights, "imu", format_name="raw")
+        store.add(weights, "imu", format_name="raw", metadata={"k_sigma": 7 - version})
     store.move("active", "imu:1", by="test")
     store.move("shadow", "imu:2", by="dashboard", reason="trying it")
     return store
@@ -295,6 +295,8 @@ class TestWhatTheShadowSees:
         view = agent_side.ShadowView(agent)
 
         assert view.artifacts["model"]["version"] == 2
+        assert view.artifacts["model"]["metadata"] == {"k_sigma": 5}
+        assert agent.artifacts["model"]["metadata"] == {"k_sigma": 6}
         assert view.artifact_path("model") == agent.shadow["model"]["path"]
         assert await view.load_model("model") == b"imu weights 2"
         assert await agent.load_model("model") == b"imu weights 1"

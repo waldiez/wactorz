@@ -41,7 +41,10 @@ ENV_VAR = "WACTORZ_AGENTS"
 #: The library agents the package itself brings, found on main and on every
 #: node alike, so a spawn naming one by target is built wherever it lands.
 #: None starts with the system: each waits in the catalogue to be asked for.
-BUILT_IN_TARGETS = ("wactorz.agents.recorder_agent:RecorderAgent",)
+BUILT_IN_TARGETS = (
+    "wactorz.agents.recorder_agent:RecorderAgent",
+    "wactorz.agents.train_agent:TrainAgent",
+)
 
 
 @dataclass

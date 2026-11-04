@@ -323,6 +323,70 @@ the version it belongs to. A version's metadata does not change once stored;
 a different threshold is a new version, which a trial can then compare. On a
 shadow pass, `me.artifacts` is the version on trial's, metadata included.
 
+## Training a version
+
+A version can be trained inside the loop rather than by a script you run: the
+`trainer` library agent, or `wactorz-train` from a terminal, runs a *recipe*
+you write on a window of recorded readings (`docs/design/train-step.md`). A
+recipe is a module, named by its importable name or its `.py` file (which may
+import the modules beside it), with two functions and an optional third:
+
+```python
+# examples/imu_anomaly/recipe.py
+import numpy as np
+
+
+def train(frame, settings):
+    """Fit on an Arrow table from the loader; settings is what the run was given."""
+    rows = np.column_stack([frame.column(axis).to_pylist() for axis in ("ax", "ay", "az")])
+    return fit(rows)                       # a mapping of numpy arrays
+
+
+def score(model, frame):
+    """Figures on rows the model was not fitted on: a mapping of numbers, each named."""
+    ...
+    return {"caught": caught, "false_alarms": false_alarms}
+
+
+def save(model, directory):               # optional: without it, arrays go as model.npz
+    path = directory / "model.npz"
+    np.savez(path, **model)
+    return path
+```
+
+The frame carries a `label` column, the effective label at each row's event
+time, when the version compared against says what it is judged on, or when
+the run asks for it. Spawn the agent with the recipe, the model's name, the
+source and what a move depends on:
+
+```text
+@catalog spawn trainer {"recipe": "examples/imu_anomaly/recipe.py", "model": "imu-detector",
+                        "source": "sensors/imu", "metric": "caught", "margin": 0.02}
+```
+
+A task to it runs one training: `{"since": ..., "until": ..., "split": {"kind":
+"time_split", "at": ...}, "settings": {...}, "reason": "regime change at 14:02"}`,
+from chat, from a rule's `task` action or from another agent. What the task does
+not say takes the agent's options; the default window is the last week with its
+last fifth held out, and a split is `holdout`, `time_split`, `rolling_origin` or
+`leave_k_out`, as the loader makes them. The fit runs in a child process with
+the agent's `timeout_s` and `memory_mb`. The version is stored with the recipe's
+hash, the seed, the settings, the window, the split's manifest and the figures,
+and the pointer the agent is for (`pointer`, `shadow` unless said) moves only
+when the new version beats the one served by the margin on the same held-out
+rows, with the figures in the move's reason. `{"action": "status"}` says what is
+running or what the last run came to. From a terminal:
+
+```bash
+wactorz-train check examples/imu_anomaly/recipe.py
+wactorz-train run examples/imu_anomaly/recipe.py --model imu-detector --source sensors/imu \
+    --metric caught --margin 0.02 --split time:1760050920 --reason "regime change at 14:02"
+```
+
+Each run is an `action` in the provenance graph and each version a `model`
+node, with `produced`, `trained` and `led_to` edges, so `GET /api/labels` and
+the model's history say what a version learned from and why it was tried.
+
 ## Your own files
 
 `me.state_dir` (or `self.state_dir` in a subclass) is the agent's own

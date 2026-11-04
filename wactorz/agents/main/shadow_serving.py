@@ -149,6 +149,7 @@ class ShadowServing:
                 ended=ended,
                 summary=summary,
                 by=by,
+                shadow_sha256=was.sha256,
             )
         except Exception as exc:
             logger.warning("cannot record the outcome of %s's trial: %s", name, exc)

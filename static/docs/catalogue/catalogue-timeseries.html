@@ -215,6 +215,10 @@ topic without its wildcards when it names none, filed under its event time with 
 arrival beside it. <code>wactorz-data sources</code>, <code>wactorz-data profile &lt;source&gt;</code> and
 <code>GET /api/data/{source}/profile</code> say what was recorded; <code>wactorz-data export</code> writes a
 window as one file for a notebook. The recorder needs the <code>data</code> extra (pyarrow).</p>
+<p>What is recorded is what the <code>trainer</code> library agent trains on: spawned with a recipe,
+a model's name and a source, it fits a new version on a window of the readings when
+sent a task, and sets it as the model's shadow when it beats the version served
+(<code>docs/library.md</code>, "Training a version"; <code>docs/design/train-step.md</code>).</p>
   </main>
 </div>
 

@@ -1464,6 +1464,8 @@ wactorz/
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 ├── artifacts_cli.py                           `wactorz-artifacts` CLI — models kept on main, by name and version
+├── data/                                      Readings as Parquet: the layout, the writer, the loader, retention, `wactorz-data`
+├── train/                                     The `train` step: a recipe fitted in a child process, stored, moved by a margin, `wactorz-train`
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
@@ -1480,6 +1482,8 @@ wactorz/
 │   ├── monitor_agent.py                       MonitorAgent — heartbeat, error registry, recovery
 │   ├── installer_agent.py                     InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── catalog_agent.py                       CatalogAgent — pre-built recipe library, spawns agents by name
+│   ├── recorder_agent.py                      RecorderAgent — keeps readings of streams as Parquet, on main or on a node
+│   ├── train_agent.py                         TrainAgent — trains a version of a model from recorded readings, on a task
 │   ├── scheduled_agent.py                     ScheduledAgent — first-class time triggers (daily/weekly/cron/once)
 │   ├── one_off_actuator_agent.py              OneOffActuatorAgent — ephemeral one-shot HA actuator
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)

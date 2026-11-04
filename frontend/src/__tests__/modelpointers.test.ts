@@ -51,9 +51,12 @@ function detail(over: Partial<ModelDetail> = {}): ModelDetail {
 
 describe("a model's status", () => {
     it("is on trial with a shadow, serving with an active alone, and neither without", () => {
-        expect(statusOf(detail().pointers)).toBe("on trial");
-        expect(statusOf({ active: pointer("active", 7) })).toBe("serving");
-        expect(statusOf({})).toBe("no active");
+        expect(statusOf(detail().pointers, 8)).toBe("on trial");
+        expect(statusOf({ active: pointer("active", 7) }, 8)).toBe("serving");
+        expect(statusOf({}, 8)).toBe("no active");
+        // No version active and the shadow on the newest: it is what is served, so no trial.
+        expect(statusOf({ shadow: pointer("shadow", 8) }, 8)).toBe("no active");
+        expect(statusOf({ shadow: pointer("shadow", 7) }, 8)).toBe("on trial");
     });
 });
 

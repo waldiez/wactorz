@@ -367,6 +367,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A shadow on the version served starts no trial of it against itself.** With no version active, agents serve
+  the newest, and a `shadow` on the newest (a first trained version, say) had them compare that version with itself:
+  identical pairs and a verdict of no difference. They now keep no pairs for it, and the Models tab says that there is
+  nothing to try it beside until another version is made active. The same holds when `active` moves onto the
+  version on trial, and a shadow that cannot be loaded no longer makes a finished hot swap look failed.
 - **The JSON after `@catalog spawn recorder` reaches the agent.** `@catalog spawn recorder {"topics":
   ["sensors/imu/#"], "source_field": "device"}`, and the same for `trainer`, built the agent with none of
   what was typed, so the recorder recorded nothing and the trainer refused every task. The object is now

@@ -18,9 +18,17 @@ import type { ModelAction, ModelDetail, ModelSummary, Pointers } from "../types/
 /** What a model is doing: trying a version beside the served one, serving one, or neither. */
 export type ModelStatus = "on trial" | "serving" | "no active";
 
+/**
+ * Whether the shadow is the version served: with no active pointer agents load the
+ * newest, and a shadow on the newest has nothing to be tried beside.
+ */
+export function shadowIsServed(pointers: Pointers, newest: number): boolean {
+    return !pointers.active && pointers.shadow?.version === newest;
+}
+
 /** What `pointers` say the model is doing. Without an active pointer, agents load the newest. */
-export function statusOf(pointers: Pointers): ModelStatus {
-    if (pointers.shadow) {
+export function statusOf(pointers: Pointers, newest: number): ModelStatus {
+    if (pointers.shadow && !shadowIsServed(pointers, newest)) {
         return "on trial";
     }
     return pointers.active ? "serving" : "no active";

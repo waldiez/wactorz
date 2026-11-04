@@ -159,8 +159,20 @@ function body(host: TrialHost): HTMLElement {
     return results(host.trial, host.series);
 }
 
-/** The trial under way, of `shadow` beside `active` (null when no version is served). */
-export function trialCard(shadow: number, active: number | null, host: TrialHost): HTMLElement {
+/**
+ * The trial under way, of `shadow` beside `active` (null when no version is active).
+ *
+ * `servedItself` says the shadow is the version served: with no version active
+ * the newest is served, and when that is the shadow there is nothing to try it
+ * beside, so the agents keep no pairs and the card says what would start it.
+ */
+export function trialCard(
+    name: string,
+    shadow: number,
+    active: number | null,
+    host: TrialHost,
+    servedItself = false,
+): HTMLElement {
     const card = labelled(el("section", "af-model-card af-model-trial"), "Shadow trial");
     const head = el("div", "af-model-trial-head");
     const beside = active === null ? "" : ` beside v${active}`;
@@ -173,6 +185,15 @@ export function trialCard(shadow: number, active: number | null, host: TrialHost
     if (host.trial) {
         const span = `${when(host.trial.since)} to ${when(host.trial.until)}`;
         card.appendChild(el("p", "af-model-trial-span", span));
+    }
+    if (servedItself) {
+        const why =
+            `No version is active, so the newest, v${shadow}, is the one served: there is nothing ` +
+            `to try it beside. Make another version active to start the trial, from chat ` +
+            `(/artifacts activate ${name}:<version>) or the command line ` +
+            `(wactorz-artifacts activate ${name}:<version>).`;
+        card.appendChild(el("p", "af-model-none", why));
+        return card;
     }
     card.appendChild(body(host));
     return card;

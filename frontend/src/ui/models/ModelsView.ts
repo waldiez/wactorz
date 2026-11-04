@@ -28,7 +28,7 @@ export function modelHref(name: string): string {
 
 /** One model in the list: a link to it, its status, its pointers. */
 function listRow(summary: ModelSummary, open: string): HTMLElement {
-    const status = statusOf(summary.pointers);
+    const status = statusOf(summary.pointers, summary.newest.version);
     const link = el("a", `af-model-row${summary.name === open ? " open" : ""}`);
     link.href = modelHref(summary.name);
     if (summary.name === open) {

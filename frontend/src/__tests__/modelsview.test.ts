@@ -420,6 +420,34 @@ describe("the Models view", () => {
         expect(trialCard().querySelector("figure")).toBeNull();
     });
 
+    it("says there is no trial while the shadow is the version served", async () => {
+        // No version active: the newest, v8, is served, and it is the shadow.
+        const reads = onTrial(() => Response.json({ ...FIGURES, pairs: 0, agreement: null }));
+        const answering = vi.fn(async (url: string, init?: RequestInit) =>
+            url.endsWith("/api/models/hvac")
+                ? Response.json({ ...HVAC, pointers: { shadow: HVAC.pointers.shadow } })
+                : reads(url, init),
+        );
+        await open("#/models/hvac", answering as never);
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("nothing to try it beside"));
+        expect(trialCard().textContent).toContain("v8, is the one served");
+        expect(trialCard().textContent).toContain("/artifacts activate hvac:<version>");
+        expect(trialCard().textContent).not.toContain("No pairs yet");
+    });
+
+    it("tries an older shadow beside the newest while no version is active", async () => {
+        const reads = onTrial(() => Response.json({ ...FIGURES, pairs: 0, agreement: null }));
+        const older = { shadow: { ...POINTER("shadow", 7) } };
+        const answering = vi.fn(async (url: string, init?: RequestInit) =>
+            url.endsWith("/api/models/hvac") ? Response.json({ ...HVAC, pointers: older }) : reads(url, init),
+        );
+        await open("#/models/hvac", answering as never);
+
+        await vi.waitFor(() => expect(trialCard().textContent).toContain("No pairs yet"));
+        expect(trialCard().textContent).not.toContain("nothing to try it beside");
+    });
+
     it("says when a trial has no pairs yet", async () => {
         await open(
             "#/models/hvac",

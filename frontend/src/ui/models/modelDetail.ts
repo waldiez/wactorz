@@ -13,7 +13,14 @@
  */
 import type { ModelAction, ModelDetail, ModelVersion, PastTrial, PointerMove } from "../../types/models";
 import { POINTER_NAMES } from "../../types/models";
-import { modelOffers, roleOf, versionOffer, type Offer, type VersionRole } from "../../models/pointers";
+import {
+    modelOffers,
+    roleOf,
+    shadowIsServed,
+    versionOffer,
+    type Offer,
+    type VersionRole,
+} from "../../models/pointers";
 import { button, el, labelled, list, listItem } from "../dom";
 import { humanSize } from "../chat/uploads";
 import { timeLabel } from "../../time";
@@ -212,7 +219,11 @@ export function buildModelDetail(detail: ModelDetail, moves: PointerMove[], host
     root.appendChild(header(detail, host));
     const { active, shadow } = detail.pointers;
     if (shadow) {
-        root.appendChild(trialCard(shadow.version, active?.version ?? null, host.trial));
+        const newest = Math.max(...detail.versions.map(v => v.version));
+        const servedItself = shadowIsServed(detail.pointers, newest);
+        root.appendChild(
+            trialCard(detail.name, shadow.version, active?.version ?? null, host.trial, servedItself),
+        );
     }
     root.appendChild(below);
     if (host.pastTrials.length) {

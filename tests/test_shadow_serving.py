@@ -27,6 +27,7 @@ from wactorz.agents.main import shadow_serving as main_side
 from wactorz.agents.main.hosts import SwapHost
 from wactorz.agents.main.shadow_serving import ShadowServing
 from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core import models
 from wactorz.core.actor import ActorState
 from wactorz.core.artifacts import ArtifactStore, pinned
 from wactorz.core.judgement import declared
@@ -231,6 +232,89 @@ class TestTheShadowPass:
             await agent.swap_shadow("model", gone)
 
         assert agent.shadow["model"]["path"] != gone["path"]
+
+    async def test_a_shadow_that_is_the_version_served_is_no_trial(
+        self, store: ArtifactStore, tmp_path: Path, published: list[tuple[str, Any]]
+    ) -> None:
+        # With no version active the newest, v2, is served, and it is the shadow too.
+        store.clear("active", "imu", by="test")
+        spec = spec_of(detect)
+        assert spec is not None
+        agent = spec.build(persistence_dir=str(tmp_path / "agents"))
+        await agent._resolve_models()
+        await agent._resolve_shadows()
+
+        await agent._on_message({"x": 3}, "sensors/imu/#")
+
+        assert agent.artifacts["model"]["version"] == 2
+        assert agent.shadow == {}
+        assert _topics(published, "shadow/anomalies/imu") == []
+
+    async def test_moving_active_off_the_shadow_starts_its_trial(
+        self, store: ArtifactStore, tmp_path: Path
+    ) -> None:
+        store.clear("active", "imu", by="test")
+        spec = spec_of(detect)
+        assert spec is not None
+        agent = spec.build(persistence_dir=str(tmp_path / "agents"))
+        await agent._resolve_models()
+        await agent._resolve_shadows()
+        assert agent.shadow == {}
+        store.move("active", "imu:1", by="test")
+        older = store.pin("imu:active")
+
+        # What hot swap does when `active` moves: the agent now serves v1.
+        await agent.swap_model("model", {**older, "path": str(store.readable_path(older))})
+
+        assert agent.artifacts["model"]["version"] == 1
+        assert agent.shadow["model"]["version"] == 2
+
+    async def test_moving_active_onto_the_shadow_ends_its_trial(
+        self, agent: FunctionAgent, store: ArtifactStore
+    ) -> None:
+        assert agent.shadow["model"]["version"] == 2
+        store.move("active", "imu:2", by="test")
+        newer = store.pin("imu:active")
+
+        await agent.swap_model("model", {**newer, "path": str(store.readable_path(newer))})
+
+        assert agent.artifacts["model"]["version"] == 2
+        assert agent.shadow == {}
+
+    async def test_a_shadow_that_will_not_load_leaves_the_version_served_swapped(
+        self,
+        store: ArtifactStore,
+        tmp_path: Path,
+        published: list[tuple[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store.clear("active", "imu", by="test")
+        spec = spec_of(detect)
+        assert spec is not None
+        agent = spec.build(persistence_dir=str(tmp_path / "agents"))
+        await agent._resolve_models()
+        await agent.load_model("model")
+        gone = {**pinned(store.resolve("imu:2")), "path": str(store.root / "nowhere.bin")}
+        monkeypatch.setattr(models, "resolve_shadow", lambda _entry, _state_dir: gone)
+        store.move("active", "imu:1", by="test")
+        older = store.pin("imu:active")
+
+        # Hot swap reads a raise as "kept the old version"; v1 is served, so none may escape.
+        await agent.swap_model("model", {**older, "path": str(store.readable_path(older))})
+
+        assert agent.artifacts["model"]["version"] == 1
+        assert agent.shadow == {}
+        assert any("no shadow for model" in p.get("message", "") for _, p in published)
+
+    async def test_being_handed_the_version_served_ends_the_trial(
+        self, agent: FunctionAgent, store: ArtifactStore
+    ) -> None:
+        served = agent.artifacts["model"]
+        assert agent.shadow["model"]["version"] == 2
+
+        await agent.swap_shadow("model", served)
+
+        assert agent.shadow == {}
 
     async def test_without_a_shadow_pointer_there_is_no_pass(
         self, store: ArtifactStore, tmp_path: Path, published: list[tuple[str, Any]]

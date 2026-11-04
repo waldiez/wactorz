@@ -74,6 +74,11 @@ def _summary(value: Any, limit: int = 160) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _same_version(pin: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    """Whether two pinned entries name one version of one model."""
+    return (pin.get("name"), pin.get("version")) == (other.get("name"), other.get("version"))
+
+
 def _names_function_agent(annotation: Any) -> bool:
     """Whether a parameter annotation is :class:`FunctionAgent`, as a class or as text.
 
@@ -349,23 +354,45 @@ class FunctionAgent(Actor):
         """Each model on trial beside one this agent serves, by key: name, version, format, size, path."""
         return {key: dict(entry) for key, entry in self._shadow_artifacts.items()}
 
-    async def _resolve_shadows(self) -> None:
+    async def _resolve_shadows(self, keys: Iterable[str] | None = None) -> None:
         """Find the version on trial beside each model that follows ``active``, on main.
 
-        An agent on a node runs no shadow yet: its pairs would be kept there,
-        where the comparison cannot read them until the data package ships
-        them to main.
+        ``keys`` limits it to those models. A shadow already tried as that
+        version is left running, and one that has become the version served
+        ends. A shadow that cannot be found or loaded is logged and leaves the
+        trial as it was: it never undoes or fails the version served. An agent
+        on a node runs no shadow yet: its pairs would be kept there, where the
+        comparison cannot read them until the data package ships them to main.
         """
         if self._node or not self._artifacts:
             return
+        wanted = set(self._artifacts) if keys is None else set(keys)
         for key, entry in list(self._artifacts.items()):
+            if key not in wanted:
+                continue
+            running = self._shadow_artifacts.get(key)
+            if running is not None and _same_version(running, entry):
+                await self.swap_shadow(key, None)
+                running = None
             try:
                 found = await asyncio.to_thread(models.resolve_shadow, entry, resolve_state_dir())
+                if found is not None and not (running and _same_version(found, running)):
+                    await self.swap_shadow(key, found)
             except Exception as exc:
                 await self.log(f"no shadow for {key}: {exc}", level="warning")
-                continue
-            if found is not None:
-                await self.swap_shadow(key, found)
+
+    async def swap_model(self, key: str, entry: Mapping[str, Any]) -> Any:
+        """Serve the version ``entry`` names under ``key``, then look again for its trial.
+
+        The version served decides whether there is a trial: a shadow on the
+        version served is none, and moving ``active`` off it starts one. So
+        the shadow is looked up again whenever the served version changes.
+        Once the served version is in place it stays: a shadow that cannot be
+        loaded is logged, and this still returns what is served.
+        """
+        loaded = await super().swap_model(key, entry)
+        await self._resolve_shadows([key])
+        return loaded
 
     async def swap_shadow(self, key: str, entry: Mapping[str, Any] | None) -> None:
         """Try the version ``entry`` names beside the one served as ``key``; None ends the trial.
@@ -379,6 +406,15 @@ class FunctionAgent(Actor):
         the pairs.
         """
         self._artifact(key)
+        if entry is not None and _same_version(entry, self._artifacts[key]):
+            # The shadow pointer may name the version served: with no version
+            # active, the newest is both. A trial of it against itself measures
+            # nothing, so there is none, and the Models tab says why.
+            await self.log(
+                f"{entry['name']}:{entry['version']} is the version served as {key}: "
+                "no trial of it against itself until another version is active"
+            )
+            entry = None
         if entry is None:
             was = self._shadow_artifacts.pop(key, None)
             self._shadow_loaded.pop(key, None)

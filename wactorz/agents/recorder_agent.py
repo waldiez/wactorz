@@ -81,7 +81,9 @@ class RecorderAgent(Actor):
         "source_field": "str — the payload field naming the source; device or source when unsaid",
         "action": "str — flush|status, as a task",
     }
-    AUTOSTART = False
+    # No AUTOSTART here: the package's own copy waits in the catalogue because
+    # `plugins.built_in` says so, and a subclass handed to `serve` is started
+    # like any agent given there unless it says otherwise itself.
 
     def __init__(
         self,

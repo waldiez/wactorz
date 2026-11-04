@@ -246,8 +246,9 @@ class PumpWatch(Actor):
 `INPUT_SCHEMA` and `OUTPUT_SCHEMA` on the class become the catalogue entry and
 the wiring a pipeline checks against; `AGENT_NAME` names it (default
 `PumpWatch` → `pump-watch`); `AUTOSTART = False` keeps it in the catalogue
-until asked for. A subclass that takes `llm_provider` in its constructor is
-given the system's model.
+until asked for. A subclass whose constructor names `llm_provider` (its own,
+or one it hands `**kwargs` on to) is given the system's model; spawn options
+reach a constructor that names them or takes `**kwargs`.
 
 A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, `{"raw": text}` for text, `{"raw": bytes}` for anything else, such as a

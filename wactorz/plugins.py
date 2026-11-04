@@ -106,13 +106,13 @@ class AgentPlugin:
         kwargs: dict[str, Any] = {"name": name or self.name}
         if persistence_dir is not None:
             kwargs["persistence_dir"] = persistence_dir
-        accepted = _accepted_parameters(cls)
-        if llm_provider is not None and (accepted is None or "llm_provider" in accepted):
+        named, open_ended = _init_parameters(cls)
+        if llm_provider is not None and "llm_provider" in named:
             kwargs["llm_provider"] = llm_provider
         for key, value in (options or {}).items():
-            if accepted is None or key in accepted:
+            if open_ended or key in named:
                 kwargs[key] = value
-        if actor_id and (accepted is None or "actor_id" in accepted):
+        if actor_id and "actor_id" in named:
             kwargs["actor_id"] = actor_id
         actor = cls(**kwargs)
         if actor_id and actor.actor_id != actor_id:
@@ -178,15 +178,36 @@ def targets() -> list[str]:
     return sorted({plugin.target for plugin in found if plugin.target})
 
 
-def _accepted_parameters(cls: type) -> set[str] | None:
-    """The keyword names ``cls.__init__`` takes, or None when it takes anything."""
-    try:
-        params = inspect.signature(cls).parameters.values()
-    except (TypeError, ValueError):
-        return None
-    if any(p.kind is p.VAR_KEYWORD for p in params):
-        return None
-    return {p.name for p in params}
+def _init_parameters(cls: type) -> tuple[set[str], bool]:
+    """The parameters building ``cls`` names, and whether it takes keywords it does not name.
+
+    An ``__init__`` taking ``**kwargs`` usually hands them on to its base's, and
+    ``Actor.__init__`` refuses what it does not know. So the names are gathered
+    along the class's bases, ``__init__`` by ``__init__``, until one that takes
+    no more than it names: what the system has to offer (``llm_provider``,
+    ``actor_id``) is passed only when one of them names it. The second value
+    says whether the ``__init__`` that runs takes ``**kwargs``, so that a spawn's
+    options reach it whether or not it names them: they are what the spawn
+    asked for, and a key nothing takes should fail rather than vanish.
+    """
+    named: set[str] = set()
+    open_ended: bool | None = None
+    for klass in cls.__mro__:
+        init = vars(klass).get("__init__")
+        if init is None or klass is object:
+            continue
+        try:
+            params = list(inspect.signature(init).parameters.values())[1:]
+        except (TypeError, ValueError):
+            # Nothing to read: let options through, and nothing unnamed.
+            return named, True
+        named.update(p.name for p in params if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD))
+        takes_more = any(p.kind is p.VAR_KEYWORD for p in params)
+        if open_ended is None:
+            open_ended = takes_more
+        if not takes_more:
+            break
+    return named, bool(open_ended)
 
 
 def _topics(value: Any) -> tuple[str, ...]:

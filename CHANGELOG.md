@@ -336,6 +336,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent class handed to `serve` or `run` starts when it should, and builds when its constructor takes
+  `**kwargs`.** A `RecorderAgent` subclass inherited the package's own recorder's `AUTOSTART = False`, so it was
+  registered and never started; it now starts unless it says `AUTOSTART = False` itself, and the package's own
+  recorder still waits in the catalogue. A constructor taking `**kwargs` was handed `llm_provider`, which
+  `Actor.__init__` refuses, so it failed at start; the model is now given only to a constructor that names it, its
+  own or one it passes `**kwargs` on to.
 - **A judged trial counts a fault labelled again inside itself as one fault.** An operator's answer confirming a
   fault the site had already labelled split it into pieces, so `faults.seen` counted it two or three times and
   `delay_s` ran from the start of the piece holding the first flag. A fault is now a stretch positive labels hold

@@ -384,8 +384,9 @@ connection per actor that closes when the actor stops:</p>
 <code>INPUT_SCHEMA</code> and <code>OUTPUT_SCHEMA</code> on the class become the catalogue entry and
 the wiring a pipeline checks against; <code>AGENT_NAME</code> names it (default
 <code>PumpWatch</code> → <code>pump-watch</code>); <code>AUTOSTART = False</code> keeps it in the catalogue
-until asked for. A subclass that takes <code>llm_provider</code> in its constructor is
-given the system's model.</p>
+until asked for. A subclass whose constructor names <code>llm_provider</code> (its own,
+or one it hands <code>**kwargs</code> on to) is given the system's model; spawn options
+reach a constructor that names them or takes <code>**kwargs</code>.</p>
 <p>A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
 camera frame. Messages on one topic are handled one at a time, in order,
@@ -468,7 +469,12 @@ library, once, off the event loop, the way that runs no code from the file:</p>
 <p>A pickle, a joblib file and a whole torch module run code when they load, so
 <code>load_model</code> refuses them unless given <code>allow_code=True</code>. GGUF, TFLite, skops
 and directories are opened through <code>artifact_path</code> by the library that reads
-them. <code>me.artifacts</code> lists each model with its name, version, format and path.</p>
+them. <code>me.artifacts</code> lists each model with its name, version, format and path,
+and its <code>metadata</code>: what was said of the version when it was added
+(<code>--meta k_sigma=5</code>), so a threshold or a calibration constant can live with
+the version it belongs to. A version's metadata does not change once stored;
+a different threshold is a new version, which a trial can then compare. On a
+shadow pass, <code>me.artifacts</code> is the version on trial's, metadata included.</p>
 <h2 id="training-a-version">Training a version</h2>
 <p>A version can be trained inside the loop rather than by a script you run: the
 <code>trainer</code> library agent, or <code>wactorz-train</code> from a terminal, runs a <em>recipe</em>

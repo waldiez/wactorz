@@ -50,6 +50,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `docs/design/train-step.md` records the decision, and `docs/design/promotion-policy.md` the one it leaves to
   the next step: when a version on trial becomes the one served.
 
+- **An agent reads what was said of the model version it serves.** `me.artifacts[key]["metadata"]` (and
+  `agent.artifacts` in a program) holds the version's `--meta` values, on main and on a node alike, so a detector's
+  threshold or a calibration constant can be kept with the version it belongs to; a shadow pass sees the version on
+  trial's. `wactorz-artifacts add` refuses more than 64 KiB of metadata, since it travels with every spawn that names
+  the version. A pointer moved between two versions that hold the same bytes now swaps the agents following it too,
+  on main and on nodes, so they serve the new version's number and metadata.
 - **Charts zoom, mark what matters, and draw as points or lines.** Every chart's axes now label round values and
   round local times, with faint gridlines, worked out again for a window zoomed into. The Models tab's trial charts and the
   Overview's history charts offer Line, Points and Joined (a mostly empty chart starts as points), and zoom: drag across
@@ -363,6 +369,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the library agent's options, kept in the spawn registry so a restart builds it as asked; a packaged
   recipe, which takes none, says so.
 
+- **An agent class handed to `serve` or `run` starts when it should, and builds when its constructor takes
+  `**kwargs`.** A `RecorderAgent` subclass inherited the package's own recorder's `AUTOSTART = False`, so it was
+  registered and never started; it now starts unless it says `AUTOSTART = False` itself, and the package's own
+  recorder still waits in the catalogue. A constructor taking `**kwargs` was handed `llm_provider`, which
+  `Actor.__init__` refuses, so it failed at start; the model is now given only to a constructor that names it, its
+  own or one it passes `**kwargs` on to.
+- **A judged trial counts a fault labelled again inside itself as one fault.** An operator's answer confirming a
+  fault the site had already labelled split it into pieces, so `faults.seen` counted it two or three times and
+  `delay_s` ran from the start of the piece holding the first flag. A fault is now a stretch positive labels hold
+  without a break, whichever positive values they hold, and its delay runs from that stretch's start.
 - **A shadow trial counts the readings that arrived while it ran, whatever their event time.** A trial was cut on its
   pairs' event time, from when `shadow` was set, so readings a node sent after being offline, a backfill or a replay
   of recorded data fell outside it and the trial showed none of them. It is now cut on when each pair arrived, in the

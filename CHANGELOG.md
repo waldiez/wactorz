@@ -29,6 +29,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **An air-quality example, `examples/air_quality/`.** A simulated office whose three rooms go wrong in three ways on
+  a Tuesday; a model of what each room is usually like at each hour, its threshold in the version's metadata; an agent
+  that asks a person about each stretch a room was far from usual, the answer kept as a label over exactly that
+  stretch; and an Air tab, all brought by one installable package named in `WACTORZ_EXTENSIONS`. A stricter version
+  can then be put on trial and judged against the answers.
 - **An agent reads what was said of the model version it serves.** `me.artifacts[key]["metadata"]` (and
   `agent.artifacts` in a program) holds the version's `--meta` values, on main and on a node alike, so a detector's
   threshold or a calibration constant can be kept with the version it belongs to; a shadow pass sees the version on

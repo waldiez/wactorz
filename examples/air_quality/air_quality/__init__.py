@@ -1,0 +1,6 @@
+"""Room air quality: a model of what is usual for each hour, and a person asked about the rest.
+
+`plant` is the simulated building, `model` what is usual, `train` stores it,
+`publish` plays a day of readings, `agents` holds the detector and the agent
+that asks, and `tab` is the dashboard's Air tab.
+"""

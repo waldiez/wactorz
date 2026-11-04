@@ -469,7 +469,12 @@ library, once, off the event loop, the way that runs no code from the file:</p>
 <p>A pickle, a joblib file and a whole torch module run code when they load, so
 <code>load_model</code> refuses them unless given <code>allow_code=True</code>. GGUF, TFLite, skops
 and directories are opened through <code>artifact_path</code> by the library that reads
-them. <code>me.artifacts</code> lists each model with its name, version, format and path.</p>
+them. <code>me.artifacts</code> lists each model with its name, version, format and path,
+and its <code>metadata</code>: what was said of the version when it was added
+(<code>--meta k_sigma=5</code>), so a threshold or a calibration constant can live with
+the version it belongs to. A version's metadata does not change once stored;
+a different threshold is a new version, which a trial can then compare. On a
+shadow pass, <code>me.artifacts</code> is the version on trial's, metadata included.</p>
 <h2 id="your-own-files">Your own files</h2>
 <p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
 directory under the state directory: for model weights, a checkpoint store, a

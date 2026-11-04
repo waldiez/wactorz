@@ -357,6 +357,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The JSON after `@catalog spawn recorder` reaches the agent.** `@catalog spawn recorder {"topics":
+  ["sensors/imu/#"], "source_field": "device"}`, and the same for `trainer`, built the agent with none of
+  what was typed, so the recorder recorded nothing and the trainer refused every task. The object is now
+  the library agent's options, kept in the spawn registry so a restart builds it as asked; a packaged
+  recipe, which takes none, says so.
+
 - **A shadow trial counts the readings that arrived while it ran, whatever their event time.** A trial was cut on its
   pairs' event time, from when `shadow` was set, so readings a node sent after being offline, a backfill or a replay
   of recorded data fell outside it and the trial showed none of them. It is now cut on when each pair arrived, in the

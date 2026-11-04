@@ -11,7 +11,9 @@ the recipe it runs and the model it trains::
 
 A task to it runs one training (`wactorz.train.run`): ``{"since": ...,
 "until": ..., "split": {...}, "settings": {...}, "reason": "..."}``, from
-chat, from a rule's ``task`` action or from the controller, each saying why.
+chat (``@trainer {"reason": "drift"}``, or ``@trainer <why>`` for a run with
+the defaults), from a rule's ``task`` action or from the controller, each
+saying why.
 What the task does not say takes the agent's options; the default window is
 the last week, with its last fifth held out. The fit runs in a child process
 with the agent's timeout and memory limit, the version is stored with what it
@@ -28,6 +30,7 @@ spawned on a node, it refuses every task and says so.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -139,6 +142,15 @@ class TrainAgent(Actor):
         """The run a task asks for, over this agent's options. Raises `TrainError`."""
         at = time.time() if now is None else now
         given = {k: v for k, v in payload.items() if k not in ("_task_id", "action")}
+        # From chat the task is its text: a JSON object says the run's fields;
+        # any other words are why it was asked for.
+        text = given.pop("text", None)
+        if isinstance(text, str) and text.strip():
+            asked = _json_object(text)
+            if asked is not None:
+                given = {**asked, **given}
+            elif "reason" not in given:
+                given["reason"] = text.strip()
         merged: dict[str, Any] = {**self.options, **given}
         if "settings" in given and isinstance(given["settings"], Mapping):
             merged["settings"] = {**self.options["settings"], **given["settings"]}
@@ -230,6 +242,18 @@ class TrainAgent(Actor):
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": message, "level": level, "timestamp": time.time()},
         )
+
+
+def _json_object(text: str) -> dict[str, Any] | None:
+    """``text`` as the JSON object it is, or None when it is not one."""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _window(since: float, until: float) -> str:

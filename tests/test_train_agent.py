@@ -149,6 +149,13 @@ class TestTheSpecOfATask:
             }
         )
 
+    def test_chat_text_is_the_run_as_json_or_the_reason(self, trainer: TrainAgent) -> None:
+        as_json = trainer.spec_for({"text": ' {"since": 1, "until": 2, "reason": "drift"} '})
+        as_words = trainer.spec_for({"text": "the valve was changed"}, now=T0)
+
+        assert (as_json.since, as_json.until, as_json.reason) == (1.0, 2.0, "drift")
+        assert (as_words.reason, as_words.until) == ("the valve was changed", T0)
+
     def test_the_window_is_the_last_week_when_unsaid(self, trainer: TrainAgent) -> None:
         spec = trainer.spec_for({}, now=T0)
 

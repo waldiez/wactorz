@@ -22,11 +22,12 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from ..core.artifacts import Artifact, ArtifactError, ArtifactStore, Pointer
+from ..core.judgement import Judgement
 from ..core.labels import Interval
 from ..core.provenance import Provenance
 from ..data.files import data_root
@@ -104,6 +105,19 @@ class Outcome:
         }
 
 
+def _with_absolute_recipe(spec: TrainSpec) -> TrainSpec:
+    """``spec`` with a recipe file named by its absolute path.
+
+    A relative path is read where the run was asked for, not where the child
+    runs, which is the state directory; a module name is left as it is.
+    """
+    recipe = spec.recipe.strip()
+    path = Path(recipe)
+    if (recipe.endswith(".py") or path.is_file()) and not path.is_absolute():
+        return replace(spec, recipe=str(path.resolve()))
+    return spec
+
+
 def new_run_id(now: float) -> str:
     """A run's id: when it started, and a few random characters to tell two apart."""
     return f"{int(now)}-{uuid.uuid4().hex[:8]}"
@@ -124,14 +138,14 @@ def _parent_of(store: ArtifactStore, name: str) -> dict[str, Any] | None:
     return {**pinned, "reference": reference, "path": str(store.readable_path(pinned))}
 
 
-def _judged(store: ArtifactStore, parent: dict[str, Any] | None) -> bool:
-    """Whether the version compared against says what it is judged on."""
+def _judgement_of(store: ArtifactStore, parent: dict[str, Any] | None) -> Judgement | None:
+    """What the version compared against says it is judged on; None when nothing says."""
     if parent is None:
-        return False
+        return None
     try:
-        return store.resolve(parent["reference"]).judgement is not None
+        return store.resolve(parent["reference"]).judgement
     except ArtifactError:
-        return False
+        return None
 
 
 def _prune_runs(root: Path, keep: int) -> None:
@@ -225,6 +239,7 @@ async def run(
     run_id = new_run_id(started)
     state = Path(state_dir)
     run_dir = runs_root(state) / run_id
+    spec = _with_absolute_recipe(spec)
     outcome = Outcome(run_id=run_id, run_dir=run_dir, spec=spec)
     store = ArtifactStore.in_state_dir(state)
     try:
@@ -233,10 +248,14 @@ async def run(
         outcome.error = f"the version to compare against cannot be read: {exc}"
         return outcome
     outcome.parent = parent["reference"] if parent else None
-    wants_labels = spec.labels if spec.labels is not None else _judged(store, parent)
+    judgement = _judgement_of(store, parent)
+    wants_labels = spec.labels if spec.labels is not None else judgement is not None
     intervals: Sequence[Interval] = ()
     if wants_labels and labels_of is not None:
-        intervals = await asyncio.to_thread(labels_of, spec.source, spec.since, spec.until)
+        # The labels of the source the model is judged against when it names
+        # one, else of the recorded source itself.
+        label_source = judgement.source if judgement and judgement.source else spec.source
+        intervals = await asyncio.to_thread(labels_of, label_source, spec.since, spec.until)
     if prov is not None:
         await asyncio.to_thread(record_start, prov, run_id=run_id, spec=spec, by=by, at=started)
     await asyncio.to_thread(_write_spec, run_dir, spec, run_id, state, parent, intervals)

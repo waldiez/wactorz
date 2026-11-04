@@ -24,6 +24,7 @@ Or via main (natural language):
 import asyncio
 import importlib
 import importlib.util
+import json
 import logging
 import pathlib
 import sys
@@ -102,12 +103,36 @@ _PROGRAMS = pathlib.Path(__file__).parent.parent / "catalogue_agents"
 _SPAWN_WORDS = ("replace", "alongside")
 
 
-def _spawn_request(text: str) -> tuple[str, dict[str, bool]]:
-    """The recipe a typed spawn names, and the payload its closing word asks for."""
+def _spawn_request(text: str) -> tuple[str, dict[str, Any]]:
+    """The recipe a typed spawn names, and the payload its closing word and its options ask for.
+
+    Options are a JSON object after the name, ``spawn recorder {"topics":
+    ["sensors/#"]}``, handed to a library agent as the keyword arguments it
+    takes; an object that does not parse is left as part of the name, so the
+    reply says what was not found.
+    """
+    text, options = _split_options(text)
     name, _, word = text.rpartition(" ")
+    payload: dict[str, Any] = {}
     if name.strip() and word.lower() in _SPAWN_WORDS:
-        return name.strip(), {word.lower(): True}
-    return text, {}
+        text, payload = name.strip(), {word.lower(): True}
+    if options is not None:
+        payload["options"] = options
+    return text, payload
+
+
+def _split_options(text: str) -> tuple[str, dict[str, Any] | None]:
+    """``text`` without the JSON object that ends it, and that object; None when there is none."""
+    head, brace, tail = text.partition("{")
+    if not brace:
+        return text, None
+    try:
+        parsed = json.loads(brace + tail)
+    except ValueError:
+        return text, None
+    if not isinstance(parsed, dict):
+        return text, None
+    return head.strip(), parsed
 
 
 @dataclass(frozen=True)
@@ -1001,10 +1026,21 @@ class CatalogAgent(Actor):
         if existing:
             return {"ok": True, "message": f"'{resolved}' is already running"}
 
+        options = payload.get("options")
+        if options is not None and not isinstance(options, dict):
+            return {"ok": False, "message": "options must be a JSON object", "agent": resolved}
+        if options and not recipe.get("plugin"):
+            return {
+                "ok": False,
+                "message": f"'{resolved}' takes no options; its settings are asked for in chat",
+                "agent": resolved,
+            }
         placing = await self._settle(resolved, payload)
         if isinstance(placing, dict):
             return placing
-        result = await self._start_recipe(resolved, recipe, placing, background_install)
+        result = await self._start_recipe(
+            resolved, recipe, placing, background_install, options=options
+        )
         if not result.get("ok"):
             await self._put_back(placing)
         return result
@@ -1040,9 +1076,19 @@ class CatalogAgent(Actor):
             await main._put_back_spawn(placing.moved_from)
 
     async def _start_recipe(
-        self, resolved: str, recipe: dict, placing: _Placing, background_install: bool
+        self,
+        resolved: str,
+        recipe: dict,
+        placing: _Placing,
+        background_install: bool,
+        options: dict[str, Any] | None = None,
     ) -> dict:
-        """Start the recipe ``resolved``, settled against where its name runs."""
+        """Start the recipe ``resolved``, settled against where its name runs.
+
+        ``options`` are a library agent's keyword arguments, from the JSON after
+        a typed spawn; kept in the spawn registry, so a restart builds the
+        agent as it was asked for.
+        """
         beta_warning = (recipe.get("warning") or "") if recipe.get("experimental") else ""
         if beta_warning:
             await self._mqtt_publish(
@@ -1076,6 +1122,8 @@ class CatalogAgent(Actor):
                 }
                 if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
+                if options:
+                    native_kwargs["options"] = dict(options)
                 actor = await self.spawn(factory, actor_id=actor_id, **native_kwargs)
                 if actor:
                     if main:
@@ -1086,6 +1134,8 @@ class CatalogAgent(Actor):
                         # bypasses the safety validator like other catalog agents.
                         save_config = {k: v for k, v in recipe.items() if k != "factory"}
                         save_config["trusted"] = True
+                        if options:
+                            save_config["options"] = dict(options)
                         main._save_to_spawn_registry({**save_config, **placing.saved})
                     msg = _chat_message_with_beta_warning(
                         f"'{resolved}' spawned and running", beta_warning

@@ -576,6 +576,35 @@ class TestARun:
         assert second.ok and reads == [SOURCE]
         assert store.resolve("demo:2").judgement is not None
 
+    async def test_the_labels_come_from_the_source_the_model_is_judged_against(
+        self, recipe: str, recorded: Path, state: Path
+    ) -> None:
+        store = ArtifactStore.in_state_dir(state)
+        first = await _run(_spec(recipe), state)
+        assert first.ok
+        store.judge("demo:1", declared(positive=["fault"], source="sensors/imu/left", by="test"))
+        reads: list[str] = []
+
+        def effective(source: str, since: float, until: float) -> list[Any]:
+            reads.append(source)
+            return []
+
+        second = await _run(_spec(recipe), state, labels_of=effective)
+
+        assert second.ok and reads == ["sensors/imu/left"]
+
+    async def test_a_relative_recipe_is_read_where_the_run_was_asked_for(
+        self, recipe: str, recorded: Path, state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(Path(recipe).parent)
+
+        outcome = await _run(_spec("recipe.py"), state)
+
+        assert outcome.ok, outcome.error
+        assert outcome.spec.recipe == str(Path(recipe).resolve())
+        meta = ArtifactStore.in_state_dir(state).resolve("demo:1").metadata
+        assert meta["recipe"] == str(Path(recipe).resolve())
+
     async def test_a_recipe_that_fails_is_a_failed_action_with_its_reason(
         self, recipe: str, recorded: Path, state: Path, graph: Provenance
     ) -> None:

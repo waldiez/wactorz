@@ -6,6 +6,7 @@ loaders are checked over the real metadata rather than a fake list.
 """
 
 import dataclasses
+import importlib.metadata
 import logging
 import sys
 from collections.abc import Iterator
@@ -80,6 +81,16 @@ def distribution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[No
     )
     (info / "entry_points.txt").write_text(ENTRY_POINTS, encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path))
+    # Read from the real metadata, but only this distribution's: a package the
+    # developer installed beside Wactorz (an example's, say) is no business of these tests.
+    real = importlib.metadata.entry_points
+
+    def ours(*, group: str) -> importlib.metadata.EntryPoints:
+        return importlib.metadata.EntryPoints(
+            point for point in real(group=group) if point.dist and point.dist.name == DISTRIBUTION
+        )
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", ours)
     _reset_loaders()
     yield
     _reset_loaders()

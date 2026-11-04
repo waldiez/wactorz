@@ -4,8 +4,7 @@ A decision record, not a guide: what makes a version on trial the version
 served, who decides it, and what is stored to say so. It builds on the
 pointers and the shadow trial (`model-pointers.md`), on what a version is
 judged on (`wactorz.core.judgement`), and on the `train` step
-(`train-step.md`). Nothing here is built yet; the "What follows" section says
-which step builds each part.
+(`train-step.md`). The "What follows" section says what is built.
 
 ## The problem
 
@@ -96,10 +95,15 @@ the move to `active`.
 
 ## What follows
 
-- **1.6b, the policy**, builds the `policies` key and its commands, main's
+- **1.6b, the policy** (built): the `policies` key and its commands
+  (`wactorz/core/promotion.py`, `ArtifactStore.policy`, `wactorz-artifacts
+  policy`, `/artifacts policy`, `PUT /api/models/{name}/policy`), main's
   cadence check with the `decision` node, the Inbox question and the automatic
-  move as `policy`, and the Models tab's view of where a trial stands against
-  its policy.
+  move as `policy` (`wactorz/agents/main/shadow_serving.py`), and the Models
+  tab's trial card showing each term met or short. One thing to know: a
+  decision is written when the verdict changes, not at every check, and a
+  verdict already decided in an earlier run of main is neither asked nor
+  promoted again.
 - **1.9, the controller**, reads the same policy and the same decisions, and
   may ask for a promotion earlier than the cadence with a decision of its own.
 - **1.12, the review**, finds the promotions that followed from a label

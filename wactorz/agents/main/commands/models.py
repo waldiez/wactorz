@@ -12,6 +12,8 @@ import asyncio
 from ....core.artifacts import ArtifactError, ArtifactStore, Pointer
 from ....core.judgement import JudgementError, declared
 from ....core.paths import resolve_state_dir
+from ....core.promotion import FIELDS, PolicyError
+from ....core.promotion import declared as policy_declared
 from .dispatch import CommandContext, command
 from .groups import MODELS
 
@@ -154,3 +156,56 @@ async def judge_model(ctx: CommandContext, argument: str) -> str:
     return (
         f"{judged.reference} is judged on {', '.join(said.positive)} as positive, against {where}."
     )
+
+
+POLICY_USAGE = (
+    "Usage: /artifacts policy <name> <field>=<value> ... -- fields: "
+    + ", ".join(FIELDS)
+    + f"; or {NOTHING} to unset it"
+)
+
+
+def _policy_fields(words: str) -> dict[str, object]:
+    """``metric=f1 margin=0.02 automatic=yes`` as the fields a policy is given."""
+    fields: dict[str, object] = {}
+    for word in words.split():
+        name, sep, value = word.partition("=")
+        if not sep:
+            raise PolicyError.unknown_field(word)
+        if name in ("margin", "min_days"):
+            fields[name] = float(value)
+        elif name == "min_labelled":
+            fields[name] = int(value)
+        else:
+            fields[name] = value
+    return fields
+
+
+@command(
+    "/artifacts policy",
+    prefixes=("/artifacts policy ",),
+    summary="say when a model's shadow may become active",
+    group=MODELS,
+    forms=(
+        (
+            "/artifacts policy <name> <field>=<value> ...",
+            "metric, margin, min_days, min_labelled, significant, automatic",
+        ),
+        (f"/artifacts policy <name> {NOTHING}", "unset the policy"),
+    ),
+)
+async def policy_model(ctx: CommandContext, argument: str) -> str:
+    """``/artifacts policy <name> metric=f1 margin=0.02 min_days=1 min_labelled=100 significant=yes automatic=no``."""
+    name, rest = _split(argument)
+    if not name or not rest:
+        return POLICY_USAGE
+    store = _store()
+    try:
+        if rest == NOTHING:
+            was = await asyncio.to_thread(store.clear_policy, name)
+            return f"{name} has no policy now." + (f" It was: {was.words()}." if was else "")
+        policy = policy_declared(_policy_fields(rest), over=store.policy(name), by=BY)
+        set_to = await asyncio.to_thread(store.set_policy, name, policy)
+    except (ArtifactError, PolicyError, ValueError) as exc:
+        return f"Cannot set the policy of {name!r}: {exc}"
+    return f"{name} is promoted when its shadow shows {set_to.words()}."

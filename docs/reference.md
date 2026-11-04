@@ -804,6 +804,8 @@ them to main too. A social channel such as Discord runs only the everyday ones
 | `/artifacts clear active\|shadow <name> [reason]` | Unset a pointer |
 | `/artifacts judge <name:version> <value>[,<value>...] [label source]` | The label values that count as what it should flag |
 | `/artifacts judge <name:version> none` | Judge it on nothing |
+| `/artifacts policy <name> <field>=<value> ...` | Metric, margin, min_days, min_labelled, significant, automatic |
+| `/artifacts policy <name> none` | Unset the policy |
 | `/artifacts promote <name> [reason]` | Make the shadow version active |
 | `/artifacts shadow <name:version> [reason]` | Try a version beside the active one |
 

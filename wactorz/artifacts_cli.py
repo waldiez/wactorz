@@ -17,6 +17,8 @@ Usage
     wactorz-artifacts promote NAME [--reason TEXT]
     wactorz-artifacts clear {active,shadow} NAME [--reason TEXT]
     wactorz-artifacts judge REFERENCE (--positive VALUE... [--label-source SOURCE] | --clear)
+    wactorz-artifacts policy NAME [--metric F] [--margin X] [--min-days D] [--min-labelled N]
+                          [--significant|--no-significant] [--automatic|--manual] | --clear
 
 A reference is ``NAME:3`` for the third version, ``NAME:latest`` for the
 newest, ``NAME:active`` or ``NAME:shadow`` for the version a pointer names, and
@@ -42,6 +44,12 @@ against the labels of its own source, unless ``--label-source`` names one for
 all. A version added without it takes the previous version's; ``judge`` sets
 or changes it on a version already stored, and keeps what it replaced.
 
+``policy`` says when a name's shadow may become active (`wactorz.core.promotion`):
+the figure compared, the margin, the days and labelled inputs the trial must
+hold, whether the difference must be significant, and whether main promotes on
+its own (``--automatic``) or asks on the dashboard. What is not said keeps what
+was set, else the default; ``--clear`` unsets it.
+
 Adding and removing work while the server runs.
 """
 
@@ -66,6 +74,8 @@ from wactorz.core.artifacts import (
 )
 from wactorz.core.judgement import KINDS, Judgement, JudgementError, declared
 from wactorz.core.paths import resolve_state_dir
+from wactorz.core.promotion import METRICS, Policy, PolicyError
+from wactorz.core.promotion import declared as policy_declared
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +199,8 @@ def _show(args: argparse.Namespace) -> None:
     shown["pointers"] = {
         which: pointer.payload() for which, pointer in store.pointers(artifact.name).items()
     }
+    policy = store.policy(artifact.name)
+    shown["policy"] = None if policy is None else policy.to_json()
     sys.stdout.write(json.dumps(shown, indent=2) + "\n")
 
 
@@ -237,6 +249,34 @@ def _judged(judgement: Judgement) -> str:
     where = f"the labels of {judgement.source}" if judgement.source else "each input's own source"
     copied = f" (from version {judgement.from_version})" if judgement.from_version else ""
     return f"{values} as positive, against {where}{copied}"
+
+
+def _policy(args: argparse.Namespace) -> None:
+    store = _store(args)
+    if args.clear:
+        was = store.clear_policy(args.name)
+        logger.info("%s has no policy now%s", args.name, f" (was: {was.words()})" if was else "")
+        return
+    given = {
+        name: value
+        for name, value in (
+            ("metric", args.metric),
+            ("margin", args.margin),
+            ("min_days", args.min_days),
+            ("min_labelled", args.min_labelled),
+            ("significant", args.significant),
+            ("automatic", args.automatic),
+        )
+        if value is not None
+    }
+    policy = store.set_policy(
+        args.name, policy_declared(given, over=store.policy(args.name), by="cli")
+    )
+    logger.info("%s is promoted when its shadow shows %s", args.name, _policy_words(policy))
+
+
+def _policy_words(policy: Policy) -> str:
+    return policy.words()
 
 
 def _remove(args: argparse.Namespace) -> None:
@@ -342,6 +382,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     judge.add_argument("reference", help="NAME:3, NAME:active, NAME:shadow or NAME:latest")
     judge.add_argument("--clear", action="store_true", help="say it is judged on nothing")
+    policy = commands.add_parser(
+        "policy", parents=[state_dir], help="say when a model's shadow may become active"
+    )
+    policy.add_argument("name", help="the model")
+    policy.add_argument("--metric", choices=METRICS, help="the figure compared (default: f1)")
+    policy.add_argument("--margin", type=float, help="how much better the shadow must be")
+    policy.add_argument("--min-days", type=float, help="how long the trial must have run")
+    policy.add_argument("--min-labelled", type=int, help="how many labelled inputs it must hold")
+    significance = policy.add_mutually_exclusive_group()
+    significance.add_argument(
+        "--significant", action="store_true", default=None, help="the difference must not be chance"
+    )
+    significance.add_argument(
+        "--no-significant", action="store_false", dest="significant", help="any difference will do"
+    )
+    automatic = policy.add_mutually_exclusive_group()
+    automatic.add_argument(
+        "--automatic", action="store_true", default=None, help="main promotes when it is met"
+    )
+    automatic.add_argument(
+        "--manual", action="store_false", dest="automatic", help="main asks on the dashboard"
+    )
+    policy.add_argument("--clear", action="store_true", help="unset the policy")
     return parser
 
 
@@ -356,6 +419,7 @@ _COMMANDS = {
     "promote": _promote,
     "clear": _clear,
     "judge": _judge,
+    "policy": _policy,
 }
 
 
@@ -363,7 +427,7 @@ def _run(args: argparse.Namespace) -> Exception | None:
     """Do what ``args`` asks; the reason it could not, or None."""
     try:
         _COMMANDS[args.command](args)
-    except (ArtifactError, JudgementError, OSError) as exc:
+    except (ArtifactError, JudgementError, PolicyError, OSError) as exc:
         return exc
     return None
 

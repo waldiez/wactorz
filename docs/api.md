@@ -355,7 +355,23 @@ A pointer's `holds` is false when the version it names no longer holds the bytes
 
 ### `GET /api/models/{name}`
 
-One model: every version, oldest first, with what was said of it when it was stored (`metadata`), what it is judged on (`judged_on`, null when nothing says, and `judged_on_history`, what it was judged on before, each with who said so and when), and its pointers as above. `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
+One model: every version, oldest first, with what was said of it when it was stored (`metadata`), what it is judged on (`judged_on`, null when nothing says, and `judged_on_history`, what it was judged on before, each with who said so and when), its pointers as above, and `policy`, when its shadow may become active (below; null when nothing is set). `404` when no version of `name` is stored, `400` for a name that cannot be one (letters, digits, `.`, `_` and `-`, starting with a letter or digit).
+
+---
+
+### `PUT /api/models/{name}/policy` · `DELETE /api/models/{name}/policy`
+
+When the model's shadow may become active (`docs/design/promotion-policy.md`). The policy is about the name, not a version, and holds across retrains.
+
+**Request body** (any of the fields; the rest keep what was set, else the default)
+```json
+{"metric": "f1", "margin": 0.02, "min_days": 1, "min_labelled": 100,
+ "significant": true, "automatic": false}
+```
+
+`metric` is one of `f1`, `precision`, `recall`, `mcc` or `false_positive_rate` (where less is better); `margin` is how much better the shadow must be on it; `min_days` how long the trial must have run; `min_labelled` how many labelled inputs it must hold; `significant` whether McNemar's test must say the difference is not chance; `automatic` whether main promotes when every term is met, or puts the promotion to the operator as a question in the Inbox, whose answer promotes or clears the shadow. Main holds every trial under way against its policy every few minutes, writes a `decision` node when the verdict changes, and says so on the feed. A trial that falls short is left running.
+
+**Response** `200 OK`: `{"policy": {...}}` with `by` (`dashboard`) and `at`; `DELETE` answers `{"policy": null, "was": {...}}`. `400` for a field that cannot be, `404` for a model with no version.
 
 ---
 
@@ -436,6 +452,8 @@ What the shadow trial shows: the pairs the serving agents kept, compared. By def
             "shadow": {"...": "the same figures"},
             "mcnemar": {"active_only": 1, "shadow_only": 9, "p": 0.021, "better": "shadow"}}}
 ```
+
+`policy` is where the trial stands against the model's policy, or null when none is set: `met`, each side's figure on the policy's `metric` and the shadow's `gain`, every `term` (`judged`, `margin`, `min_days`, `min_labelled`, `significant`) with what the policy wants, what the trial shows and whether that is enough, the policy itself, and `words`, the verdict as main says it.
 
 `labels` is there when the trial is judged. Per input: `tp`, `fp`, `fn` and `tn` over the inputs a label covers, and the rates from them; `mcc` is the Matthews correlation, honest when faults are rare. Per fault: a fault is a stretch positive labels hold without a break (a fault labelled again inside itself stays one), `seen` when an input fell inside it, caught when anything inside it was flagged; `delay_s` is from its start to the first flag. Per day: `alarms_without_fault` are flags where no positive label held, labelled or not, and `alarms_per_day` divides them by the days of event time the inputs span (null under an hour). `intervals` and `recall_interval` are 95% Wilson intervals. `mcnemar` compares the sides over the inputs exactly one judged rightly; `better` names a side only when `p` is below 0.05. `from` is the version whose declaration was used, or `request`. When a version says how to judge the trial but persistence is not running, `labels_unavailable` says so instead.
 

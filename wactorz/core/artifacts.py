@@ -40,6 +40,10 @@ stored without one takes the previous version's, and it may be set or changed
 later, keeping who changed it and when; it is about the version, not its
 bytes, so it is the one thing about a version that changes.
 
+A name may carry a policy (`wactorz.core.promotion`): when its shadow may
+become active, kept under ``policies`` in the index beside the pointers and
+written back as read, so a release that does not know the key keeps it.
+
 The index is changed under a lock on the store's directory, so a command adding
 a model while the server runs does not lose what either of them wrote. Under the
 same lock, each pointer change is appended to a journal beside the index, with
@@ -72,6 +76,8 @@ from .atomic_io import write_text
 from .judgement import Judgement, JudgementError
 from .judgement import from_json as judgement_from_json
 from .model_contents import stored_contents
+from .promotion import Policy, PolicyError
+from .promotion import from_json as policy_from_json
 from .state_lock import StateInUseError, StateLock
 from .torch_checkpoints import CheckpointRefusedError
 
@@ -648,7 +654,7 @@ class ArtifactStore:
         `ArtifactError` when the reference is not one or a pointer dangles.
         """
         name, selector = parse_reference(reference)
-        artifacts, pointers = self._read_all()
+        artifacts, pointers, _policies = self._read_all()
         return _resolve_in(artifacts, pointers, name, selector, reference)
 
     def pointer(self, name: str, which: str) -> Pointer | None:
@@ -716,7 +722,7 @@ class ArtifactStore:
         # read as it does, and nobody else needs to wait for that.
         sha256, size = self._take_in(path, fmt)
         with self._locked():
-            index, pointers = self._read_all()
+            index, pointers, policies = self._read_all()
             versions = index.setdefault(name, [])
             entry = {
                 "version": max((v["version"] for v in versions), default=0) + 1,
@@ -731,7 +737,7 @@ class ArtifactStore:
             if kept is not None:
                 entry["judged_on"] = kept
             versions.append(entry)
-            self._write_all(index, pointers)
+            self._write_all(index, pointers, policies)
         return _artifact(name, entry)
 
     def judge(self, reference: str, judged_on: Judgement | None) -> Artifact:
@@ -743,7 +749,7 @@ class ArtifactStore:
         """
         name, selector = parse_reference(reference)
         with self._locked():
-            index, pointers = self._read_all()
+            index, pointers, policies = self._read_all()
             version = _resolve_in(index, pointers, name, selector, reference).version
             entry = next(v for v in index[name] if v["version"] == version)
             was = _artifact(name, entry)
@@ -758,8 +764,53 @@ class ArtifactStore:
                 entry.pop("judged_on", None)
             else:
                 entry["judged_on"] = judged_on.to_json()
-            self._write_all(index, pointers)
+            self._write_all(index, pointers, policies)
         return _artifact(name, entry)
+
+    def policy(self, name: str) -> Policy | None:
+        """When ``name``'s shadow may become active, as set; None when nothing is set."""
+        stored = self._read_all()[2].get(name)
+        if stored is None:
+            return None
+        try:
+            return policy_from_json(stored)
+        except PolicyError:
+            return None
+
+    def set_policy(self, name: str, policy: Policy) -> Policy:
+        """Set when ``name``'s shadow may become active.
+
+        A policy is about the name, not a version, and holds across retrains.
+        Setting the same terms again changes nothing. Raises
+        `ArtifactNotFoundError` for a name with no version, so a typo is not
+        kept.
+        """
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            index, pointers, policies = self._read_all()
+            if not index.get(name):
+                raise ArtifactNotFoundError(name)
+            was = self.policy(name)
+            if was is not None and policy.same_terms(was):
+                return was
+            policies[name] = policy.to_json()
+            self._write_all(index, pointers, policies)
+        return policy
+
+    def clear_policy(self, name: str) -> Policy | None:
+        """Unset ``name``'s policy; what it was, or None when there was none."""
+        error = name_error(name)
+        if error:
+            raise ArtifactError(error)
+        with self._locked():
+            index, pointers, policies = self._read_all()
+            was = self.policy(name)
+            if name in policies:
+                policies.pop(name)
+                self._write_all(index, pointers, policies)
+        return was
 
     def remove(self, reference: str, *, every_version: bool = False) -> list[Artifact]:
         """Remove the version ``reference`` names, or with ``every_version`` all of a name's.
@@ -780,13 +831,14 @@ class ArtifactStore:
                 else ArtifactError.names_every_version(reference)
             )
         with self._locked():
-            index, pointers = self._read_all()
+            index, pointers, policies = self._read_all()
             versions = index.get(name, [])
             dropped: dict[str, Pointer] = {}
             if everything:
                 gone, kept = versions, []
                 dropped = _pointers_of(name, pointers)
                 pointers.pop(name, None)
+                policies.pop(name, None)
             else:
                 if not versions:
                     raise ArtifactNotFoundError(reference)
@@ -802,7 +854,7 @@ class ArtifactStore:
                 index[name] = kept
             else:
                 index.pop(name, None)
-            self._write_all(index, pointers)
+            self._write_all(index, pointers, policies)
             now = time.time()
             self._journal([_change(CLEARED, was, at=now) for was in dropped.values()])
             still_held = {v["sha256"] for entries in index.values() for v in entries}
@@ -829,12 +881,12 @@ class ArtifactStore:
         if selector is None or selector == which:
             raise ArtifactError.names_the_pointer(reference, which, name)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             changes: list[dict[str, Any]] = []
             moved = _move_in(
                 artifacts, pointers, which, name, selector, reference, by, reason, changes
             )
-            self._write_all(artifacts, pointers)
+            self._write_all(artifacts, pointers, policies)
             self._journal(changes)
         return moved
 
@@ -852,7 +904,7 @@ class ArtifactStore:
         if error:
             raise ArtifactError(error)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             active = pointers.get(name, {}).get("active")
             if active is None:
                 raise ArtifactConflictError.unset(name, "active")
@@ -864,7 +916,7 @@ class ArtifactStore:
             moved = _move_in(
                 artifacts, pointers, "active", name, int(previous), reference, by, reason, changes
             )
-            self._write_all(artifacts, pointers)
+            self._write_all(artifacts, pointers, policies)
             self._journal(changes)
         return moved
 
@@ -880,7 +932,7 @@ class ArtifactStore:
         if error:
             raise ArtifactError(error)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             standing = pointers.get(name, {})
             if which not in standing:
                 raise ArtifactConflictError.unset(name, which)
@@ -889,7 +941,7 @@ class ArtifactStore:
                 pointers[name] = standing
             else:
                 pointers.pop(name, None)
-            self._write_all(artifacts, pointers)
+            self._write_all(artifacts, pointers, policies)
             cleared = _pointer(name, which, was)
             self._journal([_change(CLEARED, cleared, at=time.time(), by=by, reason=reason)])
         return cleared
@@ -953,7 +1005,7 @@ class ArtifactStore:
         if error:
             raise ArtifactError(error)
         with self._locked():
-            artifacts, pointers = self._read_all()
+            artifacts, pointers, policies = self._read_all()
             standing = pointers.get(name, {})
             if "shadow" not in standing:
                 raise ArtifactConflictError.no_shadow_to_promote(name)
@@ -961,7 +1013,7 @@ class ArtifactStore:
             standing["active"] = _pointer_entry(target, standing.get("active"), by, reason)
             tried = _pointer(name, "shadow", standing.pop("shadow"))
             pointers[name] = standing
-            self._write_all(artifacts, pointers)
+            self._write_all(artifacts, pointers, policies)
             active = _pointer(name, "active", standing["active"])
             self._journal(
                 [
@@ -1021,29 +1073,41 @@ class ArtifactStore:
                 raise
             part.unlink(missing_ok=True)
 
-    def _read_all(self) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
-        """The index: every name's versions, and every name's pointers."""
+    def _read_all(
+        self,
+    ) -> tuple[
+        dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]
+    ]:
+        """The index: every name's versions, every name's pointers, and every name's policy."""
         if not self.index_path.exists():
-            return {}, {}
+            return {}, {}, {}
         try:
             stored = json.loads(self.index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ArtifactError.unreadable_index(self.index_path, exc) from exc
         if not isinstance(stored, dict) or stored.get("format") not in _READ_FORMATS:
             raise ArtifactError.unknown_index(self.index_path)
-        return stored.get("artifacts", {}), stored.get("pointers", {})
+        policies = stored.get("policies")
+        return (
+            stored.get("artifacts", {}),
+            stored.get("pointers", {}),
+            policies if isinstance(policies, dict) else {},
+        )
 
     def _write_all(
         self,
         index: Mapping[str, list[dict[str, Any]]],
         pointers: Mapping[str, dict[str, Any]],
+        policies: Mapping[str, dict[str, Any]] | None = None,
     ) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        body = {
+        body: dict[str, Any] = {
             "format": INDEX_FORMAT,
             "artifacts": {name: index[name] for name in sorted(index)},
             "pointers": {name: pointers[name] for name in sorted(pointers) if pointers[name]},
         }
+        if policies:
+            body["policies"] = {name: policies[name] for name in sorted(policies)}
         write_text(self.index_path, json.dumps(body, indent=2))
 
     def _journal(self, changes: list[dict[str, Any]]) -> None:

@@ -336,6 +336,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A judged trial counts a fault labelled again inside itself as one fault.** An operator's answer confirming a
+  fault the site had already labelled split it into pieces, so `faults.seen` counted it two or three times and
+  `delay_s` ran from the start of the piece holding the first flag. A fault is now a stretch positive labels hold
+  without a break, whichever positive values they hold, and its delay runs from that stretch's start.
 - **A shadow trial counts the readings that arrived while it ran, whatever their event time.** A trial was cut on its
   pairs' event time, from when `shadow` was set, so readings a node sent after being offline, a backfill or a replay
   of recorded data fell outside it and the trial showed none of them. It is now cut on when each pair arrived, in the

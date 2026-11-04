@@ -20,6 +20,9 @@ export default defineConfig({
         globals: true,
         include: ["src/**/*.test.ts"],
         setupFiles: ["src/__tests__/setup.ts"],
+        // CSS reaches a test empty unless named here; toastLayout.test.ts reads
+        // this stylesheet's rules, since happy-dom lays nothing out.
+        css: { include: [/src\/styles\/toast\.css/] },
         coverage: {
             provider: "v8",
             reporter: ["text", "lcov", "html"],

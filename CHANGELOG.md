@@ -342,6 +342,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Every answer of a question fits in its notice.** The dashboard's notice for a question kept its answers on
+  one row and hid what did not fit, so a question with more than three or four short answers, or a few long ones, lost
+  some of its buttons there. They now go on as many rows as they need, and a long answer wraps inside its button.
 - **An agent class handed to `serve` or `run` starts when it should, and builds when its constructor takes
   `**kwargs`.** A `RecorderAgent` subclass inherited the package's own recorder's `AUTOSTART = False`, so it was
   registered and never started; it now starts unless it says `AUTOSTART = False` itself, and the package's own

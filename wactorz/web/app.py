@@ -224,6 +224,8 @@ def build_app() -> web.Application:
     app.router.add_delete("/api/models/{name}/shadow", api_models.clear_shadow_handler)
     app.router.add_post("/api/models/{name}/promote", api_models.promote_handler)
     app.router.add_post("/api/models/{name}/rollback", api_models.rollback_handler)
+    app.router.add_put("/api/models/{name}/policy", api_models.set_policy_handler)
+    app.router.add_delete("/api/models/{name}/policy", api_models.clear_policy_handler)
     app.router.add_get("/api/labels", api_labels.labels_handler)
     app.router.add_get("/api/labels/effective", api_labels.effective_handler)
     api_data.setup(app)

@@ -10,6 +10,13 @@ are read back and compared (`wactorz.core.shadow_trial`), and the result is
 written as an ``outcome`` node about the model, whichever way the trial ended,
 with one line on the feed saying what it showed.
 
+While a shadow is set and its name carries a policy (`wactorz.core.promotion`),
+main reads the trial on a cadence and holds it against the policy. When every
+term is met it writes a ``decision`` node and, as the policy says, promotes on
+its own as ``policy`` or asks on the dashboard, whose answer promotes or clears
+the shadow; a trial that falls short is left running. ``docs/design/
+promotion-policy.md`` is the decision.
+
 Agents on nodes run no shadow yet: their pairs would be kept where main
 cannot read them, until the data package ships files to main. The hot swap
 already moves the served version when ``active`` moves, promotion included;
@@ -21,14 +28,25 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from ...config import POLICY_CHECK_S
 from ...core.artifacts import ArtifactError, ArtifactStore, Pointer
 from ...core.judges import labels_for
 from ...core.labels import Labels
 from ...core.paths import resolve_state_dir
 from ...core.persistence.stores import get_db
-from ...core.provenance import Provenance
+from ...core.pointer_moves import record_move
+from ...core.promotion import (
+    POLICY,
+    Policy,
+    Verdict,
+    decision_id,
+    judge_trial,
+    record_decision,
+)
+from ...core.provenance import LED_TO, Provenance
 from ...core.shadow_trial import (
     CLEARED,
     PROMOTED,
@@ -48,6 +66,28 @@ logger = logging.getLogger(__name__)
 #: The pointer this follows.
 SHADOW = "shadow"
 
+#: How long after starting main first holds the trials against their
+#: policies: a restart need not begin by reading every pair. Then every
+#: `POLICY_CHECK_S` (``WACTORZ_POLICY_CHECK_S``): a trial is days long, so a
+#: check every few minutes is plenty; a test sets it short.
+FIRST_POLICY_CHECK_AFTER_S = 60.0
+
+#: The answers the operator is offered when a trial meets its policy and the
+#: policy asks rather than promotes.
+PROMOTE = "Promote"
+CLEAR = "Clear the shadow"
+KEEP = "Keep trying"
+
+#: Who a move the operator's answer makes is recorded as.
+OPERATOR = "operator"
+
+#: What asks the operator: `Actor.ask_operator`, or a stand-in with its signature.
+Asker = Callable[..., Awaitable[str]]
+
+#: One trial under one policy: the model, the version on trial, when it was
+#: set, and when the policy was. A policy set anew is decided afresh.
+Trial = tuple[str, int, float, float]
+
 
 def _following_active(actor: Any, name: str) -> list[str]:
     """The keys under which ``actor`` serves ``name`` by following its ``active`` pointer."""
@@ -64,8 +104,16 @@ def _following_active(actor: Any, name: str) -> list[str]:
 class ShadowServing:
     """Gives the agents serving a model its shadow version, and records what the trial showed."""
 
-    def __init__(self, host: SwapHost | None = None) -> None:
+    def __init__(self, host: SwapHost | None = None, *, ask: Asker | None = None) -> None:
         self.host = host
+        #: What puts a promotion to the operator; None asks nobody.
+        self._ask = ask
+        #: Whether each trial met its policy at the last check, so a verdict
+        #: is said and recorded when it changes, not at every check.
+        self._verdicts: dict[Trial, bool] = {}
+        #: The trials the operator has been asked about, each once.
+        self._asked: set[Trial] = set()
+        self._questions: set[asyncio.Task[Any]] = set()
 
     @property
     def store(self) -> ArtifactStore:
@@ -114,6 +162,148 @@ class ShadowServing:
             return {**pinned, "path": str(store.readable_path(pinned))}
 
         return await asyncio.to_thread(resolve)
+
+    # ── The policy ────────────────────────────────────────────────────────
+
+    async def policy_watcher(self) -> None:
+        """Hold every trial against its policy on a cadence, until the actor stops."""
+        host = self.host
+        if host is None:
+            return
+        await asyncio.sleep(min(FIRST_POLICY_CHECK_AFTER_S, POLICY_CHECK_S))
+        while host.state.value not in ("stopped", "failed"):
+            try:
+                await self.check_policies()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(
+                    "[%s] cannot hold the trials against their policies: %s", host.name, exc
+                )
+            await asyncio.sleep(POLICY_CHECK_S)
+
+    async def check_policies(self, now: float | None = None) -> dict[str, Verdict]:
+        """One check of every trial under way whose name has a policy; each verdict by name."""
+        at = time.time() if now is None else now
+        store = self.store
+        verdicts: dict[str, Verdict] = {}
+        for name in await asyncio.to_thread(store.names):
+            shadow = await asyncio.to_thread(store.pointer, name, SHADOW)
+            policy = await asyncio.to_thread(store.policy, name)
+            if shadow is None or policy is None:
+                continue
+            verdicts[name] = await self._check(name, shadow, policy, at)
+        return verdicts
+
+    async def _check(self, name: str, shadow: Pointer, policy: Policy, now: float) -> Verdict:
+        """Hold ``name``'s trial against ``policy``; act when it has just come to be met."""
+        summary = await self._compare(name, shadow.moved_at, now, shadow=shadow.version)
+        verdict = judge_trial(summary, policy, since=shadow.moved_at, now=now)
+        trial: Trial = (name, shadow.version, shadow.moved_at, policy.at)
+        before = self._verdicts.get(trial)
+        self._verdicts[trial] = verdict.met
+        if before == verdict.met:
+            return verdict
+        active = await asyncio.to_thread(self.store.pointer, name, "active")
+        if not verdict.met:
+            if before:
+                # Met at an earlier check and no longer: the decision then
+                # stands, and this one records the change.
+                await self._record_decision(name, shadow, active, verdict, now)
+                await self._say(
+                    f"{shadow.reference}'s trial no longer meets its policy: {verdict.words()}"
+                )
+            return verdict
+        decided_before = await self._record_decision(name, shadow, active, verdict, now)
+        if decided_before:
+            # Decided in an earlier run of main: promoted, or asked, then.
+            return verdict
+        await self._say(f"{shadow.reference}'s trial meets its policy: {verdict.words()}")
+        if policy.automatic:
+            await self._promote(name, shadow, verdict, by=POLICY, reason=verdict.words())
+        elif self._ask is not None and trial not in self._asked:
+            self._asked.add(trial)
+            task = asyncio.create_task(self._ask_and_act(name, shadow, verdict))
+            self._questions.add(task)
+            task.add_done_callback(self._questions.discard)
+        return verdict
+
+    async def _record_decision(
+        self, name: str, shadow: Pointer, active: Pointer | None, verdict: Verdict, now: float
+    ) -> bool:
+        """Write the verdict as a decision; whether the same one was already there."""
+        db = get_db()
+        if db is None:
+            return False
+        prov = Provenance(db)
+        node_id = decision_id(name, shadow.version, shadow.moved_at, verdict.met, verdict.policy.at)
+        try:
+            if await asyncio.to_thread(prov.get, node_id) is not None:
+                return True
+            await asyncio.to_thread(
+                record_decision,
+                prov,
+                name=name,
+                shadow_version=shadow.version,
+                active_version=None if active is None else active.version,
+                since=shadow.moved_at,
+                verdict=verdict,
+                at=now,
+            )
+        except Exception as exc:
+            logger.warning("cannot record the policy's decision on %s: %s", name, exc)
+        return False
+
+    async def _ask_and_act(self, name: str, shadow: Pointer, verdict: Verdict) -> None:
+        """Put the promotion to the operator, and do as the answer says while the trial stands."""
+        if self._ask is None:
+            return
+        text = f"Promote {shadow.reference}? Its trial meets the policy: {verdict.words()}."
+        try:
+            answer = await self._ask(
+                text,
+                options=[PROMOTE, CLEAR, KEEP],
+                context=f"The policy asks for {verdict.policy.words()}.",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("cannot ask about %s's promotion: %s", name, exc)
+            return
+        standing = await asyncio.to_thread(self.store.pointer, name, SHADOW)
+        if standing is None or standing.version != shadow.version:
+            await self._say(f"the answer on {shadow.reference} came after its trial ended")
+            return
+        reason = f"asked by the policy: {verdict.words()}"
+        if answer == PROMOTE:
+            await self._promote(name, shadow, verdict, by=OPERATOR, reason=reason)
+        elif answer == CLEAR:
+            try:
+                await asyncio.to_thread(self.store.clear, SHADOW, name, by=OPERATOR, reason=reason)
+            except ArtifactError as exc:
+                await self._say(f"cannot clear {shadow.reference}: {exc}")
+
+    async def _promote(
+        self, name: str, shadow: Pointer, verdict: Verdict, *, by: str, reason: str
+    ) -> None:
+        """Make the shadow active, and join the move to the decision that led to it."""
+        try:
+            moved = await asyncio.to_thread(self.store.promote, name, by=by, reason=reason)
+        except ArtifactError as exc:
+            await self._say(f"cannot promote {shadow.reference}: {exc}")
+            return
+        await self._say(f"{moved.reference} is now active, by {by}: {reason}")
+        db = get_db()
+        if db is None:
+            return
+        prov = Provenance(db)
+        decision = decision_id(name, shadow.version, shadow.moved_at, True, verdict.policy.at)
+        try:
+            move = await asyncio.to_thread(record_move, prov, moved)
+            if await asyncio.to_thread(prov.get, decision) is not None:
+                await asyncio.to_thread(prov.add_edge, decision, move.id, LED_TO)
+        except Exception as exc:
+            logger.warning("cannot join %s's promotion to its decision: %s", name, exc)
 
     # ── The end of a trial ────────────────────────────────────────────────
 

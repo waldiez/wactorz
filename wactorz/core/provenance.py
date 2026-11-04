@@ -114,6 +114,11 @@ class ProvenanceError(ValueError):
         return cls(f"a node cannot cause itself: {node_id!r}")
 
 
+def model_source(name: str) -> str:
+    """The graph's ``source`` for the model ``name``, as its topics are named."""
+    return f"models/{name}"
+
+
 def statuses_of(kind: str) -> tuple[str, ...]:
     """The statuses a node of ``kind`` may hold, the starting one first."""
     return STATUSES.get(kind, DEFAULT_STATUSES)

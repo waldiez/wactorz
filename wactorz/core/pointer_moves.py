@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .artifacts import CLEARED, MOVED, PROMOTED, Pointer
-from .provenance import ACTION, DONE, Provenance, ProvNode, stable_id
+from .provenance import ACTION, DONE, Provenance, ProvNode, model_source, stable_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ DEFAULT_LIMIT = 200
 
 def source_of(name: str) -> str:
     """The graph's ``source`` for ``name``'s pointers, as its topics are named."""
-    return f"models/{name}"
+    return model_source(name)
 
 
 def record_move(prov: Provenance, now: Pointer) -> ProvNode:

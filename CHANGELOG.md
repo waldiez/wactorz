@@ -29,6 +29,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A model's policy says when its shadow becomes the version served.** `wactorz-artifacts policy NAME --metric f1
+  --margin 0.02 --min-days 1 --min-labelled 100 --significant --manual` (`/artifacts policy NAME margin=0.02` in chat,
+  `PUT /api/models/NAME/policy` from the dashboard's API) sets what a trial must show before the shadow may become
+  active: the shadow's figure on the metric beating the active version's by the margin, over at least that many days
+  and labelled inputs, with McNemar's test saying the difference is not chance. The policy is about the name, not a
+  version, so it holds across retrains, and lives in the store's index beside the pointers. While a shadow is set,
+  main holds the trial against the policy every few minutes; when every term is met it writes a `decision` node and,
+  with `--automatic`, promotes as `policy` with the figures in the move's reason, or, by default, asks on the
+  dashboard (Promote, Clear the shadow, Keep trying), whose answer promotes or clears as `operator`. A trial that
+  falls short is left running, a verdict that changes is said on the feed, and a policy set anew is decided afresh.
+  `WACTORZ_POLICY_CHECK_S` sets the cadence (ten minutes unless set). `GET /api/models/NAME/trial` and the
+  Models tab's trial card show each term met or short, and what main will do. `docs/design/promotion-policy.md`
+  records the decision.
+
 - **A model is trained inside the loop, and the version it makes says what it learned from.** The `trainer`
   library agent (`@catalog spawn trainer {"recipe": "examples/imu_anomaly/recipe.py", "model": "imu-detector",
   "source": "sensors/imu", "metric": "f1", "margin": 0.02}`) runs your recipe, a module with
@@ -49,11 +63,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   directory holds main's database, and `wactorz-train check RECIPE` says what a recipe defines.
   `docs/design/train-step.md` records the decision, and `docs/design/promotion-policy.md` the one it leaves to
   the next step: when a version on trial becomes the one served.
-- **An air-quality example, `examples/air_quality/`.** A simulated office whose three rooms go wrong in three ways on
-  a Tuesday; a model of what each room is usually like at each hour, its threshold in the version's metadata; an agent
-  that asks a person about each stretch a room was far from usual, the answer kept as a label over exactly that
-  stretch; and an Air tab, all brought by one installable package named in `WACTORZ_EXTENSIONS`. A stricter version
-  can then be put on trial and judged against the answers.
+
 - **An agent reads what was said of the model version it serves.** `me.artifacts[key]["metadata"]` (and
   `agent.artifacts` in a program) holds the version's `--meta` values, on main and on a node alike, so a detector's
   threshold or a calibration constant can be kept with the version it belongs to; a shadow pass sees the version on

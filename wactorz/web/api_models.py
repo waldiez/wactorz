@@ -52,6 +52,8 @@ from ..core.labels import Labels
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.pointer_moves import DEFAULT_LIMIT, history
+from ..core.promotion import PolicyError, judge_trial
+from ..core.promotion import declared as policy_declared
 from ..core.provenance import Provenance
 from ..core.shadow_trial import (
     compare,
@@ -88,6 +90,11 @@ def _pointer(pointer: Pointer, versions: list[Artifact]) -> dict[str, Any]:
     return {**asdict(pointer), "holds": held is not None and held.sha256 == pointer.sha256}
 
 
+def _policy_of(store: ArtifactStore, name: str) -> dict[str, Any] | None:
+    policy = store.policy(name)
+    return None if policy is None else policy.to_json()
+
+
 def _summary(store: ArtifactStore, name: str) -> dict[str, Any] | None:
     versions = store.versions(name)
     if not versions:
@@ -99,6 +106,7 @@ def _summary(store: ArtifactStore, name: str) -> dict[str, Any] | None:
         "pointers": {
             which: _pointer(pointer, versions) for which, pointer in store.pointers(name).items()
         },
+        "policy": _policy_of(store, name),
     }
 
 
@@ -116,6 +124,7 @@ def _detail(store: ArtifactStore, name: str) -> dict[str, Any]:
         "pointers": {
             which: _pointer(pointer, versions) for which, pointer in store.pointers(name).items()
         },
+        "policy": _policy_of(store, name),
     }
 
 
@@ -298,6 +307,12 @@ async def trial_handler(request: web.Request) -> web.Response:
     summary = compare(rows, judgement=judgement, labels=labels)
     if "labels" in summary:
         summary["labels"]["from"] = judged_from
+    policy = await asyncio.to_thread(_store().policy, window.name)
+    verdict = (
+        None
+        if policy is None
+        else judge_trial(summary, policy, since=window.since, now=window.until).to_dict()
+    )
     return web.json_response(
         {
             "name": window.name,
@@ -307,6 +322,7 @@ async def trial_handler(request: web.Request) -> web.Response:
             "source": _source_asked(request),
             **summary,
             **({"labels_unavailable": unavailable} if unavailable else {}),
+            "policy": verdict,
         }
     )
 
@@ -483,3 +499,39 @@ async def clear_shadow_handler(request: web.Request) -> web.Response:
     if isinstance(reason, web.Response):
         return reason
     return await _moved(_store().clear, "shadow", name, by=BY, reason=reason)
+
+
+async def set_policy_handler(request: web.Request) -> web.Response:
+    """Say when the model's shadow may become active: the body's fields over what is set.
+
+    ``{"metric": "f1", "margin": 0.02, "min_days": 1, "min_labelled": 100,
+    "significant": true, "automatic": false}``, any of them; the rest keep what
+    was set, else the default.
+    """
+    name = _name(request)
+    if isinstance(name, web.Response):
+        return name
+    body = await _body(request)
+    if isinstance(body, web.Response):
+        return body
+    store = _store()
+    try:
+        policy = policy_declared(body, over=await asyncio.to_thread(store.policy, name), by=BY)
+        set_to = await asyncio.to_thread(store.set_policy, name, policy)
+    except PolicyError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except ArtifactError as exc:
+        return _refusal(exc)
+    return web.json_response({"policy": set_to.to_json()})
+
+
+async def clear_policy_handler(request: web.Request) -> web.Response:
+    """Unset the model's policy; the answer says what it was, or null."""
+    name = _name(request)
+    if isinstance(name, web.Response):
+        return name
+    try:
+        was = await asyncio.to_thread(_store().clear_policy, name)
+    except ArtifactError as exc:
+        return _refusal(exc)
+    return web.json_response({"policy": None, "was": None if was is None else was.to_json()})

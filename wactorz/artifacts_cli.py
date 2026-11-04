@@ -7,7 +7,8 @@ nobody writes to: it changes by gaining a new version. See
 Usage
 -----
     wactorz-artifacts add PATH NAME [--format F] [--meta KEY=VALUE]... [--allow-code]
-                          [--positive VALUE]... [--label-source SOURCE]
+                          [--kind KIND] [--positive VALUE]... [--field FIELD]
+                          [--label-source SOURCE]
     wactorz-artifacts list [NAME]
     wactorz-artifacts show REFERENCE
     wactorz-artifacts remove REFERENCE [--every-version]
@@ -16,7 +17,8 @@ Usage
     wactorz-artifacts shadow NAME:V [--reason TEXT]
     wactorz-artifacts promote NAME [--reason TEXT]
     wactorz-artifacts clear {active,shadow} NAME [--reason TEXT]
-    wactorz-artifacts judge REFERENCE (--positive VALUE... [--label-source SOURCE] | --clear)
+    wactorz-artifacts judge REFERENCE ([--kind KIND] (--positive VALUE... | --field FIELD)
+                                       [--label-source SOURCE] | --clear)
 
 A reference is ``NAME:3`` for the third version, ``NAME:latest`` for the
 newest, ``NAME:active`` or ``NAME:shadow`` for the version a pointer names, and
@@ -36,8 +38,11 @@ a whole module. A directory is kept as one archive of it. Formats that run code
 when they load -- a pickle, a joblib file, a whole torch module -- are refused
 unless ``--allow-code`` is given.
 
-``--positive`` says what a version is judged on: the label values that count
-as a fault it should flag (`wactorz.core.judgement`). Each input is held
+``--kind`` and what follows it say what a version is judged on
+(`wactorz.core.judgement`): for a ``detector``, the default, ``--positive``
+names the label values that count as a fault it should flag; a
+``classifier`` or a ``regressor`` names with ``--field`` the output field its
+class or its number is in, held against the label's value. Each input is held
 against the labels of its own source, unless ``--label-source`` names one for
 all. A version added without it takes the previous version's; ``judge`` sets
 or changes it on a version already stored, and keeps what it replaced.
@@ -64,7 +69,7 @@ from wactorz.core.artifacts import (
     human_size,
     parse_reference,
 )
-from wactorz.core.judgement import KINDS, Judgement, JudgementError, declared
+from wactorz.core.judgement import DETECTOR, KINDS, Judgement, JudgementError, declared
 from wactorz.core.paths import resolve_state_dir
 
 logger = logging.getLogger(__name__)
@@ -214,9 +219,7 @@ def _clear(args: argparse.Namespace) -> None:
 
 def _judge(args: argparse.Namespace) -> None:
     store = _store(args)
-    judgement = None if args.clear else _judgement(args)
-    if judgement is None and not args.clear:
-        raise JudgementError.no_positive()
+    judgement = None if args.clear else _declared(args)
     judged = store.judge(args.reference, judgement)
     if judged.judgement is None:
         logger.info("%s is judged on nothing now", judged.reference)
@@ -226,17 +229,31 @@ def _judge(args: argparse.Namespace) -> None:
 
 def _judgement(args: argparse.Namespace) -> Judgement | None:
     """What the command line says a version is judged on, or None when it says nothing."""
-    if not args.positive and not args.label_source:
+    if not (args.positive or args.label_source or args.field or args.kind):
         return None
-    return declared(kind=args.kind, positive=args.positive, source=args.label_source, by="cli")
+    return _declared(args)
+
+
+def _declared(args: argparse.Namespace) -> Judgement:
+    """The declaration the command line gives. Raises `JudgementError` saying what it lacks."""
+    return declared(
+        kind=args.kind or DETECTOR,
+        positive=args.positive,
+        source=args.label_source,
+        field=args.field,
+        by="cli",
+    )
 
 
 def _judged(judgement: Judgement) -> str:
-    """``fault, bearing labels of each input's source``, as a line says it."""
-    values = ", ".join(judgement.positive)
+    """``fault, bearing as positive, against each input's own source``, as a line says it."""
     where = f"the labels of {judgement.source}" if judgement.source else "each input's own source"
     copied = f" (from version {judgement.from_version})" if judgement.from_version else ""
-    return f"{values} as positive, against {where}{copied}"
+    if judgement.kind == DETECTOR:
+        said = f"{', '.join(judgement.positive)} as positive"
+    else:
+        said = f"its {judgement.field!r} field as a {judgement.kind}"
+    return f"{said}, against {where}{copied}"
 
 
 def _remove(args: argparse.Namespace) -> None:
@@ -285,8 +302,12 @@ def _build_parser() -> argparse.ArgumentParser:
     judging.add_argument(
         "--kind",
         choices=KINDS,
-        default=KINDS[0],
-        help="how its answers are read (default: %(default)s)",
+        help=f"how its answers are read (default: {DETECTOR})",
+    )
+    judging.add_argument(
+        "--field",
+        metavar="FIELD",
+        help="the output field a classifier's class or a regressor's number is in",
     )
 
     add = commands.add_parser("add", parents=[state_dir, judging], help="store a file or directory")

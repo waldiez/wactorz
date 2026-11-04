@@ -29,6 +29,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A classifier and a regressor are judged against the labels too.** `wactorz-artifacts judge meter:2 --kind
+  classifier --field appliance` judges a model by the class in that field of its output against the label's value:
+  accuracy with its interval, precision, recall and F1 per class, their macro and weighted means, and the confusion of
+  labels against answers, with an input it gave no class for counted wrong and shown as no answer. `--kind regressor
+  --field co2_in_15m` holds the number in that field against the label's value: the mean absolute error, the RMS
+  error, the bias and the worst error, and which side was nearer the truth more often, with a sign test; labels that
+  are not numbers are left out and counted. The Models tab's trial card shows each kind's figures, and `GET
+  /api/models/NAME/trial` returns them. Chat's `/artifacts judge` still sets a detector.
 - **A model is trained inside the loop, and the version it makes says what it learned from.** The `trainer`
   library agent (`@catalog spawn trainer {"recipe": "examples/imu_anomaly/recipe.py", "model": "imu-detector",
   "source": "sensors/imu", "metric": "f1", "margin": 0.02}`) runs your recipe, a module with

@@ -403,6 +403,20 @@ tr.shadow .af-model-role,
   width: 28%;
   font-variant-numeric: tabular-nums;
 }
+/* Tables of many columns (per class, confusion) size each column to what it holds. */
+.af-trial-judged-table.af-trial-columns td {
+  width: auto;
+}
+.af-trial-confusion td {
+  color: var(--af-text-dim);
+}
+.af-trial-confusion td.af-trial-confusion-right {
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
+}
+.af-trial-judged-grid + .af-trial-judged-grid {
+  margin-top: 10px;
+}
 .af-trial-interval {
   display: block;
   font-size: 11px;

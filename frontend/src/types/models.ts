@@ -35,10 +35,15 @@ export interface ModelVersion {
 
 /** What a version is judged on: the labels its answers are held against (`wactorz/core/judgement.py`). */
 export interface Judgement {
-    /** How its answers are read: a `detector` flags an input by publishing something for it. */
+    /**
+     * How its answers are read: a `detector` flags an input by publishing something for it, a
+     * `classifier` answers with a class and a `regressor` with a number, in its `field`.
+     */
     kind: string;
-    /** The label values that count as what it should flag. */
+    /** The label values that count as what a detector should flag; empty for the other kinds. */
     positive: string[];
+    /** The output field a classifier or a regressor answers in; absent for a detector. */
+    field?: string;
     /** The one label source every input is judged against; null for each input's own. */
     source: string | null;
     /** Who said so: `cli`, `chat`, `request`. */
@@ -79,24 +84,91 @@ export interface DetectorSide {
     };
 }
 
-/** A trial judged against the labels, as its version declares or as the request asked. */
-export interface TrialJudged extends TrialSide<DetectorSide> {
-    kind: string;
+/** Whether the two sides really differ, from the inputs only one judged rightly (McNemar's test). */
+export interface McNemar {
+    active_only: number;
+    shadow_only: number;
+    p: number;
+    better: "active" | "shadow" | null;
+}
+
+/** What every kind's judged trial says. */
+interface JudgedBase {
     /** The version whose declaration it was judged on (`hvac:8`), or `request`. */
     from: string;
     judged_on: Judgement;
     positive: string[];
-    /** The inputs a label covered, those whose label counts as positive, and those none covered. */
+    /** The inputs a label covered and those none covered. */
     labelled: number;
-    positives: number;
     unlabelled: number;
     /** The label sources the judged inputs were held against. */
     sources: string[];
+}
+
+/** A detector's trial judged against the labels. */
+export interface DetectorJudged extends JudgedBase, TrialSide<DetectorSide> {
+    kind: "detector";
+    /** The labelled inputs whose label counts as positive. */
+    positives: number;
     /** How many days of event time the inputs span. */
     days: number;
-    /** Whether the two sides really differ, from the inputs only one judged rightly. */
-    mcnemar: { active_only: number; shadow_only: number; p: number; better: "active" | "shadow" | null };
+    mcnemar: McNemar;
 }
+
+/** One class's figures on one side of a classifier's trial. */
+export interface ClassFigures {
+    precision: number | null;
+    recall: number | null;
+    f1: number | null;
+    /** The labelled inputs that held this class. */
+    support: number;
+}
+
+/** One side of a classifier's trial, judged against the labels. */
+export interface ClassifierSide {
+    right: number;
+    accuracy: number | null;
+    accuracy_interval: RateInterval;
+    /** Labelled inputs it published nothing for, or no class in the field; each counted wrong. */
+    no_answer: number;
+    macro_f1: number | null;
+    weighted_f1: number | null;
+    per_class: Record<string, ClassFigures>;
+    /** A row per class as labelled, a column per class answered (in `classes` order), then no answer. */
+    confusion: number[][];
+}
+
+/** A classifier's trial judged against the labels. */
+export interface ClassifierJudged extends JudgedBase, TrialSide<ClassifierSide> {
+    kind: "classifier";
+    /** Every class labelled or answered, in order. */
+    classes: string[];
+    mcnemar: McNemar;
+}
+
+/** One side of a regressor's trial, judged against the labels. */
+export interface RegressorSide {
+    /** The labelled inputs it answered with a number for, and those it did not. */
+    judged: number;
+    no_answer: number;
+    mae: number | null;
+    rmse: number | null;
+    /** The mean of the answer less the truth: above zero, it reads high. */
+    bias: number | null;
+    worst: number | null;
+}
+
+/** A regressor's trial judged against the labels. */
+export interface RegressorJudged extends JudgedBase, TrialSide<RegressorSide> {
+    kind: "regressor";
+    /** Labels whose value is not a number, left out. */
+    not_numbers: number;
+    /** On how many inputs each side was nearer the truth, and whether that could be chance (a sign test). */
+    closer: { active: number; shadow: number; ties: number; p: number; better: "active" | "shadow" | null };
+}
+
+/** A trial judged against the labels, as its version declares or as the request asked. */
+export type TrialJudged = DetectorJudged | ClassifierJudged | RegressorJudged;
 
 /** Where one pointer stands, and the move that put it there. */
 export interface PointerState {

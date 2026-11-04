@@ -6,32 +6,25 @@
  * A shadow trial judged against the labels: whether each side was right, as the
  * version on trial declares it is judged (`wactorz/core/judges.py`).
  *
- * Every rate is shown with its 95% interval, so a recall of 1.0 from three
- * faults reads as the uncertain thing it is; and the verdict says whether the
- * shadow is really better or the difference could be chance. A trial nothing
- * says how to judge shows how to say it, since the figures it would have are
- * the reason to promote or not.
+ * Each kind has its figures: a detector's here, a classifier's and a
+ * regressor's in their own files. Every rate is shown with its 95% interval,
+ * so a recall of 1.0 from three faults reads as the uncertain thing it is; and
+ * the verdict says whether the shadow is really better or the difference could
+ * be chance. A trial nothing says how to judge shows how to say it, since the
+ * figures it would have are the reason to promote or not.
  */
-import type { DetectorSide, Judgement, RateInterval, ShadowTrial, TrialJudged } from "../../types/models";
+import type {
+    DetectorJudged,
+    DetectorSide,
+    Judgement,
+    McNemar,
+    ShadowTrial,
+    TrialJudged,
+} from "../../types/models";
 import { el, labelled } from "../dom";
-
-/** What no value reads as. */
-const NONE = "–";
-
-/** The p below which the server calls a difference real. */
-const SIGNIFICANT = 0.05;
-
-function rate(value: number | null): string {
-    return value === null ? NONE : value.toFixed(2);
-}
-
-function span(interval: RateInterval): string {
-    return interval === null ? "" : `${interval[0].toFixed(2)}–${interval[1].toFixed(2)}`;
-}
-
-function count(value: number): string {
-    return value.toLocaleString();
-}
+import { classifierBasis, classifierBoxes } from "./trialClassifier";
+import { box, count, grid, NONE, rate, SIGNIFICANT, type Row, pValue } from "./trialFigures";
+import { regressorBasis, regressorBoxes, regressorVerdict } from "./trialRegressor";
 
 /** A delay as a person reads it: seconds, minutes or hours. */
 export function duration(seconds: number | null): string {
@@ -47,23 +40,20 @@ export function duration(seconds: number | null): string {
     return `${(seconds / 3600).toFixed(1)} h`;
 }
 
-/** What a version is judged on, as a phrase: `fault, bearing labels of each input's source`. */
+/**
+ * What a version is judged on, as a phrase: `fault, bearing labels of each input's source`, or
+ * `appliance as a classifier, labels of meter`.
+ */
 export function judgedOn(judgement: Judgement): string {
     const where = judgement.source ? `of ${judgement.source}` : "of each input's source";
+    if (judgement.kind !== "detector" && judgement.field) {
+        return `${judgement.field} as a ${judgement.kind}, labels ${where}`;
+    }
     return `${judgement.positive.join(", ")} labels ${where}`;
 }
 
-/** One figure for both sides: a cell each, with its interval under it when it has one. */
-interface Row {
-    name: string;
-    /** What the figure means, for a reader who has not met it. */
-    hint: string;
-    value(side: DetectorSide): string;
-    interval?(side: DetectorSide): RateInterval;
-}
-
 /** The figures per input: whether each answer was right. */
-const PER_INPUT: readonly Row[] = [
+const PER_INPUT: readonly Row<DetectorSide>[] = [
     {
         name: "Precision",
         hint: "of the inputs it flagged, the share that were faults",
@@ -87,7 +77,7 @@ const PER_INPUT: readonly Row[] = [
 ];
 
 /** The figures an operator lives with: the faults caught and how soon, and the alarms raised for nothing. */
-const PER_FAULT_AND_DAY: readonly Row[] = [
+const PER_FAULT_AND_DAY: readonly Row<DetectorSide>[] = [
     {
         name: "Faults caught",
         hint: "a fault is caught when anything inside it was flagged",
@@ -110,52 +100,15 @@ const PER_FAULT_AND_DAY: readonly Row[] = [
     },
 ];
 
-function cell(row: Row, side: DetectorSide): HTMLElement {
-    const shown = el("td", "", row.value(side));
-    const interval = row.interval ? span(row.interval(side)) : "";
-    if (interval) {
-        shown.appendChild(el("span", "af-trial-interval", interval));
-    }
-    return shown;
-}
-
-/** One box of figures: a table of `rows`, a column for each side. */
-function box(judged: TrialJudged, title: string, rows: readonly Row[]): HTMLElement {
-    const shown = el("table", "af-trial-judged-table");
-    shown.appendChild(el("caption", "", title));
-    const head = el("tr");
-    head.append(el("th", "", "Figure"), el("th", "", "Active"), el("th", "", "Shadow"));
-    shown.appendChild(el("thead")).appendChild(head);
-    const body = shown.appendChild(el("tbody"));
-    for (const row of rows) {
-        const line = el("tr");
-        const name = el("th", "", row.name);
-        name.scope = "row";
-        name.title = row.hint;
-        line.append(name, cell(row, judged.active), cell(row, judged.shadow));
-        body.appendChild(line);
-    }
-    const framed = el("div", "af-trial-judged-box");
-    framed.appendChild(shown);
-    return framed;
-}
-
-/** The two boxes, side by side where the width allows and one under the other where it does not. */
-function boxes(judged: TrialJudged): HTMLElement {
-    const grid = el("div", "af-trial-judged-grid");
-    grid.append(box(judged, "Per input", PER_INPUT), box(judged, "Per fault and per day", PER_FAULT_AND_DAY));
-    return grid;
-}
-
 /** Whether the sides really differ, in words: the side right alone more often first. */
-export function verdict(judged: TrialJudged): string {
+export function verdict(judged: { mcnemar: McNemar }): string {
     const { active_only: active, shadow_only: shadow, p, better } = judged.mcnemar;
     if (active + shadow === 0) {
         return "Both sides were right on the same inputs: nothing tells them apart yet.";
     }
-    const counts = `active right alone on ${count(active)} inputs, shadow on ${count(shadow)}; p = ${p.toFixed(3)}`;
+    const counts = `active right alone on ${count(active)} inputs, shadow on ${count(shadow)}; ${pValue(p)}`;
     if (better === "shadow") {
-        return `The shadow is better: shadow right alone on ${count(shadow)} inputs, active on ${count(active)}; p = ${p.toFixed(3)}.`;
+        return `The shadow is better: shadow right alone on ${count(shadow)} inputs, active on ${count(active)}; ${pValue(p)}.`;
     }
     if (better === "active") {
         return `The active version is better: ${counts}.`;
@@ -164,12 +117,70 @@ export function verdict(judged: TrialJudged): string {
     return `No clear difference: ${counts}${below}.`;
 }
 
+function detectorBasis(judged: DetectorJudged): string {
+    const seen = judged.active.faults.seen;
+    return `${count(seen)} fault${seen === 1 ? "" : "s"} seen`;
+}
+
+/** What one kind adds to the basis line, its boxes, and its verdict. */
+interface KindView {
+    basis: string;
+    boxes: HTMLElement[];
+    verdict: string;
+    /** What reads under the basis when nothing it could judge was labelled. */
+    empty: string;
+}
+
+const NO_LABEL = "No input of the trial has a label yet: answers to questions, or labels written, add them.";
+
+function viewOf(judged: TrialJudged): KindView {
+    switch (judged.kind) {
+        case "classifier":
+            return {
+                basis: classifierBasis(judged),
+                boxes: classifierBoxes(judged),
+                verdict: verdict(judged),
+                empty: NO_LABEL,
+            };
+        case "regressor":
+            return {
+                basis: regressorBasis(judged),
+                boxes: regressorBoxes(judged),
+                verdict: regressorVerdict(judged),
+                empty: judged.not_numbers
+                    ? "No label of the trial's inputs is a number: a regressor is judged against labels that are."
+                    : NO_LABEL,
+            };
+        default:
+            return {
+                basis: detectorBasis(judged),
+                boxes: [
+                    grid(
+                        box(judged, "Per input", PER_INPUT),
+                        box(judged, "Per fault and per day", PER_FAULT_AND_DAY),
+                    ),
+                ],
+                verdict: verdict(judged),
+                empty: NO_LABEL,
+            };
+    }
+}
+
 /** What the figures rest on: the labels, how many inputs they covered, and who said how to judge. */
-function basis(judged: TrialJudged): string {
+function basis(judged: TrialJudged, added: string): string {
     const from = judged.from === "request" ? "as asked" : `as ${judged.from} declares`;
-    const covered = `${count(judged.labelled)} of ${count(judged.labelled + judged.unlabelled)} inputs labelled`;
-    const faults = `${count(judged.active.faults.seen)} fault${judged.active.faults.seen === 1 ? "" : "s"} seen`;
-    return `Against ${judgedOn(judged.judged_on)}, ${from} · ${covered} · ${faults} · rates with their 95% interval under them`;
+    // A regressor's labels that are not numbers covered an input too, though it was not judged.
+    const total =
+        judged.labelled + judged.unlabelled + (judged.kind === "regressor" ? judged.not_numbers : 0);
+    const covered = `${count(judged.labelled)} of ${count(total)} inputs labelled`;
+    const parts = [`Against ${judgedOn(judged.judged_on)}, ${from}`, covered];
+    if (added) {
+        parts.push(added);
+    }
+    if (judged.kind !== "regressor") {
+        parts.push("rates with their 95% interval under them");
+    }
+    return parts.join(" · ");
 }
 
 /** How to say what a model is judged on, for a trial nothing says it of. */
@@ -184,9 +195,18 @@ function howToJudge(name: string, version: number | null): HTMLElement {
         el("code", "", `wactorz-artifacts judge ${reference} --positive fault`),
         " or ",
         el("code", "", `/artifacts judge ${reference} fault`),
-        ".",
+        "; for a model that answers with a class or a number, ",
+        el("code", "", `wactorz-artifacts judge ${reference} --kind classifier --field <field>`),
+        " (or ",
+        el("code", "", "--kind regressor"),
+        ").",
     );
     return hint;
+}
+
+/** A kind this dashboard has no figures for: say so rather than show the wrong ones. */
+function unknownKind(kind: string): HTMLElement {
+    return el("p", "af-model-none", `Judged as a ${kind}, which this dashboard cannot show yet.`);
 }
 
 /** The trial judged against the labels, why it is not, or how to have it judged. */
@@ -204,17 +224,16 @@ export function judgedSection(trial: ShadowTrial): HTMLElement {
         section.appendChild(howToJudge(trial.name, trial.shadow?.version ?? null));
         return section;
     }
-    section.appendChild(el("p", "af-trial-judged-basis", basis(judged)));
-    if (!judged.labelled) {
-        section.appendChild(
-            el(
-                "p",
-                "af-model-none",
-                "No input of the trial has a label yet: answers to questions, or labels written, add them.",
-            ),
-        );
+    if (!["detector", "classifier", "regressor"].includes(judged.kind)) {
+        section.appendChild(unknownKind(judged.kind));
         return section;
     }
-    section.append(boxes(judged), el("p", "af-trial-verdict", verdict(judged)));
+    const view = viewOf(judged);
+    section.appendChild(el("p", "af-trial-judged-basis", basis(judged, view.basis)));
+    if (!judged.labelled) {
+        section.appendChild(el("p", "af-model-none", view.empty));
+        return section;
+    }
+    section.append(...view.boxes, el("p", "af-trial-verdict", view.verdict));
     return section;
 }

@@ -1,18 +1,28 @@
-"""A detector's answers judged against the labels: per input, per fault, per day, and how sure.
+"""A model's answers judged against the labels, as its kind says: detector, classifier, regressor.
 
 The statistics are checked against values worked out by hand or published
-tables; the detector against small trials whose right answers can be counted.
+tables; each kind against small trials whose right answers can be counted.
 """
 
 import json
 import math
+import random
 from typing import Any
 
 import pytest
 
 from wactorz.core import judges
-from wactorz.core.judgement import KINDS, declared
-from wactorz.core.judges import judge, mcc, mcnemar, sources_to_read, wilson
+from wactorz.core.judgement import CLASSIFIER, KINDS, REGRESSOR, declared
+from wactorz.core.judges import (
+    class_of,
+    judge,
+    mcc,
+    mcnemar,
+    number_of,
+    ratio,
+    sources_to_read,
+    wilson,
+)
 from wactorz.core.labels import Interval, Label
 
 T0 = 1_760_000_000.0
@@ -284,3 +294,219 @@ class TestPerFaultAndPerDay:
 
 def test_every_kind_a_declaration_may_name_has_a_judge() -> None:
     assert set(KINDS) == set(judges.JUDGES)
+
+
+# ── The classifier ────────────────────────────────────────────────────────────
+
+
+APPLIANCE = declared(kind=CLASSIFIER, field="appliance", by="cli", at=T0)
+
+
+def answered(ts: float, active: Any, shadow: Any, source: str = "meter") -> dict[str, Any]:
+    """An input at ``ts`` and what each side published for it: a value in the field, or None."""
+    return {
+        "ts": ts,
+        "source": source,
+        "active_output": None
+        if active is None
+        else json.dumps({"appliance": active, "co2": active}),
+        "shadow_output": None
+        if shadow is None
+        else json.dumps({"appliance": shadow, "co2": shadow}),
+    }
+
+
+APPLIANCES = {
+    "meter": [
+        interval(T0, T0 + 100, "kettle", source="meter"),
+        interval(T0 + 100, T0 + 200, "washer", source="meter"),
+    ]
+}
+
+#: Truths kettle, kettle, kettle, washer, washer; then an input no label covers.
+CLASSIFIED = [
+    answered(T0 + 10, "kettle", "kettle"),
+    answered(T0 + 20, "washer", "kettle"),
+    answered(T0 + 30, None, "kettle"),
+    answered(T0 + 110, "washer", "washer"),
+    answered(T0 + 120, "washer", "kettle"),
+    answered(T0 + 300, "kettle", "kettle"),
+]
+
+
+class TestTheClassifier:
+    def test_each_side_is_scored_against_the_label_values(self) -> None:
+        result = judge(CLASSIFIED, APPLIANCE, APPLIANCES)
+
+        assert (result["kind"], result["labelled"], result["unlabelled"]) == (CLASSIFIER, 5, 1)
+        assert result["classes"] == ["kettle", "washer"]
+        active, shadow = result["active"], result["shadow"]
+        assert (active["right"], active["accuracy"], active["no_answer"]) == (3, 0.6, 1)
+        assert (shadow["right"], shadow["accuracy"], shadow["no_answer"]) == (4, 0.8, 0)
+        assert active["accuracy_interval"] == wilson(3, 5)
+
+    def test_per_class_figures_and_their_means(self) -> None:
+        active = judge(CLASSIFIED, APPLIANCE, APPLIANCES)["active"]
+
+        kettle, washer = active["per_class"]["kettle"], active["per_class"]["washer"]
+        assert (kettle["precision"], kettle["recall"], kettle["f1"], kettle["support"]) == (
+            1.0, 1 / 3, 0.5, 3,
+        )  # fmt: skip
+        assert (washer["precision"], washer["recall"], washer["f1"], washer["support"]) == (
+            2 / 3, 1.0, 0.8, 2,
+        )  # fmt: skip
+        assert active["macro_f1"] == pytest.approx(0.65)
+        assert active["weighted_f1"] == pytest.approx((0.5 * 3 + 0.8 * 2) / 5)
+
+    def test_the_confusion_has_a_column_for_no_answer(self) -> None:
+        result = judge(CLASSIFIED, APPLIANCE, APPLIANCES)
+
+        # Rows as labelled (kettle, washer); columns as answered (kettle, washer, no answer).
+        assert result["active"]["confusion"] == [[1, 1, 1], [0, 2, 0]]
+        assert result["shadow"]["confusion"] == [[3, 0, 0], [1, 1, 0]]
+
+    def test_the_sides_are_compared_on_the_inputs_only_one_got_right(self) -> None:
+        test = judge(CLASSIFIED, APPLIANCE, APPLIANCES)["mcnemar"]
+
+        assert (test["active_only"], test["shadow_only"]) == (1, 2)
+
+    def test_an_output_without_a_class_in_the_field_is_no_answer(self) -> None:
+        rows = [
+            {"ts": T0 + 1, "source": "meter", "active_output": json.dumps({"score": 1}),
+             "shadow_output": json.dumps(["kettle"])},
+            {"ts": T0 + 2, "source": "meter", "active_output": "not json",
+             "shadow_output": json.dumps({"appliance": None})},
+        ]  # fmt: skip
+
+        result = judge(rows, APPLIANCE, APPLIANCES)
+
+        assert result["active"]["no_answer"] == result["shadow"]["no_answer"] == 2
+        assert result["active"]["accuracy"] == 0.0
+
+    def test_a_class_answered_that_no_label_holds_is_a_class_too(self) -> None:
+        result = judge([answered(T0 + 1, "toaster", "kettle")], APPLIANCE, APPLIANCES)
+
+        assert result["classes"] == ["kettle", "toaster"]
+        assert result["active"]["per_class"]["toaster"] == {
+            "precision": 0.0, "recall": None, "f1": 0.0, "support": 0,
+        }  # fmt: skip
+
+    @pytest.mark.parametrize(
+        ("value", "reads"),
+        [("kettle", "kettle"), (" washer ", "washer"), (3, "3"), (3.0, "3"), (True, "true"),
+         (2.5, None), ("", None), (None, None), ({"a": 1}, None)],
+    )  # fmt: skip
+    def test_a_class_is_a_word_a_whole_number_or_a_truth_value(
+        self, value: Any, reads: Any
+    ) -> None:
+        assert class_of(value) == reads
+
+    def test_many_inputs_and_classes_count_as_one_by_one_would(self) -> None:
+        rng = random.Random(3)
+        names = [f"c{i:02}" for i in range(40)]
+        truths = {"meter": [interval(T0 + 100 * i, T0 + 100 * (i + 1), n, source="meter")
+                            for i, n in enumerate(names)]}  # fmt: skip
+        rows = [
+            answered(T0 + i * 2, rng.choice([*names, None]), rng.choice(names))
+            for i in range(2_000)
+        ]
+
+        result = judge(rows, APPLIANCE, truths)
+
+        # Each cell counted the slow way: the label of each input, and what the side answered.
+        classes = result["classes"]
+        cells = [(names[(i * 2) // 100], json.loads(r["active_output"])["appliance"] if r["active_output"] else None)
+                 for i, r in enumerate(rows)]  # fmt: skip
+        assert result["active"]["confusion"] == [
+            [*(cells.count((truth, said)) for said in classes), cells.count((truth, None))]
+            for truth in classes
+        ]
+        for name in classes:
+            figures = result["active"]["per_class"][name]
+            tp = cells.count((name, name))
+            assert figures["support"] == sum(1 for truth, _ in cells if truth == name)
+            assert figures["precision"] == ratio(tp, sum(1 for _, said in cells if said == name))
+
+    def test_nothing_labelled_has_no_figures(self) -> None:
+        result = judge([answered(T0 + 900, "kettle", "kettle")], APPLIANCE, APPLIANCES)
+
+        assert (result["labelled"], result["active"]["accuracy"], result["active"]["macro_f1"]) == (
+            0, None, None,
+        )  # fmt: skip
+
+
+# ── The regressor ─────────────────────────────────────────────────────────────
+
+
+CO2 = declared(kind=REGRESSOR, field="co2", by="cli", at=T0)
+
+READINGS = {
+    "meter": [
+        interval(T0, T0 + 100, "420", source="meter"),
+        interval(T0 + 100, T0 + 200, "high", source="meter"),
+    ]
+}
+
+#: Truth 420 for the first four; a label that is not a number; an input no label covers.
+REGRESSED = [
+    answered(T0 + 10, 400, 430),
+    answered(T0 + 20, 450, 400),
+    answered(T0 + 30, 420, None),
+    answered(T0 + 40, 410, 430),
+    answered(T0 + 110, 1, 1),
+    answered(T0 + 500, 1, 1),
+]
+
+
+class TestTheRegressor:
+    def test_each_sides_errors_against_the_label_values(self) -> None:
+        result = judge(REGRESSED, CO2, READINGS)
+
+        assert (result["kind"], result["labelled"], result["not_numbers"], result["unlabelled"]) == (
+            REGRESSOR, 4, 1, 1,
+        )  # fmt: skip
+        active, shadow = result["active"], result["shadow"]
+        assert (active["judged"], active["no_answer"], active["mae"], active["bias"]) == (
+            4,
+            0,
+            15,
+            0,
+        )
+        assert active["rmse"] == pytest.approx(math.sqrt(350))
+        assert active["worst"] == 30
+        assert (shadow["judged"], shadow["no_answer"], shadow["bias"], shadow["worst"]) == (
+            3,
+            1,
+            0,
+            20,
+        )
+        assert shadow["mae"] == pytest.approx(40 / 3)
+        assert shadow["rmse"] == pytest.approx(math.sqrt(200))
+
+    def test_closer_counts_each_input_once_and_an_answer_beats_none(self) -> None:
+        closer = judge(REGRESSED, CO2, READINGS)["closer"]
+
+        assert (closer["active"], closer["shadow"], closer["ties"]) == (1, 2, 1)
+        assert (closer["p"], closer["better"]) == (1.0, None)
+
+    def test_a_side_closer_every_time_is_better(self) -> None:
+        rows = [answered(T0 + i, 400, 419) for i in range(10)]
+
+        closer = judge(rows, CO2, READINGS)["closer"]
+
+        assert closer["shadow"] == 10 and closer["better"] == "shadow"
+        assert closer["p"] == pytest.approx(2 / 2**10)
+
+    @pytest.mark.parametrize(
+        ("value", "reads"),
+        [(3, 3.0), (2.5, 2.5), (" 420.5 ", 420.5), ("high", None), (True, None),
+         (float("nan"), None), ("inf", None), (None, None)],
+    )  # fmt: skip
+    def test_a_number_is_a_finite_number_or_its_text(self, value: Any, reads: Any) -> None:
+        assert number_of(value) == reads
+
+    def test_nothing_labelled_has_no_errors(self) -> None:
+        result = judge([answered(T0 + 150, 1, 1)], CO2, READINGS)
+
+        assert result["not_numbers"] == 1 and result["active"]["mae"] is None
+        assert result["sources"] == []

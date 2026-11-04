@@ -16,8 +16,10 @@ from wactorz.agents.main.commands import models as models_commands
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.core.artifacts import ArtifactNotFoundError, ArtifactStore
 from wactorz.core.judgement import (
+    CLASSIFIER,
     DETECTOR,
     MAX_POSITIVE,
+    REGRESSOR,
     Judgement,
     JudgementError,
     declared,
@@ -84,11 +86,34 @@ class TestTheDeclaration:
             ({"positive": ["fault"], "source": "sensors/#"}, "is not a label source"),
             ({"positive": ["fault"], "source": 7}, "is not a label source"),
             ({"positive": ["fault"], "source": "s" * 257}, "is not a label source"),
+            ({"kind": CLASSIFIER}, "the output field it answers in"),
+            ({"kind": REGRESSOR, "field": "  "}, "the output field it answers in"),
+            ({"kind": CLASSIFIER, "field": 3}, "is not an output field"),
+            ({"kind": CLASSIFIER, "field": "f" * 65}, "is not an output field"),
+            ({"kind": CLASSIFIER, "field": "x", "positive": ["a"]}, "what a detector flags"),
+            ({"positive": ["fault"], "field": "score"}, "not on a field"),
         ],
     )
     def test_what_cannot_be_taken_says_why(self, given: Any, says: str) -> None:
         with pytest.raises(JudgementError, match=says):
             from_json(given)
+
+    @pytest.mark.parametrize("kind", [CLASSIFIER, REGRESSOR])
+    def test_a_kind_that_reads_a_field_names_it_and_reads_back(self, kind: str) -> None:
+        judgement = declared(kind=kind, field=" appliance ", source="meter", by="cli", at=5.0)
+
+        assert (judgement.kind, judgement.field, judgement.positive) == (kind, "appliance", ())
+        assert from_json(judgement.to_json()) == judgement
+
+    def test_a_detector_stores_no_field(self) -> None:
+        assert "field" not in faults().to_json()
+
+    def test_another_field_is_other_terms(self) -> None:
+        one = declared(kind=CLASSIFIER, field="appliance")
+
+        assert one.same_terms(declared(kind=CLASSIFIER, field="appliance", by="chat"))
+        assert not one.same_terms(declared(kind=CLASSIFIER, field="device"))
+        assert not one.same_terms(declared(kind=REGRESSOR, field="appliance"))
 
     def test_an_empty_source_is_each_inputs_own(self) -> None:
         assert from_json({"positive": ["fault"], "source": "  "}).source is None
@@ -259,10 +284,37 @@ class TestTheCommandLine:
         stored = ArtifactStore.in_state_dir(state).resolve("imu:1")
         assert stored.judged_on is None and len(stored.judged_on_history) == 1
 
+    def test_a_classifier_and_a_regressor_name_their_field(
+        self, tmp_path: Path, model: Path
+    ) -> None:
+        state = str(tmp_path / "state")
+
+        code, out = self.run(
+            "add", str(model), "meter", "--kind", "classifier", "--field", "appliance",
+            "--state-dir", state,
+        )  # fmt: skip
+        assert code == 0
+        assert "Judged on its 'appliance' field as a classifier, against each input's own" in out
+
+        code, out = self.run(
+            "judge", "meter:1", "--kind", "regressor", "--field", "watts",
+            "--label-source", "clamp", "--state-dir", state,
+        )  # fmt: skip
+        assert code == 0
+        assert (
+            "meter:1 is judged on its 'watts' field as a regressor, against the labels of clamp"
+            in out
+        )
+        judgement = ArtifactStore.in_state_dir(state).resolve("meter:1").judgement
+        assert judgement is not None and (judgement.kind, judgement.field) == (REGRESSOR, "watts")
+
     @pytest.mark.parametrize(
         ("argv", "says"),
         [
             (("judge", "imu:1"), "name at least one"),
+            (("judge", "imu:1", "--kind", "classifier"), "the output field it answers in"),
+            (("judge", "imu:1", "--field", "watts"), "not on a field"),
+            (("add", "MODEL", "imu", "--kind", "regressor"), "the output field it answers in"),
             (("judge", "imu:1", "--label-source", "line-3"), "name at least one"),
             (("judge", "imu:1", "--positive", "x" * 65), "is not a label value"),
             (("judge", "imu:9", "--positive", "fault"), "imu:9"),
@@ -274,6 +326,7 @@ class TestTheCommandLine:
         state = str(tmp_path / "state")
         assert self.run("add", str(model), "imu", "--state-dir", state)[0] == 0
 
+        argv = tuple(str(model) if a == "MODEL" else a for a in argv)
         code, out = self.run(*argv, "--state-dir", state)
 
         assert code == 1 and says in out
@@ -301,6 +354,11 @@ class TestFromChat:
         reply = await models_commands.judge_model(chat(), "imu:1 none")
 
         assert reply == "imu:1 is judged on nothing now."
+
+    async def test_the_usage_says_where_the_other_kinds_are_declared(self) -> None:
+        reply = await models_commands.judge_model(chat(), "")
+
+        assert "wactorz-artifacts judge --kind" in reply
 
     @pytest.mark.parametrize(
         ("argument", "says"),

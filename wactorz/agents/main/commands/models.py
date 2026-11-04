@@ -119,7 +119,8 @@ NOTHING = "none"
 
 JUDGE_USAGE = (
     "Usage: /artifacts judge <name:version> <value>[,<value>...] [label source]"
-    f" -- or {NOTHING} instead of the values"
+    f" -- or {NOTHING} instead of the values. This judges it as a detector; a classifier or"
+    " a regressor is declared with wactorz-artifacts judge --kind ... --field ..."
 )
 
 
@@ -131,7 +132,8 @@ JUDGE_USAGE = (
     forms=(
         (
             "/artifacts judge <name:version> <value>[,<value>...] [label source]",
-            "the label values that count as what it should flag",
+            "the label values that count as what a detector should flag"
+            " (a classifier or regressor: wactorz-artifacts judge --kind ... --field ...)",
         ),
         (f"/artifacts judge <name:version> {NOTHING}", "judge it on nothing"),
     ),

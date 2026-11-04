@@ -427,6 +427,26 @@ tr.shadow .af-model-role,
   font-size: 12px;
   color: rgba(255, 255, 255, 0.85);
 }
+/* The trial against its policy: one line per term, met or short. */
+.af-trial-policy-terms {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-trial-policy-terms li {
+  padding: 3px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.af-trial-policy-terms li.met::before {
+  content: "✓ ";
+  color: var(--af-ok, #6c6);
+}
+.af-trial-policy-terms li.short::before {
+  content: "· ";
+  color: var(--af-text-dim);
+}
 .af-trial-judged code {
   font-size: 11px;
 }

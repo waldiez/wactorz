@@ -33,6 +33,7 @@ from .models import (
     activate_model,
     clear_model_pointer,
     judge_model,
+    policy_model,
     promote_model,
     shadow_model,
 )
@@ -55,6 +56,7 @@ registry.add(shadow_model)
 registry.add(promote_model)
 registry.add(clear_model_pointer)
 registry.add(judge_model)
+registry.add(policy_model)
 registry.add(show_artifacts)
 registry.add(show_mqtt_status)
 registry.add(show_bus)

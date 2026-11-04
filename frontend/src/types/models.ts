@@ -189,6 +189,48 @@ export interface PointerState {
 /** The pointers a model has set; an unset one is absent. */
 export type Pointers = Partial<Record<PointerName, PointerState>>;
 
+/** When a model's shadow may become active (`wactorz/core/promotion.py`). */
+export interface Policy {
+    /** The figure compared: `f1`, `precision`, `recall`, `mcc` or `false_positive_rate`. */
+    metric: string;
+    /** How much better the shadow must be on it. */
+    margin: number;
+    /** How long the trial must have run. */
+    min_days: number;
+    /** How many labelled inputs the trial must hold. */
+    min_labelled: number;
+    /** Whether McNemar's test must say the difference is not chance. */
+    significant: boolean;
+    /** Whether main promotes when the policy is met, or asks. */
+    automatic: boolean;
+    /** Who set it: `cli`, `chat`, `dashboard`. */
+    by: string;
+    /** Seconds since the epoch. */
+    at: number;
+}
+
+/** One thing a policy asks, what the trial shows for it, and whether that is enough. */
+export interface PolicyTerm {
+    name: "judged" | "margin" | "min_days" | "min_labelled" | "significant";
+    wanted: number | boolean;
+    actual: number | boolean | null;
+    met: boolean;
+}
+
+/** A trial held against its model's policy, as `GET /api/models/{name}/trial` gives it. */
+export interface PolicyVerdict {
+    met: boolean;
+    metric: string;
+    /** Each side's figure on the metric, and the shadow's gain; null when not measured. */
+    shadow: number | null;
+    active: number | null;
+    gain: number | null;
+    terms: PolicyTerm[];
+    policy: Policy;
+    /** The verdict as a line, as main says it on the feed. */
+    words: string;
+}
+
 /** A model as the list shows it. */
 export interface ModelSummary {
     name: string;
@@ -196,6 +238,8 @@ export interface ModelSummary {
     /** How many versions are stored. */
     versions: number;
     pointers: Pointers;
+    /** When its shadow may become active; absent or null when nothing is set. */
+    policy?: Policy | null;
 }
 
 /** One model in full: every version, oldest first, and its pointers. */
@@ -203,6 +247,8 @@ export interface ModelDetail {
     name: string;
     versions: ModelVersion[];
     pointers: Pointers;
+    /** When its shadow may become active; absent or null when nothing is set. */
+    policy?: Policy | null;
 }
 
 /** One move of a pointer, from the provenance graph. */
@@ -265,6 +311,8 @@ export interface ShadowTrial extends TrialFigures {
     /** Seconds since the epoch. */
     since: number;
     until: number;
+    /** Where the trial stands against the model's policy; absent or null when none is set. */
+    policy?: PolicyVerdict | null;
 }
 
 /** One stretch of a trial, as `GET /api/models/{name}/trial/series` gives it. */

@@ -221,7 +221,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.hot_swap = HotSwap(self)
         self.data_files = DataFiles(self)
         self.data_retention = DataRetention(self)
-        self.shadow_serving = ShadowServing(self)
+        self.shadow_serving = ShadowServing(self, ask=self.ask_operator)
         self.artifact_service = ArtifactService(self, follow=self._follow_pointers)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
@@ -369,6 +369,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self.data_files.listener()))
         # Let old hours of readings go, when a retention is set
         self._tasks.append(asyncio.create_task(self.data_retention.run()))
+        # Hold each trial under way against its model's promotion policy
+        self._tasks.append(asyncio.create_task(self.shadow_serving.policy_watcher()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

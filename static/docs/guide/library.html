@@ -732,6 +732,9 @@ model-free orchestrator described above.</p>
 <ul>
 <li><code>imu_anomaly/</code>: a trained model watching IMU readings, as a script, a
   pipeline, a notebook and inside a FastAPI app.</li>
+<li><code>air_quality/</code>: a model of each room's usual air per hour, an agent that
+  asks a person about the rest and keeps the answers as labels, and a
+  dashboard tab, as one installable package.</li>
 <li><code>llm_notes/</code>: an agent that calls the system's language model through
   <code>me.llm</code>, with the cost kept across restarts.</li>
 <li><code>yolo_watch/</code>: a YOLO model as an agent, as a function answering snapshots

@@ -401,10 +401,17 @@ class SpawnMixin(_Host):
             )
             return None
 
-        kwargs = {"name": name, "persistence_dir": str(self._persistence_dir.parent)}
+        kwargs: dict[str, Any] = {
+            "name": name,
+            "persistence_dir": str(self._persistence_dir.parent),
+        }
         llm = getattr(self, "llm", None)
         if llm is not None:
             kwargs["llm_provider"] = llm
+        options = config.get("options")
+        if isinstance(options, dict) and options:
+            # A library agent's keyword arguments, as the spawn gave them.
+            kwargs["options"] = dict(options)
         logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
         return await self.spawn(factory, actor_id=config.get("actor_id"), **kwargs)
 

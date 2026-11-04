@@ -278,6 +278,21 @@ def test_route_native(main_host):
     assert kw["name"] == "weather-agent"
 
 
+def test_route_native_with_the_options_it_was_spawned_with(main_host):
+    # A library agent restored from the registry is built as it was asked for.
+    options = {"topics": ["sensors/#"], "source_field": "device"}
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "recorder", "type": "native", "options": options}
+        )
+    )
+    assert actor is not None
+    _factory, kw = main_host.spawn_calls[-1]
+    assert kw["options"] == options
+    run(main_host._spawn_local_from_config({"name": "weather-agent", "type": "native"}))
+    assert "options" not in main_host.spawn_calls[-1][1]
+
+
 def test_native_persisted_for_restore(main_host):
     # The regression under fix: a native agent must land in the spawn registry
     # so it is restored after a process restart (previously it never was).

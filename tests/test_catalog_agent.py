@@ -552,6 +552,45 @@ class TestANameThatRunsElsewhere:
 
         assert seen == [("weather", wanted)]
 
+    @pytest.mark.parametrize(
+        ("typed", "name", "wanted"),
+        [
+            (
+                'spawn recorder {"topics": ["sensors/#"], "source_field": "device"}',
+                "recorder",
+                {"options": {"topics": ["sensors/#"], "source_field": "device"}},
+            ),
+            (
+                'spawn recorder alongside {"topics": "a/#"}',
+                "recorder",
+                {"alongside": True, "options": {"topics": "a/#"}},
+            ),
+            ("spawn recorder {not json", "recorder {not json", {}),
+            ("spawn recorder [1, 2]", "recorder [1, 2]", {}),
+        ],
+    )
+    async def test_the_json_after_the_name_is_the_agents_options(
+        self,
+        catalog: CatalogAgent,
+        typed: str,
+        name: str,
+        wanted: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen: list[tuple[str, dict[str, Any]]] = []
+
+        async def _spawn(
+            name: str, payload: dict[str, Any], *, background_install: bool = False
+        ) -> dict[str, Any]:
+            seen.append((name, payload))
+            return {"ok": True}
+
+        monkeypatch.setattr(catalog, "_action_spawn", _spawn)
+
+        await catalog._handle(typed)
+
+        assert seen == [(name, wanted)]
+
 
 class TestNativeSpawn:
     async def test_it_is_started_with_mains_model_and_saved_without_its_factory(
@@ -578,6 +617,39 @@ class TestNativeSpawn:
         (saved,) = main.spawn_registry
         assert "factory" not in saved
         assert saved["trusted"] is True
+
+    async def test_a_library_agent_is_built_with_its_options_and_they_are_saved(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        spawner = _spawner(catalog, monkeypatch)
+        options = {"topics": ["sensors/#"], "source_field": "device"}
+
+        result = await catalog._action_spawn("recorder", {"options": options})
+
+        assert result["ok"] is True
+        ((factory, kwargs),) = spawner.calls
+        assert factory == catalog._catalog["recorder"]["factory"]
+        assert kwargs["options"] == options
+        (saved,) = main.spawn_registry
+        assert saved["options"] == options and saved["type"] == "native"
+
+    async def test_a_packaged_recipe_takes_no_options(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("weather-agent", {"options": {"city": "Athens"}})
+
+        assert result == {
+            "ok": False,
+            "message": "'weather-agent' takes no options; its settings are asked for in chat",
+            "agent": "weather-agent",
+        }
+        assert spawner.calls == []
+        refused = await catalog._action_spawn("recorder", {"options": [1]})
+        assert refused["ok"] is False and "JSON object" in refused["message"]
 
     async def test_without_main_it_still_spawns_but_is_not_saved(
         self, catalog: CatalogAgent, monkeypatch: pytest.MonkeyPatch

@@ -26,7 +26,7 @@ from .judgement import Judgement
 from .judges import judge
 from .labels import Interval
 from .pointer_moves import source_of
-from .provenance import OUTCOME, Provenance, ProvNode, stable_id
+from .provenance import EVALUATED_BY, MODEL, OUTCOME, Provenance, ProvNode, stable_id
 
 #: What the outcome is about, in its payload's ``what``.
 SHADOW_TRIAL = "shadow_trial"
@@ -248,15 +248,18 @@ def record_outcome(
     ended: str,
     summary: Mapping[str, Any],
     by: str,
+    shadow_sha256: str | None = None,
 ) -> ProvNode:
     """Write what the trial of ``name:shadow_version`` showed, as an ``outcome`` about the model.
 
     ``since`` is when the pointer was set, ``until`` when it was cleared or
     promoted, ``ended`` which of the two, ``by`` whoever did it. The id is the
-    trial's, so an outcome written twice is one node. It stands alone until the
-    train step writes ``model`` nodes for an ``evaluated_by`` edge to reach.
+    trial's, so an outcome written twice is one node. With ``shadow_sha256``,
+    the bytes the version held, the outcome is joined ``evaluated_by`` from the
+    version's ``model`` node when the train step wrote one; otherwise it stands
+    alone.
     """
-    return prov.add_node(
+    outcome = prov.add_node(
         OUTCOME,
         ts=since,
         ts_end=until,
@@ -272,6 +275,11 @@ def record_outcome(
         },
         node_id=outcome_id(name, shadow_version, since),
     )
+    if shadow_sha256:
+        model = stable_id(MODEL, name, shadow_version, shadow_sha256)
+        if prov.get(model) is not None:
+            prov.add_edge(model, outcome.id, EVALUATED_BY)
+    return outcome
 
 
 def outcomes_of(prov: Provenance, name: str) -> list[dict[str, Any]]:

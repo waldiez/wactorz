@@ -94,7 +94,7 @@ Each edge points from cause to effect:
 ### Statuses
 
 - A `label` is `valid`, `partly_superseded` or `superseded`.
-- An `action` is `planned`, `running`, `done`, `cancelled` or `undone`.
+- An `action` is `planned`, `running`, `done`, `cancelled`, `failed` or `undone`.
 - Any node derived from a superseded label is marked `invalidated` once a
   review (below) has decided it no longer holds; until then it keeps its
   status, and the graph shows that a review is pending.
@@ -227,9 +227,12 @@ unverified label only within what the stream's policy allows without asking.
   read back by `GET /api/models/{name}/moves`.
 - **Hot swaps** (built): each running agent reloaded because a pointer it follows moved is
   an `action` node, `led_to` from the move (`wactorz/core/model_swaps.py`).
-- **The train step** writes an `action` for each run, a `model` node for the
-  version it stores, `produced` and `trained` edges, and its window and splits
-  in the action's payload.
+- **The train step** (built): an `action` for each run, a `model` node for the
+  version it stores, `produced` and `trained` edges, `led_to` the move it made,
+  and its window and split in the action's payload; a run that failed is a
+  `failed` action with an `outcome` saying why (`wactorz/train/record.py`,
+  `docs/design/train-step.md`). A shadow trial's outcome is joined
+  `evaluated_by` from the model node when there is one.
 - **Shadow serving** writes the trial's `outcome`.
 - **The controller** writes its `observation`, `decision` and `action` nodes,
   and builds reviews when a label is superseded.

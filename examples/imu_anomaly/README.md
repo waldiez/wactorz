@@ -11,6 +11,7 @@ language model.
 | ---- | ---- |
 | `model.py` | The model: fitting it to normal motion, as two named arrays, and scoring a reading with them. |
 | `train.py` | Fits it on synthetic "normal" motion, writes `imu_model.npz` and keeps it on main as a new version of `imu-detector`, with its score on held-out readings; `--set active` or `--set shadow` points at it. Stands in for your own training. |
+| `recipe.py` | The same model as a recipe the `trainer` agent and `wactorz-train` run on recorded readings: fit on a window's normal readings, scored by the false alarms and the labelled faults caught, stored as the next version and set as the shadow when it beats the one served. |
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
 | `triage.py` | Asks a person whether a strong anomaly was maintenance or a real problem; the answer becomes a label of the device. |
 | `run.py` | Starts Wactorz with the detector and triage, in the minimal profile; `--with-main` starts main, the planner and the catalogue around them. |

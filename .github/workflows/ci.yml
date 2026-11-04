@@ -281,6 +281,15 @@ jobs:
           # Dockerfile's `runtime` stage).
           no-cache-filters: runtime
 
+      # The build's layers stay in the builder after the image is loaded, and
+      # Trivy exports another copy of the image to scan it: for the ultra image
+      # the three do not fit on a hosted runner together. The build step has
+      # written the cache already, so the builder's copy is not needed again.
+      - name: Room for the scan
+        run: |
+          docker buildx prune --all --force
+          df -h /
+
       - name: Smoke test
         run: make image-smoke IMAGE=wactorz:ci
 

@@ -216,6 +216,49 @@ class TestPerFaultAndPerDay:
         assert result["active"]["faults"]["seen"] == 1
         assert result["shadow"]["faults"]["delay_s"]["mean"] is None
 
+    def test_a_fault_labelled_again_inside_itself_is_one_fault(self) -> None:
+        # The site's label over the whole fault, then an operator's newer label
+        # inside it: the effective intervals come as three touching pieces.
+        site = interval(T0, T0 + 600, "fault")
+        labels = {
+            "pump-1": [
+                interval(T0, T0 + 200, "fault"),
+                interval(T0 + 200, T0 + 400, "fault"),
+                Interval(start=T0 + 400, end=T0 + 600, label=site.label),
+            ]
+        }
+        rows = [pair(T0 + 100, False, False), pair(T0 + 300, True, False)]
+
+        faults = judge(rows, FAULTS, labels)["active"]["faults"]
+
+        assert (faults["seen"], faults["caught"]) == (1, 1)
+        assert faults["delay_s"]["max"] == 300.0
+
+    def test_touching_faults_of_different_positive_values_are_one_fault(self) -> None:
+        several = declared(positive=["fault", "bearing"])
+        labels = {"pump-1": [interval(T0, T0 + 10, "bearing"), interval(T0 + 10, None, "fault")]}
+
+        faults = judge([pair(T0 + 1, False, False), pair(T0 + 20, True, True)], several, labels)
+
+        assert (faults["active"]["faults"]["seen"], faults["active"]["faults"]["caught"]) == (1, 1)
+        assert faults["active"]["faults"]["delay_s"]["max"] == 20.0
+
+    def test_a_gap_or_a_negative_label_between_faults_keeps_them_apart(self) -> None:
+        labels = {
+            "pump-1": [
+                interval(T0, T0 + 10, "fault"),
+                interval(T0 + 20, T0 + 30, "fault"),  # a gap no label holds before it
+                interval(T0 + 30, T0 + 40, "normal"),
+                interval(T0 + 40, T0 + 50, "fault"),
+            ]
+        }
+        rows = [pair(T0 + 5, True, True), pair(T0 + 25, True, True), pair(T0 + 45, True, True)]
+
+        faults = judge(rows, FAULTS, labels)["active"]["faults"]
+
+        assert (faults["seen"], faults["caught"]) == (3, 3)
+        assert faults["delay_s"]["max"] == 5.0
+
     def test_alarms_without_a_fault_are_counted_per_day(self) -> None:
         labels = {"pump-1": [interval(T0, T0 + 10, "fault")]}
         rows = [

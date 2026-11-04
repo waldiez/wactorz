@@ -246,8 +246,9 @@ class PumpWatch(Actor):
 `INPUT_SCHEMA` and `OUTPUT_SCHEMA` on the class become the catalogue entry and
 the wiring a pipeline checks against; `AGENT_NAME` names it (default
 `PumpWatch` → `pump-watch`); `AUTOSTART = False` keeps it in the catalogue
-until asked for. A subclass that takes `llm_provider` in its constructor is
-given the system's model.
+until asked for. A subclass whose constructor names `llm_provider` (its own,
+or one it hands `**kwargs` on to) is given the system's model; spawn options
+reach a constructor that names them or takes `**kwargs`.
 
 A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, `{"raw": text}` for text, `{"raw": bytes}` for anything else, such as a
@@ -315,7 +316,12 @@ library, once, off the event loop, the way that runs no code from the file:
 A pickle, a joblib file and a whole torch module run code when they load, so
 `load_model` refuses them unless given `allow_code=True`. GGUF, TFLite, skops
 and directories are opened through `artifact_path` by the library that reads
-them. `me.artifacts` lists each model with its name, version, format and path.
+them. `me.artifacts` lists each model with its name, version, format and path,
+and its `metadata`: what was said of the version when it was added
+(`--meta k_sigma=5`), so a threshold or a calibration constant can live with
+the version it belongs to. A version's metadata does not change once stored;
+a different threshold is a new version, which a trial can then compare. On a
+shadow pass, `me.artifacts` is the version on trial's, metadata included.
 
 ## Training a version
 

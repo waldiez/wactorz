@@ -75,6 +75,16 @@ def _reference(entry: Mapping[str, Any]) -> str:
     return f"{entry.get('name')}:{entry.get('version')}"
 
 
+def same_version(pin: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    """Whether two pins name the same version of the same bytes.
+
+    The bytes alone do not say it: the store keeps identical bytes once, so two
+    versions may share them and still differ in what was said of each (a
+    threshold in their metadata), which the agent reads.
+    """
+    return pin.get("version") == other.get("version") and pin.get("sha256") == other.get("sha256")
+
+
 class HotSwap:
     """Re-pins and reloads the agents whose pins follow a pointer that moved."""
 
@@ -157,7 +167,7 @@ class HotSwap:
         except ArtifactError as exc:
             await self._say(f"{agent} keeps {_reference(entry)} as {key}: {exc}")
             return
-        if repinned["sha256"] == entry["sha256"]:
+        if same_version(repinned, entry):
             return
         updated = {**config, "artifacts": {**pinned_in(config), key: repinned}}
         # The registry is what says a node may have a version, and the
@@ -205,10 +215,10 @@ class HotSwap:
         except ArtifactError as exc:
             await self._say(f"{actor.name} keeps {_reference(entry)} as {key}: {exc}")
             return
-        recorded = pinned_in(config).get(key, {}).get("sha256") if config is not None else None
-        if repinned["sha256"] == entry["sha256"]:
+        recorded = pinned_in(config).get(key) if config is not None else None
+        if same_version(repinned, entry):
             # Already on the version, as a restore leaves it; its record may lag.
-            if config is not None and recorded != repinned["sha256"]:
+            if config is not None and (recorded is None or not same_version(recorded, repinned)):
                 host._save_to_spawn_registry(
                     {**config, "artifacts": {**pinned_in(config), key: repinned}}
                 )

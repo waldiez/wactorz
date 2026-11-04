@@ -157,6 +157,17 @@ class TestAnActorsModels:
         assert detector.seen_at_start == str(store.path_of(held))
         assert detector.artifacts["model"]["version"] == 1
 
+    async def test_it_reads_what_was_said_of_its_model(
+        self, detector: Detector, store: ArtifactStore, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "imu.npz"
+        np.savez(path, mean=np.zeros(3))
+        store.add(path, "imu-detector", metadata={"k_sigma": 6})
+
+        await detector.start()
+
+        assert detector.artifacts["model"]["metadata"] == {"k_sigma": 6}
+
     async def test_load_model_reads_it_once(
         self,
         detector: Detector,

@@ -296,9 +296,9 @@ source for all. One source for a whole trial would judge a model serving
 several devices against one device's labels.
 
 A detector is judged per input (precision, recall, F1, the false-positive
-rate, the Matthews correlation), per fault (a stretch a positive label holds is
-caught when anything inside it was flagged, and the delay is from its start to
-the first flag) and per day (alarms where no fault was), because each answers
+rate, the Matthews correlation), per fault (a stretch positive labels hold
+without a break is caught when anything inside it was flagged, and the delay
+is from its start to the first flag) and per day (alarms where no fault was), because each answers
 a question an operator asks. Every rate carries a 95% Wilson interval, and
 McNemar's test over the inputs exactly one side judged rightly says whether
 the shadow is better or the difference could be chance. Each kind is one

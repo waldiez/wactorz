@@ -155,13 +155,21 @@
   word-break: break-word;
 }
 
+/* A question may offer several answers, each up to 60 characters, and the toast
+   hides what spills out of it: the buttons go on as many rows as they need, each
+   its own width, and a label longer than the toast wraps inside its button. */
 .wz-toast__actions {
   padding: 0 16px 13px;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .wz-toast__btn {
+  flex: none;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
   font-size: 11.5px;
   font-weight: 600;
   padding: 5px 13px;

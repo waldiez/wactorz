@@ -20,10 +20,10 @@ three ways, because each answers a different question:
 
 - per input: precision, recall, F1, the false-positive rate, specificity and
   the Matthews correlation, which stays honest when faults are rare;
-- per fault: a fault is a stretch a positive label holds, and it is caught when
-  anything inside it was flagged; how long after its start the first flag came
-  is the detection delay. A detector need not flag every reading of a long
-  fault, only catch it early;
+- per fault: a fault is a stretch positive labels hold without a break, and it
+  is caught when anything inside it was flagged; how long after its start the
+  first flag came is the detection delay. A detector need not flag every
+  reading of a long fault, only catch it early;
 - per day: the alarms raised where no known fault was, which is what an
   operator lives with.
 
@@ -191,6 +191,32 @@ def _rates(tp: int, fp: int, fn: int, tn: int) -> dict[str, Any]:
     }
 
 
+def fault_spans(
+    intervals: Sequence[Interval], positive: set[str]
+) -> list[tuple[float, float | None]]:
+    """The faults ``intervals`` hold: each stretch positive labels hold without a break, as (start, end).
+
+    ``intervals`` are one source's, in order and not overlapping, as
+    `Labels.effective` gives them. Its intervals name the label holding each
+    stretch, so a fault an operator confirmed inside one the site had already
+    labelled comes as several pieces; touching positive pieces are one fault
+    here, whichever positive values they hold. A moment no label holds, or a
+    label that is not positive, ends a fault. An end of None is a fault still
+    open.
+    """
+    spans: list[tuple[float, float | None]] = []
+    for interval in intervals:
+        if interval.label.value not in positive:
+            continue
+        last_end = spans[-1][1] if spans else None
+        if last_end is not None and last_end >= interval.start:
+            end = None if interval.end is None else max(interval.end, last_end)
+            spans[-1] = (spans[-1][0], end)
+        else:
+            spans.append((interval.start, interval.end))
+    return spans
+
+
 def _faults(
     rows: Sequence[Mapping[str, Any]],
     labels: Mapping[str, Sequence[Interval]],
@@ -205,14 +231,9 @@ def _faults(
     caught = dict.fromkeys(SIDES, 0)
     delays: dict[str, list[float]] = {side: [] for side in SIDES}
     for source, kept in by_source.items():
-        for interval in labels.get(source, ()):
-            if interval.label.value not in positive:
-                continue
+        for start, end in fault_spans(labels.get(source, ()), positive):
             inside = [
-                r
-                for r in kept
-                if interval.start <= float(r["ts"])
-                and (interval.end is None or float(r["ts"]) < interval.end)
+                r for r in kept if start <= float(r["ts"]) and (end is None or float(r["ts"]) < end)
             ]
             if not inside:
                 continue
@@ -221,7 +242,7 @@ def _faults(
                 first = min((float(r["ts"]) for r in inside if flagged(r, side)), default=None)
                 if first is not None:
                     caught[side] += 1
-                    delays[side].append(max(0.0, first - interval.start))
+                    delays[side].append(max(0.0, first - start))
     return {
         side: {
             "seen": seen,

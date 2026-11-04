@@ -91,6 +91,16 @@ class TestAdding:
         assert store.resolve("imu-detector:1").metadata == {"dataset": "imu-2026", "auc": 0.93}
         assert artifact.metadata["auc"] == 0.93
 
+    def test_metadata_too_large_to_travel_with_every_pin_is_refused(
+        self, store: ArtifactStore, model: Path
+    ) -> None:
+        card = "x" * artifacts_module.METADATA_MAX_BYTES
+
+        with pytest.raises(ArtifactError, match="put larger things inside the artifact"):
+            store.add(model, "imu-detector", metadata={"card": card})
+
+        assert store.names() == []
+
     def test_metadata_that_is_not_json_is_refused(self, store: ArtifactStore, model: Path) -> None:
         with pytest.raises(ArtifactError, match="metadata"):
             store.add(model, "imu-detector", metadata={"when": object()})

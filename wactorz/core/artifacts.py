@@ -101,6 +101,12 @@ _READ_FORMATS = (1, INDEX_FORMAT)
 #: metadata.
 POINTERS = ("active", "shadow")
 
+#: The most metadata a version may carry, as JSON. It travels with every pin:
+#: in each spawn config, signed command and spawn-registry record that names
+#: the version, so it is kept to what an agent reads (a threshold, a
+#: calibration constant, the dataset's name), not a model card.
+METADATA_MAX_BYTES = 64 * 1024
+
 #: A SHA-256, as a file in the store is named.
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -210,6 +216,10 @@ class ArtifactError(Exception):
         return cls(f"{entry!r} is not a pinned artifact")
 
     @classmethod
+    def metadata_not_a_mapping(cls, entry: Any) -> "ArtifactError":
+        return cls(f"{entry!r} has metadata that is not a mapping")
+
+    @classmethod
     def no_sha256(cls, entry: Any) -> "ArtifactError":
         return cls(f"{entry!r} does not name a SHA-256")
 
@@ -246,6 +256,13 @@ class ArtifactError(Exception):
     @classmethod
     def metadata_not_json(cls, exc: Exception) -> "ArtifactError":
         return cls(f"its metadata is not JSON: {exc}")
+
+    @classmethod
+    def metadata_too_large(cls, size: int) -> "ArtifactError":
+        return cls(
+            f"its metadata is {size} bytes as JSON, over {METADATA_MAX_BYTES}: "
+            "keep what an agent reads in metadata, and put larger things inside the artifact"
+        )
 
     @classmethod
     def refused_checkpoint(cls, path: Path, exc: CheckpointRefusedError) -> "ArtifactError":
@@ -688,9 +705,11 @@ class ArtifactStore:
         if fmt.name == "state_dict":
             _check_state_dict(path)
         try:
-            json.dumps(dict(metadata or {}))
+            said = json.dumps(dict(metadata or {}))
         except (TypeError, ValueError) as exc:
             raise ArtifactError.metadata_not_json(exc) from exc
+        if len(said.encode()) > METADATA_MAX_BYTES:
+            raise ArtifactError.metadata_too_large(len(said.encode()))
 
         self.objects.mkdir(parents=True, exist_ok=True)
         # Copied in and hashed before the lock is taken: a model takes as long to
@@ -1204,7 +1223,12 @@ def _resolve_in(
 
 
 def pinned(artifact: Artifact) -> dict[str, Any]:
-    """``artifact`` as a spawn config carries it: enough to fetch it and check it."""
+    """``artifact`` as a spawn config carries it: enough to fetch it and check it, and what was said of it.
+
+    The metadata goes with it so that the agent reading the version reads what
+    its author said of it too: the threshold a detector flags above, the
+    dataset it was trained on.
+    """
     return {
         "name": artifact.name,
         "version": artifact.version,
@@ -1212,13 +1236,16 @@ def pinned(artifact: Artifact) -> dict[str, Any]:
         "format": artifact.format,
         "size": artifact.size,
         "runs_code": artifact.runs_code,
+        "metadata": dict(artifact.metadata),
     }
 
 
 def check_pinned(entry: Any) -> dict[str, Any]:
     """``entry`` if it is a well-formed pinned artifact; `ArtifactError` saying why it is not.
 
-    Asked by a node of what main sent, before it fetches anything.
+    Asked by a node of what main sent, before it fetches anything. The entry
+    comes back with ``metadata`` always a dict: empty when the one who pinned
+    it sent none, as a main from before metadata travelled does.
     """
     if not isinstance(entry, Mapping):
         raise ArtifactError.not_pinned(entry)
@@ -1237,7 +1264,10 @@ def check_pinned(entry: Any) -> dict[str, Any]:
     follows = entry.get("follows")
     if follows is not None and follows not in POINTERS:
         raise ArtifactError.follows_no_pointer(entry, follows)
-    return dict(entry)
+    metadata = entry.get("metadata")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise ArtifactError.metadata_not_a_mapping(entry)
+    return {**entry, "metadata": dict(metadata or {})}
 
 
 def pinned_in(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

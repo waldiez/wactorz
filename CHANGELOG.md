@@ -388,6 +388,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Training runs started within one second are let go oldest first.** A run's id held its start in whole seconds,
+  so of two runs started in the same second, pruning the run directories kept either one, and could delete the newer.
+  Ids now hold the start in microseconds; directories named before the change sort as older and go first.
 - **A shadow on the version served starts no trial of it against itself.** With no version active, agents serve
   the newest, and a `shadow` on the newest (a first trained version, say) had them compare that version with itself:
   identical pairs and a verdict of no difference. They now keep no pairs for it, and the Models tab says that there is

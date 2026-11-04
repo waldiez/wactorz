@@ -119,8 +119,13 @@ def _with_absolute_recipe(spec: TrainSpec) -> TrainSpec:
 
 
 def new_run_id(now: float) -> str:
-    """A run's id: when it started, and a few random characters to tell two apart."""
-    return f"{int(now)}-{uuid.uuid4().hex[:8]}"
+    """A run's id: when it started, in microseconds, and a few random characters to tell two apart.
+
+    The time is zero-padded so the ids sort as the runs started, which is how
+    `_prune_runs` finds the oldest; runs started in the same second still sort
+    in order. An id of whole seconds sorts before these.
+    """
+    return f"{round(now * 1_000_000):016d}-{uuid.uuid4().hex[:8]}"
 
 
 def runs_root(state_dir: str | Path) -> Path:
@@ -149,7 +154,7 @@ def _judgement_of(store: ArtifactStore, parent: dict[str, Any] | None) -> Judgem
 
 
 def _prune_runs(root: Path, keep: int) -> None:
-    """Let the oldest run directories go, keeping ``keep``."""
+    """Let the oldest run directories go, keeping ``keep``; their names sort as they started (`new_run_id`)."""
     if not root.is_dir():
         return
     runs = sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name)

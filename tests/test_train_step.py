@@ -13,6 +13,7 @@ import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -653,6 +654,37 @@ class TestARun:
 
         assert not first.run_dir.exists()
         assert second.run_dir.is_dir()
+
+
+class TestRunIds:
+    def test_runs_started_in_one_second_are_let_go_oldest_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The random part sorts the newer run first, so only the time can order them.
+        hexes = iter(["f" * 32, "0" * 32])
+        monkeypatch.setattr(run_module.uuid, "uuid4", lambda: SimpleNamespace(hex=next(hexes)))
+        older = run_module.new_run_id(1_793_801_401.1)
+        newer = run_module.new_run_id(1_793_801_401.9)
+        for run_id in (older, newer):
+            (tmp_path / run_id).mkdir()
+
+        run_module._prune_runs(tmp_path, 1)
+
+        assert [p.name for p in tmp_path.iterdir()] == [newer]
+
+    def test_a_run_named_in_whole_seconds_is_older_than_one_named_since(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "1793801401-d1b050be").mkdir()
+        kept = run_module.new_run_id(1_793_801_401.0)
+        (tmp_path / kept).mkdir()
+
+        run_module._prune_runs(tmp_path, 1)
+
+        assert [p.name for p in tmp_path.iterdir()] == [kept]
+
+    def test_an_id_says_when_its_run_started(self) -> None:
+        assert run_module.new_run_id(1_793_801_401.25).startswith("1793801401250000-")
 
 
 class TestTheGraphRecord:

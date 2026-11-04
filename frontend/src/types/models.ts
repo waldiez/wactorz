@@ -191,8 +191,8 @@ export type Pointers = Partial<Record<PointerName, PointerState>>;
 
 /** When a model's shadow may become active (`wactorz/core/promotion.py`). */
 export interface Policy {
-    /** The figure compared: `f1`, `precision`, `recall`, `mcc` or `false_positive_rate`. */
-    metric: string;
+    /** The figure compared (`f1`, `macro_f1`, `mae`...); null for the main one of the trial's kind. */
+    metric: string | null;
     /** How much better the shadow must be on it. */
     margin: number;
     /** How long the trial must have run. */
@@ -220,7 +220,16 @@ export interface PolicyTerm {
 /** A trial held against its model's policy, as `GET /api/models/{name}/trial` gives it. */
 export interface PolicyVerdict {
     met: boolean;
+    /** The figure compared: the policy's, else the main one of the trial's kind. */
     metric: string;
+    /** The kind the trial was judged as; null for a trial not judged. */
+    kind: string | null;
+    /** Whether that kind reports the figure; a policy on one it does not is never met. */
+    reported: boolean;
+    /** The figures the kind reports, the main one first. */
+    metrics: string[];
+    /** The test the significance term reads: McNemar's, or a regressor's sign test. */
+    test: "mcnemar" | "sign";
     /** Each side's figure on the metric, and the shadow's gain; null when not measured. */
     shadow: number | null;
     active: number | null;

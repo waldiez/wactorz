@@ -18,18 +18,26 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
+from .judgement import CLASSIFIER, DETECTOR, REGRESSOR
 from .provenance import DECISION, Provenance, ProvNode, model_source, stable_id
 
-#: The figures a detector's trial reports that a policy may compare on, and
-#: the ones where less is better.
-METRICS = ("f1", "precision", "recall", "mcc", "false_positive_rate")
-LOWER_IS_BETTER = frozenset({"false_positive_rate"})
+#: The figures each kind's trial reports that a policy may compare on, the
+#: first its main one, compared when the policy names none.
+METRICS_OF_KIND: dict[str, tuple[str, ...]] = {
+    DETECTOR: ("f1", "precision", "recall", "mcc", "false_positive_rate"),
+    CLASSIFIER: ("macro_f1", "weighted_f1", "accuracy"),
+    REGRESSOR: ("mae", "rmse"),
+}
+#: Every figure a policy may name, whatever the kind.
+METRICS = tuple(m for metrics in METRICS_OF_KIND.values() for m in metrics)
+#: The figures where less is better.
+LOWER_IS_BETTER = frozenset({"false_positive_rate", "mae", "rmse"})
 
-#: What a name's policy says when nothing is set.
-DEFAULT_METRIC = "f1"
+#: What a name's policy says when nothing is set; no metric is the kind's main one.
+DEFAULT_METRIC: str | None = None
 DEFAULT_MARGIN = 0.0
 DEFAULT_MIN_DAYS = 1.0
 DEFAULT_MIN_LABELLED = 100
@@ -46,6 +54,10 @@ PROMOTION = "promotion"
 FIELDS = ("metric", "margin", "min_days", "min_labelled", "significant", "automatic")
 
 _DAY_S = 86400.0
+
+#: The names of the tests the ``significant`` term reads.
+MCNEMAR = "mcnemar"
+SIGN_TEST = "sign"
 
 
 class PolicyError(ValueError):
@@ -84,7 +96,8 @@ class PolicyError(ValueError):
 class Policy:
     """When a name's shadow may become active, and who said so when."""
 
-    metric: str = DEFAULT_METRIC
+    #: The figure compared; None for the main one of the kind the trial is judged as.
+    metric: str | None = DEFAULT_METRIC
     margin: float = DEFAULT_MARGIN
     min_days: float = DEFAULT_MIN_DAYS
     min_labelled: int = DEFAULT_MIN_LABELLED
@@ -107,8 +120,9 @@ class Policy:
     def words(self) -> str:
         """The policy as a line: ``f1 by 0.02 over 1 day and 100 labelled, significant, asked``."""
         days = f"{self.min_days:g} day" + ("" if self.min_days == 1 else "s")
+        metric = self.metric or "the main figure of its kind"
         return (
-            f"{self.metric} by {self.margin:g} over {days} and {self.min_labelled} labelled, "
+            f"{metric} by {self.margin:g} over {days} and {self.min_labelled} labelled, "
             f"{'significant' if self.significant else 'significance not required'}, "
             f"{'promoted on its own' if self.automatic else 'asked'}"
         )
@@ -160,10 +174,10 @@ def declared(
             raise PolicyError.unknown_field(str(name))
     fields = {**base, **given}
     metric = fields["metric"]
-    if metric not in METRICS:
+    if metric is not None and metric not in METRICS:
         raise PolicyError.unknown_metric(metric)
     return Policy(
-        metric=str(metric),
+        metric=None if metric is None else str(metric),
         margin=_number("margin", fields["margin"]),
         min_days=_number("min_days", fields["min_days"]),
         min_labelled=_count("min_labelled", fields["min_labelled"]),
@@ -215,11 +229,24 @@ class Verdict:
     active: float | None = None
     gain: float | None = None
     policy: Policy = field(default_factory=Policy)
+    #: The kind the trial was judged as; None for a trial not judged.
+    kind: str | None = None
+    #: The test the ``significant`` term reads: McNemar's, or a regressor's sign test.
+    test: str = "mcnemar"
+
+    @property
+    def reported(self) -> bool:
+        """Whether the trial's kind reports the figure compared; true for a trial not judged."""
+        return self.kind is None or self.metric in METRICS_OF_KIND.get(self.kind, ())
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "met": self.met,
             "metric": self.metric,
+            "kind": self.kind,
+            "reported": self.reported,
+            "metrics": list(METRICS_OF_KIND.get(self.kind or "", ())),
+            "test": self.test,
             "shadow": self.shadow,
             "active": self.active,
             "gain": self.gain,
@@ -231,7 +258,9 @@ class Verdict:
     def words(self) -> str:
         """The verdict as a line, for a move's reason or the feed."""
         parts: list[str] = []
-        if self.shadow is not None and self.active is not None and self.gain is not None:
+        if not self.reported:
+            parts.append(f"{self.metric} is not a figure a {self.kind} reports")
+        elif self.shadow is not None and self.active is not None and self.gain is not None:
             parts.append(
                 f"{self.metric} {self.shadow:.4g} vs {self.active:.4g} "
                 f"({'+' if self.gain >= 0 else ''}{self.gain:.4g}, margin {self.policy.margin:g})"
@@ -247,7 +276,8 @@ class Verdict:
             parts.append(f"{int(labelled.actual)} labelled")
         significant = by_name.get("significant")
         if significant is not None and significant.wanted:
-            parts.append(f"McNemar p={float(significant.actual):.3g}")
+            test = "sign test" if self.test == SIGN_TEST else "McNemar"
+            parts.append(f"{test} p={float(significant.actual):.3g}")
         verdict = "met" if self.met else "not met"
         return f"{verdict}: {', '.join(parts)}"
 
@@ -265,21 +295,27 @@ def judge_trial(summary: Mapping[str, Any], policy: Policy, *, since: float, now
     """``summary``, a trial compared and judged against the labels, held against ``policy``.
 
     A trial that is not judged (``labels`` absent) meets nothing on the
-    figures and says so in its terms. The days are from ``since``, when the
-    shadow was set, to ``now``.
+    figures and says so in its terms. The figure compared is the policy's,
+    else the main one of the kind the trial is judged as; one that kind does
+    not report is never met, and the verdict says so. Significance is
+    McNemar's test, or for a regressor the sign test on which side was nearer
+    the truth. The days are from ``since``, when the shadow was set, to ``now``.
     """
     labels = summary.get("labels")
     judged = isinstance(labels, Mapping)
-    shadow = _figure(labels.get("shadow") if judged else None, policy.metric)
-    active = _figure(labels.get("active") if judged else None, policy.metric)
+    kind = str(labels.get("kind") or DETECTOR) if judged else None
+    metric = policy.metric or METRICS_OF_KIND.get(kind or DETECTOR, ("f1",))[0]
+    shadow = _figure(labels.get("shadow") if judged else None, metric)
+    active = _figure(labels.get("active") if judged else None, metric)
     gain: float | None = None
     if shadow is not None and active is not None:
-        gain = (active - shadow) if policy.metric in LOWER_IS_BETTER else (shadow - active)
+        gain = (active - shadow) if metric in LOWER_IS_BETTER else (shadow - active)
     days = max(0.0, now - since) / _DAY_S
     labelled = int(labels.get("labelled") or 0) if judged else 0
-    mcnemar = labels.get("mcnemar") if judged else None
-    p = float(mcnemar.get("p", 1.0)) if isinstance(mcnemar, Mapping) else 1.0
-    better = mcnemar.get("better") if isinstance(mcnemar, Mapping) else None
+    test = SIGN_TEST if kind == REGRESSOR else MCNEMAR
+    tested = labels.get("closer" if test == SIGN_TEST else "mcnemar") if judged else None
+    p = float(tested.get("p", 1.0)) if isinstance(tested, Mapping) else 1.0
+    better = tested.get("better") if isinstance(tested, Mapping) else None
     terms = (
         Term("judged", True, judged, judged),
         Term("margin", policy.margin, gain, gain is not None and gain >= policy.margin),
@@ -292,15 +328,19 @@ def judge_trial(summary: Mapping[str, Any], policy: Policy, *, since: float, now
             (not policy.significant) or (better == "shadow"),
         ),
     )
-    return Verdict(
+    verdict = Verdict(
         met=all(t.met for t in terms),
         terms=terms,
-        metric=policy.metric,
+        metric=metric,
         shadow=shadow,
         active=active,
         gain=gain,
         policy=policy,
+        kind=kind,
+        test=test,
     )
+    # A figure the kind does not report is never met, whatever the sides hold under that name.
+    return verdict if verdict.reported else replace(verdict, met=False)
 
 
 # ── The decision in the graph ─────────────────────────────────────────────────

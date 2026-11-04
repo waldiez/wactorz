@@ -36,7 +36,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   --field co2_in_15m` holds the number in that field against the label's value: the mean absolute error, the RMS
   error, the bias and the worst error, and which side was nearer the truth more often, with a sign test; labels that
   are not numbers are left out and counted. The Models tab's trial card shows each kind's figures, and `GET
-  /api/models/NAME/trial` returns them. Chat's `/artifacts judge` still sets a detector.
+  /api/models/NAME/trial` returns them. Chat's `/artifacts judge` still sets a detector. A promotion policy compares a
+  classifier on `macro_f1`, `weighted_f1` or `accuracy` and a regressor on `mae` or `rmse` (less is better), with
+  the sign test for a regressor's significance; a policy that names no metric uses the main one of the trial's kind
+  (`f1`, `macro_f1`, `mae`), and one the kind does not report is never met, saying which it does.
 - **A model's policy says when its shadow becomes the version served.** `wactorz-artifacts policy NAME --metric f1
   --margin 0.02 --min-days 1 --min-labelled 100 --significant --manual` (`/artifacts policy NAME margin=0.02` in chat,
   `PUT /api/models/NAME/policy` from the dashboard's API) sets what a trial must show before the shadow may become

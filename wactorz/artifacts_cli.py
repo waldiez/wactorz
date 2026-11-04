@@ -407,7 +407,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "policy", parents=[state_dir], help="say when a model's shadow may become active"
     )
     policy.add_argument("name", help="the model")
-    policy.add_argument("--metric", choices=METRICS, help="the figure compared (default: f1)")
+    policy.add_argument(
+        "--metric",
+        choices=METRICS,
+        help="the figure compared (default: the main one of its kind: f1, macro_f1 or mae)",
+    )
     policy.add_argument("--margin", type=float, help="how much better the shadow must be")
     policy.add_argument("--min-days", type=float, help="how long the trial must have run")
     policy.add_argument("--min-labelled", type=int, help="how many labelled inputs it must hold")

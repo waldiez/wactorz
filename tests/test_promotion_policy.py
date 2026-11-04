@@ -28,6 +28,7 @@ from wactorz.core.model_swaps import move_id
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import WactorzDB
 from wactorz.core.promotion import (
+    METRICS_OF_KIND,
     POLICY,
     Policy,
     PolicyError,
@@ -100,8 +101,10 @@ class TestThePolicy:
     def test_the_defaults_ask_the_operator_after_a_day_and_a_hundred_labels(self) -> None:
         policy = declared(by="cli", at=T0)
 
-        assert policy == Policy("f1", 0.0, 1.0, 100, True, False, by="cli", at=T0)
-        assert policy.words() == ("f1 by 0 over 1 day and 100 labelled, significant, asked")
+        assert policy == Policy(None, 0.0, 1.0, 100, True, False, by="cli", at=T0)
+        assert policy.words() == (
+            "the main figure of its kind by 0 over 1 day and 100 labelled, significant, asked"
+        )
 
     def test_fields_given_sit_over_the_policy_set_before(self) -> None:
         before = declared({"margin": 0.05, "min_days": 3}, by="cli", at=T0)
@@ -253,6 +256,98 @@ class TestTheVerdict:
             "actual": 0.4,
             "met": True,
         }
+
+
+class TestEachKindsFigures:
+    """A policy compares on the figures the trial's kind reports, its main one unless it names one."""
+
+    @staticmethod
+    def classified(shadow: float = 0.9, active: float = 0.7, p: float = 0.01) -> dict[str, Any]:
+        return {
+            "labels": {
+                "kind": "classifier",
+                "labelled": 200,
+                "active": {"macro_f1": active, "weighted_f1": active, "accuracy": active},
+                "shadow": {"macro_f1": shadow, "weighted_f1": shadow, "accuracy": shadow},
+                "mcnemar": {"p": p, "better": "shadow" if p < 0.05 else None},
+            }
+        }
+
+    @staticmethod
+    def regressed(shadow: float = 4.0, active: float = 9.0, p: float = 0.001) -> dict[str, Any]:
+        return {
+            "labels": {
+                "kind": "regressor",
+                "labelled": 200,
+                "active": {"mae": active, "rmse": active * 1.2},
+                "shadow": {"mae": shadow, "rmse": shadow * 1.2},
+                "closer": {"active": 3, "shadow": 40, "ties": 0, "p": p,
+                           "better": "shadow" if p < 0.05 else None},
+            }
+        }  # fmt: skip
+
+    def test_a_classifier_is_compared_on_its_macro_f1_unless_another_is_named(self) -> None:
+        verdict = judge_trial(
+            self.classified(), declared({"margin": 0.1}), since=T0, now=T0 + 2 * DAY
+        )
+
+        assert (verdict.met, verdict.metric, verdict.kind) == (True, "macro_f1", "classifier")
+        assert verdict.gain == pytest.approx(0.2)
+        accuracy = judge_trial(
+            self.classified(), declared({"metric": "accuracy"}), since=T0, now=T0 + 2 * DAY
+        )
+        assert (accuracy.met, accuracy.metric) == (True, "accuracy")
+
+    def test_a_regressor_is_better_with_less_error_and_its_sign_test_says_if_by_chance(
+        self,
+    ) -> None:
+        verdict = judge_trial(self.regressed(), declared({"margin": 2}), since=T0, now=T0 + 2 * DAY)
+
+        assert (verdict.met, verdict.metric, verdict.gain, verdict.test) == (
+            True,
+            "mae",
+            5.0,
+            "sign",
+        )
+        assert verdict.words() == (
+            "met: mae 4 vs 9 (+5, margin 2), 2 day(s), 200 labelled, sign test p=0.001"
+        )
+        chance = judge_trial(self.regressed(p=0.4), declared(), since=T0, now=T0 + 2 * DAY)
+        assert [t.name for t in chance.terms if not t.met] == ["significant"]
+
+    def test_a_worse_regressor_falls_short_on_the_margin(self) -> None:
+        verdict = judge_trial(
+            self.regressed(shadow=10.0), declared({"metric": "rmse"}), since=T0, now=T0 + 2 * DAY
+        )
+
+        assert verdict.met is False
+        assert verdict.gain == pytest.approx(-1.2)
+
+    @pytest.mark.parametrize(("metric", "kind"), [("mae", "classifier"), ("f1", "regressor")])
+    def test_a_figure_the_kind_does_not_report_is_never_met_and_says_why(
+        self, metric: str, kind: str
+    ) -> None:
+        summary = self.classified() if kind == "classifier" else self.regressed()
+        # Even should the sides hold a value under that name, it is not the kind's figure.
+        summary["labels"]["active"][metric] = 0.1
+        summary["labels"]["shadow"][metric] = 0.9
+
+        verdict = judge_trial(summary, declared({"metric": metric}), since=T0, now=T0 + 2 * DAY)
+
+        assert verdict.met is False and verdict.reported is False
+        assert f"{metric} is not a figure a {kind} reports" in verdict.words()
+        shown = verdict.to_dict()
+        assert (shown["reported"], shown["kind"]) == (False, kind)
+        assert shown["metrics"] == list(METRICS_OF_KIND[kind])
+
+    def test_a_detector_is_compared_on_f1_when_the_policy_names_none(self) -> None:
+        verdict = judge_trial(judged(), declared(), since=T0, now=T0 + 2 * DAY)
+
+        assert (verdict.metric, verdict.kind, verdict.test) == ("f1", "detector", "mcnemar")
+
+    def test_a_metric_of_any_kind_may_be_set(self) -> None:
+        assert declared({"metric": "mae"}).metric == "mae"
+        assert declared({"metric": "macro_f1"}).metric == "macro_f1"
 
 
 class TestTheDecision:
@@ -442,7 +537,8 @@ class TestMainHoldsATrialToItsPolicy:
         assert options == [PROMOTE, CLEAR, KEEP]
         assert (
             context
-            == "The policy asks for f1 by 0.05 over 1 day and 100 labelled, significant, asked."
+            == "The policy asks for the main figure of its kind by 0.05 over 1 day and 100 labelled, "
+            "significant, asked."
         )
         active = store.pointer("imu", "active")
         assert active is not None and (active.version, active.by) == (2, OPERATOR)
@@ -684,7 +780,8 @@ class TestTheChatCommand:
         second = await models_commands.policy_model(chat(), "imu automatic=yes")
 
         assert first == (
-            "imu is promoted when its shadow shows f1 by 0.02 over 2 days and 100 labelled, "
+            "imu is promoted when its shadow shows the main figure of its kind by 0.02 over 2 days "
+            "and 100 labelled, "
             "significant, asked."
         )
         assert second.endswith("significant, promoted on its own.")
@@ -696,7 +793,7 @@ class TestTheChatCommand:
 
         reply = await models_commands.policy_model(chat(), "imu none")
 
-        assert reply.startswith("imu has no policy now. It was: f1 by 0.3")
+        assert reply.startswith("imu has no policy now. It was: the main figure of its kind by 0.3")
         assert store.policy("imu") is None
 
     @pytest.mark.parametrize(

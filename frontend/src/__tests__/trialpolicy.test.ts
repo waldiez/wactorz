@@ -28,6 +28,10 @@ const POLICY = (overrides: Partial<Policy> = {}): Policy => ({
 const VERDICT = (overrides: Partial<PolicyVerdict> = {}): PolicyVerdict => ({
     met: true,
     metric: "f1",
+    kind: "detector",
+    reported: true,
+    metrics: ["f1", "precision", "recall", "mcc", "false_positive_rate"],
+    test: "mcnemar",
     shadow: 0.91,
     active: 0.85,
     gain: 0.06,
@@ -139,5 +143,47 @@ describe("a trial against its policy", () => {
             "Judged against the labels: no",
         );
         expect(byRole(section, "listitem", "Gain on f1").textContent).toBe("Gain on f1: – (asks 0.020)");
+    });
+});
+
+describe("a policy on a classifier or a regressor", () => {
+    it("names the sign test a regressor's significance reads", () => {
+        const verdict = VERDICT({ kind: "regressor", metric: "mae", metrics: ["mae", "rmse"], test: "sign" });
+
+        const section = policySection(TRIAL({ policy: verdict }));
+
+        const term = byRole(section, "listitem", "Difference not chance");
+        expect(term.textContent).toBe("Difference not chance: Sign test p = 0.003");
+        const sure = VERDICT({
+            terms: [{ name: "significant", wanted: true, actual: 2e-16, met: true }],
+        });
+        expect(
+            byRole(policySection(TRIAL({ policy: sure })), "listitem", "Difference not chance").textContent,
+        ).toBe("Difference not chance: McNemar p < 0.001");
+    });
+
+    it("says which figure a policy that names none compares on", () => {
+        const verdict = VERDICT({ kind: "classifier", metric: "macro_f1", policy: POLICY({ metric: null }) });
+
+        expect(policySection(TRIAL({ policy: verdict })).textContent).toContain(
+            "The policy asks for macro_f1, the main figure of its kind, by 0.02 over 1 day",
+        );
+    });
+
+    it("says a figure the kind does not report can never be met, and which it does", () => {
+        const verdict = VERDICT({
+            met: false,
+            kind: "classifier",
+            metric: "mae",
+            reported: false,
+            metrics: ["macro_f1", "weighted_f1", "accuracy"],
+            shadow: null,
+            active: null,
+            gain: null,
+        });
+
+        expect(policyVerdict(verdict)).toBe(
+            "The policy cannot be met: a classifier reports no mae. Set its metric to one of macro_f1, weighted_f1, accuracy.",
+        );
     });
 });

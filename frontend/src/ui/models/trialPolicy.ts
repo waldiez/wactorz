@@ -9,6 +9,7 @@
  */
 import type { PolicyTerm, PolicyVerdict, ShadowTrial } from "../../types/models";
 import { el, labelled, list, listItem } from "../dom";
+import { pValue } from "./trialFigures";
 
 /** What no value reads as. */
 const NONE = "–";
@@ -33,13 +34,19 @@ const TERMS: Record<PolicyTerm["name"], string> = {
 };
 
 /** One term: its name, what the trial shows, and what the policy asks. */
-function termLine(term: PolicyTerm, metric: string): HTMLElement {
+function termLine(term: PolicyTerm, verdict: PolicyVerdict): HTMLElement {
+    const metric = verdict.metric;
     const name = term.name === "margin" ? `Gain on ${metric}` : TERMS[term.name];
     let shown: string;
     if (term.name === "judged") {
         shown = term.actual ? "yes" : "no";
     } else if (term.name === "significant") {
-        shown = term.wanted ? `McNemar p = ${figure(term.actual)}` : "not required";
+        const test = verdict.test === "sign" ? "Sign test" : "McNemar";
+        shown = term.wanted
+            ? typeof term.actual === "number"
+                ? `${test} ${pValue(term.actual)}`
+                : `${test} p = ${NONE}`
+            : "not required";
     } else {
         shown = `${figure(term.actual)} (asks ${figure(term.wanted)})`;
     }
@@ -52,7 +59,8 @@ function termLine(term: PolicyTerm, metric: string): HTMLElement {
 function whatFollows(verdict: PolicyVerdict): string {
     const { policy } = verdict;
     const does = policy.automatic ? "main promotes the shadow on its own" : "main asks on the dashboard";
-    return `The policy asks for ${policy.metric} by ${policy.margin} over ${policy.min_days} day${policy.min_days === 1 ? "" : "s"} and ${policy.min_labelled} labelled inputs; when it is met, ${does}. Set by ${policy.by || "nobody"}.`;
+    const metric = policy.metric ?? `${verdict.metric}, the main figure of its kind,`;
+    return `The policy asks for ${metric} by ${policy.margin} over ${policy.min_days} day${policy.min_days === 1 ? "" : "s"} and ${policy.min_labelled} labelled inputs; when it is met, ${does}. Set by ${policy.by || "nobody"}.`;
 }
 
 /** How to set a policy, for a model that has none. */
@@ -69,6 +77,9 @@ function howToSet(name: string): HTMLElement {
 
 /** Whether the trial meets the policy, in a line. */
 export function policyVerdict(verdict: PolicyVerdict): string {
+    if (!verdict.reported) {
+        return `The policy cannot be met: a ${verdict.kind ?? "model"} reports no ${verdict.metric}. Set its metric to one of ${verdict.metrics.join(", ")}.`;
+    }
     const sides =
         verdict.shadow === null || verdict.active === null
             ? `${verdict.metric} not measured yet`
@@ -93,7 +104,7 @@ export function policySection(trial: ShadowTrial): HTMLElement {
     section.appendChild(el("p", "af-trial-verdict", policyVerdict(verdict)));
     const terms = list(el("ul", "af-trial-policy-terms"), "Policy terms");
     for (const term of verdict.terms) {
-        terms.appendChild(termLine(term, verdict.metric));
+        terms.appendChild(termLine(term, verdict));
     }
     section.append(terms, el("p", "af-trial-judged-basis", whatFollows(verdict)));
     return section;

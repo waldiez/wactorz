@@ -488,6 +488,25 @@ The outcomes of the model's trials that ended, newest first: how each ended (`pr
 
 ---
 
+### `GET /api/models/{name}/drift`
+
+The drift alarms the `drift` agent raised about the model, newest first (`docs/design/drift.md`): each an `observation` in the provenance graph, with the `test` (`psi`, `ks` or `adwin`), the `column`, the `source` it was read from, the `statistic` and `threshold`, `p` for KS, `at` for the moment ADWIN found the scores changed, how many `rows` each side held, the `version` served, the current `window` and the `reference` it was compared against, and `by`, the agent. An alarm is an episode, written once when a test first crosses its threshold; the gauges `wactorz_model_drift{model,test,column}` carry the statistic as it moves.
+
+**Response** `200 OK`
+```json
+{"name": "imu-detector",
+ "alarms": [{"id": "…", "at": 1760086400.0, "by": "agent:drift", "what": "drift",
+             "model": "imu-detector", "version": 3, "test": "psi", "column": "ay", "source": "sensors/imu",
+             "statistic": 0.42, "threshold": 0.2, "alarmed": true, "p": null, "at": null,
+             "rows": {"reference": 1008, "current": 288}, "detail": {},
+             "window": {"source": "sensors/imu", "since": 1760000000.0, "until": 1760086400.0},
+             "reference": {"source": "sensors/imu", "since": 1759395200.0, "until": 1760000000.0}}]}
+```
+
+`400` for a bad `name`, `503` when persistence is not running.
+
+---
+
 ### `GET /api/data`
 
 The sources with recorded readings under the state directory's `data/`: every source a recorder filed at least one hour of, and `shadow/<model>` and `serving/<model>` for pairs and serving logs (`docs/design/data-storage.md`). Each says what it holds, and the answer says the retention in force (`WACTORZ_DATA_RETENTION_DAYS`; `null` when everything is kept).

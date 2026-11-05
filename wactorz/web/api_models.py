@@ -14,6 +14,8 @@ made ``by`` the dashboard:
 over a window: its pairs compared, and against the labels of a source when
 ``source`` and ``positive`` say which values count; ``/trials`` the outcomes of
 the trials that ended; ``/trial/series`` the same pairs over time, for a chart.
+``GET /api/models/{name}/drift`` is the drift alarms the drift agent raised
+about the model, newest first (`wactorz.drift`).
 ``GET /api/models/{name}/moves`` is the history of those moves, newest first,
 from the provenance graph in main's database (`wactorz.core.pointer_moves`).
 
@@ -64,6 +66,7 @@ from ..core.shadow_trial import (
     series,
 )
 from ..data.files import LAST_SECOND, DataError, data_root
+from ..drift import alarms_of
 from . import runtime
 
 #: Who a move made here is recorded as made by.
@@ -391,6 +394,20 @@ async def trials_handler(request: web.Request) -> web.Response:
         )
     trials = await asyncio.to_thread(outcomes_of, Provenance(db), name)
     return web.json_response({"name": name, "trials": trials})
+
+
+async def drift_handler(request: web.Request) -> web.Response:
+    """The drift alarms raised about the model, newest first."""
+    name = _name(request)
+    if isinstance(name, web.Response):
+        return name
+    db = runtime.db if runtime.db is not None else get_db()
+    if db is None:
+        return web.json_response(
+            {"error": "persistence is not running, so no drift alarms are recorded"}, status=503
+        )
+    alarms = await asyncio.to_thread(alarms_of, Provenance(db), name)
+    return web.json_response({"name": name, "alarms": alarms})
 
 
 def _moment(raw: str | None) -> float | bool | None:

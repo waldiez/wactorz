@@ -44,6 +44,7 @@ ENV_VAR = "WACTORZ_AGENTS"
 BUILT_IN_TARGETS = (
     "wactorz.agents.recorder_agent:RecorderAgent",
     "wactorz.agents.train_agent:TrainAgent",
+    "wactorz.agents.drift_agent:DriftAgent",
 )
 
 

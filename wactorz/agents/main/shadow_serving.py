@@ -10,8 +10,10 @@ are read back and compared (`wactorz.core.shadow_trial`), and the result is
 written as an ``outcome`` node about the model, whichever way the trial ended,
 with one line on the feed saying what it showed.
 
-While a shadow is set and its name carries a policy (`wactorz.core.promotion`),
-main reads the trial on a cadence and holds it against the policy. When every
+While a shadow is set, main reads the trial on a cadence and sets its gauges,
+``wactorz_model_score`` and ``wactorz_model_shadow_agreement``
+(`wactorz.monitoring.model_metrics`); when its name carries a policy
+(`wactorz.core.promotion`) it holds the trial against the policy too. When every
 term is met it writes a ``decision`` node and, as the policy says, promotes on
 its own as ``policy`` or asks on the dashboard, whose answer promotes or clears
 the shadow; a trial that falls short is left running. ``docs/design/
@@ -55,6 +57,7 @@ from ...core.shadow_trial import (
     record_outcome,
 )
 from ...data.files import data_root
+from ...monitoring import model_metrics
 from ..shadow_serving import shadow_source
 
 if TYPE_CHECKING:
@@ -184,14 +187,18 @@ class ShadowServing:
             await asyncio.sleep(POLICY_CHECK_S)
 
     async def check_policies(self, now: float | None = None) -> dict[str, Verdict]:
-        """One check of every trial under way whose name has a policy; each verdict by name."""
+        """One check of every trial under way: its gauges set, and, where its name has a policy, its verdict by name."""
         at = time.time() if now is None else now
         store = self.store
         verdicts: dict[str, Verdict] = {}
         for name in await asyncio.to_thread(store.names):
             shadow = await asyncio.to_thread(store.pointer, name, SHADOW)
+            if shadow is None:
+                continue
             policy = await asyncio.to_thread(store.policy, name)
-            if shadow is None or policy is None:
+            if policy is None:
+                summary = await self._compare(name, shadow.moved_at, at, shadow=shadow.version)
+                model_metrics.record_trial(name, summary)
                 continue
             verdicts[name] = await self._check(name, shadow, policy, at)
         return verdicts
@@ -200,6 +207,7 @@ class ShadowServing:
         """Hold ``name``'s trial against ``policy``; act when it has just come to be met."""
         summary = await self._compare(name, shadow.moved_at, now, shadow=shadow.version)
         verdict = judge_trial(summary, policy, since=shadow.moved_at, now=now)
+        model_metrics.record_trial(name, summary, metric=verdict.metric)
         trial: Trial = (name, shadow.version, shadow.moved_at, policy.at)
         before = self._verdicts.get(trial)
         self._verdicts[trial] = verdict.met
@@ -311,6 +319,7 @@ class ShadowServing:
     async def _ended(self, name: str, was: Pointer) -> None:
         """Compare the trial's pairs and write its outcome; say what it showed."""
         until = time.time()
+        model_metrics.forget_trial(name)
         active = await asyncio.to_thread(self.store.pointer, name, "active")
         promoted = active is not None and active.version == was.version
         ended = PROMOTED if promoted else CLEARED

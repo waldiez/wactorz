@@ -649,6 +649,36 @@ agent can read current state without a request/response round-trip.
 
 ---
 
+### `models/{name}/drift`
+**Published by:** The `drift` library agent, on main
+**Retained:** no
+**Trigger:** When a drift test first crosses its threshold on a column of the model's readings, once per episode (`docs/design/drift.md`).
+**Purpose:** What a rule fires a retrain on: a `task` action to the `trainer` with the window and split the rule names. `observation` is the id of the alarm's node in the provenance graph, which the trainer joins its run to; `ts` is the moment ADWIN found the scores changed, else the end of the window checked.
+
+```json
+{
+  "what":        "drift",
+  "model":       "imu-detector",
+  "version":     3,
+  "observation": "…",
+  "ts":          1760086400.0,
+  "test":        "psi",
+  "column":      "ay",
+  "source":      "sensors/imu",
+  "statistic":   0.42,
+  "threshold":   0.2,
+  "alarmed":     true,
+  "p":           null,
+  "at":          null,
+  "rows":        {"reference": 1008, "current": 288},
+  "detail":      {},
+  "window":      {"source": "sensors/imu", "since": 1760000000.0, "until": 1760086400.0},
+  "reference":   {"source": "sensors/imu", "since": 1759395200.0, "until": 1760000000.0}
+}
+```
+
+---
+
 ### Node control and status topics
 **Published by:** Main actor and remote runner
 **Purpose:** Remote node lifecycle, reconciliation, and task routing.
@@ -777,6 +807,7 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/artifact_request` | Remote runner | The artifacts an agent spawned here names that the node does not hold |
 | `models/{name}/active` | Main actor | Retained: the version of a model agents serve, or empty when none is marked; at start and on each move |
 | `models/{name}/shadow` | Main actor | Retained: the version of a model on trial beside the active one, or empty; at start and on each move |
+| `models/{name}/drift` | The `drift` agent | A drift test crossing its threshold on a column of the model's readings, once per episode, with the observation's id |
 | `agents/at/{node}/{agent}/task` | Main actor | Task for an agent on that node |
 | `agents/by-name/{agent}/task` | Main actor | Task by name, for a node from before tasks went by node |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |

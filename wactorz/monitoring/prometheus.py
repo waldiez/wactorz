@@ -23,6 +23,7 @@ from . import (
     http_metrics,
     llm_metrics,
     loop_lag,
+    model_metrics,
 )
 
 RegistryProvider = Callable[[], Any | None]
@@ -473,6 +474,7 @@ class PrometheusMonitor:
             *chat_metrics.COLLECTORS,
             *actor_metrics.COLLECTORS,
             *ha_metrics.COLLECTORS,
+            *model_metrics.COLLECTORS,
         ):
             self._registry.register(collector)
         ProcessCollector(registry=self._registry)

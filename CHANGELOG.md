@@ -29,6 +29,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A model's readings are watched for drift, and a rule retrains on it.** The `drift` library agent
+  (`@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}`)
+  reads two windows of the model's recorded source through the loader on a cadence (`WACTORZ_DRIFT_CHECK_S`,
+  ten minutes unless set): the last day, and what the served version was trained on when the trainer made
+  it, else the day before. Over them it runs PSI and the two-sample KS test on every numeric column, and,
+  when `scores` names a recorded source of the model's scores, the same on the scores and ADWIN over the day
+  for the moment they changed, all in the standard library (`docs/design/drift.md`). A test over its
+  threshold on a column raises an episode once: an `observation` in the provenance graph, a line on the
+  feed, a message on `models/NAME/drift` with the observation's id, and the gauges `wactorz_model_drift` and
+  `wactorz_model_drift_alarm`; it stays raised until the statistic comes back, a promotion starts the
+  episodes afresh against the new version, and a restart reads them back. `GET /api/models/NAME/drift`
+  lists the alarms. A rule on the topic closes the loop without a person: its `task` action sends the
+  `trainer` the window and split it names and the alarm's `observation`, the run is joined `led_to` from
+  it, and the policy decides the promotion. For that, a rule's payload value that is one placeholder is the
+  trigger's value as it is (`"at": "{at}"` hands a number on) and placeholders are filled inside nested
+  objects.
+- **The model loop reports to Prometheus.** `wactorz_model_score{model,side,metric}` and
+  `wactorz_model_shadow_agreement{model}` are set at every check of every shadow trial under way, with or
+  without a policy, and dropped when it ends; `wactorz_model_train_seconds{model}` and
+  `wactorz_model_train_runs_total{model,outcome}` by the trainer; the drift gauges above by the `drift`
+  agent.
 - **A Wiring tab on the dashboard.** `#/wiring` draws `GET /api/wiring`: the agents and the topics between them, left to
   right as the data flows, with the topics fed from outside grouped by root, what a model on trial publishes dashed,
   a reader missing a field in red with the fields named on its box, and an Operator box joined to each agent waiting

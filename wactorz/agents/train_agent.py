@@ -13,7 +13,9 @@ A task to it runs one training (`wactorz.train.run`): ``{"since": ...,
 "until": ..., "split": {...}, "settings": {...}, "reason": "..."}``, from
 chat (``@trainer {"reason": "drift"}``, or ``@trainer <why>`` for a run with
 the defaults), from a rule's ``task`` action or from the controller, each
-saying why.
+saying why. A task that names an ``observation`` -- the id of the drift alarm
+a rule fired on, or of anything else in the graph -- has its run joined
+``led_to`` from it, so the graph says why the version was made.
 What the task does not say takes the agent's options; the default window is
 the last week, with its last fifth held out. The fit runs in a child process
 with the agent's timeout and memory limit, the version is stored with what it
@@ -30,6 +32,7 @@ spawned on a node, it refuses every task and says so.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Mapping
@@ -40,7 +43,9 @@ from ..core.actor import Actor, Message, MessageType
 from ..core.labels import Labels
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
-from ..core.provenance import Provenance
+from ..core.provenance import LED_TO, Provenance, ProvenanceError
+from ..monitoring import model_metrics
+from ..train.record import run_node_id
 from ..train.run import LabelsOf, Outcome, run
 from ..train.spec import DEFAULT_SEED, DEFAULT_TIMEOUT_S, DEFAULT_WINDOW_S, TrainError, TrainSpec
 
@@ -70,6 +75,7 @@ class TrainAgent(Actor):
         "split": 'dict — {"kind": "holdout"|"time_split"|"rolling_origin"|"leave_k_out", ...}, as a task',
         "settings": "dict — passed to train(), as a task; over the spawn option's",
         "reason": "str — why the run was asked for, kept with the move",
+        "observation": "str — the graph node the run follows from, e.g. a drift alarm's, joined led_to",
         "action": "str — status, as a task: what is running or what the last run came to",
     }
     AUTOSTART = False
@@ -141,7 +147,7 @@ class TrainAgent(Actor):
     def spec_for(self, payload: Mapping[str, Any], *, now: float | None = None) -> TrainSpec:
         """The run a task asks for, over this agent's options. Raises `TrainError`."""
         at = time.time() if now is None else now
-        given = {k: v for k, v in payload.items() if k not in ("_task_id", "action")}
+        given = {k: v for k, v in payload.items() if k not in ("_task_id", "action", "observation")}
         # From chat the task is its text: a JSON object says the run's fields;
         # any other words are why it was asked for.
         text = given.pop("text", None)
@@ -198,14 +204,32 @@ class TrainAgent(Actor):
             return
         self.running = spec
         self._running_id = "starting"
-        self.run_detached(self._train_and_reply(spec, target, task_id), name=f"{self.name}:train")
+        self.run_detached(
+            self._train_and_reply(spec, target, task_id, _observation_of(payload)),
+            name=f"{self.name}:train",
+        )
 
-    async def _train_and_reply(self, spec: TrainSpec, target: str, task_id: Any) -> None:
+    async def _train_and_reply(
+        self, spec: TrainSpec, target: str, task_id: Any, observation: str = ""
+    ) -> None:
         try:
             outcome = await self.train(spec)
         finally:
             self.running = None
+        if observation:
+            await self._join(observation, outcome.run_id)
         await self._reply(target, task_id, outcome.to_dict())
+
+    async def _join(self, observation: str, run_id: str) -> None:
+        """Join the run ``led_to`` from ``observation``, when both are in the graph."""
+        db = get_db()
+        if db is None:
+            return
+        prov = Provenance(db)
+        try:
+            await asyncio.to_thread(prov.add_edge, observation, run_node_id(run_id), LED_TO)
+        except ProvenanceError as exc:
+            await self.log(f"the run is not joined to {observation}: {exc}", level="warning")
 
     async def train(self, spec: TrainSpec) -> Outcome:
         """One run, said on the feed as it starts and as it ends."""
@@ -224,6 +248,7 @@ class TrainAgent(Actor):
         self._running_id = outcome.run_id
         self.last = outcome
         self.runs += 1
+        model_metrics.record_train(spec.model, outcome.seconds, ok=outcome.ok)
         if outcome.ok:
             self.metrics.tasks_completed += 1
         else:
@@ -242,6 +267,15 @@ class TrainAgent(Actor):
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": message, "level": level, "timestamp": time.time()},
         )
+
+
+def _observation_of(payload: Mapping[str, Any]) -> str:
+    """The graph node a task says its run follows from: its own ``observation``, else its trigger's."""
+    named = payload.get("observation")
+    if not isinstance(named, str) or not named:
+        trigger = payload.get("trigger")
+        named = trigger.get("observation") if isinstance(trigger, Mapping) else None
+    return named.strip() if isinstance(named, str) else ""
 
 
 def _json_object(text: str) -> dict[str, Any] | None:

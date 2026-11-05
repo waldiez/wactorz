@@ -22,8 +22,11 @@ A spawn config, a pipeline definition and chat all describe a rule the same way:
     }
 
 An action's payload may name fields of the trigger payload in braces, by the
-same dotted path a condition uses (``{reading.score}``), and carries the
-trigger payload itself under ``trigger`` unless told not to.
+same dotted path a condition uses (``{reading.score}``), inside nested objects
+and lists too, and carries the trigger payload itself under ``trigger`` unless
+told not to. A value that is one placeholder and nothing else is the trigger's
+value as it is, so ``"at": "{ts}"`` hands a number on, and
+``"split": {"kind": "time_split", "at": "{ts}"}`` is what the trainer reads.
 
 A ``label`` action records that a source was doing something from the moment
 the trigger says it happened (its ``ts`` or ``timestamp``, else now), as the
@@ -42,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import operator
+import re
 import string
 import time
 from collections.abc import Callable
@@ -361,14 +365,30 @@ class _TriggerFormatter(string.Formatter):
 
 _FORMATTER = _TriggerFormatter()
 
+#: A value that is one placeholder and nothing else: ``{score}``, ``{reading.ts}``.
+_WHOLE_PLACEHOLDER = re.compile(r"^\{([^{}:!]+)\}$")
+
 
 def _render(value: Any, trigger: Any) -> Any:
-    """A string with ``{field}`` placeholders filled from a dict trigger; anything else as is.
+    """``value`` with its ``{field}`` placeholders filled from a dict trigger.
 
-    A string that cannot be rendered -- a stray brace, a format spec the value
-    does not take -- is sent as written: the action still runs.
+    A string that is one placeholder and nothing else becomes the trigger's
+    value as it is -- a number stays a number, an object an object -- so an
+    action can hand a trigger's field to an agent that reads it as such. Any
+    other string is formatted, and one that cannot be -- a stray brace, a
+    format spec the value does not take -- is sent as written: the action
+    still runs. A dict or a list is rendered inside; anything else is as is.
     """
+    if isinstance(value, dict):
+        return {key: _render(item, trigger) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_render(item, trigger) for item in value]
     if isinstance(value, str) and "{" in value and isinstance(trigger, dict):
+        whole = _WHOLE_PLACEHOLDER.match(value)
+        if whole is not None:
+            found, field = field_value(trigger, whole.group(1).strip())
+            if found:
+                return field
         try:
             return _FORMATTER.vformat(value, (), trigger)
         except (ValueError, TypeError, IndexError, KeyError, AttributeError):

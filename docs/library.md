@@ -385,7 +385,61 @@ wactorz-train run examples/imu_anomaly/recipe.py --model imu-detector --source s
 
 Each run is an `action` in the provenance graph and each version a `model`
 node, with `produced`, `trained` and `led_to` edges, so `GET /api/labels` and
-the model's history say what a version learned from and why it was tried.
+the model's history say what a version learned from and why it was tried. A
+task that names an `observation`, the id of a drift alarm, has its run joined
+`led_to` from it.
+
+## Watching for drift
+
+The `drift` library agent watches one model's recorded readings and says when
+they no longer look like what the served version learned from
+(`docs/design/drift.md`). Spawn it with the model, and the recorded source of
+its inputs when the version does not say what it read:
+
+```text
+@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}
+```
+
+Every `check_s` seconds (`WACTORZ_DRIFT_CHECK_S`, ten minutes unless set) it
+reads two windows through the loader, in event time: the current one, the last
+`window_s` (a day), and the reference, the window the served version was trained
+on when the `trainer` made it, else `reference` as spawned, else the window of
+the same length before the current one. Over them it runs, on every numeric
+column (or `columns`), PSI, which alarms at `0.2`, and the two-sample KS test,
+which alarms at `D >= 0.1` with `p < 0.05`; and, when `scores` names a recorded
+source of the model's scores (its `score_column`, `score` unless said), the same
+on the scores and ADWIN over the current window, which says the moment the
+scores changed. Each test runs only when both windows hold `min_rows` (100).
+The thresholds are spawn options with these names.
+
+A test over its threshold on a column raises an episode, once: an `observation`
+node about the model, a line on the feed, a message on `models/<name>/drift`
+with the observation's id, and the gauges `wactorz_model_drift{model,test,column}`
+and `wactorz_model_drift_alarm`. The episode stays raised, the gauges following,
+until a check finds the statistic back under its threshold; a promotion moves
+the reference to the new version and starts afresh; after a restart the episodes
+of the version served are read back from the graph. `GET /api/models/{name}/drift`
+lists the alarms, and `{"action": "check"}` as a task runs a check now.
+
+What follows from an alarm is a rule's, so the loop closes without a person: a
+rule on the topic sends the trainer a task with the window and split it names
+and the alarm's observation, and the policy decides the promotion.
+
+```json
+{"type": "rule", "name": "imu-retrain",
+ "triggers": ["models/imu-detector/drift"],
+ "conditions": [{"field": "test", "op": "in", "value": ["psi", "adwin"]}],
+ "actions": [{"type": "task", "agent": "trainer",
+              "payload": {"split": {"kind": "time_split", "at": "{at}"},
+                          "observation": "{observation}",
+                          "reason": "drift: {test} on {column} ({statistic})"}}],
+ "cooldown_seconds": 86400}
+```
+
+A rule's placeholder that is a value on its own, `"at": "{at}"`, is the
+trigger's value as it is, a number staying a number, and placeholders are filled
+inside nested objects, so the split above reaches the trainer as it reads it.
+The cooldown makes however many columns alarm at once one retrain.
 
 ## Your own files
 

@@ -22,9 +22,10 @@ from wactorz.agents.train_agent import TrainAgent
 from wactorz.core.actor import Message, MessageType
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import WactorzDB
-from wactorz.core.provenance import ACTION, Provenance
+from wactorz.core.provenance import ACTION, LED_TO, OBSERVATION, Provenance
 from wactorz.data import data_root
 from wactorz.data.parquet import Writer
+from wactorz.monitoring import model_metrics
 from wactorz.train import Outcome, TrainError, TrainSpec
 from wactorz.train.cli import main
 from wactorz.train.record import runs_of
@@ -186,6 +187,60 @@ class TestATask:
             "training demo with " + trainer.options["recipe"] + " on sensors/x",
             "stored demo:1",
         ]
+
+    async def test_a_run_is_joined_to_the_observation_the_task_names(
+        self,
+        trainer: TrainAgent,
+        recorded: Path,
+        sent: list[tuple[str, Any, Any]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        with WactorzDB(tmp_path / "db" / "wactorz.db") as db:
+            monkeypatch.setattr(train_agent, "get_db", lambda: db)
+            graph = Provenance(db)
+            alarm = graph.add_node(OBSERVATION, ts=T0, ts_end=T0 + 3600, source="models/demo")
+            # As a rule's task action sends it: the alarm under ``trigger``.
+            await trainer.handle_message(
+                _task(
+                    {
+                        "since": T0,
+                        "until": T0 + 3600,
+                        "trigger": {"observation": alarm.id, "test": "psi"},
+                        "_task_id": "t1",
+                    }
+                )
+            )
+            await _settled(trainer)
+
+            (reply,) = [p for _, kind, p in sent if kind == MessageType.RESULT]
+            assert reply["ok"] is True
+            (run,) = runs_of(graph, "demo")
+            assert (alarm.id, run["id"], LED_TO) in {
+                (e.src, e.dst, e.relation) for e in graph.edges(run["id"])
+            }
+            assert next(n.id for n in graph.descendants(alarm.id)) == run["id"]
+        assert model_metrics.TRAIN_RUNS.labels(model="demo", outcome="ok")._value.get() >= 1
+
+    async def test_an_observation_the_graph_lacks_is_said_and_the_run_still_answers(
+        self,
+        trainer: TrainAgent,
+        recorded: Path,
+        sent: list[tuple[str, Any, Any]],
+        feed: list[dict[str, Any]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        with WactorzDB(tmp_path / "db" / "wactorz.db") as db:
+            monkeypatch.setattr(train_agent, "get_db", lambda: db)
+            await trainer.handle_message(
+                _task({"since": T0, "until": T0 + 3600, "observation": "nowhere", "_task_id": "t1"})
+            )
+            await _settled(trainer)
+
+        (reply,) = [p for _, kind, p in sent if kind == MessageType.RESULT]
+        assert reply["ok"] is True
+        assert any("not joined to nowhere" in m["message"] for m in feed)
 
     async def test_a_second_task_during_a_run_is_refused(
         self, trainer: TrainAgent, sent: list[tuple[str, Any, Any]], monkeypatch: pytest.MonkeyPatch

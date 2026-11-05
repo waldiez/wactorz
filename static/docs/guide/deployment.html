@@ -523,6 +523,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>How often main holds each shadow trial against its model's promotion policy, in seconds (<code>docs/design/promotion-policy.md</code>); the first check comes a minute after main starts. A trial is days long, so a few minutes is plenty; set it short to watch a test promote</td>
 </tr>
 <tr>
+<td><code>WACTORZ_DRIFT_CHECK_S</code></td>
+<td><code>600</code></td>
+<td>How often the <code>drift</code> agent reads a model's two windows and runs its tests, in seconds (<code>docs/design/drift.md</code>), unless it was spawned with its own <code>check_s</code>; the first check comes a minute after it starts. A window is a day long, so a few minutes is plenty</td>
+</tr>
+<tr>
 <td><code>WACTORZ_DATA_RETENTION_DAYS</code></td>
 <td><code>0</code></td>
 <td>How many days of recorded readings main keeps under <code>&lt;state&gt;/data/</code> (<code>docs/design/data-storage.md</code>). Past it, an hour of a source is removed a few times a day, unless a stored model says it was trained on it. <code>0</code> keeps everything. <code>wactorz-data sweep --dry-run</code> says what a retention would remove</td>

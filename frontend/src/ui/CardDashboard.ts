@@ -43,6 +43,8 @@ import { Heartbeats } from "./overview/heartbeats";
 import { DashboardChat } from "./chat/DashboardChat";
 import { OverviewView } from "./overview/overview";
 import { OverviewData } from "./overview/overviewData";
+import { WiringData } from "./wiring/wiringData";
+import { WiringView } from "./wiring/WiringView";
 import { TrendPanel } from "./overview/trendPanel";
 import type { AgentAction } from "./overview/cards";
 import { el, testId } from "./dom";
@@ -80,6 +82,9 @@ export class CardDashboard {
     private _trendPanel = new TrendPanel();
     /** The stored models and their pointers. */
     private _models = new ModelsView(new ModelCatalog(new ModelsApi(ingressBase())));
+    /** The wiring, read when it may have changed while its view shows, and the view of it. */
+    private _wiringData = new WiringData({ isShowing: () => this.view === "wiring" });
+    private _wiring = new WiringView(this._wiringData);
     /** The questions agents wait on the person for, and the view of them. */
     private _inbox = new QuestionInbox(new QuestionsApi(ingressBase()));
     private _inboxView: InboxView;
@@ -193,6 +198,7 @@ export class CardDashboard {
         }, 5000);
         this._metrics.startPolling();
         this._data.start();
+        this._wiringData.start();
     }
 
     /** Hide the dashboard, unwire events, and stop timers. */
@@ -206,6 +212,7 @@ export class CardDashboard {
         }
         this._metrics.stopPolling();
         this._data.stop();
+        this._wiringData.stop();
         this._trendPanel.close();
     }
 
@@ -216,6 +223,7 @@ export class CardDashboard {
         this._unsubscribe();
         this._trendPanel.destroy();
         this._models.destroy();
+        this._wiring.destroy();
         this._inboxView.destroy();
         this._unsubscribeInbox();
         releaseHeaderPopovers();
@@ -246,6 +254,9 @@ export class CardDashboard {
     /** Draw what a batch of the store's changes did. */
     private _onAgentsChanged(changes: AgentChanges): void {
         changes.removed.forEach((agent, id) => this._forget(id, agent));
+        if (changes.added.size > 0 || changes.removed.size > 0 || changes.placement) {
+            this._wiringData.changed();
+        }
         const visible = this.root.classList.contains("cd-visible");
         if (visible) {
             this._drawChanges(changes);
@@ -339,8 +350,14 @@ export class CardDashboard {
         });
         this._listeners.on("af-route", route => this._routes.open(route));
         this._listeners.on("af-register-view", v => this.registerView(v.key, v.icon, v.label, v.build));
-        this._listeners.on("af-model-pointer", d => this._models.moved(d.name));
-        this._listeners.on("af-question-book", book => this._inbox.heard(book));
+        this._listeners.on("af-model-pointer", d => {
+            this._models.moved(d.name);
+            this._wiringData.changed();
+        });
+        this._listeners.on("af-question-book", book => {
+            this._inbox.heard(book);
+            this._wiringData.changed();
+        });
         this._listeners.on("af-questions-listed", ({ listed }) => {
             if (listed) {
                 this._inbox.listed(listed);
@@ -410,6 +427,8 @@ export class CardDashboard {
             body.appendChild(this._models.build());
         } else if (this.view === "inbox") {
             body.appendChild(this._inboxView.build());
+        } else if (this.view === "wiring") {
+            body.appendChild(this._wiring.build());
         } else {
             const builder = this._viewBuilders.get(this.view);
             if (builder) {

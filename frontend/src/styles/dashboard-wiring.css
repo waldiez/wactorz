@@ -1,0 +1,445 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2025 - 2026 Waldiez & contributors
+ */
+/* ── Wiring view (see ui/wiring/) ───────────────────────────────────── */
+.af-wiring {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: hidden;
+}
+.af-wire-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.af-wire-page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-wire-subtitle,
+.af-wire-status {
+  margin-top: 2px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.af-wire-chip {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  cursor: pointer;
+}
+.af-wire-chip.field_mismatch {
+  color: #f87171;
+}
+.af-wire-chip.unread {
+  color: #fbbf24;
+}
+.af-wire-chip.no_producer {
+  color: #fb923c;
+}
+.af-wire-chip[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.af-wire-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-wire-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.af-wire-segment-label {
+  margin-right: 4px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-segment-btn,
+.af-wire-btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+}
+.af-wire-segment-btn[aria-pressed="true"] {
+  border-color: #60a5fa;
+  background: rgba(96, 165, 250, 0.15);
+  color: #fff;
+}
+.af-wire-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.af-wire-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.af-wire-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+}
+.af-wire-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* The drawing keeps its size; the frame scrolls when it is larger than the screen. */
+.af-wire-frame {
+  flex: 1;
+  min-height: 240px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.af-wire-canvas {
+  position: relative;
+}
+.af-wire-lines {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.af-wire-line {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.7);
+  stroke-width: 1.5;
+}
+.af-wire-line.feeds {
+  stroke: #38bdf8;
+}
+.af-wire-line.asks {
+  stroke: #c4b5fd;
+}
+.af-wire-line.shadow {
+  stroke: #fbbf24;
+  stroke-dasharray: 5 4;
+}
+.af-wire-line.problem {
+  stroke: #f87171;
+  stroke-width: 2;
+}
+.af-wire-line.selected {
+  stroke: #60a5fa;
+  stroke-width: 2.5;
+}
+.af-wire-line-label {
+  font-size: 11px;
+  fill: rgba(255, 255, 255, 0.8);
+  /* A dark band behind the words, so a line or a box under them does not hide them. */
+  paint-order: stroke;
+  stroke: #0b0e14;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.af-wire-line-label.problem {
+  fill: #fca5a5;
+}
+.af-wire-lane {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+.af-wire-lane-name {
+  position: absolute;
+  top: 6px;
+  left: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* Exactly as tall as the layout made it: every line one row, cut short, never wrapped
+   (layout.ts heightOf counts on FIRST_LINE, LINE and PADDING matching these). */
+.af-wire-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 6px 10px;
+  overflow: hidden;
+  text-align: left;
+  font: inherit;
+  color: rgba(255, 255, 255, 0.92);
+  background: #161b25;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  cursor: grab;
+  /* A drag on a touch screen moves the box, not the page. */
+  touch-action: none;
+  user-select: none;
+}
+.af-wire-node.dragging {
+  cursor: grabbing;
+  z-index: 1;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.af-wire-node:focus-visible {
+  outline: 2px solid var(--af-focus);
+  outline-offset: 2px;
+}
+.af-wire-node[aria-pressed="true"] {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 1px #60a5fa;
+}
+.af-wire-node-name,
+.af-wire-node-line {
+  display: block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.af-wire-node-name {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+.af-wire-node-line {
+  font-size: 11px;
+  line-height: 16px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-wire-node.topic {
+  border-radius: 18px;
+  padding: 6px 14px;
+}
+.af-wire-node.topic .af-wire-node-name {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 500;
+  font-size: 12px;
+}
+.af-wire-node.source {
+  border-style: dashed;
+  border-color: #38bdf8;
+}
+.af-wire-node.operator {
+  border-color: #c4b5fd;
+  background: #1d1830;
+}
+.af-wire-node.shadow {
+  border-style: dashed;
+  border-color: #fbbf24;
+}
+.af-wire-node.warned {
+  border-color: #f87171;
+}
+.af-wire-node.topic.warned .af-wire-node-line {
+  color: #fbbf24;
+}
+.af-wire-node-line.problem {
+  color: #fca5a5;
+}
+
+.af-wire-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  list-style: none;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-wire-legend-hint {
+  margin-left: auto;
+}
+.af-wire-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.af-wire-legend-key {
+  width: 18px;
+  border-top: 2px solid rgba(148, 163, 184, 0.8);
+}
+.af-wire-legend-item.shadow .af-wire-legend-key {
+  border-top: 2px dashed #fbbf24;
+}
+.af-wire-legend-item.problem .af-wire-legend-key {
+  border-top-color: #f87171;
+}
+.af-wire-legend-item.asks .af-wire-legend-key {
+  border-top-color: #c4b5fd;
+}
+.af-wire-legend-item.feeds .af-wire-legend-key {
+  border-top-color: #38bdf8;
+}
+
+.af-wire-detail {
+  min-height: 0;
+  overflow-y: auto;
+  align-self: start;
+  max-height: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-wire-detail-kind {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-detail-title {
+  margin: 2px 0 10px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.af-wire-detail-title.topic {
+  font-family: "JetBrains Mono", monospace;
+}
+.af-wire-detail-facts {
+  display: grid;
+  gap: 6px;
+}
+.af-wire-detail-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+}
+.af-wire-detail-row dt {
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-detail-row dd {
+  overflow-wrap: anywhere;
+}
+.af-wire-detail-row a,
+.af-wire-detail a {
+  color: #93c5fd;
+}
+.af-wire-detail-label {
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-payload {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.af-wire-detail-warnings {
+  margin-top: 12px;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+.af-wire-warning.field_mismatch {
+  color: #fca5a5;
+}
+.af-wire-warning.unread,
+.af-wire-warning.no_producer {
+  color: #fcd34d;
+}
+
+.af-wire-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.af-wire-list-title {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-wire-list-items {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+.af-wire-list-row {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.af-wire-list-row[aria-pressed="true"] {
+  border-color: #60a5fa;
+}
+.af-wire-list-row.warned,
+.af-wire-list-row.warning.field_mismatch {
+  border-color: rgba(248, 113, 113, 0.6);
+}
+.af-wire-list-row.warning.unread,
+.af-wire-list-row.warning.no_producer {
+  border-color: rgba(251, 191, 36, 0.6);
+}
+.af-wire-empty {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* A phone: the list, with the selection's details under it. */
+@media (max-width: 720px) {
+  .af-wiring {
+    overflow-y: auto;
+  }
+  /* Each part as tall as what it holds, one after another, the page scrolling. */
+  .af-wire-body,
+  .af-wire-main {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+  }
+  .af-wire-detail {
+    max-height: none;
+  }
+  /* The page scrolls, not the list inside it. */
+  .af-wire-list {
+    overflow: visible;
+  }
+}

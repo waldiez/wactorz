@@ -29,6 +29,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A Wiring tab on the dashboard.** `#/wiring` draws `GET /api/wiring`: the agents and the topics between them, left to
+  right as the data flows, with the topics fed from outside grouped by root, what a model on trial publishes dashed,
+  a reader missing a field in red with the fields named on its box, and an Operator box joined to each agent waiting
+  on an answer. The warnings are counted above it, each a button that shows only the topics with that warning and
+  what is joined to them. It groups by machine or not, hides or shows outside sources and the system's own agents
+  (hidden at first), and shows a list in place of the graph, which is what a phone shows. Choosing a box says what it
+  publishes, reads and serves, the fields a topic carries and the last payload seen on it, and each warning as a
+  sentence. A box can be dragged where it reads best, or moved with Alt and an arrow key; it stays there in this
+  browser, across reloads and for each grouping, until Reset layout. It reads the wiring again when agents come or go,
+  a model's pointer moves or an agent's questions change, every half minute while it shows, and on Refresh; a read
+  that fails keeps what was shown and says it is stale.
+
 - **`GET /api/wiring`: who publishes what, who reads it, and where the data stops.** The agents and the topics between
   them, from main's topic registry: each topic's producers and readers, the fields of the last payload seen on it with
   the payload and when it came, the topics fed from outside the system grouped by root, the models each agent serves

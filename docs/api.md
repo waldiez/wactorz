@@ -540,7 +540,7 @@ Every pointer move answers `200 OK` with `{"pointer": {...}}`, the pointer it mo
 
 ### `GET /api/wiring`
 
-Who publishes what, who reads it, and where the data stops: the agents and the topics between them, the topics fed from outside the system, and what looks wrong. Read from main's topic registry when asked, with no stream behind it: ask again when agents come or go.
+Who publishes what, who reads it, and where the data stops: the agents and the topics between them, the topics fed from outside the system, and what looks wrong. Read from main's topic registry when asked, with no stream behind it: ask again when agents come or go. The dashboard's Wiring tab (`#/wiring`) draws it.
 
 **Response** `200 OK`
 ```json

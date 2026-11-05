@@ -17,6 +17,7 @@ import { emit } from "../events";
 import { blockingFindings, isAccepted } from "./axe";
 import { byRole } from "./queries";
 import { goTo, openDashboard } from "./dashboard";
+import { wiring } from "./wiring/fixtures";
 
 function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
@@ -108,6 +109,24 @@ describe("the dashboard passes axe", () => {
 
         goTo("models", "hvac");
         await vi.waitFor(() => expect(document.querySelector(".af-model-detail")).not.toBeNull());
+
+        expect(await blockingFindings(document.body)).toEqual([]);
+        vi.unstubAllGlobals();
+    });
+
+    it.each(["graph", "list"])("on the wiring view, as a %s, a topic selected", async mode => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (url: string) => Response.json(url.endsWith("/api/wiring") ? wiring() : {})),
+        );
+
+        goTo("wiring");
+        await vi.waitFor(() => expect(document.querySelector(".af-wire-node, .af-wire-list")).not.toBeNull());
+        if (mode === "list") {
+            byRole(document.body, "button", "View as list").click();
+        }
+        document.querySelector<HTMLElement>('[data-node="topic:air/kitchen/score"]')?.click();
+        expect(document.querySelector(".af-wire-detail-title")?.textContent).toBe("air/kitchen/score");
 
         expect(await blockingFindings(document.body)).toEqual([]);
         vi.unstubAllGlobals();

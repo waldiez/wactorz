@@ -80,6 +80,7 @@ describe("the header", () => {
 
         expect(allByRole(nav, "button").map(nameOf)).toEqual([
             "Overview",
+            "Wiring",
             "Feed",
             "Chat",
             "Models",

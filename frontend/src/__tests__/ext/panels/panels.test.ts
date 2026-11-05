@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { loadServerConfig } from "../../../config/serverConfig";
 import { emit, listen } from "../../../events";
-import { PANELS_KEY, parsePanels, register, toastOptions } from "../../../ext/panels";
+import { PANELS_KEY, panelIcon, parsePanels, register, toastOptions } from "../../../ext/panels";
 import { PanelView, topicMatches, type PanelServices } from "../../../ext/panels/PanelView";
 import { PANEL_API_VERSION, type PanelHost, type PanelModule } from "../../../ext/panels/types";
 import { safeStorage } from "../../../safeStorage";
+import { iconMarkup } from "../../../ui/shell/icons";
 
 const ENTRY = { name: "mlops", title: "MLOps", icon: "grid" };
 
@@ -401,6 +402,28 @@ describe("the list of panels", () => {
         stopHearing();
 
         expect(views).toMatchObject([{ key: "mlops", icon: "grid", label: "MLOps" }]);
+    });
+
+    it("shows a panel's own icon file, by a name no dashboard icon has", () => {
+        const icon_svg = '<svg viewBox="0 0 24 24"><path d="M9 2v5"/></svg>';
+        safeStorage.set(PANELS_KEY, JSON.stringify([{ ...ENTRY, name: "energy", icon_svg }]));
+        const views: { key: string; icon: string }[] = [];
+        const stopHearing = listen("af-register-view", view => views.push(view));
+
+        stops.push(register(services({})));
+        stopHearing();
+
+        expect(views).toMatchObject([{ key: "energy", icon: "panel:energy" }]);
+        expect(iconMarkup("panel:energy")).toContain('d="M9 2v5"');
+        // The dashboard's own icon of the panel's name is untouched.
+        expect(iconMarkup("grid")).toContain("<rect");
+    });
+
+    it("falls back to the icon a panel names when its file has nothing to draw", () => {
+        expect(panelIcon({ ...ENTRY, name: "blank", icon: "models", icon_svg: "<p>no</p>" })).toBe("models");
+        expect(panelIcon({ ...ENTRY, name: "blank", icon: "no-such-icon", icon_svg: "<p>no</p>" })).toBe(
+            "grid",
+        );
     });
 
     it("maps a panel's notices to the dashboard's toasts", () => {

@@ -29,6 +29,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A package's dashboard tab can bring its own icon.** `Panel(icon=Path(__file__).parent / "icon.svg")` ships an SVG
+  drawn on the dashboard's 24 by 24 grid, beside naming one of the dashboard's icons as before. The page keeps only its
+  shapes, as for any icon an extension registers; a file it cannot use leaves the tab on the default icon, with the
+  reason in the log. `/api/config` sends the file's text as the panel's `icon_svg`.
+
 - **A classifier and a regressor are judged against the labels too.** `wactorz-artifacts judge meter:2 --kind
   classifier --field appliance` judges a model by the class in that field of its output against the label's value:
   accuracy with its interval, precision, recall and F1 per class, their macro and weighted means, and the confusion of

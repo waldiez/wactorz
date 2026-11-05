@@ -11,6 +11,12 @@ succeeds::
 
     def panel(app) -> Panel:
         return Panel(title="MLOps", script=Path(__file__).parent / "panel.js")
+
+Its icon is one of the dashboard's by name, or an ``.svg`` file the package
+ships. A file is read once, when the extension loads, and the page keeps only
+its shapes, drawn as the dashboard's own icons are: lines in the text's colour
+on a 24 by 24 grid. A file that cannot be used leaves the tab in place, on the
+default icon, and the log says why.
 """
 
 import re
@@ -34,14 +40,41 @@ class Panel:
     title: str
     #: The ES module the page loads, in the extension's package.
     script: Path
-    #: The name of one of the dashboard's icons.
-    icon: str = "grid"
+    #: The name of one of the dashboard's icons, or an ``.svg`` file in the package.
+    icon: str | Path = "grid"
     #: MQTT topic filters the panel listens to, beyond what the dashboard relays.
     topics: tuple[str, ...] = ()
 
 
 #: Each loaded extension's panel, by the extension's short name.
 PANELS: web.AppKey[dict[str, Panel]] = web.AppKey("wactorz_panels", dict)
+#: The text of each panel's icon file, by the extension's short name, for a panel that ships one.
+PANEL_ICONS: web.AppKey[dict[str, str]] = web.AppKey("wactorz_panel_icons", dict)
+
+#: The icon a page shows for a panel whose own icon is a file, should it not read the file.
+DEFAULT_ICON = "grid"
+#: The most an icon file may hold: a line icon is a handful of shapes.
+ICON_MAX_BYTES = 16 * 1024
+
+
+class PanelIconError(ValueError):
+    """A panel's icon file that cannot be shown."""
+
+    @classmethod
+    def not_svg(cls, path: Path) -> "PanelIconError":
+        return cls(f"its icon {path} is not an .svg file")
+
+    @classmethod
+    def too_large(cls, path: Path) -> "PanelIconError":
+        return cls(f"its icon {path} is larger than {ICON_MAX_BYTES} bytes")
+
+    @classmethod
+    def unreadable(cls, path: Path, reason: Exception) -> "PanelIconError":
+        return cls(f"its icon {path} cannot be read: {reason}")
+
+    @classmethod
+    def no_drawing(cls, path: Path) -> "PanelIconError":
+        return cls(f"its icon {path} holds no <svg> element")
 
 
 def panel_problem(name: str, panel: Panel) -> str | None:
@@ -55,3 +88,29 @@ def panel_problem(name: str, panel: Panel) -> str | None:
     if panel.script.suffix != ".js" or not panel.script.is_file():
         return f"{panel.script} is not a .js file"
     return None
+
+
+def icon_file_text(panel: Panel) -> str | None:
+    """The text of ``panel``'s icon file, or None when its icon is one of the dashboard's.
+
+    Raises:
+        PanelIconError: the file is not an SVG the page could draw.
+    """
+    if not isinstance(panel.icon, Path):
+        return None
+    path = panel.icon
+    if path.suffix.lower() != ".svg" or not path.is_file():
+        raise PanelIconError.not_svg(path)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise PanelIconError.unreadable(path, exc) from exc
+    if len(data) > ICON_MAX_BYTES:
+        raise PanelIconError.too_large(path)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PanelIconError.unreadable(path, exc) from exc
+    if "<svg" not in text:
+        raise PanelIconError.no_drawing(path)
+    return text

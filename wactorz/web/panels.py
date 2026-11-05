@@ -8,15 +8,26 @@ content hash, and a panel's name does not change when its package is upgraded.
 from aiohttp import web
 from aiohttp.web import Response, StreamResponse
 
-from ..ext import PANELS
+from ..ext import PANEL_ICONS, PANELS
+from ..ext._panel import DEFAULT_ICON
 
 
 def listed(app: web.Application) -> list[dict[str, str]]:
-    """What the page needs to show each panel's tab."""
-    return [
-        {"name": name, "title": panel.title, "icon": panel.icon}
-        for name, panel in app.get(PANELS, {}).items()
-    ]
+    """What the page needs to show each panel's tab.
+
+    A panel whose icon is a file is sent the file's text as ``icon_svg``, read
+    when the extension loaded, with ``icon`` naming the dashboard's default for
+    a page that does not read it.
+    """
+    icons = app.get(PANEL_ICONS, {})
+    entries: list[dict[str, str]] = []
+    for name, panel in app.get(PANELS, {}).items():
+        icon = panel.icon if isinstance(panel.icon, str) else DEFAULT_ICON
+        entry = {"name": name, "title": panel.title, "icon": icon}
+        if name in icons:
+            entry["icon_svg"] = icons[name]
+        entries.append(entry)
+    return entries
 
 
 async def script_handler(request: web.Request) -> StreamResponse | Response:

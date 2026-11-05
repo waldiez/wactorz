@@ -18,6 +18,7 @@ import pytest
 from wactorz.agents.function_agent import spec_of
 from wactorz.core.artifacts import ArtifactStore
 from wactorz.core.paths import resolve_state_dir
+from wactorz.ext._panel import icon_file_text
 
 pytest.importorskip("numpy")
 
@@ -245,7 +246,9 @@ class TestThePackage:
             spec_of(aq.agents.detect) is not None and aq.agents.AirWatch.AGENT_NAME == "air-watch"
         )
 
-    def test_its_tab_is_a_panel_with_a_script_that_mounts(self, aq: types.SimpleNamespace) -> None:
+    def test_its_tab_is_a_panel_with_a_script_that_mounts_and_an_icon_of_its_own(
+        self, aq: types.SimpleNamespace
+    ) -> None:
         aq.tab.setup(None)
         panel = aq.tab.panel(None)
         script = Path(panel.script).read_text(encoding="utf-8")
@@ -255,6 +258,8 @@ class TestThePackage:
         assert "export const apiVersion = 1;" in script
         assert "export function mount(root, host)" in script
         assert "innerHTML" not in script
+        icon = icon_file_text(panel)
+        assert icon is not None and 'viewBox="0 0 24 24"' in icon
 
     def test_training_stores_the_threshold_with_the_version(
         self, aq: types.SimpleNamespace, tmp_path: Path

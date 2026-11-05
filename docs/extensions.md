@@ -150,7 +150,7 @@ def panel(app):
     return Panel(
         title="MLOps",
         script=Path(__file__).parent / "panel.js",
-        icon="models",                # one of the dashboard's icons; "grid" otherwise
+        icon="models",                # one of the dashboard's icons, or an .svg file; "grid" otherwise
         topics=("mlops/#",),          # relayed to the page for host.subscribe
     )
 ```
@@ -168,6 +168,15 @@ export function mount(root, host) {
     return () => stop();              // called when another view opens
 }
 ```
+
+**Its icon.** `icon` names one of the dashboard's icons, or is a `Path` to an `.svg`
+file in the package, `icon=Path(__file__).parent / "icon.svg"`. The file is read once,
+when the extension loads, and the page keeps only the shapes inside its `<svg>`
+(`path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `ellipse`, `g`), drawn as the
+dashboard's own icons are: lines in the text's colour, two units wide, on a 24 by 24
+grid. So draw it on that grid; the file's own `viewBox`, size and colours give way. A
+file that is missing, larger than 16 KiB, not UTF-8 or with no `<svg>` in it leaves the
+tab in place on the default icon, and the log says why.
 
 `mount(root, host)` fills `root` and may return, or resolve to, a function that is
 called when another view opens; the tab is mounted again when it is opened again.
@@ -392,7 +401,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload
-- [ ] Optional `panel()` names a `.js` module exporting `apiVersion` and `mount(root, host)`
+- [ ] Optional `panel()` names a `.js` module exporting `apiVersion` and `mount(root, host)`, and an icon by name or an `.svg` on a 24 by 24 grid
 - [ ] Config is read from `os.getenv(…)`, not `wactorz.config.CONFIG`
 - [ ] Extension no-ops gracefully when its env var / dependency is absent
 - [ ] Frontend barrel exports a `register(config)` function; wires via the event bus

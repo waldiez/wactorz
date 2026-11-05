@@ -11,7 +11,7 @@
 import { registerConfigEntry } from "../../config/serverConfig";
 import { emit } from "../../events";
 import { safeStorage } from "../../safeStorage";
-import { iconMarkup } from "../../ui/shell/icons";
+import { iconMarkup, registerIconFile } from "../../ui/shell/icons";
 import { PanelView, type PanelServices } from "./PanelView";
 import type { ToastOptions } from "../../ui/ToastManager";
 import type { PanelEntry, PanelStop, PanelToast } from "./types";
@@ -58,6 +58,19 @@ export function toastOptions(notice: PanelToast): ToastOptions {
     return { title: notice.title, message: notice.message, type: types[notice.type ?? "info"] };
 }
 
+/** The icon `entry`'s tab shows: its own file's when that has shapes, else the one it names, else the default. */
+export function panelIcon(entry: PanelEntry): string {
+    if (typeof entry.icon_svg === "string") {
+        // Prefixed, so a panel's icon never replaces one of the dashboard's.
+        const own = `panel:${entry.name}`;
+        registerIconFile(own, entry.icon_svg);
+        if (iconMarkup(own)) {
+            return own;
+        }
+    }
+    return iconMarkup(entry.icon) ? entry.icon : DEFAULT_ICON;
+}
+
 /** A script is loaded by the browser, at an address only known once running. */
 const loadScript: PanelServices["load"] = url => import(/* @vite-ignore */ url);
 
@@ -73,7 +86,7 @@ export function register(services: Omit<PanelServices, "load"> & Partial<PanelSe
         const stop = view.start();
         emit("af-register-view", {
             key: entry.name,
-            icon: iconMarkup(entry.icon) ? entry.icon : DEFAULT_ICON,
+            icon: panelIcon(entry),
             label: entry.title,
             build: () => view.build(),
         });

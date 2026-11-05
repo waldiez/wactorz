@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { registerIcon, iconMarkup } from "../ui/shell/icons";
+import { registerIcon, registerIconFile, iconMarkup } from "../ui/shell/icons";
 import { buildHeader } from "../ui/shell/header";
 
 describe("registerIcon reduces markup to shapes", () => {
@@ -51,6 +51,40 @@ describe("registerIcon reduces markup to shapes", () => {
         registerIcon("t-nested", '<g><path d="M1 2" onclick="window.__pwned = 1"/></g>');
 
         expect(iconMarkup("t-nested")).not.toContain("onclick");
+    });
+});
+
+describe("registerIconFile takes a whole SVG file", () => {
+    const FILE =
+        '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" stroke="red">' +
+        '<path d="M9 2v5"/><circle cx="12" cy="12" r="3" onload="window.__pwned = 1"/><script>window.__pwned = 1;</script>' +
+        "</svg>\n";
+
+    it("keeps the shapes inside its svg, drawn on the dashboard's own grid", () => {
+        registerIconFile("t-file", FILE);
+        const markup = iconMarkup("t-file");
+
+        expect(markup).toContain('d="M9 2v5"');
+        expect(markup).toContain('cx="12"');
+        expect(markup).toContain('viewBox="0 0 24 24"');
+        expect(markup).not.toContain("48");
+        expect(markup).not.toContain("red");
+    });
+
+    it("drops what is not a shape, as registerIcon does", () => {
+        registerIconFile("t-file-script", FILE);
+        const markup = iconMarkup("t-file-script");
+
+        expect(markup).not.toContain("script");
+        expect(markup).not.toContain("onload");
+        expect(markup).not.toContain("xml");
+    });
+
+    it("draws nothing for a file with no svg in it", () => {
+        registerIconFile("t-file-none", "<p>not a drawing</p>");
+
+        expect(iconMarkup("t-file-none")).toBe("");
     });
 });
 

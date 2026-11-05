@@ -94,6 +94,19 @@ export function registerIcon(name: string, svgPaths: string): void {
     _paths.set(name, svg.innerHTML);
 }
 
+/** Register a custom icon from a whole SVG file's text, as a package ships one.
+ *
+ * Only the shapes inside the file's `<svg>` are kept, through ``registerIcon``;
+ * the file's own `viewBox`, size and stroke give way to the dashboard's, so the
+ * icon is drawn on the same 24 by 24 grid as every other. A file with no `<svg>`
+ * registers nothing to draw, which ``iconMarkup`` answers with an empty string.
+ */
+export function registerIconFile(name: string, svgFile: string): void {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = svgFile;
+    registerIcon(name, tpl.content.querySelector("svg")?.innerHTML ?? "");
+}
+
 /** Markup for an inline icon at `size` px (default 16). Inherits `currentColor`. */
 export function iconMarkup(name: IconName, size = 16): string {
     const paths = _paths.get(name);

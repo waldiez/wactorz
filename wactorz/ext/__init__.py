@@ -62,12 +62,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import installed
-from ._panel import PANELS, Panel, panel_problem
+from ._panel import PANEL_ICONS, PANELS, Panel, PanelIconError, icon_file_text, panel_problem
 
 if TYPE_CHECKING:
     from aiohttp.web import Application
 
-__all__ = ["PANELS", "Panel"]
+__all__ = ["PANELS", "PANEL_ICONS", "Panel"]
 
 log = logging.getLogger(__name__)
 
@@ -203,17 +203,19 @@ def setup_all(app: Application) -> None:
     """
     mods = discover()
     panels: dict[str, Panel] = {}
+    icons: dict[str, str] = {}
 
     # Phase 1
     for mod in mods:
         try:
             mod.setup(app)
             log.info("[ext] %s loaded", getattr(mod, "__name__", mod))
-            _add_panel(panels, mod, app)
+            _add_panel(panels, icons, mod, app)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("[ext] %s setup failed: %s", getattr(mod, "__name__", mod), exc)
 
     app[PANELS] = panels
+    app[PANEL_ICONS] = icons
 
     # Phase 2  — register, don't call; aiohttp runs them at server start
     for mod in _topo_sort_on_ready(mods):
@@ -223,8 +225,10 @@ def setup_all(app: Application) -> None:
             log.info("[ext] %s on_ready registered", name)
 
 
-def _add_panel(panels: dict[str, Panel], mod: Extension, app: Application) -> None:
-    """Take the panel ``mod`` declares, if it declares one that can be shown."""
+def _add_panel(
+    panels: dict[str, Panel], icons: dict[str, str], mod: Extension, app: Application
+) -> None:
+    """Take the panel ``mod`` declares, if it declares one that can be shown, and its icon file."""
     provider = getattr(mod, "panel", None)
     if provider is None:
         return
@@ -237,8 +241,15 @@ def _add_panel(panels: dict[str, Panel], mod: Extension, app: Application) -> No
     problem = panel_problem(name, panel)
     if problem:
         log.warning("[ext] %s has no dashboard tab: %s", name, problem)
-    else:
-        panels[name] = panel
+        return
+    panels[name] = panel
+    try:
+        text = icon_file_text(panel)
+    except PanelIconError as exc:
+        log.warning("[ext] %s's tab has the default icon: %s", name, exc)
+        return
+    if text is not None:
+        icons[name] = text
 
 
 def collect_public_config(app: Application) -> dict[str, Any]:

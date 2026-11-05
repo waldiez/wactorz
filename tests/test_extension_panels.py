@@ -17,12 +17,14 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz import config, ext
-from wactorz.ext import PANELS, Panel
+from wactorz.ext import PANEL_ICONS, PANELS, Panel
+from wactorz.ext._panel import ICON_MAX_BYTES
 from wactorz.web import relay, runtime
 from wactorz.web.app import build_app
 
 KEY = "a-key-for-the-panel-tests"
 SCRIPT = "export const apiVersion = 1;\nexport function mount(root) { root.textContent = 'hi'; }\n"
+ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 2v5"/></svg>\n'
 
 
 def _module(name: str, **attrs: Any) -> Any:
@@ -52,11 +54,15 @@ def _nothing_followed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-def _panels(monkeypatch: pytest.MonkeyPatch, *modules: Any) -> dict[str, Panel]:
+def _loaded(monkeypatch: pytest.MonkeyPatch, *modules: Any) -> web.Application:
     _use(monkeypatch, *modules)
     app = web.Application()
     ext.setup_all(app)
-    return app[PANELS]
+    return app
+
+
+def _panels(monkeypatch: pytest.MonkeyPatch, *modules: Any) -> dict[str, Panel]:
+    return _loaded(monkeypatch, *modules)[PANELS]
 
 
 class TestWhatIsTaken:
@@ -120,6 +126,60 @@ class TestWhatIsTaken:
         assert said in caplog.text
 
 
+class TestIconFiles:
+    def test_a_panels_own_icon_is_read_once_when_it_loads(
+        self, monkeypatch: pytest.MonkeyPatch, script: Path, tmp_path: Path
+    ) -> None:
+        icon = tmp_path / "icon.svg"
+        icon.write_bytes(ICON.encode())
+        panel = Panel(title="Energy", script=script, icon=icon)
+
+        app = _loaded(monkeypatch, _module("energy", panel=lambda _app: panel))
+
+        assert app[PANELS] == {"energy": panel}
+        assert app[PANEL_ICONS] == {"energy": ICON}
+
+    def test_an_icon_by_name_reads_no_file(
+        self, monkeypatch: pytest.MonkeyPatch, script: Path
+    ) -> None:
+        panel = Panel(title="MLOps", script=script, icon="models")
+
+        assert _loaded(monkeypatch, _module("mlops", panel=lambda _app: panel))[PANEL_ICONS] == {}
+
+    @pytest.mark.parametrize(
+        ("file_name", "content", "said"),
+        [
+            ("missing.svg", None, "is not an .svg file"),
+            ("icon.png", ICON.encode(), "is not an .svg file"),
+            ("big.svg", b"<svg>" + b" " * ICON_MAX_BYTES + b"</svg>", "larger than"),
+            ("latin.svg", b"<svg>\xff</svg>", "cannot be read"),
+            ("blank.svg", b"<p>not a drawing</p>", "no <svg> element"),
+        ],
+    )
+    def test_an_icon_that_cannot_be_used_leaves_the_tab_on_the_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        script: Path,
+        tmp_path: Path,
+        file_name: str,
+        content: bytes | None,
+        said: str,
+    ) -> None:
+        icon = tmp_path / file_name
+        if content is not None:
+            icon.write_bytes(content)
+        panel = Panel(title="Energy", script=script, icon=icon)
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.ext"):
+            app = _loaded(monkeypatch, _module("energy", panel=lambda _app: panel))
+
+        assert app[PANELS] == {"energy": panel}
+        assert app[PANEL_ICONS] == {}
+        assert "default icon" in caplog.text
+        assert said in caplog.text
+
+
 class TestTopics:
     def test_followed_topics_are_relayed(self) -> None:
         relay.follow(["mlops/+/state", "mlops/+/state"])
@@ -142,7 +202,15 @@ async def client_fixture(
     monkeypatch.setattr(config, "CONFIG", dataclasses.replace(config.CONFIG, api_key=KEY))
     monkeypatch.setattr(runtime, "registry", None)
     panel = Panel(title="MLOps", script=script, icon="models", topics=("mlops/#",))
-    _use(monkeypatch, _module("mlops", panel=lambda _app: panel), _module("plain"))
+    icon = script.with_name("energy.svg")
+    icon.write_bytes(ICON.encode())
+    energy = Panel(title="Energy", script=script, icon=icon)
+    _use(
+        monkeypatch,
+        _module("mlops", panel=lambda _app: panel),
+        _module("energy", panel=lambda _app: energy),
+        _module("plain"),
+    )
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -158,7 +226,11 @@ class TestTheServer:
         response = await client.get("/api/config", headers=_keyed())
         listed = (await response.json())["extensions"]["panels"]
 
-        assert listed == [{"name": "mlops", "title": "MLOps", "icon": "models"}]
+        assert listed == [
+            {"name": "mlops", "title": "MLOps", "icon": "models"},
+            # A page that does not read the file still has an icon to show.
+            {"name": "energy", "title": "Energy", "icon": "grid", "icon_svg": ICON},
+        ]
 
     async def test_serves_the_script_as_a_module_that_is_checked_each_time(
         self, client: TestClient

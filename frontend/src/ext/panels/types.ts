@@ -22,6 +22,8 @@ export interface PanelEntry {
     title: string;
     /** The name of one of the dashboard's icons. */
     icon: string;
+    /** The text of the package's own icon file, when it ships one: drawn instead of `icon`. */
+    icon_svg?: string;
 }
 
 /** A notice a panel shows. */

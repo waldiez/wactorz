@@ -1,7 +1,8 @@
 """The Air tab: a card per room, drawn from what the agents publish.
 
 An extension whose only part is a panel: the page reads everything it shows
-from MQTT, so the server has no route to add.
+from MQTT, so the server has no route to add. Its icon is the package's own
+file, drawn on the dashboard's grid.
 """
 
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from aiohttp import web
 
 from wactorz.ext import Panel
+
+HERE = Path(__file__).parent
 
 
 def setup(_app: web.Application) -> None:
@@ -18,7 +21,7 @@ def setup(_app: web.Application) -> None:
 def panel(_app: web.Application) -> Panel:
     return Panel(
         title="Air",
-        script=Path(__file__).with_name("panel.js"),
-        icon="grid",
+        script=HERE / "panel.js",
+        icon=HERE / "icon.svg",
         topics=("sensors/air/#", "air/#"),
     )

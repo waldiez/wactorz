@@ -11,6 +11,7 @@ alone would let a burst of invented ids push out the agents actually running.
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,6 +26,40 @@ def _restore_runtime() -> Any:
     agents = dict(runtime.state["agents"])
     yield
     runtime.state["agents"] = agents
+
+
+class _OneActor:
+    """A registry holding one actor, as far as the live map asks of it."""
+
+    def __init__(self, actor_id: str, name: str) -> None:
+        self.actor = SimpleNamespace(actor_id=actor_id, name=name)
+
+    def get(self, actor_id: str) -> SimpleNamespace | None:
+        return self.actor if actor_id == self.actor.actor_id else None
+
+
+class TestFirstNames:
+    def test_an_agent_of_this_process_is_named_before_its_first_heartbeat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runtime.state["agents"] = {}
+        greeter = "d4ea98e9-fab6-4e31-93fd-b243d465e95f"
+        monkeypatch.setattr(runtime, "registry", _OneActor(greeter, "greeter"))
+
+        events.update_agent(greeter, "metrics", {"messages_processed": 1})
+
+        assert runtime.state["agents"][greeter]["name"] == "greeter"
+
+    def test_one_the_registry_does_not_hold_is_named_by_its_id_until_heard_from(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runtime.state["agents"] = {}
+        on_a_node = "5be1a2c3-0000-4000-8000-000000000000"
+        monkeypatch.setattr(runtime, "registry", _OneActor("someone-else", "greeter"))
+
+        events.update_agent(on_a_node, "metrics", {"messages_processed": 1})
+
+        assert runtime.state["agents"][on_a_node]["name"] == "5be1a2c3"
 
 
 class TestLiveAgentMap:

@@ -5,9 +5,9 @@
 import { log } from "./logger";
 import { uid } from "../ids";
 import { resolveAgentName } from "../agents/naming";
+import { parseAgentState } from "../agents/states";
 import { readingsFrom } from "../agents/nodeReadings";
 import type {
-    AgentState,
     AlertPayload,
     AnswerPayload,
     ChatMessage,
@@ -292,17 +292,6 @@ function bool(v: unknown): boolean | undefined {
     return typeof v === "boolean" ? v : undefined;
 }
 
-/** Validate an untrusted value into an {@link AgentState}, defaulting to "running". */
-function coerceState(v: unknown): AgentState {
-    if (v === "initializing" || v === "running" || v === "stopped") {
-        return v;
-    }
-    if (v !== null && typeof v === "object" && typeof (v as { failed?: unknown }).failed === "string") {
-        return { failed: (v as { failed: string }).failed };
-    }
-    return "running";
-}
-
 /** Validate an untrusted alert severity, defaulting to "info". */
 function coerceSeverity(v: unknown): AlertPayload["severity"] {
     return v === "info" || v === "warning" || v === "error" || v === "critical" ? v : "info";
@@ -320,7 +309,7 @@ export function normaliseHeartbeat(p: unknown): HeartbeatPayload {
     const out: HeartbeatPayload = {
         agentId,
         agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
-        state: coerceState(o["state"]),
+        state: parseAgentState(o["state"]),
         sequence: num(o["sequence"]) ?? 0,
         timestampMs: toMs(o["timestampMs"] ?? o["timestamp_ms"] ?? o["timestamp"]),
     };
@@ -456,7 +445,7 @@ export function normaliseStatus(p: unknown): StatusPayload {
     const out: StatusPayload = {
         agentId,
         agentName: resolveAgentName(str(o["agentName"] ?? o["name"]), agentId),
-        state: coerceState(o["state"]),
+        state: parseAgentState(o["state"]),
         messagesReceived: num(o["messagesReceived"] ?? o["messages_received"]) ?? 0,
         messagesProcessed: num(o["messagesProcessed"] ?? o["messages_processed"]) ?? 0,
         messagesFailed: num(o["messagesFailed"] ?? o["messages_failed"]) ?? 0,

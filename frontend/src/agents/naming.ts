@@ -62,6 +62,15 @@ export function displayName(raw: string | undefined): string {
 }
 
 /**
+ * True when `name` is only the start of `id`: what the server files an agent
+ * under before the agent has said its own name. It names nothing, so it never
+ * replaces a name already known.
+ */
+export function isStandInName(name: string, id: string): boolean {
+    return id.length > 8 && name === id.slice(0, 8);
+}
+
+/**
  * Resolve a human-readable display name from whatever the backend sends.
  * - If name is empty or looks like a raw timestamp (all digits), extract from the WID id.
  * - If name is itself a WID string (contains "Z-"), extract the embedded name.

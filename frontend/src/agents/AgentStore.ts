@@ -35,6 +35,7 @@ import type {
 import { readingsFrom } from "./nodeReadings";
 import { NODE_EVICT_MS, STALE_MS } from "./liveness";
 import { addressOf } from "./addresses";
+import { isStandInName } from "./naming";
 
 /** A moment worth showing on an agent's card, as it happened. */
 export type AgentActivity =
@@ -143,6 +144,9 @@ export class AgentStore {
     addOrUpdateAgent(agent: AgentInfo): void {
         const existing = this._agents.get(agent.id);
         const merged: AgentInfo = existing ? { ...existing, ...agent } : agent;
+        if (existing && isStandInName(agent.name, agent.id)) {
+            merged.name = existing.name;
+        }
         if (existing?.protected) {
             merged.protected = true;
         }

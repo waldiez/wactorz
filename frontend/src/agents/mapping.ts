@@ -14,7 +14,6 @@
  */
 import type {
     AgentInfo,
-    AgentState,
     AlertPayload,
     AnswerPayload,
     ChatMessage,
@@ -30,6 +29,7 @@ import type { FeedItem } from "../types/feed";
 import type { ChatHandler } from "../io/WSClient";
 import { uid } from "../ids";
 import { nameFromWid, resolveAgentName } from "./naming";
+import { parseAgentState } from "./states";
 
 // --- untrusted-payload field coercers (raw MQTT JSON) -------------------------
 /** Coerce to a plain object; null/primitive payloads become `{}`. */
@@ -45,20 +45,12 @@ function asNum(v: unknown): number | undefined {
     return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
-/** Coerce the backend's free-form state/status string into an {@link AgentState}. */
-function toAgentState(raw: string): AgentState {
-    if (raw === "stopped" || raw === "initializing") {
-        return raw;
-    }
-    return "running";
-}
-
 /** Build an {@link AgentInfo} from a WS state-patch agent (caller ensures `agent_id`). */
 export function toAgentInfo(a: StatePatchAgent): AgentInfo {
     const update: AgentInfo = {
         id: a.agent_id,
         name: resolveAgentName(a.name, a.agent_id),
-        state: toAgentState(a.state ?? a.status ?? "running"),
+        state: parseAgentState(a.state ?? a.status),
         protected: a.protected ?? false,
         essential: a.essential ?? false,
     };
@@ -96,7 +88,11 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
  * deletion guard still suppresses and resolve a display name for each.
  */
 export function reconcileActorList(actors: AgentInfo[], isDeleted: (id: string) => boolean): AgentInfo[] {
-    return actors.filter(a => !isDeleted(a.id)).map(a => ({ ...a, name: resolveAgentName(a.name, a.id) }));
+    // The list is the server's JSON, typed but never checked: its state is read
+    // like every other path's, or a "failed" there would show as itself, green.
+    return actors
+        .filter(a => !isDeleted(a.id))
+        .map(a => ({ ...a, name: resolveAgentName(a.name, a.id), state: parseAgentState(a.state) }));
 }
 
 /**

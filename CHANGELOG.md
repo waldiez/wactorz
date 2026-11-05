@@ -424,6 +424,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The dashboard shows a failed agent as failed.** An agent that had failed never showed as failed: depending on which
+  report reached the page last it showed as running, as stopped, or as "failed" in green. An agent built but not yet
+  started showed as running too, and the card of one not yet heard from said "unknown". Now a failed agent's card says
+  failed, in red, and a message to it says it cannot answer until it runs again, as for a stopped one; one not yet
+  started shows as starting, and one listed but not yet heard from as running. And after a restart an agent no longer
+  shows for a moment under the start of its id: the server names an agent of its own from the start, and the dashboard
+  keeps a name it knows.
 - **A trial's agreement counts what the version is judged on.** Two versions agreed only when their outputs were the
   same in every field, so a detector that publishes its score, or a classifier that publishes a confidence beside its
   class, showed little agreement where the two flagged, or named, alike. Now a detector's sides agree when both flagged

@@ -52,6 +52,9 @@ class _Registry:
     def find_by_name(self, _name: str) -> Any:
         return None
 
+    def get(self, _actor_id: str) -> Any:
+        return None
+
 
 @pytest.fixture(name="sent")
 def sent_fixture() -> Iterator[list[dict[str, Any]]]:
@@ -133,6 +136,9 @@ class _WithMain:
 
     def find_by_name(self, name: str) -> Any:
         return self.main if name == "main" else None
+
+    def get(self, actor_id: str) -> Any:
+        return self.main if actor_id == getattr(self.main, "actor_id", None) else None
 
     def all_actors(self) -> list[Any]:
         return [self.main]

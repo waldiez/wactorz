@@ -72,6 +72,19 @@ describe("AgentStore — addOrUpdateAgent", () => {
         expect(store.byName("worker").map(a => a.id)).toEqual(["on-main", "on-pi"]);
     });
 
+    it("keeps a known name when the server sends the start of the id in its place", () => {
+        // What the server files an agent under before its first heartbeat says its name.
+        const id = "d4ea98e9-fab6-4e31-93fd-b243d465e95f";
+        store.addOrUpdateAgent(agent({ id, name: "greeter" }));
+        store.addOrUpdateAgent(agent({ id, name: "d4ea98e9" }));
+        expect(store.get(id)?.name).toBe("greeter");
+        // A new name is still taken, and an agent first heard of that way is called that.
+        store.addOrUpdateAgent(agent({ id, name: "host" }));
+        expect(store.get(id)?.name).toBe("host");
+        store.addOrUpdateAgent(agent({ id: "5be1a2c3-0000-4000-8000-000000000000", name: "5be1a2c3" }));
+        expect(store.get("5be1a2c3-0000-4000-8000-000000000000")?.name).toBe("5be1a2c3");
+    });
+
     it("keeps protected and node sticky across a partial update", () => {
         store.addOrUpdateAgent(agent({ protected: true, node: "n1" }));
         store.addOrUpdateAgent(agent({ protected: false }));

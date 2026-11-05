@@ -29,6 +29,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A household-energy example.** `examples/household_energy/` finds each run of an appliance in one power meter's
+  readings, names the appliance with a small classifier, and asks a person in the Inbox whether it was right; the answers
+  become labels, and a second version that also looks at how long a run lasted is judged against them with
+  `wactorz-artifacts judge appliances:2 --kind classifier --field appliance`. Its Energy tab shows the meter with each
+  run marked, and ships its own icon.
+
 - **A package's dashboard tab can bring its own icon.** `Panel(icon=Path(__file__).parent / "icon.svg")` ships an SVG
   drawn on the dashboard's 24 by 24 grid, beside naming one of the dashboard's icons as before. The page keeps only its
   shapes, as for any icon an extension registers; a file it cannot use leaves the tab on the default icon, with the

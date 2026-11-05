@@ -690,6 +690,9 @@ model-free orchestrator described above.
 - `air_quality/`: a model of each room's usual air per hour, an agent that
   asks a person about the rest and keeps the answers as labels, and a
   dashboard tab, as one installable package.
+- `household_energy/`: one power meter, a classifier naming the appliance
+  behind each run, a person asked whether it was right, and a dashboard tab
+  with its own icon, as one installable package.
 - `llm_notes/`: an agent that calls the system's language model through
   `me.llm`, with the cost kept across restarts.
 - `yolo_watch/`: a YOLO model as an agent, as a function answering snapshots

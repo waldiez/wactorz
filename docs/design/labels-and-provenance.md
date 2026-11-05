@@ -84,7 +84,7 @@ Each edge points from cause to effect:
 
 | Relation | From → to | Reads |
 | --- | --- | --- |
-| `led_to` | observation → question, label → decision, decision → action | the second happened because of the first |
+| `led_to` | observation → question or action, label → decision, decision → action | the second happened because of the first |
 | `answered_by` | question → label | the label came from the answer to the question |
 | `trained` | label → model | the version was trained with this label |
 | `produced` | action → model | the retrain stored this version |

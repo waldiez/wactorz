@@ -137,6 +137,38 @@ class TestConfig:
         assert body["text"] == "score 12.5 on {where}"
         assert body["trigger"] == {"score": 12.5}
 
+    def test_a_value_that_is_one_placeholder_is_the_triggers_value_as_it_is(self) -> None:
+        action = RuleAction.from_dict(
+            {
+                "type": "task",
+                "agent": "trainer",
+                "payload": {
+                    "split": {"kind": "time_split", "at": "{ts}"},
+                    "observation": "{observation}",
+                    "reference": "{reference}",
+                    "tests": ["{test}", "psi on {column}"],
+                    "missing": "{nobody}",
+                    "reason": "drift: {test} on {column}",
+                },
+            }
+        )
+        trigger = {
+            "ts": 1760000000.0,
+            "observation": "abc",
+            "reference": {"since": 1.0, "until": 2.0},
+            "test": "psi",
+            "column": "ax",
+        }
+
+        body = action.body(trigger)
+
+        assert body["split"] == {"kind": "time_split", "at": 1760000000.0}
+        assert body["observation"] == "abc"
+        assert body["reference"] == {"since": 1.0, "until": 2.0}
+        assert body["tests"] == ["psi", "psi on ax"]
+        assert body["missing"] == "{nobody}"
+        assert body["reason"] == "drift: psi on ax"
+
 
 class TestPlaceholders:
     """An action's placeholders read the trigger the way a condition's ``field`` does."""

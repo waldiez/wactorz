@@ -220,6 +220,7 @@ def build_app() -> web.Application:
     app.router.add_get("/api/models/{name}/trial", api_models.trial_handler)
     app.router.add_get("/api/models/{name}/trial/series", api_models.trial_series_handler)
     app.router.add_get("/api/models/{name}/trials", api_models.trials_handler)
+    app.router.add_get("/api/models/{name}/drift", api_models.drift_handler)
     app.router.add_post("/api/models/{name}/active", api_models.set_active_handler)
     app.router.add_post("/api/models/{name}/shadow", api_models.set_shadow_handler)
     app.router.add_delete("/api/models/{name}/shadow", api_models.clear_shadow_handler)

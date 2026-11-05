@@ -65,3 +65,15 @@ What is recorded is what the `trainer` library agent trains on: spawned with a r
 a model's name and a source, it fits a new version on a window of the readings when
 sent a task, and sets it as the model's shadow when it beats the version served
 (`docs/library.md`, "Training a version"; `docs/design/train-step.md`).
+
+And what the `drift` library agent watches: spawned with a model, and the source
+when the served version does not say what it was trained on, it reads the last
+day and the version's training window through the loader on a cadence, runs PSI
+and KS on each feature and ADWIN on the model's recorded scores, and raises each
+shift once, as an `observation`, a feed line and a message on
+`models/<name>/drift` for a rule to retrain on (`docs/library.md`, "Watching for
+drift"; `docs/design/drift.md`):
+
+```text
+@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}
+```

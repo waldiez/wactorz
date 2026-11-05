@@ -219,6 +219,15 @@ window as one file for a notebook. The recorder needs the <code>data</code> extr
 a model's name and a source, it fits a new version on a window of the readings when
 sent a task, and sets it as the model's shadow when it beats the version served
 (<code>docs/library.md</code>, "Training a version"; <code>docs/design/train-step.md</code>).</p>
+<p>And what the <code>drift</code> library agent watches: spawned with a model, and the source
+when the served version does not say what it was trained on, it reads the last
+day and the version's training window through the loader on a cadence, runs PSI
+and KS on each feature and ADWIN on the model's recorded scores, and raises each
+shift once, as an <code>observation</code>, a feed line and a message on
+<code>models/&lt;name&gt;/drift</code> for a rule to retrain on (<code>docs/library.md</code>, "Watching for
+drift"; <code>docs/design/drift.md</code>):</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}
+</code></pre></div>
   </main>
 </div>
 

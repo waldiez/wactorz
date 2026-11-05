@@ -271,6 +271,11 @@ DATA_RETENTION_DAYS = _env_float("WACTORZ_DATA_RETENTION_DAYS", 0.0)
 #: minutes is plenty; a test sets it short.
 POLICY_CHECK_S = max(5.0, _env_float("WACTORZ_POLICY_CHECK_S", 600.0))
 
+#: How often the drift agent reads a model's windows and runs its tests, in
+#: seconds (docs/design/drift.md), unless the agent was spawned with its own
+#: ``check_s``. A window is a day long, so a few minutes is plenty.
+DRIFT_CHECK_S = max(5.0, _env_float("WACTORZ_DRIFT_CHECK_S", 600.0))
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:

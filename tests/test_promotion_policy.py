@@ -40,6 +40,7 @@ from wactorz.core.promotion import (
     record_decision,
 )
 from wactorz.core.provenance import DECISION, LED_TO, Provenance
+from wactorz.monitoring import model_metrics
 from wactorz.web import api_models, runtime
 from wactorz.web.app import build_app
 
@@ -679,6 +680,30 @@ class TestMainHoldsATrialToItsPolicy:
         active = store.pointer("imu", "active")
         assert active is not None and (active.version, active.by) == (2, POLICY)
         assert [d["policy"]["automatic"] for d in decisions_of(graph, "imu")] == [True, False]
+
+    async def test_every_trial_sets_its_gauges_with_or_without_a_policy(
+        self,
+        store: ArtifactStore,
+        trials: ShadowServing,
+        compared: dict[str, Any],
+    ) -> None:
+        def gauge(series: Any, **labels: str) -> float | None:
+            for sample in series.collect()[0].samples:
+                if all(sample.labels.get(k) == v for k, v in labels.items()):
+                    return sample.value
+            return None
+
+        assert await trials.check_policies(now=days_in(store, 2)) == {}
+        assert gauge(model_metrics.AGREEMENT, model="imu") == 0.9
+        assert gauge(model_metrics.SCORE, model="imu", side="shadow", metric="f1") == 0.9
+
+        store.set_policy("imu", declared({"metric": "precision"}, by="cli"))
+        await trials.check_policies(now=days_in(store, 2))
+        assert gauge(model_metrics.SCORE, model="imu", side="active", metric="precision") == 0.8
+
+        await trials.follow([("imu", "shadow", None, store.pointer("imu", "shadow"))])
+        assert gauge(model_metrics.AGREEMENT, model="imu") is None
+        assert gauge(model_metrics.SCORE, model="imu", side="shadow", metric="f1") is None
 
     async def test_without_a_policy_or_a_shadow_nothing_is_checked(
         self, store: ArtifactStore, trials: ShadowServing, compared: dict[str, Any]

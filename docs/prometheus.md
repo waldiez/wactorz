@@ -71,6 +71,12 @@ And, for what the dashboard does not show:
 | `wactorz_actor_slow_restarts{actor_name,node}` | `1` for an agent that crashed so often in a row that its supervisor now restarts it slowly; `node` is empty for one on this server, and a node's come from its heartbeat |
 | `wactorz_llm_spend_usd{period}` | Spent on models so far this spend period (`daily`, `weekly` or `monthly`), as Settings shows it |
 | `wactorz_llm_spend_limit_usd{period}` | The spend limit for the period; absent when none is set. At it, model requests pause until the period ends or the limit is raised |
+| `wactorz_model_score{model,side,metric}` | Each side of a model's shadow trial, `active` and `shadow`, on the figure the promotion policy compares (`f1`, `macro_f1`, `mae`, or the policy's), from the labels so far; set at every check of the trial and dropped when it ends |
+| `wactorz_model_shadow_agreement{model}` | The share of a trial's pairs both sides answered alike |
+| `wactorz_model_drift{model,test,column}` | A drift test's statistic on a column of the model's readings at the `drift` agent's last check: PSI, KS's `D`, or how many changes ADWIN found in the scores (`docs/design/drift.md`) |
+| `wactorz_model_drift_alarm{model,test,column}` | `1` while that test is over its threshold on that column, so an alert rule needs no threshold of its own |
+| `wactorz_model_train_seconds{model}` | How long the last training run of the model took |
+| `wactorz_model_train_runs_total{model,outcome}` | Training runs by how they ended: `ok` or `failed` |
 
 A request counts once however many attempts it took, and one the caller cancelled is not counted. The `wactorz_agent_*` series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
 

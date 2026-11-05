@@ -530,7 +530,53 @@ wactorz-train<span class="w"> </span>run<span class="w"> </span>examples/imu_ano
 
 <p>Each run is an <code>action</code> in the provenance graph and each version a <code>model</code>
 node, with <code>produced</code>, <code>trained</code> and <code>led_to</code> edges, so <code>GET /api/labels</code> and
-the model's history say what a version learned from and why it was tried.</p>
+the model's history say what a version learned from and why it was tried. A
+task that names an <code>observation</code>, the id of a drift alarm, has its run joined
+<code>led_to</code> from it.</p>
+<h2 id="watching-for-drift">Watching for drift</h2>
+<p>The <code>drift</code> library agent watches one model's recorded readings and says when
+they no longer look like what the served version learned from
+(<code>docs/design/drift.md</code>). Spawn it with the model, and the recorded source of
+its inputs when the version does not say what it read:</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}
+</code></pre></div>
+
+<p>Every <code>check_s</code> seconds (<code>WACTORZ_DRIFT_CHECK_S</code>, ten minutes unless set) it
+reads two windows through the loader, in event time: the current one, the last
+<code>window_s</code> (a day), and the reference, the window the served version was trained
+on when the <code>trainer</code> made it, else <code>reference</code> as spawned, else the window of
+the same length before the current one. Over them it runs, on every numeric
+column (or <code>columns</code>), PSI, which alarms at <code>0.2</code>, and the two-sample KS test,
+which alarms at <code>D &gt;= 0.1</code> with <code>p &lt; 0.05</code>; and, when <code>scores</code> names a recorded
+source of the model's scores (its <code>score_column</code>, <code>score</code> unless said), the same
+on the scores and ADWIN over the current window, which says the moment the
+scores changed. Each test runs only when both windows hold <code>min_rows</code> (100).
+The thresholds are spawn options with these names.</p>
+<p>A test over its threshold on a column raises an episode, once: an <code>observation</code>
+node about the model, a line on the feed, a message on <code>models/&lt;name&gt;/drift</code>
+with the observation's id, and the gauges <code>wactorz_model_drift{model,test,column}</code>
+and <code>wactorz_model_drift_alarm</code>. The episode stays raised, the gauges following,
+until a check finds the statistic back under its threshold; a promotion moves
+the reference to the new version and starts afresh; after a restart the episodes
+of the version served are read back from the graph. <code>GET /api/models/{name}/drift</code>
+lists the alarms, and <code>{"action": "check"}</code> as a task runs a check now.</p>
+<p>What follows from an alarm is a rule's, so the loop closes without a person: a
+rule on the topic sends the trainer a task with the window and split it names
+and the alarm's observation, and the policy decides the promotion.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rule"</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"imu-retrain"</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"triggers"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"models/imu-detector/drift"</span><span class="p">],</span>
+<span class="w"> </span><span class="nt">"conditions"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"test"</span><span class="p">,</span><span class="w"> </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"in"</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"psi"</span><span class="p">,</span><span class="w"> </span><span class="s2">"adwin"</span><span class="p">]}],</span>
+<span class="w"> </span><span class="nt">"actions"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"task"</span><span class="p">,</span><span class="w"> </span><span class="nt">"agent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"trainer"</span><span class="p">,</span>
+<span class="w">              </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"split"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"time_split"</span><span class="p">,</span><span class="w"> </span><span class="nt">"at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{at}"</span><span class="p">},</span>
+<span class="w">                          </span><span class="nt">"observation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{observation}"</span><span class="p">,</span>
+<span class="w">                          </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"drift: {test} on {column} ({statistic})"</span><span class="p">}}],</span>
+<span class="w"> </span><span class="nt">"cooldown_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">86400</span><span class="p">}</span>
+</code></pre></div>
+
+<p>A rule's placeholder that is a value on its own, <code>"at": "{at}"</code>, is the
+trigger's value as it is, a number staying a number, and placeholders are filled
+inside nested objects, so the split above reaches the trainer as it reads it.
+The cooldown makes however many columns alarm at once one retrain.</p>
 <h2 id="your-own-files">Your own files</h2>
 <p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
 directory under the state directory: for model weights, a checkpoint store, a

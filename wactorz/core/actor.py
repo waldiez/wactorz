@@ -466,6 +466,13 @@ def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
     return cleaned
 
 
+def declared_topics(value: Any) -> tuple[str, ...]:
+    """``SUBSCRIBES`` or ``PUBLISHES`` as a tuple of topics: one string, several, or none."""
+    if isinstance(value, str):
+        return (value,) if value else ()
+    return tuple(str(topic) for topic in value or () if topic)
+
+
 class Actor(ABC):
     """Base Actor class. All agents inherit from this.
     Actors are fully async and communicate only through messages.
@@ -618,6 +625,8 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
+        if self._published_manifest is None:
+            await self._announce_declared()
         # A question asked before a restart is still open: listen for its
         # answer, which goes to `on_operator_answer` since nothing awaits it,
         # and say again what the book holds, for a reader that missed it. A
@@ -1865,8 +1874,27 @@ class Actor(ABC):
         text. ``retain`` keeps the last message on the broker for whoever
         subscribes later; ``qos=1`` asks for at-least-once delivery, for a
         message that must not be lost while the broker is away.
+
+        A dict sent is also kept on this agent's contract in main's topic
+        registry, when main runs in this process, as what the agent was seen
+        publishing on ``topic``: an agent often publishes topics it never
+        declared, and the wiring shows what it really sends.
         """
         await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
+        if isinstance(payload, dict):
+            self._note_published(topic, payload)
+
+    def _note_published(self, topic: str, payload: dict[str, Any]) -> None:
+        """Keep ``payload`` on this agent's contract as what it publishes on ``topic``; best-effort."""
+        bus = topic_bus.get_topic_bus()
+        if bus is None or topic_bus.is_machinery(topic):
+            return
+        try:
+            contract = bus.registry.get(self.name, self.actor_id, self._node or None)
+            if contract is not None:
+                contract.update_observed(topic, payload)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("[%s] Recording what it published on %r failed: %s", self.name, topic, exc)
 
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
@@ -2282,12 +2310,37 @@ class Actor(ABC):
         }
         await self._send_manifest(manifest)
 
+    async def _announce_declared(self) -> None:
+        """Publish a manifest from what the class declares, for an actor that announced nothing itself.
+
+        An `Actor` subclass registered with the system says what it reads and
+        writes in ``SUBSCRIBES`` and ``PUBLISHES``; without a manifest main
+        would know none of it, and the agent would be missing from the topic
+        registry and the wiring. One that declares no topics is left as it is.
+        """
+        cls = type(self)
+        subscribes = declared_topics(getattr(cls, "SUBSCRIBES", ()))
+        publishes = declared_topics(getattr(cls, "PUBLISHES", ()))
+        if not subscribes and not publishes:
+            return
+        await self.publish_manifest(
+            description=str(getattr(cls, "DESCRIPTION", "") or ""),
+            publishes=list(publishes),
+            capabilities=[str(c) for c in getattr(cls, "CAPABILITIES", ()) or ()],
+            input_schema=dict(getattr(cls, "INPUT_SCHEMA", {}) or {}),
+            output_schema=dict(getattr(cls, "OUTPUT_SCHEMA", {}) or {}),
+            subscribes=list(subscribes),
+        )
+
     async def _send_manifest(self, manifest: dict[str, Any]) -> None:
         """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
 
         Every manifest goes out through here, so the copy main trusts for its
         own agents is always the one last sent.
         """
+        if self._artifacts and "models" not in manifest:
+            # The models it serves, by name: which version stands where is the store's to say.
+            manifest = {**manifest, "models": models.served_models(self._artifacts)}
         self._published_manifest = manifest
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 

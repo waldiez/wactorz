@@ -48,6 +48,7 @@ from . import (
     runtime,
     sessions,
     static_site,
+    wiring,
     ws,
 )
 
@@ -229,6 +230,7 @@ def build_app() -> web.Application:
     app.router.add_get("/api/labels", api_labels.labels_handler)
     app.router.add_get("/api/labels/effective", api_labels.effective_handler)
     api_data.setup(app)
+    app.router.add_get("/api/wiring", wiring.wiring_handler)
     app.router.add_get("/api/questions", questions.questions_handler)
     app.router.add_post("/api/questions/{agent_id}/{question_id}/answer", answers.answer_handler)
 

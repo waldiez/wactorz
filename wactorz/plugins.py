@@ -27,7 +27,7 @@ from typing import Any
 from . import installed
 from .agents.function_agent import AgentSpec, FunctionAgent, agent_name_from, spec_of
 from .config import CONFIG
-from .core.actor import Actor
+from .core.actor import Actor, declared_topics
 
 logger = logging.getLogger(__name__)
 
@@ -213,15 +213,6 @@ def _init_parameters(cls: type) -> tuple[set[str], bool]:
     return named, bool(open_ended)
 
 
-def _topics(value: Any) -> tuple[str, ...]:
-    """``value`` as a tuple of topics: one string, several, or none."""
-    if not value:
-        return ()
-    if isinstance(value, str):
-        return (value,)
-    return tuple(str(t) for t in value)
-
-
 def _first_line(text: str | None) -> str:
     return (text or "").strip().split("\n")[0].strip()
 
@@ -277,8 +268,8 @@ def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
             autostart=bool(getattr(obj, "AUTOSTART", True)),
             input_schema=dict(getattr(obj, "INPUT_SCHEMA", {}) or {}),
             output_schema=dict(getattr(obj, "OUTPUT_SCHEMA", {}) or {}),
-            subscribes=_topics(getattr(obj, "SUBSCRIBES", ())),
-            publishes=_topics(getattr(obj, "PUBLISHES", ())),
+            subscribes=declared_topics(getattr(obj, "SUBSCRIBES", ())),
+            publishes=declared_topics(getattr(obj, "PUBLISHES", ())),
         )
     raise NotAnAgentError(target or obj)
 

@@ -73,6 +73,13 @@ def _decoded_json(payload: bytes | None) -> Any | None:
         return None
 
 
+def _models_named(declared: Any) -> dict[str, str]:
+    """The models a manifest says its agent serves, by key, each by name: what can be read of them."""
+    if not isinstance(declared, Mapping):
+        return {}
+    return {str(key): str(name) for key, name in declared.items() if isinstance(name, str) and name}
+
+
 def _claimed_node(known_nodes: dict[str, dict[str, Any]], name: str, data: dict[str, Any]) -> str:
     """The node an agent main placed nowhere is on: the one it names, or whose heartbeat lists it."""
     named = str(data.get("node") or "").strip()
@@ -377,6 +384,7 @@ class ManifestRegistry:
                 # What tells the planner apart topics that differ only by an
                 # id, such as one button's serial from another's.
                 description=str(data.get("description") or ""),
+                models=_models_named(data.get("models")),
             )
             if hasattr(contract, "observed_samples") and observed:
                 contract.observed_samples = dict(observed)
@@ -438,8 +446,28 @@ class ManifestRegistry:
         payload = _decoded_json(message.payload)
         if not isinstance(payload, dict):
             return None
-        contract = self._sender(self._producers_of(topic), topic, message)
+        producers = self._producers_of(topic)
+        if not producers:
+            self._record_outside(topic, payload)
+            return None
+        contract = self._sender(producers, topic, message)
         return None if contract is None else (contract, topic, payload)
+
+    def _record_outside(self, topic: str, payload: dict[str, Any]) -> None:
+        """Keep a payload no agent published as what arrives on ``topic`` from outside.
+
+        A sensor, a bridge or a script feeds the topics an agent reads without
+        being an agent, and its fields are what that agent has to match. Kept
+        only while some agent reads the topic.
+        """
+        try:
+            bus = topic_bus.get_topic_bus()
+            if bus:
+                bus.registry.record_outside(topic, payload)
+        except Exception as exc:
+            logger.debug(
+                "[%s] Recording an outside sample on %r failed: %s", self.host_name, topic, exc
+            )
 
     def _sender(self, producers: list[Any], topic: str, message: Any) -> Any | None:
         """Which of ``producers`` a sample is from: the one whose node signed it, else the first

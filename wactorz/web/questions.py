@@ -146,6 +146,24 @@ def listing() -> dict[str, list[dict[str, Any]]]:
     return {"open": open_, "answered": answered[:ANSWERED_KEPT]}
 
 
+def asked_by() -> dict[str, dict[str, Any]]:
+    """What each agent has asked a person, by the agent's id: how many are open and answered, and where.
+
+    ``channels`` are where its questions went, as each was asked. An agent
+    that asked nothing, or whose book is gone, is not here.
+    """
+    asked: dict[str, dict[str, Any]] = {}
+    for agent_id, (_name, questions) in _books.items():
+        if runtime.is_deleted(agent_id) or not questions:
+            continue
+        asked[agent_id] = {
+            "open": sum(1 for q in questions if q.open),
+            "answered": sum(1 for q in questions if not q.open),
+            "channels": sorted({q.channel for q in questions if q.channel}),
+        }
+    return asked
+
+
 async def questions_handler(_request: web.Request) -> web.Response:
     """``GET /api/questions``: what is waiting for an answer, and what was answered lately."""
     return web.json_response(listing())

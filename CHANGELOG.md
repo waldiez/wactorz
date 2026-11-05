@@ -29,6 +29,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **`GET /api/wiring`: who publishes what, who reads it, and where the data stops.** The agents and the topics between
+  them, from main's topic registry: each topic's producers and readers, the fields of the last payload seen on it with
+  the payload and when it came, the topics fed from outside the system grouped by root, the models each agent serves
+  with where their pointers stand, and what each agent has asked a person. It warns of a topic nobody reads, a
+  subscription nothing publishes outside the world's roots, and a field an agent declares it reads that its topic does
+  not carry, including a topic a sensor or a bridge feeds: main now keeps the last payload on each topic under
+  `sensors/`, `custom/` and `agents/+/data/` that an agent reads and none publishes. What an agent sends with
+  `Actor.publish` is recorded on its contract too, as a generated agent's publishes are, so a topic it never declared
+  is still shown as its, and an `Actor` subclass that declares `SUBSCRIBES` or `PUBLISHES` and publishes no manifest
+  of its own now announces those, so it is in the registry at all. What a model on trial publishes, under `shadow/`, is
+  marked `shadow` and is no warning. An agent's manifest names the models it serves (`models`), and every recorded
+  sample says when it came (`at`). `503` with no actor system in the process.
+
 - **A household-energy example.** `examples/household_energy/` finds each run of an appliance in one power meter's
   readings, names the appliance with a small classifier, and asks a person in the Inbox whether it was right; the answers
   become labels, and a second version that also looks at how long a run lasted is judged against them with

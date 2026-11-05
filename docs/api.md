@@ -538,6 +538,53 @@ Every pointer move answers `200 OK` with `{"pointer": {...}}`, the pointer it mo
 
 ---
 
+### `GET /api/wiring`
+
+Who publishes what, who reads it, and where the data stops: the agents and the topics between them, the topics fed from outside the system, and what looks wrong. Read from main's topic registry when asked, with no stream behind it: ask again when agents come or go.
+
+**Response** `200 OK`
+```json
+{
+  "agents": [
+    {"id": "…", "name": "ahu-1-scorer", "node": "ahu-edge-1", "description": "Scores AHU-1's air.",
+     "publishes": ["anomalies/ahu-1"], "subscribes": ["sensors/ahu-1/#"], "reads_fields": ["temperature"],
+     "models": [{"key": "model", "name": "ahu-scorer", "active": 7, "shadow": 8}],
+     "asks": {"open": 1, "answered": 4, "channels": ["telegram"]}}
+  ],
+  "topics": [
+    {"topic": "anomalies/ahu-1", "producers": ["…"], "consumers": ["…"], "outside": false, "shadow": false,
+     "sampled": true,
+     "fields": {"ts": "float", "score": "float"}, "fields_from": "seen",
+     "example": {"ts": 1760000000.0, "score": 0.2}, "seen_at": 1760000002.1},
+    {"topic": "sensors/ahu-1/state", "producers": [], "consumers": ["…"], "outside": true, "shadow": false,
+     "sampled": true,
+     "fields": {"temp": "float", "fan": "float"}, "fields_from": "seen", "example": {"temp": 17.4, "fan": 0.62},
+     "seen_at": 1760000001.0}
+  ],
+  "sources": [{"root": "sensors", "topics": ["sensors/ahu-1/state"]}],
+  "warnings": [
+    {"kind": "field_mismatch", "topic": "sensors/ahu-1/state", "consumer": "…", "missing": ["temperature"],
+     "carried": ["fan", "temp"], "carried_from": "seen"},
+    {"kind": "unread", "topic": "metrics/ahu-1/temp", "producers": ["…"]},
+    {"kind": "no_producer", "topic": "drift/ahu-1", "consumers": ["…"]}
+  ]
+}
+```
+
+Agents are named by id in `producers`, `consumers` and the warnings. A topic is one an agent declares or was seen publishing (a declared pattern that seen topics fill is shown as those topics), one seen from outside that an agent reads, or a subscription nothing fills. `outside` marks a topic no agent publishes under the world's roots (`sensors/`, `home/`, `custom/`, `schedule/`, `homeassistant/`), where a sensor, Home Assistant or a script is expected to publish; `sources` groups them by root.
+
+What a topic carries is the fields of the last payload seen on it, from its producer or from outside (`fields_from: "seen"`, with the payload as `example` and when it came as `seen_at`), or before anything is seen what its producer declares (`"declared"`). Main keeps payloads from outside only under `sensors/`, `custom/` and `agents/+/data/`, and only for topics an agent reads; any other is `sampled: false`, with nothing known of its fields. An example longer than 2,048 characters of JSON comes as `example_text`, cut, with `example_cut: true`.
+
+`models` are the models an agent's manifest names, with where the store's `active` and `shadow` pointers stand (`null` when unset). `asks` is what the agent has asked a person, from `GET /api/questions`, or `null`.
+
+`shadow` marks what a model on trial publishes, under `shadow/` in front of the agent's own topic (see `GET /api/models/{name}/trial`).
+
+The warnings: `unread`, a topic an agent publishes that no agent reads (the dashboard may still show it; a `shadow` topic is never one); `no_producer`, a subscription outside the world's roots that no agent publishes and nothing was seen on; `field_mismatch`, a field an agent declares it reads (`consumes_schema`) that the topic does not carry. A field declared as `any` names nothing, and a topic nothing is known about raises no mismatch.
+
+`503` when no actor system runs in the monitor's process: the registry is main's.
+
+---
+
 ### `GET /api/questions`
 
 The questions agents have put to a person, on any channel, from main or a node: the open ones oldest first, and the newest answered ones.

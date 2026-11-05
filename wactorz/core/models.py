@@ -70,6 +70,11 @@ class ModelError(ArtifactError):
         return cls(f"{agent} cannot start without its models: {exc}")
 
 
+def served_models(resolved: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Each resolved model's name, by the key its agent loads it under, as a manifest says it."""
+    return {key: str(entry["name"]) for key, entry in resolved.items() if entry.get("name")}
+
+
 def resolve_in_store(wanted: Mapping[str, Any], state_dir: str | Path) -> dict[str, dict[str, Any]]:
     """Each artifact ``wanted`` names, pinned in main's store, with the path it is read at.
 

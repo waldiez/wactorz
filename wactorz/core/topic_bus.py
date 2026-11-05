@@ -134,6 +134,10 @@ class TopicContract:
     #: is which. Not stored with the contract: the retained manifest brings it
     #: back after a restart.
     description: str = ""
+    #: The models the agent serves, by the key it loads each under: ``{"model":
+    #: "imu-detector"}``. From its manifest, so an agent on a node says it too;
+    #: where each model's pointers stand is the store's to say, not this.
+    models: dict = field(default_factory=dict)
 
     def __post_init__(self):
         """Guard against LLM mistakes:
@@ -190,11 +194,7 @@ class TopicContract:
         """
         if not isinstance(payload, dict):
             return
-        fields = {k: type(v).__name__ for k, v in payload.items() if not k.startswith("_")}
-        self.observed_samples[topic] = {
-            "fields": fields,
-            "example": {k: v for k, v in payload.items() if not k.startswith("_")},
-        }
+        self.observed_samples[topic] = sample_of(payload)
 
     def to_dict(self) -> dict:
         return {
@@ -209,6 +209,7 @@ class TopicContract:
             "timestamp": self.timestamp,
             "observed_samples": self.observed_samples,
             "description": self.description,
+            "models": self.models,
         }
 
     @classmethod
@@ -225,6 +226,7 @@ class TopicContract:
             timestamp=d.get("timestamp", time.time()),
             observed_samples=d.get("observed_samples", {}),
             description=d.get("description", "") or "",
+            models=dict(d.get("models") or {}),
         )
 
     @classmethod
@@ -240,6 +242,33 @@ class TopicContract:
             node=config.get("node"),
             actor_id=config.get("actor_id"),
         )
+
+
+#: Topics that are the system's own machinery, never data.
+_MACHINERY = ("nodes/", "system/", "main/", "$SYS/")
+
+
+def is_machinery(topic: str) -> bool:
+    """Whether ``topic`` is the system talking to itself: heartbeats, manifests, commands.
+
+    An agent's own data topics (``agents/<id>/data/...``) are data.
+    """
+    if topic.startswith(_MACHINERY):
+        return True
+    return topic.startswith("agents/") and "/data" not in topic
+
+
+def sample_of(payload: dict) -> dict:
+    """What is kept of one real payload: its field names and types, the payload, and when it came.
+
+    Keys starting with ``_`` are the sender's own bookkeeping and are left out.
+    """
+    kept = {k: v for k, v in payload.items() if not k.startswith("_")}
+    return {
+        "fields": {k: type(v).__name__ for k, v in kept.items()},
+        "example": kept,
+        "at": time.time(),
+    }
 
 
 # ── MQTT wildcard matching ──────────────────────────────────────────────────────
@@ -271,6 +300,10 @@ def _match_parts(p: list[str], t: list[str]) -> bool:
 # ── Topic Registry ─────────────────────────────────────────────────────────────
 
 
+#: How many topics from outside the registry keeps a last payload for.
+OUTSIDE_TOPICS_KEPT = 256
+
+
 class TopicRegistry:
     """Global index of all live TopicContracts, queryable by topic pattern.
 
@@ -294,6 +327,32 @@ class TopicRegistry:
         #: contract written before its agent's id was known is under the name,
         #: until the contract with the id replaces it.
         self._contracts: dict[str, TopicContract] = {}
+        #: The last payload seen on each topic no agent publishes but some agent
+        #: reads, by topic: what a sensor, a bridge or a script outside the
+        #: system sends, which no contract would otherwise hold.
+        self._outside: dict[str, dict] = {}
+
+    def record_outside(self, topic: str, payload: dict) -> bool:
+        """Keep ``payload`` as the last seen on ``topic``, when no agent publishes it and one reads it.
+
+        Returns whether it was kept. The table holds `OUTSIDE_TOPICS_KEPT`
+        topics at most; past that, the one heard from longest ago goes.
+        """
+        if (
+            not isinstance(payload, dict)
+            or self.producers_of(topic)
+            or not self.consumers_of(topic)
+        ):
+            return False
+        self._outside.pop(topic, None)
+        self._outside[topic] = sample_of(payload)
+        while len(self._outside) > OUTSIDE_TOPICS_KEPT:
+            del self._outside[next(iter(self._outside))]
+        return True
+
+    def outside_samples(self) -> dict[str, dict]:
+        """The last payload seen on each topic from outside, by topic, oldest first."""
+        return {topic: dict(sample) for topic, sample in self._outside.items()}
 
     def register(self, contract: TopicContract):
         if contract.actor_id and self._is_unidentified(contract.name, contract.place):

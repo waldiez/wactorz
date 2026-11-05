@@ -168,6 +168,11 @@ describe("normaliser field validation (hardening)", () => {
         });
     });
 
+    it("reads the plain failed a heartbeat or a status carries as failed", () => {
+        expect(normaliseHeartbeat({ agentId: "x", state: "failed" }).state).toEqual({ failed: "" });
+        expect(normaliseStatus({ agentId: "x", state: "failed" }).state).toEqual({ failed: "" });
+    });
+
     it("coerces an unknown alert severity to 'info'", () => {
         expect(normaliseAlert({ agentId: "x", severity: "nuclear", message: "m" }).severity).toBe("info");
     });

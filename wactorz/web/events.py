@@ -61,6 +61,17 @@ def _evict_stalest() -> None:
     )
 
 
+def _known_name(agent_id: str) -> str:
+    """The name to file a newly seen agent under until it says its own.
+
+    A metric or a status can arrive before an agent's first heartbeat, which is
+    what names it here. An agent of this process is named by the registry; any
+    other, an agent on a node, by the start of its id until it is heard from.
+    """
+    actor = runtime.registry.get(agent_id) if runtime.registry is not None else None
+    return actor.name if actor is not None else agent_id[:8]
+
+
 def update_agent(agent_id: str, key: str, data) -> None:
     """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
@@ -68,7 +79,7 @@ def update_agent(agent_id: str, key: str, data) -> None:
     if agent_id not in runtime.state["agents"]:
         runtime.state["agents"][agent_id] = {
             "agent_id": agent_id,
-            "name": agent_id[:8],
+            "name": _known_name(agent_id),
             "first_seen": time.time(),
             # Set here as well as below: eviction ranks on it, and an entry
             # without one sorts as infinitely stale — so a new arrival would be

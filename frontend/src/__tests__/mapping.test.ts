@@ -56,6 +56,13 @@ describe("toAgentInfo", () => {
         expect(toAgentInfo({ agent_id: "a", state: "weird" } as StatePatchAgent).state).toBe("running");
     });
 
+    it("reads the server's failed and idle", () => {
+        expect(toAgentInfo({ agent_id: "a", state: "failed" } as StatePatchAgent).state).toEqual({
+            failed: "",
+        });
+        expect(toAgentInfo({ agent_id: "a", state: "idle" } as StatePatchAgent).state).toBe("initializing");
+    });
+
     it("uses status when state is absent", () => {
         expect(toAgentInfo({ agent_id: "a", status: "stopped" } as StatePatchAgent).state).toBe("stopped");
     });
@@ -399,6 +406,14 @@ describe("reconcileActorList", () => {
     it("resolves a display name for each surviving agent", () => {
         const [a] = reconcileActorList([actor("agent-Catalog-1a2b", "")], () => false);
         expect(a?.name).toBe(resolveAgentName("", "agent-Catalog-1a2b"));
+    });
+
+    it("reads each listed state as every other path does", () => {
+        // The list arrives as the server's JSON: a state there is a plain string.
+        const listed = (state: string): AgentInfo =>
+            ({ id: state, name: state, state }) as unknown as AgentInfo;
+        const out = reconcileActorList([listed("failed"), listed("idle"), listed("unknown")], () => false);
+        expect(out.map(a => a.state)).toEqual([{ failed: "" }, "initializing", "running"]);
     });
 
     it("keeps an empty list empty and never mutates the input element", () => {

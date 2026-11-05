@@ -55,6 +55,7 @@ from ...core.shadow_trial import (
     record_outcome,
 )
 from ...data.files import data_root
+from ..shadow_serving import shadow_source
 
 if TYPE_CHECKING:
     from ...core.persistence import WactorzDB
@@ -357,20 +358,15 @@ class ShadowServing:
         except ModuleNotFoundError:
             return {**compare([]), "pairs_unavailable": "install wactorz[data]"}
         root = data_root(resolve_state_dir())
-
-        def read() -> list[dict[str, Any]]:
-            return parquet.arrived_in(root, f"shadow/{name}", since, until).to_pylist()
-
         try:
-            rows = await asyncio.to_thread(read)
+            rows = await asyncio.to_thread(
+                parquet.rows_arrived_in, root, shadow_source(name), since, until
+            )
         except Exception as exc:
             logger.warning("cannot read the pairs of %s's trial: %s", name, exc)
             return {**compare([]), "pairs_unavailable": str(exc)}
-        db = get_db()
-        if db is None:
-            return compare(rows)
         try:
-            return await asyncio.to_thread(_judged, self.store, name, rows, shadow, db)
+            return await asyncio.to_thread(_judged, self.store, name, rows, shadow, get_db())
         except Exception as exc:
             logger.warning("cannot judge %s's trial against the labels: %s", name, exc)
             return compare(rows)
@@ -392,13 +388,20 @@ def _judged(
     name: str,
     rows: list[dict[str, Any]],
     shadow: int | None,
-    db: WactorzDB,
+    db: WactorzDB | None,
 ) -> dict[str, Any]:
-    """The pairs compared, and judged against the labels when a version says how."""
+    """The pairs compared as a version says it is judged, and against the labels when ``db`` holds them.
+
+    The declaration decides what agreeing means as well as how the labels are
+    read, so it is found even without the labels, and a trial agrees the same
+    whether or not persistence is running.
+    """
     found = judgement_of_trial(store, name, rows, shadow=shadow)
     if found is None:
         return compare(rows)
     judgement, judged_from = found
+    if db is None:
+        return compare(rows, judgement=judgement)
     labels = labels_for(rows, judgement, Labels(db).effective)
     summary = compare(rows, judgement=judgement, labels=labels)
     summary["labels"]["from"] = judged_from

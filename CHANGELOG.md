@@ -399,6 +399,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A trial's agreement counts what the version is judged on.** Two versions agreed only when their outputs were the
+  same in every field, so a detector that publishes its score, or a classifier that publishes a confidence beside its
+  class, showed little agreement where the two flagged, or named, alike. Now a detector's sides agree when both flagged
+  an input or neither did, a classifier's when they give the same class in the declared field, and a regressor's the
+  same number there; a model that declares nothing is compared on its whole output, as before. The ended trial's line
+  on the feed and its recorded outcome count it the same way, with persistence running or not.
+
 - **Training runs started within one second are let go oldest first.** A run's id held its start in whole seconds,
   so of two runs started in the same second, pruning the run directories kept either one, and could delete the newer.
   Ids now hold the start in microseconds; directories named before the change sort as older and go first.

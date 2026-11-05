@@ -191,6 +191,11 @@ def arrived_in(
     return _read(paths, columns, column=ARRIVED, start=start, end=end)
 
 
+def rows_arrived_in(root: Path, source: str, start: float, end: float) -> list[dict[str, Any]]:
+    """`arrived_in` as a list of rows, each a dict: for a caller that works on rows, off the event loop."""
+    return arrived_in(root, source, start, end).to_pylist()
+
+
 def _read(
     paths: Sequence[Path],
     columns: Sequence[str] | None,

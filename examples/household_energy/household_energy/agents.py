@@ -35,13 +35,7 @@ ANSWERS = {**{title: appliance for appliance, title in TITLES.items()}, "Somethi
     models={"model": MODEL_NAME},
 )
 async def guess(run: dict, me: wactorz.FunctionAgent) -> dict:
-    """The run, with the appliance it looks like.
-
-    Nothing else a version works out goes in: a trial counts two versions as
-    agreeing when they publish the same thing, so a figure that differs on
-    every run, such as how near the run was, would hide that they named the
-    same appliance.
-    """
+    """The run, with the appliance it looks like."""
     model = await me.load_model("model")
     appliance, _distance = classify(model, run)
     return {**run, "appliance": appliance}

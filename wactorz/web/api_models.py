@@ -36,6 +36,7 @@ from typing import Any
 
 from aiohttp import web
 
+from ..agents.shadow_serving import shadow_source
 from ..core.artifacts import (
     Artifact,
     ArtifactConflictError,
@@ -264,13 +265,10 @@ async def _pairs(window: _Window) -> list[dict[str, Any]] | web.Response:
             {"error": "the pairs cannot be read: install wactorz[data]"}, status=503
         )
     root = data_root(resolve_state_dir())
-
-    def read() -> list[dict[str, Any]]:
-        table = parquet.arrived_in(root, f"shadow/{window.name}", window.since, window.until)
-        return table.to_pylist()
-
     try:
-        return await asyncio.to_thread(read)
+        return await asyncio.to_thread(
+            parquet.rows_arrived_in, root, shadow_source(window.name), window.since, window.until
+        )
     except DataError as exc:
         return web.json_response({"error": str(exc)}, status=400)
 

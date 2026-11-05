@@ -22,8 +22,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .artifacts import ArtifactError, ArtifactStore
-from .judgement import Judgement
-from .judges import judge
+from .judgement import CLASSIFIER, DETECTOR, Judgement
+from .judges import answer_of, class_of, judge, number_of
 from .labels import Interval
 from .pointer_moves import source_of
 from .provenance import EVALUATED_BY, MODEL, OUTCOME, Provenance, ProvNode, stable_id
@@ -60,6 +60,22 @@ def _score(output: Any) -> float | None:
     return None
 
 
+def _alike(row: Mapping[str, Any], outputs: Mapping[str, Any], judgement: Judgement | None) -> bool:
+    """Whether active and shadow answered ``row``'s input alike, in what the version is judged on.
+
+    A detector is judged on whether it published, so two that both flagged an
+    input agree whatever else each put in its output; a classifier on the class
+    in its field, and a regressor on the number there, as `judges` reads them.
+    With no judgement, the whole outputs are compared.
+    """
+    if judgement is None:
+        return outputs["active"] == outputs["shadow"]
+    if judgement.kind == DETECTOR:
+        return (outputs["active"] is None) == (outputs["shadow"] is None)
+    read = class_of if judgement.kind == CLASSIFIER else number_of
+    return read(answer_of(row, "active", judgement)) == read(answer_of(row, "shadow", judgement))
+
+
 def _percentile(values: Sequence[float], fraction: float) -> float | None:
     if not values:
         return None
@@ -83,8 +99,11 @@ def compare(
 ) -> dict[str, Any]:
     """What the pairs ``rows`` show.
 
-    ``agreement`` is the share of pairs where both sides answered alike:
-    neither flagged, or both flagged with the same output. ``score`` is each
+    ``agreement`` is the share of pairs where both sides answered alike in
+    what the ``judgement`` judges (`_alike`): both flagged or neither for a
+    detector, the same class or number in the field for a classifier or a
+    regressor, and the same output, or none from either, without one. It does
+    not need the labels. ``score`` is each
     side's mean ``score`` and the mean of shadow's minus active's, over the
     pairs where both gave one. With the ``judgement`` a version declares and
     the ``labels`` of the sources its inputs are judged against (from
@@ -109,7 +128,7 @@ def compare(
             version = row.get(f"{side}_version")
             if isinstance(version, (int, float)) and not isinstance(version, bool):
                 versions[side].add(int(version))
-        if outputs["active"] == outputs["shadow"]:
+        if _alike(row, outputs, judgement):
             agreed += 1
         score = {side: _score(output) for side, output in outputs.items()}
         for side, value in score.items():

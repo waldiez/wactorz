@@ -613,6 +613,27 @@ class TestMainStartsAndEndsTheTrial:
         assert outcome["labels"]["from"] == "imu:2"
         assert (outcome["labels"]["positives"], outcome["labels"]["shadow"]["recall"]) == (4, 1.0)
 
+    async def test_without_persistence_the_trial_still_agrees_as_the_version_declares(
+        self,
+        later: float,
+        host: _Host,
+        trials: ShadowServing,
+        store: ArtifactStore,
+        state: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        was = store.pointer("imu", "shadow")
+        assert was is not None
+        # Both sides flag every pair; the last differs only in its score.
+        store.judge("imu:2", declared(positive=["fault"], by="cli"))
+        _pairs(state, was.moved_at, 4)
+        monkeypatch.setattr(main_side, "get_db", lambda: None)
+        store.clear("shadow", "imu", by="dashboard")
+
+        await trials.follow([("imu", "shadow", None, was)])
+
+        assert host.feed() == ["the trial of imu:2 ended (cleared): 4 pair(s), agreed on 100%"]
+
     async def test_an_outcome_that_cannot_be_judged_is_still_compared(
         self,
         later: float,
@@ -751,6 +772,45 @@ class TestTheComparison:
         assert summary["latency"]["shadow"]["mean_ms"] == 3.0
         assert summary["versions"] == {"active": [1], "shadow": [2]}
         assert compare([])["agreement"] is None
+
+    def test_detectors_agree_on_flagging_whatever_else_each_output_holds(self) -> None:
+        rows = [
+            _row(T0, {"score": 6.1}, {"score": 7.4}),
+            _row(T0 + 1, None, None),
+            _row(T0 + 2, {"score": 6.0}, None),
+        ]
+
+        summary = compare(rows, judgement=declared(positive=["fault"]))
+
+        assert summary["agreement"] == pytest.approx(2 / 3)
+        assert compare(rows)["agreement"] == pytest.approx(1 / 3)
+
+    def test_classifiers_agree_on_the_class_in_their_field(self) -> None:
+        rows = [
+            _row(
+                T0,
+                {"appliance": "kettle", "distance": 0.4},
+                {"appliance": "kettle", "distance": 1.2},
+            ),
+            _row(T0 + 1, {"appliance": "washer"}, {"appliance": "kettle"}),
+            _row(T0 + 2, {"appliance": " oven "}, {"appliance": "oven", "sure": True}),
+            # Neither gave a class: alike, as neither flagging is for a detector.
+            _row(T0 + 3, None, {"other": "kettle"}),
+        ]
+
+        summary = compare(rows, judgement=declared(kind="classifier", field="appliance"))
+
+        assert summary["agreement"] == 0.75
+
+    def test_regressors_agree_on_the_number_in_their_field(self) -> None:
+        rows = [
+            _row(T0, {"co2": 812.0, "spread": 4}, {"co2": "812", "spread": 9}),
+            _row(T0 + 1, {"co2": 812.0}, {"co2": 813.0}),
+        ]
+
+        summary = compare(rows, judgement=declared(kind="regressor", field="co2"))
+
+        assert summary["agreement"] == 0.5
 
     def test_precision_and_recall_against_the_labels(self, db: WactorzDB) -> None:
         labels = Labels(db)

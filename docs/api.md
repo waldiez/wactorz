@@ -461,7 +461,7 @@ A `classifier` (judged on the class in `judged_on.field`) has `labelled`, `unlab
 
 `from` is the version whose declaration was used, or `request`. When a version says how to judge the trial but persistence is not running, `labels_unavailable` says so instead.
 
-`agreement` is the share of pairs where both sides answered alike; `flagged` how many inputs each side published something for; `score` is read from a `score` field in the outputs, over the pairs where both gave one. `404` when no shadow is set and no window is given, `400` for a bad `name`, `since` or `until`, `400` for `positive` values that are not label values, `503` when the pairs cannot be read because the `data` extra is not installed, or when `positive` is given and persistence is not running.
+`agreement` is the share of pairs where both sides answered alike in what the version is judged on: both flagged or neither for a detector, the same class or number in the declared field for a classifier or a regressor, and the same output when nothing says how the version is judged; `flagged` how many inputs each side published something for; `score` is read from a `score` field in the outputs, over the pairs where both gave one. `404` when no shadow is set and no window is given, `400` for a bad `name`, `since` or `until`, `400` for `positive` values that are not label values, `503` when the pairs cannot be read because the `data` extra is not installed, or when `positive` is given and persistence is not running.
 
 ---
 

@@ -471,6 +471,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`/agents restart` restarts an agent handed in by code.** An agent given to `run(agents=...)` or `serve(agents=...)`
+  has no spawn config to rebuild it from, so restarting it was refused with "not found in spawn registry", though `/stop`
+  told you to use `/agents restart` to resume it. Now it is stopped and started again in place, its state kept; one
+  already stopped is started. Main does not restart itself, and an agent that refuses to stop is left running.
+
+- **An agent whose start fails shows as stopped, not running.** Starting a stopped agent (`/start`, the dashboard's Start
+  button, or a restart) whose own setup raised left it marked running with nothing running: no messages handled, no
+  heartbeat. It is now wound back down, shows as stopped, says why, and can be started again.
+
 - **The dashboard shows a failed agent as failed.** An agent that had failed never showed as failed: depending on which
   report reached the page last it showed as running, as stopped, or as "failed" in green. An agent built but not yet
   started showed as running too, and the card of one not yet heard from said "unknown". Now a failed agent's card says

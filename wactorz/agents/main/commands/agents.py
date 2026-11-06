@@ -92,7 +92,7 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
     # Local agent — stop and re-spawn using config from spawn registry
     config = named.entry
     if not config:
-        return f"Agent '{agent_name}' not found in spawn registry."
+        return await _restart_in_place(ctx, agent_name)
     if ctx.actor._registry:
         target = ctx.actor._registry.find_by_name(agent_name)
         if target:
@@ -109,6 +109,31 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
     # restarts trusted rather than failing the validator it never had
     # to pass.
     await ctx.actor._spawn_from_config(new_config, save=True, from_registry=True)
+    return f"Agent '{agent_name}' restarted locally."
+
+
+async def _restart_in_place(ctx: CommandContext, agent_name: str) -> str:
+    """Restart a local agent the spawn registry keeps no config for: stop it, then start it.
+
+    Such an agent was handed in by code (`run(agents=...)`, `serve(agents=...)`)
+    or is one of main's own, so there is nothing to build a fresh one from. The
+    same actor goes down and comes back up instead, its state kept as a stop and
+    a start keep it. One already stopped is only started.
+    """
+    target = ctx.actor._registry.find_by_name(agent_name) if ctx.actor._registry else None
+    if target is None:
+        return f"Agent '{agent_name}' not found locally."
+    if target is ctx.actor:
+        return f"'{agent_name}' cannot restart itself: it is running this command."
+    if target.state != ActorState.STOPPED and not await target.apply_command("stop"):
+        return f"'{agent_name}' refused stop (it may be essential), so it was not restarted."
+    try:
+        started = await target.apply_command("start")
+    except Exception as exc:
+        logger.exception("[main] restart of %r failed to start it again", agent_name)
+        return f"'{agent_name}' stopped, but failed to start again: {exc}"
+    if not started:
+        return f"'{agent_name}' stopped, but refused start."
     return f"Agent '{agent_name}' restarted locally."
 
 

@@ -271,3 +271,48 @@ class TestStopRunsOncePerRun:
         await actor.stop()
 
         assert actor.stops == 2
+
+
+class _FailsToStart(Actor):
+    """An actor whose own setup raises, until told not to."""
+
+    def __init__(self, persistence_dir: Path) -> None:
+        super().__init__(name="flaky", persistence_dir=str(persistence_dir))
+        self.broken = True
+
+    async def on_start(self) -> None:
+        if self.broken:
+            raise RuntimeError("setup crashed")
+
+    async def handle_message(self, message: Message) -> None:  # pragma: no cover - never delivered
+        return None
+
+
+class TestAFailedStartCommand:
+    """A start command whose start fails leaves the actor stopped, not half running."""
+
+    async def test_it_is_stopped_with_no_loops_and_the_caller_hears_why(
+        self, tmp_path: Path
+    ) -> None:
+        actor = _FailsToStart(tmp_path)
+        actor.state = ActorState.STOPPED
+
+        with pytest.raises(RuntimeError, match="setup crashed"):
+            await actor.apply_command("start")
+
+        assert actor.state == ActorState.STOPPED
+        assert actor._tasks == []
+
+    async def test_a_later_start_can_try_again(self, tmp_path: Path) -> None:
+        actor = _FailsToStart(tmp_path)
+        actor.state = ActorState.STOPPED
+        with pytest.raises(RuntimeError):
+            await actor.apply_command("start")
+
+        actor.broken = False
+        try:
+            assert await actor.apply_command("start") is True
+            assert actor.state == ActorState.RUNNING
+            assert len(actor._tasks) == 3
+        finally:
+            await actor.stop()

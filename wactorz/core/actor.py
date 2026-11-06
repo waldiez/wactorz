@@ -1120,7 +1120,18 @@ class Actor(ABC):
             if self.state != ActorState.STOPPED:
                 logger.warning("[%s] Ignoring 'start' — actor is %s.", self.name, self.state.value)
                 return False
-            await self.start()
+            try:
+                await self.start()
+            except BaseException:
+                # `start` marks the actor running before `on_start`, and starts
+                # its loops last: one that fails part-way would be reported
+                # running with nothing running. It is wound back down, as the
+                # supervisor does with a spawn that fails to start, so it shows
+                # as stopped and a later start can try again; the caller still
+                # hears why.
+                with contextlib.suppress(Exception):
+                    await self.stop()
+                raise
             self._resume_supervision()
         elif command == "stop":
             self._release_from_supervision()

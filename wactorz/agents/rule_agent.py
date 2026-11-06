@@ -3,7 +3,10 @@
 The glue between the stages of a pipeline, without a program per rule. A rule
 subscribes to one or more trigger topics, checks conditions against the
 payload, waits out a cooldown, and runs its actions: publish a message, send a
-task to an agent, call a webhook, ask the operator, or record a label. A Home Assistant service call stays with
+task to an agent, call a webhook, ask the operator, or record a label. The
+cooldown runs in the triggers' own time, the event time each payload carries
+in ``ts`` or ``timestamp``, else when it arrived, so a replayed day's cooldown
+is a replayed day (docs/design/event-time.md). A Home Assistant service call stays with
 the ``ha_actuator`` type; a rule is for everything that is not Home Assistant.
 
 A spawn config, a pipeline definition and chat all describe a rule the same way:
@@ -455,6 +458,7 @@ class RuleAgent(Actor):
         super().__init__(**kwargs)
         self.config = config
         self.description = config.description or self._describe()
+        #: The event time of the trigger the rule last fired on, for the cooldown.
         self._fired_at: float | None = None
         self.fired = 0
 
@@ -481,10 +485,10 @@ class RuleAgent(Actor):
         self.metrics.messages_processed += 1
         if not all(c.holds(payload) for c in self.config.conditions):
             return False
-        now = time.monotonic()
-        if self._fired_at is not None and now - self._fired_at < self.config.cooldown_seconds:
+        at = event_time(payload)
+        if self._fired_at is not None and at - self._fired_at < self.config.cooldown_seconds:
             return False
-        self._fired_at = now
+        self._fired_at = at
         self.fired += 1
         for action in self.config.actions:
             try:

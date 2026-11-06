@@ -11,6 +11,7 @@ writes and reads the files and needs pyarrow, the ``data`` extra, so it is
 imported where it is used rather than here.
 """
 
+from .clock import DEFAULT_LATENESS_S, newest_event_time, now_of
 from .files import (
     DATA_DIRNAME,
     DataError,
@@ -23,10 +24,13 @@ from .files import (
 
 __all__ = [
     "DATA_DIRNAME",
+    "DEFAULT_LATENESS_S",
     "DataError",
     "data_root",
     "event_time_of",
     "files_for",
     "hour_dir",
+    "newest_event_time",
+    "now_of",
     "sources",
 ]

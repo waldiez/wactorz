@@ -367,8 +367,9 @@ source and what a move depends on:
 A task to it runs one training: `{"since": ..., "until": ..., "split": {"kind":
 "time_split", "at": ...}, "settings": {...}, "reason": "regime change at 14:02"}`,
 from chat, from a rule's `task` action or from another agent. What the task does
-not say takes the agent's options; the default window is the last week with its
-last fifth held out, and a split is `holdout`, `time_split`, `rolling_origin` or
+not say takes the agent's options; the default window is the last week the
+source has seen, ending at its newest recorded reading held back by `lateness_s`
+(a minute), with its last fifth held out, and a split is `holdout`, `time_split`, `rolling_origin` or
 `leave_k_out`, as the loader makes them. The fit runs in a child process with
 the agent's `timeout_s` and `memory_mb`. The version is stored with the recipe's
 hash, the seed, the settings, the window, the split's manifest and the figures,
@@ -402,9 +403,11 @@ its inputs when the version does not say what it read:
 
 Every `check_s` seconds (`WACTORZ_DRIFT_CHECK_S`, ten minutes unless set) it
 reads two windows through the loader, in event time: the current one, the last
-`window_s` (a day), and the reference, the window the served version was trained
-on when the `trainer` made it, else `reference` as spawned, else the window of
-the same length before the current one. Over them it runs, on every numeric
+`window_s` (a day) ending at the source's own now, its newest recorded reading
+held back by `lateness_s` (a minute), so a replayed day is checked at the
+replay's own moments; and the reference, the window the served version was
+trained on when the `trainer` made it, else `reference` as spawned, else the
+window of the same length before the current one. Over them it runs, on every numeric
 column (or `columns`), PSI, which alarms at `0.2`, and the two-sample KS test,
 which alarms at `D >= 0.1` with `p < 0.05`; and, when `scores` names a recorded
 source of the model's scores (its `score_column`, `score` unless said), the same
@@ -439,7 +442,8 @@ and the alarm's observation, and the policy decides the promotion.
 A rule's placeholder that is a value on its own, `"at": "{at}"`, is the
 trigger's value as it is, a number staying a number, and placeholders are filled
 inside nested objects, so the split above reaches the trainer as it reads it.
-The cooldown makes however many columns alarm at once one retrain.
+The cooldown makes however many columns alarm at once one retrain; it counts
+the alarms' own time, so a replayed day is a day.
 
 ## Your own files
 

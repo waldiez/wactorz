@@ -223,6 +223,18 @@ class TestTheVerdict:
             == "met: f1 0.9 vs 0.8 (+0.1, margin 0.05), 2 day(s), 200 labelled, McNemar p=0.01"
         )
 
+    def test_the_days_are_the_event_time_the_pairs_cover(self) -> None:
+        replayed = {**judged(), "span": {"since": T0, "until": T0 + 2 * DAY}}
+        begun = {**judged(), "span": {"since": T0, "until": T0 + DAY / 2}}
+        a_minute = T0 + 10 * DAY
+
+        quick = judge_trial(replayed, declared(), since=a_minute, now=a_minute + 60)
+        slow = judge_trial(begun, declared(), since=T0, now=T0 + 3 * DAY)
+
+        assert quick.met is True
+        assert [t.actual for t in quick.terms if t.name == "min_days"] == [2.0]
+        assert [t.name for t in slow.terms if not t.met] == ["min_days"]
+
     @pytest.mark.parametrize(
         ("summary", "policy", "now", "short"),
         [

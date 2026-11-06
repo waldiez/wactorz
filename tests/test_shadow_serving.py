@@ -771,7 +771,9 @@ class TestTheComparison:
         assert summary["score"]["scored"] == 2
         assert summary["latency"]["shadow"]["mean_ms"] == 3.0
         assert summary["versions"] == {"active": [1], "shadow": [2]}
+        assert summary["span"] == {"since": T0, "until": T0 + 5}
         assert compare([])["agreement"] is None
+        assert compare([])["span"] is None
 
     def test_detectors_agree_on_flagging_whatever_else_each_output_holds(self) -> None:
         rows = [

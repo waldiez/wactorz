@@ -514,8 +514,9 @@ source and what a move depends on:</p>
 <p>A task to it runs one training: <code>{"since": ..., "until": ..., "split": {"kind":
 "time_split", "at": ...}, "settings": {...}, "reason": "regime change at 14:02"}</code>,
 from chat, from a rule's <code>task</code> action or from another agent. What the task does
-not say takes the agent's options; the default window is the last week with its
-last fifth held out, and a split is <code>holdout</code>, <code>time_split</code>, <code>rolling_origin</code> or
+not say takes the agent's options; the default window is the last week the
+source has seen, ending at its newest recorded reading held back by <code>lateness_s</code>
+(a minute), with its last fifth held out, and a split is <code>holdout</code>, <code>time_split</code>, <code>rolling_origin</code> or
 <code>leave_k_out</code>, as the loader makes them. The fit runs in a child process with
 the agent's <code>timeout_s</code> and <code>memory_mb</code>. The version is stored with the recipe's
 hash, the seed, the settings, the window, the split's manifest and the figures,
@@ -543,9 +544,11 @@ its inputs when the version does not say what it read:</p>
 
 <p>Every <code>check_s</code> seconds (<code>WACTORZ_DRIFT_CHECK_S</code>, ten minutes unless set) it
 reads two windows through the loader, in event time: the current one, the last
-<code>window_s</code> (a day), and the reference, the window the served version was trained
-on when the <code>trainer</code> made it, else <code>reference</code> as spawned, else the window of
-the same length before the current one. Over them it runs, on every numeric
+<code>window_s</code> (a day) ending at the source's own now, its newest recorded reading
+held back by <code>lateness_s</code> (a minute), so a replayed day is checked at the
+replay's own moments; and the reference, the window the served version was
+trained on when the <code>trainer</code> made it, else <code>reference</code> as spawned, else the
+window of the same length before the current one. Over them it runs, on every numeric
 column (or <code>columns</code>), PSI, which alarms at <code>0.2</code>, and the two-sample KS test,
 which alarms at <code>D &gt;= 0.1</code> with <code>p &lt; 0.05</code>; and, when <code>scores</code> names a recorded
 source of the model's scores (its <code>score_column</code>, <code>score</code> unless said), the same
@@ -576,7 +579,8 @@ and the alarm's observation, and the policy decides the promotion.</p>
 <p>A rule's placeholder that is a value on its own, <code>"at": "{at}"</code>, is the
 trigger's value as it is, a number staying a number, and placeholders are filled
 inside nested objects, so the split above reaches the trainer as it reads it.
-The cooldown makes however many columns alarm at once one retrain.</p>
+The cooldown makes however many columns alarm at once one retrain; it counts
+the alarms' own time, so a replayed day is a day.</p>
 <h2 id="your-own-files">Your own files</h2>
 <p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
 directory under the state directory: for model weights, a checkpoint store, a

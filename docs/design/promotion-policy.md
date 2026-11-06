@@ -33,7 +33,7 @@ may become active:
 | --- | --- | --- |
 | `metric` | The figure compared, among those the trial reports for the model's kind: `f1`, `precision`, `recall`, `mcc`, `false_positive_rate` for a detector; `macro_f1`, `weighted_f1`, `accuracy` for a classifier; `mae`, `rmse` for a regressor, where less is better | the kind's main one, the first named |
 | `margin` | How much better the shadow must be on it | `0` |
-| `min_days` | How long the trial must have run | `1` |
+| `min_days` | How long the trial must have run, in the event time its pairs cover (`event-time.md`) | `1` |
 | `min_labelled` | How many labelled inputs the trial must hold | `100` |
 | `significant` | Whether the test must say the difference is not chance: McNemar's, or for a regressor the sign test on which side was nearer the truth | `true` |
 | `automatic` | Whether main promotes when the policy is met, or only says so | `false` |

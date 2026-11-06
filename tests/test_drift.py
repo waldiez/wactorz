@@ -8,6 +8,7 @@ gauges. ``docs/design/drift.md`` is the decision these pin.
 
 import random
 import statistics
+import time
 import types
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -24,7 +25,7 @@ from wactorz.core.artifacts import ArtifactStore
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.persistence import WactorzDB
 from wactorz.core.provenance import OBSERVATION, Provenance
-from wactorz.data import data_root
+from wactorz.data import DEFAULT_LATENESS_S, data_root
 from wactorz.data.parquet import Writer
 from wactorz.drift import (
     ADWIN,
@@ -582,6 +583,29 @@ class TestTheAgentChecks:
 
         assert [r.column for r in readings] == ["ax", "ax"]
         assert readings[0].rows["reference"] == 2 * 144
+
+    async def test_unsaid_now_is_the_sources_newest_reading_held_back(
+        self, agent: DriftAgent, recorded: None, db: WactorzDB
+    ) -> None:
+        newest = T0 + 287 * 300
+
+        readings = await agent.check()
+
+        # Held back a minute: the window ends before the newest reading, which
+        # the next check will find, with whatever arrives late beside it.
+        assert agent.checked_at == newest - DEFAULT_LATENESS_S
+        assert readings[0].rows == {"reference": 7 * 144, "current": 287}
+        agent.lateness_s = 0.0
+        await agent.check()
+        assert agent.checked_at == newest
+
+    async def test_a_source_nothing_is_recorded_for_is_checked_at_the_wall_clock(
+        self, agent: DriftAgent, store: ArtifactStore, db: WactorzDB
+    ) -> None:
+        readings = await agent.check()
+
+        assert agent.checked_at == pytest.approx(time.time(), abs=5.0)
+        assert readings == []
 
     async def test_what_keeps_a_check_from_running_says_why(
         self, tmp_path: Path, store: ArtifactStore, recorded: None, feed: list[dict[str, Any]]

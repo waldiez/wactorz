@@ -17,7 +17,10 @@ saying why. A task that names an ``observation`` -- the id of the drift alarm
 a rule fired on, or of anything else in the graph -- has its run joined
 ``led_to`` from it, so the graph says why the version was made.
 What the task does not say takes the agent's options; the default window is
-the last week, with its last fifth held out. The fit runs in a child process
+the last week of the source's own time, ending at its newest recorded event
+time held back by ``lateness_s`` (`wactorz.data.now_of`), so a replay trains
+on the replay's last week and a live run on the wall clock's; its last fifth
+is held out. The fit runs in a child process
 with the agent's timeout and memory limit, the version is stored with what it
 was trained on, the pointer the agent is for (``shadow`` unless said) moves
 when the new version beats the one served by the margin, and the run and the
@@ -44,6 +47,7 @@ from ..core.labels import Labels
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.provenance import LED_TO, Provenance, ProvenanceError
+from ..data import DEFAULT_LATENESS_S, data_root, now_of
 from ..monitoring import model_metrics
 from ..train.record import run_node_id
 from ..train.run import LabelsOf, Outcome, run
@@ -71,7 +75,8 @@ class TrainAgent(Actor):
         "margin": "float — how much better the new version must be (spawn option)",
         "pointer": "str — shadow|active|none, the pointer a run is for (spawn option)",
         "since": "float — Unix seconds the window starts at, as a task; default: a week before until",
-        "until": "float — Unix seconds the window ends at, as a task; default: now",
+        "until": "float — Unix seconds the window ends at, as a task; default: the source's now",
+        "lateness_s": "float — how far behind the source's newest reading the window ends (60)",
         "split": 'dict — {"kind": "holdout"|"time_split"|"rolling_origin"|"leave_k_out", ...}, as a task',
         "settings": "dict — passed to train(), as a task; over the spawn option's",
         "reason": "str — why the run was asked for, kept with the move",
@@ -100,6 +105,7 @@ class TrainAgent(Actor):
         timeout_s: float = DEFAULT_TIMEOUT_S,
         memory_mb: int = 0,
         window_s: float = DEFAULT_WINDOW_S,
+        lateness_s: float = DEFAULT_LATENESS_S,
     ) -> None:
         super().__init__(actor_id=actor_id, name=name or NAME, persistence_dir=persistence_dir)
         self.options: dict[str, Any] = {
@@ -118,6 +124,7 @@ class TrainAgent(Actor):
             "memory_mb": memory_mb,
         }
         self.window_s = window_s
+        self.lateness_s = max(0.0, float(lateness_s))
         #: The run in progress, and the last one that ended.
         self.running: TrainSpec | None = None
         self.last: Outcome | None = None
@@ -145,8 +152,23 @@ class TrainAgent(Actor):
             )
 
     def spec_for(self, payload: Mapping[str, Any], *, now: float | None = None) -> TrainSpec:
-        """The run a task asks for, over this agent's options. Raises `TrainError`."""
+        """The run a task asks for, over this agent's options. Raises `TrainError`.
+
+        ``now`` is where the window ends when the task says no ``until``; the
+        wall clock when unsaid. `spec_for_task` reads it from the source.
+        """
         at = time.time() if now is None else now
+        merged = self._merged(payload)
+        until = merged.get("until")
+        merged["until"] = float(until) if isinstance(until, (int, float)) else at
+        since = merged.get("since")
+        merged["since"] = (
+            float(since) if isinstance(since, (int, float)) else merged["until"] - self.window_s
+        )
+        return TrainSpec.from_dict(merged)
+
+    def _merged(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """The task's fields over this agent's options."""
         given = {k: v for k, v in payload.items() if k not in ("_task_id", "action", "observation")}
         # From chat the task is its text: a JSON object says the run's fields;
         # any other words are why it was asked for.
@@ -160,13 +182,23 @@ class TrainAgent(Actor):
         merged: dict[str, Any] = {**self.options, **given}
         if "settings" in given and isinstance(given["settings"], Mapping):
             merged["settings"] = {**self.options["settings"], **given["settings"]}
-        until = merged.get("until")
-        merged["until"] = float(until) if isinstance(until, (int, float)) else at
-        since = merged.get("since")
-        merged["since"] = (
-            float(since) if isinstance(since, (int, float)) else merged["until"] - self.window_s
-        )
-        return TrainSpec.from_dict(merged)
+        return merged
+
+    async def spec_for_task(self, payload: Mapping[str, Any]) -> TrainSpec:
+        """`spec_for`, with the window ending at the source's own now when the task says no ``until``.
+
+        The source's now is its newest recorded event time held back by
+        ``lateness_s``, read off the event loop; the wall clock while nothing
+        is recorded for it.
+        """
+        merged = self._merged(payload)
+        source = str(merged.get("source") or "")
+        now = await asyncio.to_thread(self.now_of, source)
+        return self.spec_for(payload, now=now)
+
+    def now_of(self, source: str) -> float:
+        """What "now" is on ``source``, for the default window's end; off the event loop."""
+        return now_of(data_root(resolve_state_dir()), source, lateness=self.lateness_s)
 
     def status(self) -> dict[str, Any]:
         """What is running, and what the last run came to."""
@@ -198,7 +230,7 @@ class TrainAgent(Actor):
             )
             return
         try:
-            spec = self.spec_for(payload)
+            spec = await self.spec_for_task(payload)
         except TrainError as exc:
             await self._reply(target, task_id, {"error": str(exc)})
             return

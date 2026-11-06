@@ -2,8 +2,10 @@
 
 A decision record, not a guide: which clock the model loop reads, where that
 time comes from, and what has to change for it. Labels and the provenance graph
-are kept in event time (`wactorz/core/labels.py`); the rest is not built yet,
-and the "What follows" section says which step builds each part.
+are kept in event time (`wactorz/core/labels.py`), the recorder files readings
+by it, the train step takes its window in it, and the loop's "now" is each
+source's own (`wactorz/data/clock.py`); the "What follows" section says what
+each step built and what is still open.
 
 ## The problem
 
@@ -76,6 +78,27 @@ still lands in its window. During a live run that is the wall clock less a
 small delay; during a replay it is the replay's own time. The same code serves
 both, and the simulator needs no clock of its own inside the actors.
 
+Built as `wactorz.data.now_of`: the newest `ts` in the source's newest hour
+of Parquet, less a minute (`lateness_s`, an option of the agents that read
+it), and the wall clock while nothing is recorded for the source, so a loop
+without a recorder behaves as before. It is read where the loop asks "now":
+
+- the `drift` agent ends its current window there, so a replayed day is
+  checked at the replay's own moments;
+- the `trainer` ends its default window there, so "the last week" is the
+  last week the source saw;
+- the promotion policy counts a trial's days as the event time its pairs
+  cover (the trial summary's `span`), a replayed day being a day however fast
+  it was played; a trial with no pairs yet counts the wall clock since the
+  shadow was set;
+- a rule's cooldown counts the event time of the triggers it fires on, so a
+  cooldown of a day is a replayed day. A trigger without a time counts when
+  it arrived.
+
+The cadences stay on the wall clock: how often the drift agent checks and
+main holds a trial to its policy is how often the machine looks, not how far
+the data has come.
+
 Timeouts that concern people, such as how long to wait for an operator's
 answer, stay in wall-clock time: a person answers in real minutes, replayed or
 not. The simulator speeds those up through its operator persona, not through
@@ -97,18 +120,23 @@ the clock.
 
 ## What follows
 
-- **The collector** stores the event time in `ts` and the arrival time in a new
-  column, with `time_source`; a schema migration adds the column. Readings
-  without a payload time behave as today. The recorder that keeps readings for
-  the model loop writes the same three columns to Parquet; where each store is
-  used is decided in `data-storage.md`.
+- **The recorder** (built) writes the event time in `ts`, the arrival in
+  `arrived` and `time_source` to Parquet; where each store is used is decided
+  in `data-storage.md`. The collector that serves the dashboard's charts still
+  stores arrival time, with a payload time kept beside it, since its charts
+  are of what was seen when; a schema migration adds the column when a chart
+  needs event time.
 - **`StreamWindow`** gains an option to window by event time; the default stays
   the wall clock, so existing agents are unchanged.
 - **Labels and the provenance graph** (built) are stored in event time
   (`labels-and-provenance.md`).
-- **The train step** takes its window and splits in event time, and records
-  them with the version it stores.
+- **The train step** (built) takes its window and splits in event time, and
+  records them with the version it stores.
+- **"Now" per source** (built, above): the drift agent's window, the
+  trainer's default window, the policy's days and a rule's cooldown.
 - **The simulator** replays recorded data with its original times in the
-  payloads, at any speed, through the same collector and agents.
+  payloads, at any speed, through the same recorder and agents, which the
+  above makes possible: nothing in the loop reads the machine's clock to
+  place the data.
 - **High-rate frames** are defined with the high-rate recorder, when the first
   design partner's rates need it.

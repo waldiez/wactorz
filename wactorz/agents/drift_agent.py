@@ -11,10 +11,13 @@ one model::
 
 On a cadence (``check_s``, else ``WACTORZ_DRIFT_CHECK_S``) it reads two
 windows of ``source`` through the loader, in event time: the current window,
-the last ``window_s``; and the reference, what the served version learned
-from (its ``window`` metadata when the `train` step made it), else the
-window the agent was spawned with, else the window of the same length
-before the current one. Over them it runs PSI and KS on each feature column
+the last ``window_s`` ending at the source's own "now", its newest recorded
+event time held back by ``lateness_s`` (`wactorz.data.now_of`), so a replay
+is checked at its own moments and a live run at the wall clock less a
+minute; and the reference, what the served version learned from (its
+``window`` metadata when the `train` step made it), else the window the
+agent was spawned with, else the window of the same length before the
+current one. Over them it runs PSI and KS on each feature column
 (``columns``, else every numeric one), and, when ``scores`` names a recorded
 source of the model's scores, the same on its ``score_column`` and ADWIN
 over the current window for the moment the scores changed
@@ -49,7 +52,7 @@ from ..core.artifacts import ArtifactError, ArtifactStore
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.provenance import Provenance
-from ..data.files import data_root
+from ..data import DEFAULT_LATENESS_S, data_root, now_of
 from ..drift import (
     DEFAULT_SCORE_COLUMN,
     Reading,
@@ -158,6 +161,7 @@ class DriftAgent(Actor):
         "score_column": "str — the column of that source holding the score; score when unsaid",
         "reference": 'dict — {"since": ..., "until": ...}, the window compared against',
         "window_s": "float — how long the current window is; a day when unsaid",
+        "lateness_s": "float — how far behind the source's newest reading the window ends (60)",
         "check_s": "float — seconds between checks; WACTORZ_DRIFT_CHECK_S when unsaid",
         "psi": "float — PSI at or over this alarms (0.2)",
         "ks": "float — KS's D at or over this, with p under ks_p, alarms (0.1, 0.05)",
@@ -180,6 +184,7 @@ class DriftAgent(Actor):
         score_column: str = DEFAULT_SCORE_COLUMN,
         reference: Mapping[str, Any] | None = None,
         window_s: float = DEFAULT_WINDOW_S,
+        lateness_s: float = DEFAULT_LATENESS_S,
         check_s: float | None = None,
         psi: float = Thresholds.psi,
         ks: float = Thresholds.ks,
@@ -196,6 +201,7 @@ class DriftAgent(Actor):
         self.score_column = score_column.strip() or DEFAULT_SCORE_COLUMN
         self.reference = _window_option(reference, self.source)
         self.window_s = max(1.0, _number(window_s, DEFAULT_WINDOW_S))
+        self.lateness_s = max(0.0, _number(lateness_s, DEFAULT_LATENESS_S))
         self.check_s = max(1.0, _number(check_s, DRIFT_CHECK_S))
         self.thresholds = Thresholds(
             psi=_number(psi, Thresholds.psi),
@@ -307,13 +313,19 @@ class DriftAgent(Actor):
     # ── One check ─────────────────────────────────────────────────────────
 
     async def check(self, now: float | None = None) -> list[Reading]:
-        """Read both windows, run the tests, raise and settle episodes; every reading. Raises `DriftError`."""
+        """Read both windows, run the tests, raise and settle episodes; every reading. Raises `DriftError`.
+
+        ``now`` is where the current window ends; unsaid, it is the source's
+        own now, the newest event time recorded for it held back by
+        ``lateness_s``, or the wall clock while nothing is recorded.
+        """
         if self.on_node:
             raise DriftError.not_on_main()
         if not self.model:
             raise DriftError.no_model()
-        at = time.time() if now is None else now
-        version, source, reference = await asyncio.to_thread(self._windows_of, at)
+        version, source, learned = await asyncio.to_thread(self._served)
+        at = await asyncio.to_thread(self.now_of, source) if now is None else now
+        reference = self._reference_for(source, learned, at)
         current = Window(source, at - self.window_s, at)
         rows = await self._read(current)
         base = await self._read(reference)
@@ -339,8 +351,8 @@ class DriftAgent(Actor):
         await self._follow_episodes(version, readings, current, reference, at)
         return readings
 
-    def _windows_of(self, now: float) -> tuple[int, str, Window]:
-        """The version served, the source read, and the reference window; off the event loop."""
+    def _served(self) -> tuple[int, str, Window | None]:
+        """The version served, the source read, and the window it learned from; off the event loop."""
         store = self.store
         try:
             pointer = store.pointer(self.model, "active")
@@ -357,13 +369,19 @@ class DriftAgent(Actor):
         source = self.source or (learned.source if learned is not None else "")
         if not source:
             raise DriftError.no_source(self.model)
+        return version, source, learned
+
+    def _reference_for(self, source: str, learned: Window | None, now: float) -> Window:
+        """The reference window: as spawned, else what the version learned from, else the window before."""
         if self.reference is not None:
-            reference = self.reference
-        elif learned is not None and learned.source == source:
-            reference = learned
-        else:
-            reference = Window(source, now - 2 * self.window_s, now - self.window_s)
-        return version, source, reference
+            return self.reference
+        if learned is not None and learned.source == source:
+            return learned
+        return Window(source, now - 2 * self.window_s, now - self.window_s)
+
+    def now_of(self, source: str) -> float:
+        """Where ``source``'s current window ends: its newest event time held back; off the event loop."""
+        return now_of(data_root(resolve_state_dir()), source, lateness=self.lateness_s)
 
     async def _read(self, window: Window) -> list[dict[str, Any]]:
         """The rows of ``window``, through the loader, off the event loop."""

@@ -29,11 +29,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **An agent not yet heard from is listed as `starting`.** In `/api/actors` and the WebSocket snapshot, an agent the
-  server knows of but has had no heartbeat or status from yet says `starting`, where it said `unknown`; the dashboard
-  shows it as starting, where it showed it running. `running` means what it did: reported over MQTT, so ready. A
-  client that handles each state by name has one more to know.
-
 - **A model's readings are watched for drift, and a rule retrains on it.** The `drift` library agent
   (`@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}`)
   reads two windows of the model's recorded source through the loader on a cadence (`WACTORZ_DRIFT_CHECK_S`,
@@ -50,6 +45,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   it, and the policy decides the promotion. For that, a rule's payload value that is one placeholder is the
   trigger's value as it is (`"at": "{at}"` hands a number on) and placeholders are filled inside nested
   objects.
+- **The model loop reads "now" from the data, not the machine's clock.** Where the loop needed
+  now it read the wall clock, so a day of readings replayed in an hour fell outside the drift
+  agent's "last day" and the trainer's "last week". Now each source has a now of its own
+  (`wactorz.data.now_of`): the newest event time recorded for it, held back by a minute
+  (`lateness_s`, an option of the agents that read it), and the wall clock while nothing is
+  recorded for it, so a loop without a recorder behaves as before. The `drift` agent ends its
+  current window there, the `trainer` ends its default window there, the promotion policy counts a
+  trial's days as the event time its pairs cover (the trial's new `span`, in `GET /api/models/NAME/trial`),
+  and a rule's cooldown counts the event time of the triggers it fires on. A replayed day is
+  therefore a day however fast it is played, which is what the simulator needs
+  (`docs/design/event-time.md`).
+- **The provenance graph can be read.** `GET /api/provenance` lists its nodes by `kind`, `source`,
+  `actor`, `status` and a window of event time, with the edges among them when asked, and
+  `GET /api/provenance/{id}` is one node with its edges and, with `walk=down` or `walk=up`, everything
+  that followed from it or that it followed from. A report of a run, the simulator's or a person's,
+  reads the alarms, the retrains, the decisions and the moves, and which led to which, without
+  reaching into main's database.
+- **The air-quality example retrains on its own.** `examples/air_quality` now carries the loop's four
+  library agents with their options set (`loop.py`), started with the system: `air-recorder` files the
+  rooms' readings and the detector's scores apart, `air-drift` holds the last day against the healthy
+  week the served version learned from, `air-trainer` fits the model as a recipe (`recipe.py`) on the
+  recorded readings and sets the shadow when it is no worse, and `air-retrain` is the baseline rule of
+  `docs/design/drift.md`, firing the trainer at the moment an alarm on the scores names, once a day.
+  `python -m air_quality.publish --week` plays the healthy week first, so the recorder holds the
+  reference; `train.py` stores the week as the version's `window`. It is the first scenario the
+  simulator scores the baseline on.
 - **The model loop reports to Prometheus.** `wactorz_model_score{model,side,metric}` and
   `wactorz_model_shadow_agreement{model}` are set at every check of every shadow trial under way, with or
   without a policy, and dropped when it ends; `wactorz_model_train_seconds{model}` and

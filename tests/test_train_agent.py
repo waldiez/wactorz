@@ -11,6 +11,7 @@ a node it refuses, since the store and the data are main's.
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -162,6 +163,19 @@ class TestTheSpecOfATask:
         spec = trainer.spec_for({}, now=T0)
 
         assert (spec.since, spec.until) == (T0 - 7 * 86400, T0)
+
+    async def test_a_task_without_an_end_ends_at_the_sources_own_now(
+        self, trainer: TrainAgent, recorded: Path
+    ) -> None:
+        newest = T0 + 59 * 60
+
+        spec = await trainer.spec_for_task({"reason": "drift"})
+        said = await trainer.spec_for_task({"until": T0 + 60})
+        elsewhere = await trainer.spec_for_task({"source": "sensors/nothing-yet"})
+
+        assert (spec.since, spec.until) == (newest - 60 - 7 * 86400, newest - 60)
+        assert said.until == T0 + 60
+        assert elsewhere.until == pytest.approx(time.time(), abs=5.0)
 
     def test_what_cannot_be_a_run_is_refused(self, trainer: TrainAgent) -> None:
         with pytest.raises(TrainError, match="since < until"):

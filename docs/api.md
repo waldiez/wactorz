@@ -72,20 +72,6 @@ List all registered actors with live metrics.
 ]
 ```
 
-`state` is the last state the agent reported over MQTT, in a heartbeat or a status: `running`,
-`idle` (built, not started), `stopped` or `failed`. So `running` means ready: the agent has been
-heard from, and the rest of the system can reach it. A client waiting for a system to be up can
-wait on it.
-
-Until an agent reports, its state is `starting`, and the dashboard shows it as starting. An agent
-of this process is in this list from the moment it is registered, before anything arrives from it.
-An agent on a node appears once its first message arrives; if that is a metric rather than a
-heartbeat, it is `starting` until the heartbeat follows.
-
-A WebSocket snapshot lists only agents the server has had a message from, with the same rule for
-`starting`. An agent that is registered and has sent nothing yet is only in this list, which the
-dashboard reads when it loads and on a timer.
-
 ---
 
 ### `GET /api/actors/{actor_id}`
@@ -383,7 +369,7 @@ When the model's shadow may become active (`docs/design/promotion-policy.md`). T
  "significant": true, "automatic": false}
 ```
 
-`metric` is one of `f1`, `precision`, `recall`, `mcc` or `false_positive_rate` (where less is better); `margin` is how much better the shadow must be on it; `min_days` how long the trial must have run; `min_labelled` how many labelled inputs it must hold; `significant` whether McNemar's test must say the difference is not chance; `automatic` whether main promotes when every term is met, or puts the promotion to the operator as a question in the Inbox, whose answer promotes or clears the shadow. Main holds every trial under way against its policy every few minutes, writes a `decision` node when the verdict changes, and says so on the feed. A trial that falls short is left running.
+`metric` is one of `f1`, `precision`, `recall`, `mcc` or `false_positive_rate` (where less is better); `margin` is how much better the shadow must be on it; `min_days` how long the trial must have run, counted in the event time its pairs cover (the trial's `span`, so a replayed day is a day; `docs/design/event-time.md`); `min_labelled` how many labelled inputs it must hold; `significant` whether McNemar's test must say the difference is not chance; `automatic` whether main promotes when every term is met, or puts the promotion to the operator as a question in the Inbox, whose answer promotes or clears the shadow. Main holds every trial under way against its policy every few minutes, writes a `decision` node when the verdict changes, and says so on the feed. A trial that falls short is left running.
 
 **Response** `200 OK`: `{"policy": {...}}` with `by` (`dashboard`) and `at`; `DELETE` answers `{"policy": null, "was": {...}}`. `400` for a field that cannot be, `404` for a model with no version.
 
@@ -449,7 +435,8 @@ What the shadow trial shows: the pairs the serving agents kept, compared. By def
 ```json
 {"name": "imu-detector", "shadow": {"version": 4, "moved_at": 1760000000.0, "...": "..."},
  "since": 1760000000.0, "until": 1760086400.0, "source": "sensors/imu/left-wrist",
- "pairs": 8640, "agreement": 0.97, "flagged": {"active": 41, "shadow": 38}, "shadow_errors": 0,
+ "pairs": 8640, "span": {"since": 1760000000.0, "until": 1760086400.0},
+ "agreement": 0.97, "flagged": {"active": 41, "shadow": 38}, "shadow_errors": 0,
  "versions": {"active": [3], "shadow": [4]},
  "latency": {"active": {"mean_ms": 1.2, "p95_ms": 2.9}, "shadow": {"mean_ms": 1.4, "p95_ms": 3.1}},
  "score": {"active_mean": 2.1, "shadow_mean": 2.0, "difference_mean": -0.1, "scored": 8640},
@@ -707,6 +694,42 @@ What one `source` was doing, moment by moment: the newest label at each moment o
 ```
 
 `400` without a `source`, `503` when persistence is not running.
+
+---
+
+### `GET /api/provenance`
+
+The provenance graph as it is (`docs/design/labels-and-provenance.md`): the nodes, oldest recorded first, filtered by `kind` (`observation`, `question`, `label`, `decision`, `action`, `model` or `outcome`), `source`, `actor` (`agent:drift`, `policy`, `operator`, ...), `status` (repeatable) and a window of event time (`since`, `until`, Unix seconds: the nodes whose window touches it), up to `limit` (1000 unless said, 5000 at most). With `edges=1` every edge into or out of a listed node comes with them. What a report of a run reads: the alarms, the retrains and the decisions, and which led to which.
+
+**Response** `200 OK`
+```json
+{"nodes": [{"id": "…", "kind": "observation", "ts": 1760000000.0, "ts_end": 1760086400.0, "recorded": 1760086400.0,
+            "status": "valid", "source": "sensors/imu", "actor": "agent:drift", "node": "",
+            "payload": {"what": "drift", "model": "imu-detector", "test": "psi", "column": "ay", "…": "…"}},
+           {"id": "…", "kind": "action", "status": "done", "source": "model:imu-detector", "actor": "agent:trainer",
+            "payload": {"what": "train", "…": "…"}, "…": "…"}],
+ "edges": [{"src": "…", "dst": "…", "relation": "led_to", "recorded": 1760086430.0}]}
+```
+
+`400` for a `kind`, time or `limit` that is not one, `503` when persistence is not running.
+
+---
+
+### `GET /api/provenance/{id}`
+
+One node with every edge into or out of it. With `walk=down` it also carries everything that followed from the node, however far, as `nodes` (oldest first) and the edges among them as `walk_edges`; `walk=up` everything it followed from; `depth` bounds the walk.
+
+**Response** `200 OK`
+```json
+{"node": {"id": "…", "kind": "observation", "…": "…"},
+ "edges": [{"src": "…", "dst": "…", "relation": "led_to", "recorded": 1760086430.0}],
+ "walk": "down",
+ "nodes": [{"id": "…", "kind": "action", "…": "…"}, {"id": "…", "kind": "model", "…": "…"}],
+ "walk_edges": [{"src": "…", "dst": "…", "relation": "led_to", "recorded": 1760086430.0},
+                {"src": "…", "dst": "…", "relation": "produced", "recorded": 1760086460.0}]}
+```
+
+`404` for an id the graph does not hold, `400` for a `walk` that is not `down` or `up`, `503` when persistence is not running.
 
 ---
 

@@ -103,9 +103,10 @@ def compare(
     what the ``judgement`` judges (`_alike`): both flagged or neither for a
     detector, the same class or number in the field for a classifier or a
     regressor, and the same output, or none from either, without one. It does
-    not need the labels. ``score`` is each
-    side's mean ``score`` and the mean of shadow's minus active's, over the
-    pairs where both gave one. With the ``judgement`` a version declares and
+    not need the labels. ``span`` is the event time the pairs cover
+    (`event_span`), which is how long the trial has run in the source's own
+    time. ``score`` is each side's mean ``score`` and the mean of shadow's
+    minus active's, over the pairs where both gave one. With the ``judgement`` a version declares and
     the ``labels`` of the sources its inputs are judged against (from
     `Labels.effective`, by source), ``labels`` holds each side judged on them
     (`wactorz.core.judges`).
@@ -138,8 +139,10 @@ def compare(
             differences.append(score["shadow"] - score["active"])
         if row.get("shadow_error"):
             errors += 1
+    span = event_span(kept)
     summary: dict[str, Any] = {
         "pairs": len(kept),
+        "span": None if span is None else {"since": span[0], "until": span[1]},
         "agreement": (agreed / len(kept)) if kept else None,
         "flagged": flagged,
         "shadow_errors": errors,

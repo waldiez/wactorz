@@ -3,22 +3,29 @@
 
 The building is the same on every run, its faults stand out from what is usual
 for the hour and an ordinary busy day does not, the agent asks once per
-episode with a label over its window, and the package brings its two agents
-and its tab. Imported from its folder, as the README's `pip install -e` would
-make it importable.
+episode with a label over its window, and the package brings its two agents,
+the four of the loop and its tab. The loop runs without a person: the
+recorder files the readings and the scores apart, the drift agent alarms on
+the scores at the Tuesday's faults, the rule sends the trainer a task cut
+where the alarm says, and the trainer fits the recipe on what was recorded.
+Imported from its folder, as the README's `pip install -e` would make it
+importable.
 """
 
 import importlib
 import re
 import types
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from wactorz.agents.function_agent import spec_of
+from wactorz.core.actor import Message
 from wactorz.core.artifacts import ArtifactStore
 from wactorz.core.paths import resolve_state_dir
+from wactorz.data import data_root, sources
 from wactorz.ext._panel import icon_file_text
 
 pytest.importorskip("numpy")
@@ -36,6 +43,8 @@ def aq_fixture(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespace:
         agents=importlib.import_module("air_quality.agents"),
         train=importlib.import_module("air_quality.train"),
         tab=importlib.import_module("air_quality.tab"),
+        recipe=importlib.import_module("air_quality.recipe"),
+        loop=importlib.import_module("air_quality.loop"),
     )
 
 
@@ -241,10 +250,27 @@ class TestThePackage:
         assert points["wactorz.agents"] == {
             "air-detect": "air_quality.agents:detect",
             "air-watch": "air_quality.agents:AirWatch",
+            "air-recorder": "air_quality.loop:AirRecorder",
+            "air-drift": "air_quality.loop:AirDrift",
+            "air-trainer": "air_quality.loop:AirTrainer",
+            "air-retrain": "air_quality.loop:AirRetrain",
         }
         assert points["wactorz.extensions"] == {"air": "air_quality.tab"}
         assert (
             spec_of(aq.agents.detect) is not None and aq.agents.AirWatch.AGENT_NAME == "air-watch"
+        )
+        loop = aq.loop
+        assert [
+            c.AGENT_NAME
+            for c in (loop.AirRecorder, loop.AirDrift, loop.AirTrainer, loop.AirRetrain)
+        ] == [
+            "air-recorder",
+            "air-drift",
+            "air-trainer",
+            "air-retrain",
+        ]
+        assert all(
+            c.AUTOSTART for c in (loop.AirRecorder, loop.AirDrift, loop.AirTrainer, loop.AirRetrain)
         )
 
     def test_its_tab_is_a_panel_with_a_script_that_mounts_and_an_icon_of_its_own(
@@ -274,3 +300,231 @@ class TestThePackage:
         assert [v.metadata["k_sigma"] for v in store.versions("air-quality")] == [5.0, 4.0]
         shadow = store.pointer("air-quality", "shadow")
         assert shadow is not None and shadow.version == 2
+        plant = aq.plant
+        assert store.versions("air-quality")[0].metadata["window"] == {
+            "source": "sensors/air",
+            "since": plant.WEEK,
+            "until": plant.WEEK + 7 * plant.DAY_S,
+        }
+
+    def test_the_threshold_is_read_from_wherever_a_version_carries_it(
+        self, aq: types.SimpleNamespace
+    ) -> None:
+        threshold_of = aq.agents.threshold_of
+
+        assert threshold_of({"k_sigma": 4}, {}) == 4.0
+        assert threshold_of({"settings": {"k_sigma": 3}}, {}) == 3.0
+        assert threshold_of({}, {"k_sigma": 2}) == 2.0
+        assert threshold_of({}, {}) == aq.model.K_SIGMA
+
+
+# ── The loop without a person ─────────────────────────────────────────────────
+
+
+class FakeRegistry:
+    """What a rule sends its task through; stands in for the actor registry."""
+
+    def __init__(self, *actors: Any) -> None:
+        self._by_name = {a.name: a for a in actors}
+        self.delivered: list[tuple[str, Message]] = []
+
+    def find_by_name(self, name: str) -> Any:
+        return self._by_name.get(name)
+
+    async def deliver(self, target_id: str, msg: Message) -> bool:
+        self.delivered.append((target_id, msg))
+        return True
+
+
+class _Agent:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.actor_id = f"{name}-id"
+
+
+@pytest.fixture(name="published")
+def published_fixture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    """What the loop's agents say on the broker: the feed lines and the alarms."""
+    seen: list[tuple[str, Any]] = []
+
+    async def record(self: Any, topic: str, payload: Any, **_kwargs: Any) -> None:
+        seen.append((topic, payload))
+
+    from wactorz.core.actor import Actor
+
+    monkeypatch.setattr(Actor, "_mqtt_publish", record)
+    return seen
+
+
+def _arrow() -> Any:
+    return pytest.importorskip("pyarrow")
+
+
+def _frame(rows: list[dict[str, Any]], labels: dict[str, str] | None = None) -> Any:
+    """``rows`` as the loader hands them to a recipe, with a label column when ``labels`` names rooms."""
+    pa = _arrow()
+    kept = [
+        {
+            **row,
+            "arrived": row["ts"],
+            "time_source": "payload",
+            "label": (labels or {}).get(row["device"]),
+        }
+        for row in rows
+    ]
+    return pa.Table.from_pylist(kept)
+
+
+@pytest.fixture(name="recorded")
+async def recorded_fixture(
+    aq: types.SimpleNamespace, tmp_path: Path, published: list[tuple[str, Any]]
+) -> AsyncIterator[Any]:
+    """The healthy week and the Tuesday to 16:00, readings and v1's scores, filed as the recorder files them; v1 active."""
+    _arrow()
+    plant, model, loop = aq.plant, aq.model, aq.loop
+    state = Path(resolve_state_dir())
+    v1 = aq.train.train(state)
+    fitted = aq.model.fit(plant.readings(plant.WEEK, plant.WEEK + 7 * plant.DAY_S, faults=False))
+    recorder = loop.AirRecorder(persistence_dir=str(tmp_path / "agents"), batch_rows=100000)
+    for reading in [
+        *plant.readings(plant.WEEK, plant.WEEK + 7 * plant.DAY_S, faults=False),
+        *plant.readings(plant.TUESDAY + 7 * 3600, plant.TUESDAY + 16 * 3600),
+    ]:
+        value, worst = model.score(fitted, reading)
+        await recorder.record(dict(reading), "sensors/air/#")
+        await recorder.record(
+            {
+                "device": reading["device"],
+                "ts": reading["ts"],
+                "score": round(value, 2),
+                "worst": worst,
+            },
+            "air/+/score",
+        )
+    await recorder.flush()
+    yield types.SimpleNamespace(version=v1, state=state)
+
+
+class TestTheLoop:
+    def test_the_recorder_files_the_readings_and_the_scores_apart(
+        self, aq: types.SimpleNamespace, recorded: Any
+    ) -> None:
+        assert set(sources(data_root(recorded.state))) == {"sensors/air", "air/scores"}
+
+    def test_the_recipe_fits_the_usual_and_scores_the_rest(self, aq: types.SimpleNamespace) -> None:
+        plant, recipe = aq.plant, aq.recipe
+        healthy = list(plant.readings(plant.WEEK, plant.WEEK + 7 * plant.DAY_S, faults=False))
+        tuesday = list(plant.readings(plant.TUESDAY, plant.TUESDAY + plant.DAY_S))
+        labelled = _frame(tuesday, {"kitchen": "sensor_fault"})
+
+        model = recipe.train(_frame(healthy), {"k_sigma": 4})
+        figures = recipe.score(model, labelled)
+
+        assert float(model["k_sigma"]) == 4.0 and recipe.threshold_of(model) == 4.0
+        assert set(model) == {
+            "k_sigma",
+            *(f"{r}.{p}" for r in plant.ROOMS for p in ("mean", "spread")),
+        }
+        assert set(figures) == {"false_alarms", "labelled_faults", "caught"}
+        assert figures["labelled_faults"] == 288.0
+        assert 0.0 < figures["false_alarms"] < 0.2 and figures["caught"] > 0.1
+        # A fit leaves labelled faults out, so the kitchen's usual is the healthy week's.
+        refit = recipe.train(labelled, {})
+        assert refit["kitchen.mean"].sum() == 0.0
+
+    async def test_the_drift_agent_alarms_on_the_scores_at_the_tuesdays_faults(
+        self,
+        aq: types.SimpleNamespace,
+        recorded: Any,
+        tmp_path: Path,
+        published: list[tuple[str, Any]],
+    ) -> None:
+        plant, loop = aq.plant, aq.loop
+        agent = loop.AirDrift(persistence_dir=str(tmp_path / "drift"))
+
+        readings = await agent.check()
+
+        # The source's own now: the Tuesday's newest reading, held back a minute.
+        assert agent.checked_at == plant.TUESDAY + 16 * 3600 - 300 - 60
+        by_key = {(r.test, r.column): r for r in readings}
+        assert by_key[("adwin", "score")].alarmed
+        cut = by_key[("adwin", "score")].at
+        assert plant.TUESDAY + 12 * 3600 <= cut <= plant.TUESDAY + 14 * 3600
+        alarms = [p for t, p in published if t == "models/air-quality/drift"]
+        assert {a["column"] for a in alarms} >= {"score"}
+        assert [a["at"] for a in alarms if a["test"] == "adwin"] == [cut]
+        assert all(
+            a["reference"]
+            == {"source": "sensors/air", "since": plant.WEEK, "until": plant.WEEK + 7 * plant.DAY_S}
+            for a in alarms
+            if a["column"] != "score"
+        )
+
+    async def test_the_rule_sends_the_trainer_a_task_cut_at_the_alarm_once_a_day(
+        self, aq: types.SimpleNamespace, tmp_path: Path, published: list[tuple[str, Any]]
+    ) -> None:
+        plant, loop = aq.plant, aq.loop
+        rule = loop.AirRetrain(persistence_dir=str(tmp_path / "rule"))
+        registry = FakeRegistry(_Agent("air-trainer"))
+        rule._registry = registry  # type: ignore[assignment]  # stands in for ActorRegistry
+        cut = plant.TUESDAY + 13 * 3600
+        alarm = {
+            "what": "drift",
+            "model": "air-quality",
+            "version": 1,
+            "observation": "obs-1",
+            "test": "adwin",
+            "column": "score",
+            "statistic": 3.0,
+            "ts": cut,
+            "at": cut,
+        }
+
+        assert not await rule.evaluate({**alarm, "test": "ks", "column": "co2", "at": None})
+        assert await rule.evaluate(alarm)
+        assert not await rule.evaluate({**alarm, "test": "psi", "ts": cut + 3600, "at": None})
+        assert await rule.evaluate(
+            {**alarm, "ts": cut + 86400, "at": cut + 86400, "observation": "obs-2"}
+        )
+
+        (target, first), (_, second) = registry.delivered
+        assert target == "air-trainer-id"
+        assert first.payload["split"] == {"kind": "time_split", "at": cut}
+        assert first.payload["observation"] == "obs-1"
+        assert first.payload["reason"] == "drift: adwin on score (3.0)"
+        assert second.payload["observation"] == "obs-2"
+
+    async def test_the_trainer_fits_the_recipe_on_what_was_recorded_and_moves_the_shadow(
+        self,
+        aq: types.SimpleNamespace,
+        recorded: Any,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        plant, loop = aq.plant, aq.loop
+        monkeypatch.setenv("PYTHONPATH", str(EXAMPLE))
+        trainer = loop.AirTrainer(persistence_dir=str(tmp_path / "trainer"))
+        cut = plant.TUESDAY + 13 * 3600
+
+        spec = await trainer.spec_for_task(
+            {"split": {"kind": "time_split", "at": cut}, "reason": "drift: adwin on score"}
+        )
+        outcome = await trainer.train(spec)
+
+        # The window ends at the source's own now, the Tuesday's newest reading held back.
+        assert spec.until == plant.TUESDAY + 16 * 3600 - 300 - 60
+        assert spec.since == spec.until - 7 * plant.DAY_S
+        assert outcome.ok, outcome.error
+        assert outcome.artifact is not None and outcome.artifact.version == 2
+        metadata = outcome.artifact.metadata
+        assert metadata["window"] == {
+            "source": "sensors/air",
+            "since": spec.since,
+            "until": spec.until,
+        }
+        assert metadata["settings"] == {"k_sigma": 5.0}
+        assert set(metadata["metrics"]["new"]) >= {"false_alarms", "labelled_faults"}
+        assert metadata["metrics"]["parent"] is not None
+        store = ArtifactStore.in_state_dir(recorded.state)
+        shadow = store.pointer("air-quality", "shadow")
+        assert shadow is not None and shadow.version == 2, outcome.not_moved

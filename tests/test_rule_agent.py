@@ -236,6 +236,19 @@ class TestEvaluation:
 
         assert sum(1 for t, _ in published if t == "alerts/imu") == 1
 
+    async def test_the_cooldown_counts_the_triggers_own_time(
+        self, tmp_path: Path, published: list[tuple[str, Any]]
+    ) -> None:
+        rule = _rule(tmp_path, cooldown_seconds=3600)
+        t0 = 1_760_000_000.0
+
+        assert await rule.evaluate({"score": 1, "ts": t0})
+        assert not await rule.evaluate({"score": 2, "ts": t0 + 600})
+        assert not await rule.evaluate({"score": 3, "timestamp": t0 - 60})
+        assert await rule.evaluate({"score": 4, "ts": t0 + 3600})
+
+        assert sum(1 for t, _ in published if t == "alerts/imu") == 2
+
     async def test_a_task_action_reaches_the_named_agent(
         self, tmp_path: Path, published: list[tuple[str, Any]]
     ) -> None:

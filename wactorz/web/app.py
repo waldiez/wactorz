@@ -29,6 +29,7 @@ from . import (
     api_log_capture,
     api_logs,
     api_models,
+    api_provenance,
     api_reset,
     api_system,
     api_uploads,
@@ -231,6 +232,8 @@ def build_app() -> web.Application:
     app.router.add_delete("/api/models/{name}/policy", api_models.clear_policy_handler)
     app.router.add_get("/api/labels", api_labels.labels_handler)
     app.router.add_get("/api/labels/effective", api_labels.effective_handler)
+    app.router.add_get("/api/provenance", api_provenance.nodes_handler)
+    app.router.add_get("/api/provenance/{id}", api_provenance.node_handler)
     api_data.setup(app)
     app.router.add_get("/api/wiring", wiring.wiring_handler)
     app.router.add_get("/api/questions", questions.questions_handler)

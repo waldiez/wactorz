@@ -6,9 +6,10 @@ publishes the score, for the Air tab, and returns an alarm only when the score
 is past the threshold. That keeps it a detector a trial can judge (an input is
 flagged when the agent publishes something for it), and keeps it free of
 memory, since a trial runs it a second time for each reading with the version
-on trial. The threshold is the model version's own, from its metadata
-(``--meta k_sigma=5``), so a version and the threshold it was meant for travel
-together.
+on trial. The threshold is the model version's own: its metadata's
+(``--meta k_sigma=5``, as `train.py` stores it), the settings of the run that
+made it, or the one the recipe put inside the model, so a version and the
+threshold it was meant for travel together.
 
 `AirWatch` is an actor, because it remembers: it opens an episode when a room
 stays past the threshold, closes it when the room settles, and then asks the
@@ -17,6 +18,7 @@ episode's window, which is what a later trial is judged against.
 """
 
 import datetime as dt
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +41,17 @@ ANSWERS = {
 }
 
 
+def threshold_of(metadata: Mapping[str, Any], model: Mapping[str, Any]) -> float:
+    """The threshold a version was meant for: its metadata's, the run's settings', the model's own, else the default."""
+    said = metadata.get("k_sigma")
+    if said is None:
+        settings = metadata.get("settings")
+        said = settings.get("k_sigma") if isinstance(settings, Mapping) else None
+    if said is None:
+        said = model.get("k_sigma")
+    return float(said) if said is not None else K_SIGMA
+
+
 @wactorz.agent(
     name="air-detect",
     subscribes="sensors/air/#",
@@ -50,7 +63,7 @@ ANSWERS = {
 async def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None:
     """Publish the reading's score; return an alarm when it is past the threshold."""
     model = await me.load_model("model")
-    threshold = float(me.artifacts["model"]["metadata"].get("k_sigma", K_SIGMA))
+    threshold = threshold_of(me.artifacts["model"]["metadata"], model)
     value, worst = score(model, reading)
     room = str(reading["device"])
     scored = {"device": room, "ts": reading["ts"], "score": round(value, 2), "worst": worst}

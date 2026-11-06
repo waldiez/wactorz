@@ -291,6 +291,16 @@ def _figure(side: Mapping[str, Any] | None, metric: str) -> float | None:
     return float(value)
 
 
+def _days_of(summary: Mapping[str, Any], since: float, now: float) -> float:
+    """How long the trial has run: its pairs' event-time span, else wall-clock time since the shadow was set."""
+    span = summary.get("span")
+    if isinstance(span, Mapping):
+        first, last = span.get("since"), span.get("until")
+        if isinstance(first, (int, float)) and isinstance(last, (int, float)):
+            return max(0.0, float(last) - float(first)) / _DAY_S
+    return max(0.0, now - since) / _DAY_S
+
+
 def judge_trial(summary: Mapping[str, Any], policy: Policy, *, since: float, now: float) -> Verdict:
     """``summary``, a trial compared and judged against the labels, held against ``policy``.
 
@@ -299,7 +309,10 @@ def judge_trial(summary: Mapping[str, Any], policy: Policy, *, since: float, now
     else the main one of the kind the trial is judged as; one that kind does
     not report is never met, and the verdict says so. Significance is
     McNemar's test, or for a regressor the sign test on which side was nearer
-    the truth. The days are from ``since``, when the shadow was set, to ``now``.
+    the truth. The days are the event time the trial's pairs cover (the
+    summary's ``span``), so a replayed day counts as one however fast it was
+    played, as ``docs/design/event-time.md`` asks; a trial with no pairs has
+    run from ``since``, when the shadow was set, to ``now``, on the wall clock.
     """
     labels = summary.get("labels")
     judged = isinstance(labels, Mapping)
@@ -310,7 +323,7 @@ def judge_trial(summary: Mapping[str, Any], policy: Policy, *, since: float, now
     gain: float | None = None
     if shadow is not None and active is not None:
         gain = (active - shadow) if metric in LOWER_IS_BETTER else (shadow - active)
-    days = max(0.0, now - since) / _DAY_S
+    days = _days_of(summary, since, now)
     labelled = int(labels.get("labelled") or 0) if judged else 0
     test = SIGN_TEST if kind == REGRESSOR else MCNEMAR
     tested = labels.get("closer" if test == SIGN_TEST else "mcnemar") if judged else None

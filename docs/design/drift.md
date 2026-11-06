@@ -34,7 +34,8 @@ Each check reads two windows of the model's recorded source through the loader,
 in event time:
 
 - the **current** window: the last `window_s` of event time (a day unless
-  said), ending now;
+  said), ending at the source's own now, its newest recorded event time held
+  back by a minute (`event-time.md`);
 - the **reference** window: what the served version learned from, read from
   the version's `window` metadata when the `train` step made it; else the
   window the agent was spawned with; else the window of the same length
@@ -59,8 +60,9 @@ is still seen. Each test runs only when both windows hold at least `min_rows`
 rows (100 unless said), since a decile of ten readings says nothing. The
 thresholds are options of the agent, with these defaults.
 
-The windows are event time, as `event-time.md` requires, so a replay through
-the simulator drifts at the same moments a plant did.
+The windows are event time and end at the source's own now, as
+`event-time.md` requires, so a replay through the simulator drifts at the
+same moments a plant did, however fast it is played.
 
 ### An alarm is an observation, a line, a topic and a gauge
 

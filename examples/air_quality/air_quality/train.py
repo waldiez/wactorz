@@ -19,6 +19,7 @@ import numpy as np
 from wactorz.core.artifacts import Artifact, ArtifactStore
 from wactorz.core.paths import resolve_state_dir
 
+from .loop import READINGS
 from .model import K_SIGMA, MODEL_NAME, fit
 from .plant import DAY_S, SEED, WEEK, readings
 
@@ -36,7 +37,14 @@ def train(
         artifact = store.add(
             path,
             MODEL_NAME,
-            metadata={"k_sigma": k_sigma, "trained_on": "the healthy week of 2 March 2026"},
+            metadata={
+                "k_sigma": k_sigma,
+                "trained_on": "the healthy week of 2 March 2026",
+                # What the version learned from, as the train step records it:
+                # the drift agent's reference, once that week has been played
+                # through the recorder.
+                "window": {"source": READINGS, "since": WEEK, "until": WEEK + 7 * DAY_S},
+            },
         )
     print(f"stored {artifact.reference} (k_sigma {k_sigma}) in {store.root.resolve()}")
     if pointer:

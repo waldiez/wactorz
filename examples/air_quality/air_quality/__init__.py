@@ -2,5 +2,7 @@
 
 `plant` is the simulated building, `model` what is usual, `train` stores it,
 `publish` plays a day of readings, `agents` holds the detector and the agent
-that asks, and `tab` is the dashboard's Air tab.
+that asks, `recipe` is the model as the train step fits it, `loop` the
+recorder, drift agent, trainer and rule that retrain without a person, and
+`tab` is the dashboard's Air tab.
 """

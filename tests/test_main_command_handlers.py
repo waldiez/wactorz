@@ -13,6 +13,7 @@ not started, and a plan that is not pending cannot be approved twice.
 
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -28,7 +29,7 @@ from wactorz.agents.main.planning import PENDING_PLANS_KEY
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import CONFIG
 from wactorz.core import topic_bus
-from wactorz.core.actor import ActorState
+from wactorz.core.actor import Actor, ActorState
 from wactorz.core.topic_bus import TopicBus, TopicContract
 
 
@@ -46,6 +47,19 @@ class _Agent:
         if self.error:
             raise self.error
         return self.accept
+
+
+class _BreaksOnRestart(Actor):
+    """A real actor whose own setup raises once `broken` is set."""
+
+    broken = False
+
+    async def on_start(self) -> None:
+        if self.broken:
+            raise RuntimeError("setup crashed")
+
+    async def handle_message(self, message: Any) -> None:  # pragma: no cover - never delivered
+        return None
 
 
 class _Registry:
@@ -727,7 +741,100 @@ class TestRestart:
     async def test_an_unknown_local_agent_is_refused(self, main: _Main) -> None:
         text = await agent_cmds.restart_agent(_ctx(main), "ghost")
 
-        assert text == "Agent 'ghost' not found in spawn registry."
+        assert text == "Agent 'ghost' not found locally."
+        main._registry = None
+        assert (
+            await agent_cmds.restart_agent(_ctx(main), "ghost")
+            == "Agent 'ghost' not found locally."
+        )
+
+    async def test_an_agent_handed_in_by_code_is_stopped_and_started_in_place(
+        self, main: _Main
+    ) -> None:
+        # Running, but kept nowhere: `run(agents=...)` hands it to the system
+        # without a spawn config, so there is nothing to build a new one from.
+        running = _Agent("detector")
+        registry = _Registry(running)
+        main._registry = registry
+
+        text = await agent_cmds.restart_agent(_ctx(main), "detector")
+
+        assert text == "Agent 'detector' restarted locally."
+        assert running.commands == ["stop", "start"]
+        assert registry.unregistered == []
+        assert [c for c in main.calls if c[0] == "spawn"] == []
+
+    async def test_a_stopped_one_is_only_started(self, main: _Main) -> None:
+        stopped = _Agent("detector", ActorState.STOPPED)
+        main._registry = _Registry(stopped)
+
+        assert await agent_cmds.restart_agent(_ctx(main), "detector") == (
+            "Agent 'detector' restarted locally."
+        )
+        assert stopped.commands == ["start"]
+
+    async def test_one_that_refuses_stop_is_left_running(self, main: _Main) -> None:
+        essential = _Agent("monitor")
+        essential.accept = False
+        main._registry = _Registry(essential)
+
+        text = await agent_cmds.restart_agent(_ctx(main), "monitor")
+
+        assert text == "'monitor' refused stop (it may be essential), so it was not restarted."
+        assert essential.commands == ["stop"]
+
+    async def test_a_failed_start_says_it_stopped(self, main: _Main) -> None:
+        class _FailsToStart(_Agent):
+            async def apply_command(self, command: str) -> bool:
+                self.commands.append(command)
+                if command == "start":
+                    raise RuntimeError("setup crashed")
+                return True
+
+        flaky = _FailsToStart("detector")
+        main._registry = _Registry(flaky)
+
+        text = await agent_cmds.restart_agent(_ctx(main), "detector")
+
+        assert text == "'detector' stopped, but failed to start again: setup crashed"
+
+    async def test_a_real_actor_whose_start_fails_is_left_stopped(
+        self, main: _Main, tmp_path: Path
+    ) -> None:
+        # The fakes above stand in for apply_command; this is a real actor,
+        # whose start marks it running before its own setup runs.
+        flaky = _BreaksOnRestart(name="detector", persistence_dir=str(tmp_path))
+        await flaky.start()
+        flaky.broken = True
+        main._registry = _Registry(cast(_Agent, flaky))
+        try:
+            text = await agent_cmds.restart_agent(_ctx(main), "detector")
+            state_after, loops_after = flaky.state, list(flaky._tasks)
+        finally:
+            await flaky.stop()
+
+        assert text == "'detector' stopped, but failed to start again: setup crashed"
+        assert state_after == ActorState.STOPPED
+        assert loops_after == []
+
+    async def test_a_refused_start_says_it_stopped(self, main: _Main) -> None:
+        class _RefusesStart(_Agent):
+            async def apply_command(self, command: str) -> bool:
+                self.commands.append(command)
+                return command != "start"
+
+        main._registry = _Registry(_RefusesStart("detector"))
+
+        text = await agent_cmds.restart_agent(_ctx(main), "detector")
+
+        assert text == "'detector' stopped, but refused start."
+
+    async def test_main_does_not_restart_itself(self, main: _Main) -> None:
+        main._registry = _Registry(cast(_Agent, main))
+
+        text = await agent_cmds.restart_agent(_ctx(main), "main")
+
+        assert text == "'main' cannot restart itself: it is running this command."
 
     async def test_a_local_agent_is_stopped_then_respawned_trusted(self, main: _Main) -> None:
         running = _Agent("weather")

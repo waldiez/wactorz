@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The provenance routes: the graph read back as it is.
 
 ``GET /api/provenance`` lists nodes by kind, source, actor, status and

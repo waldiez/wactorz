@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 r"""The model as a recipe the train step runs: fit on a window of recorded readings, score on the rest.
 
 What `train.py` does by hand on the healthy week, from what the recorder

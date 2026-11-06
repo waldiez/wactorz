@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The provenance graph main keeps, read back as it is.
 
 ``GET /api/provenance`` lists nodes, oldest recorded first, by ``kind``

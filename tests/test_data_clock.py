@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Now, per source: the newest event time a source has seen, held back by an allowed lateness.
 
 Where the model loop needs "now" it reads the source's own time, so a replay

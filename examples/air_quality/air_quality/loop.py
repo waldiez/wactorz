@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The loop without a person: the four library agents, as this package carries them.
 
 Wactorz brings a recorder, a drift agent, a trainer and a rule agent, each

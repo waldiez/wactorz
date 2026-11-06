@@ -145,8 +145,19 @@ class TestWithNotice:
     def test_keeps_windows_line_endings(self) -> None:
         assert (
             ln.with_notice("#!/bin/sh\r\necho\r\n", ".sh")
-            == "#!/bin/sh\r\n# SPDX-License-Identifier: Apache-2.0\necho\r\n"
+            == "#!/bin/sh\r\n# SPDX-License-Identifier: Apache-2.0\r\necho\r\n"
         )
+        assert (
+            ln.with_notice("a {}\r\n", ".css")
+            == "/**\r\n * SPDX-License-Identifier: Apache-2.0\r\n */\r\na {}\r\n"
+        )
+
+    def test_a_windows_file_with_the_line_passes(self) -> None:
+        assert (
+            ln.problem("/**\r\n * SPDX-License-Identifier: Apache-2.0\r\n */\r\nx;\r\n", ".ts")
+            is None
+        )
+        assert ln.problem("# SPDX-License-Identifier: Apache-2.0\r\n", ".py") is None
 
 
 class TestRun:
@@ -198,6 +209,15 @@ class TestRun:
         assert (tree / "static" / "app" / "assets" / "index.js").read_text(
             encoding="utf-8"
         ) == "x;\n"
+
+    def test_fix_keeps_a_files_windows_line_endings(self, tree: Path) -> None:
+        (tree / "pkg" / "bad.py").write_bytes(b'"""Doc."""\r\nx = 1\r\n')
+
+        ln.run(["pkg/bad.py"], fix=True)
+
+        assert (tree / "pkg" / "bad.py").read_bytes() == (
+            b'# SPDX-License-Identifier: Apache-2.0\r\n"""Doc."""\r\nx = 1\r\n'
+        )
 
     def test_named_paths_are_the_only_ones_read(self, tree: Path) -> None:
         assert ln.run(["pkg/good.py", "pkg/data.json"], fix=False) == 0

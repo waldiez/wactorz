@@ -120,10 +120,18 @@ def with_notice(text: str, suffix: str) -> str:
         if problem(text, suffix) is not None:
             del lines[opening[0] + 1]
         return "".join(lines)
+    # The file's own line ending, so a Windows checkout does not end up mixed.
+    eol = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
     keep = preamble_length(lines, suffix)
     if keep and not lines[keep - 1].endswith("\n"):
-        lines[keep - 1] += "\n"
-    return "".join([*lines[:keep], notice_block(suffix), *lines[keep:]])
+        lines[keep - 1] += eol
+    return "".join([*lines[:keep], notice_block(suffix).replace("\n", eol), *lines[keep:]])
+
+
+def read_source(file: Path) -> str:
+    """`file` exactly as it is: line endings untranslated, so a fix keeps them."""
+    with file.open(encoding="utf-8", newline="") as f:
+        return f.read()
 
 
 def is_built(path: Path) -> bool:
@@ -176,17 +184,18 @@ def run(paths: Iterable[str], fix: bool) -> int:
     failed = False
     for path in files_to_read(paths):
         file = ROOT / path
-        text = file.read_text(encoding="utf-8")
+        text = read_source(file)
         wrong = problem(text, path.suffix)
         if wrong is None:
             continue
         if fix and not is_built(path):
             file.write_text(with_notice(text, path.suffix), encoding="utf-8", newline="")
-            print(f"{path}: license line written")
+            print(f"{path.as_posix()}: license line written")
             continue
         failed = True
         hint = " (built: run `make build-frontend`)" if is_built(path) else ""
-        print(f"{path}: {wrong}{hint}")
+        # Spelled as git spells it, on every platform.
+        print(f"{path.as_posix()}: {wrong}{hint}")
     if failed and not fix:
         print("Run `make fmt-licenses` to write them.", file=sys.stderr)
     return 1 if failed else 0

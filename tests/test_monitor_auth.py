@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The monitor's API key, and the rule that refuses to start without one.
 
  Two separate protections, and neither replaces the other. The key guards the

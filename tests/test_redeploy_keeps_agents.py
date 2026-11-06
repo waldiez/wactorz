@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A redeploy keeps the node's agents.
 
 A deploy kills the node's old process and starts the new one. From main's side

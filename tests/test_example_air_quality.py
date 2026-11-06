@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The air-quality example does what its README says.
 
 The building is the same on every run, its faults stand out from what is usual

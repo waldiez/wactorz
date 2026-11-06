@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`Client`: one running server, from outside it."""
 
 import os

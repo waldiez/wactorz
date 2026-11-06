@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which broker messages are forwarded to browsers.
 
 The server subscribes to whole subtrees — `agents/#`, `system/#`, `nodes/#` and

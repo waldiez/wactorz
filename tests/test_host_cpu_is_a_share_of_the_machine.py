@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The CPU figure on the dashboard is a share of the whole machine.
 
 psutil reports a process's CPU the way `top` does — per core, so a process

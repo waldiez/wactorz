@@ -162,6 +162,11 @@ jobs:
       - name: Lint
         run: make lint-py
 
+      # Every source file and the committed static/app open with the license
+      # line. Reads files only: no frontend toolchain needed.
+      - name: License lines
+        run: make lint-licenses
+
       # static/docs is committed and shipped in the wheel, so a change under
       # docs/ without a rebuild releases documentation for the previous version
       # — the same failure the static/app check below covers for the frontend.

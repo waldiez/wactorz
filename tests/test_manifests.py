@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main does with the agent manifests that arrive over MQTT.
 
 A remote agent lives in another process, so its published and subscribed topics

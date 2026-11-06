@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Handing a task to another agent and waiting for its answer.
 
 Two routes, tried in order: an agent in this process gets the task through its

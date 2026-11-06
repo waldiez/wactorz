@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """User-facing summaries for agent lifecycle actions."""
 
 from types import SimpleNamespace

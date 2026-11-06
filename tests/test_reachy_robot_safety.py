@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stopping, offline commands, health and speech synthesis against the real SDK's shape.
 
 The fakes here have the attributes the installed Reachy Mini SDK actually

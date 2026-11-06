@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A message whose publish failed is retried before anything queued behind it.
 
 The old code put it back with `await self._queue.put(item)` under a comment

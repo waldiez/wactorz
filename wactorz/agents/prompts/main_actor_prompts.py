@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """System prompt, intent-classifier prompt, and fact-extraction prompt for MainActor.
 
 The system prompt and the classifier prompt are templates: a core that holds

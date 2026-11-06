@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The LLM, as reached from a node.
 
 The API key stays on main. An agent running here calls ``agent.llm.chat(...)``

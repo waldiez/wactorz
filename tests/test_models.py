@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent names its models, finds them before it starts, and loads them safely.
 
 A library agent names them with ``models=`` on ``@wactorz.agent`` or ``MODELS``

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The MCP server's tools against real HTTP endpoints standing in for Wactorz and HA.
 
 Each tool is a thin translation from an MCP call to one HTTP request, so what

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Browser sessions for the monitor: what the cookie stands for.
 
 The cookie carries a random session id and **never the configured key**. The

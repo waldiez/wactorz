@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The imu_anomaly example: the model stored and served by version, its scripts, its triage, and the FastAPI app.
 
 What it needs that is not installed for the suite is stood in for.

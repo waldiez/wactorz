@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The rest of what generated code is handed as `agent`.
 
 Generated code is written by a model, often for a remote node first, so this

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner is told which machines there are, and how an agent reads its own.
 
 A request such as "monitor the CPU on raspberrypi" names a machine and asks for

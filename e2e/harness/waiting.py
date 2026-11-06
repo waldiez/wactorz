@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Waiting on conditions, which is the only kind of waiting this suite has.
 
 Three shapes, and the difference between them is the assertion they support:

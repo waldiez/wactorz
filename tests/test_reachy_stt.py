@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Provider-level tests for configurable Reachy speech-to-text backends."""
 
 import asyncio

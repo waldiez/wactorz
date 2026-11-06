@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How the supervisor paces restarts, and what it tells the user.
 
 A crashing actor is restarted after a delay that doubles with each crash in a

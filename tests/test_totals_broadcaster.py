@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's headline totals keep updating while agents are working.
 
 Totals are the one part of a snapshot that queries the database, so a timer

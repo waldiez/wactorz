@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reference's command table says what `/help` says.
 
 The table is written by `scripts/sync_command_docs.py` from the commands' own

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where a spawn the model wrote runs: on main, or on the node made for it.
 
 With ``WACTORZ_MODEL_CODE_NODE`` set, code the model writes goes to that node

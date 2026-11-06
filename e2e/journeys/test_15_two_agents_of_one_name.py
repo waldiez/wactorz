@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Two agents of one name: one on the node, a copy on main, each reached by its address.
 
 The page calls each ``name@node`` once the name is shared, and talks to the one

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node does with what arrives on the broker.
 
 A node subscribes to topics named by generated agent code and feeds whatever

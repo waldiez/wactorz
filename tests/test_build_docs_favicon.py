@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The docs site carries the dashboard's icon, and follows it when it changes."""
 
 import importlib.util

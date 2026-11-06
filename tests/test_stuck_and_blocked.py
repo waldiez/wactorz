@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What stops running is seen, and said, by something that is still running.
 
 Three ways a process looks alive while doing nothing, each invisible to what

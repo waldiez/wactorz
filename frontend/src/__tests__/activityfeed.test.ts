@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityFeed, MAX_HEARTBEATS, MAX_ITEMS } from "../ui/feed/activityFeed";

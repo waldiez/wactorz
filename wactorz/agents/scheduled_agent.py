@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ScheduledAgent — first-class scheduled trigger primitive.
 
 Fires an MQTT event at a configured schedule. Designed to be paired with a

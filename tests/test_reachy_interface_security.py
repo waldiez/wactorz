@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Actor and microphone input keeps its authority across Reachy's bridge to main."""
 
 import asyncio

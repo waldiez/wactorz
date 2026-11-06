@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The compose stacks give every deployed node a broker account of its own.
 
 The compose broker is configured here, so it knows the accounts Wactorz derives:

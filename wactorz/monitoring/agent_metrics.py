@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How long a generated agent's work takes, and how it ends.
 
 Two calls carry everything a generated agent does: ``handle_task``, once per

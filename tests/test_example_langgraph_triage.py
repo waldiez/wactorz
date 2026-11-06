@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The langgraph_triage example: a LangGraph graph as an agent.
 
 What it needs that is not installed for the suite is stood in for.

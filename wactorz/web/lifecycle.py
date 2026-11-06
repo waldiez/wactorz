@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agent lifecycle: retained-state purges and deletion.
 
 Deleting an agent has to clear every place its state lingers — retained MQTT

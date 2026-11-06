@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The label routes, and the dashboard vouching for the answers it sends.
 
 ``GET /api/labels`` lists labels by source and event-time window, superseded

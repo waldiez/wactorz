@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the generated access list lets each account do, asked of a real broker.
 
 `tests/test_broker_accounts.py` pins the text of the file. This asks mosquitto

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for the real WactorzDB write path against an on-disk SQLite database.
 

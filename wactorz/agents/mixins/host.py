@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the mixins require of the class they are mixed into.
 
 Each mixin here reaches for attributes it does not define — `self.name`,

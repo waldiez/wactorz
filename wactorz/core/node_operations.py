@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the model may ask a node for: named operations that only read.
 
 A node's shell is reachable over SSH from main's installer, and main's model

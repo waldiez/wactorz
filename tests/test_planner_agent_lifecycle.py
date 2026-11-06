@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner around its plans: routing, workers, caching, and ending.
 
 A planner is spawned for one request and must not outlive it. Every way it

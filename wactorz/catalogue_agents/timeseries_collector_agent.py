@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CATALOG AGENT — timeseries-collector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Background data collector. Subscribes to sensor, detection, HA state-change

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the model loop reports to Prometheus: a trial's figures, drift, and the training runs.
 
 Set where the figures are made: a trial's by main's check of it

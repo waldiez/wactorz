@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model routes: reading the store, and moving its pointers from the dashboard.
 
 Each move is the store's own, recorded as made by the dashboard, and refused in

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Labels: what a source was doing over a period, as someone said.
 
 A label is a node of the provenance graph (`wactorz.core.provenance`): a window

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/metrics` says what an operator cannot see from the dashboard.
 
 Whether this server is connected to the broker and what is waiting behind that

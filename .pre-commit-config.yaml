@@ -9,6 +9,16 @@ repos:
 
   - repo: local
     hooks:
+      # The license line at the top of every source file: written where it is
+      # missing, so the commit stops with the files changed, to be staged again.
+      # A built file in static/app is only reported: the build writes it.
+      # `make lint-licenses` reads the whole tree, in CI too.
+      - id: license-notices
+        name: license notices
+        entry: bash -c '"$(make -s python-path)" scripts/license_notices.py --fix "$@"' --
+        language: system
+        types_or: [python, shell, powershell, ts, javascript, css, html]
+
       # Gated Python lint + format (Ruff) and type checking (basedpyright). The
       # advisory Ruff families are intentionally NOT here — `make lint-py` reports
       # them; they never block a commit.

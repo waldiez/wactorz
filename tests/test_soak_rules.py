@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The soak run's verdict, checked on runs that never happened.
 
 `tests/broker/test_soak.py` keeps a main and a node busy and decides from the

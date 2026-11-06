@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dry-run flow end to end: plan, propose, approve, revise, reject, run.
 
 `tests/test_planning.py` covers the predicates and the persistence. This drives

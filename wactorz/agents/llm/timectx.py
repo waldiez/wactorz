@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The live date/time context handed to models.
 
 Shared by LLMAgent and by actors that have no LLM, which is why it lives with

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One message the publisher cannot send no longer holds up the rest.
 
 The publisher sends one message at a time, in order, and a failed one goes

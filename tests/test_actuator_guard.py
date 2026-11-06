@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the actuator post-resolution guard (filter_unrequested_actions)
 and the request-derived color/brightness detection."""
 

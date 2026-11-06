@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The questions an agent has asked a person, kept until they are answered.
 
 An agent that asks the operator something (:meth:`wactorz.Actor.ask_operator`)

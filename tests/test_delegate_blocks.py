@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Delegations the model writes into its own reply.
 
 Two forms reach an agent. A `<delegate>` block is the unambiguous one: valid

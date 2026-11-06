@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HomeAssistantActuatorAgent — reactive actuator for external automations.
 
 Subscribes to one or more MQTT topics, filters incoming detection payloads,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Durable MQTT publishing for the actor system.
 
 Callers hand messages over and carry on: delivery, reconnection and retry

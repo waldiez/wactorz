@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which control messages this node acts on.
 
 The signing rule itself lives in :mod:`wactorz.core.node_signing`, which main

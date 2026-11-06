@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A migration completes when the target says the agent started, not before.
 
 The source stops the agent but keeps its state, so until the target confirms,

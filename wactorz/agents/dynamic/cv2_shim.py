@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A cv2.VideoCapture that survives a flaky camera backend.
 
 Generated vision code opens the camera with `cv2.VideoCapture(0)` and assumes it

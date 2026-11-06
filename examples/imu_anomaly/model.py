@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model: the mean of normal motion and the inverse of its covariance.
 
 Two named arrays, saved as an ``.npz`` and kept on main with

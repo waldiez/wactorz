@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's blobs travel beside its state when it moves.
 
 A migration ships the state as JSON; a model, an array or raw bytes goes as a

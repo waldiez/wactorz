@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The install every journey runs against, and what is checked after each.
 
 One install for the whole run: a broker, the application as a process, and a

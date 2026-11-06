@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Drift: three tests over two windows, an episode per shift, and the drift agent that raises them.
 
 PSI, KS and ADWIN are checked on numbers whose answer is known; the check on

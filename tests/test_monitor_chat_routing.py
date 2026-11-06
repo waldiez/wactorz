@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for the monitor's chat routing.
 
 The monitor was split into :mod:`wactorz.web.*`; the chat routing that used to

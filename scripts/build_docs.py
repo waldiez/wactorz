@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Wactorz docs builder.
 
 Converts docs/*.md → static/docs/*.html using a custom dark template that matches

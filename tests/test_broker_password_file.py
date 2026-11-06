@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every broker Wactorz configures can rewrite its own password file.
 
 `mosquitto_passwd -c` creates the file and refuses when one is already there,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an actor starts, it owns and ends; what it writes, it writes whole.
 
 Work handed to the background with a bare ``asyncio.create_task`` kept no

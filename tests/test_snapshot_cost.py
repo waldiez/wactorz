@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The per-event snapshot must not touch the database.
 
 The regression this pins: ``events.snapshot()`` is broadcast on every broker

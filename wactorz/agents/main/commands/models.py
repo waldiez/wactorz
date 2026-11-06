@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Moving a model's pointers from chat, and saying what a version is judged on.
 
 The pointers belong to the store (`wactorz.core.artifacts`); these verbs move

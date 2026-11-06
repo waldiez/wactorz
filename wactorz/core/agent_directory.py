@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where a node hears the other agents are, from their retained manifests.
 
 Main resolves an address from its own records. A node has none, but every

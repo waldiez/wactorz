@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main and a node still work together with the access list in force.
 
 `test_access_list.py` asks the broker what each rule allows. This runs the real

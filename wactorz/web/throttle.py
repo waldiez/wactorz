@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Rate limiting for attempts at the key, on the sign-in form and in a header.
 
 One shared key and no user accounts means guessing is the only attack, and

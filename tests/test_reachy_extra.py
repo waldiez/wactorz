@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`pip install 'wactorz[reachy]'` installs exactly what the Reachy recipe would.
 
 The extra exists so the packages resolve together with Wactorz's own before it

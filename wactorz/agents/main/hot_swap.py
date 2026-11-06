@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reloading the agents that follow a model pointer, when it moves.
 
 A spawn that named a model by its bare name, or as ``NAME:active`` or

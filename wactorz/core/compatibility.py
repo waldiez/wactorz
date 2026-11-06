@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which versions of Wactorz can work together as a server and a node.
 
 A node runs the same package the server does, and what passes between them --

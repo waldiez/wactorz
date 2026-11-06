@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The private CA and broker certificate an install issues for brokers it provides.
 
 A node that connects over TLS has to trust the broker's certificate, and asking

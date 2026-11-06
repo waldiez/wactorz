@@ -1,4 +1,5 @@
 #!/usr/bin/with-contenv bashio
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC1008
 
 bashio::log.info "Starting Wactorz addon..."

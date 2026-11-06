@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A fake IMU: normal readings with an abnormal one now and then.
 
 Publishes to the broker Wactorz itself is configured for, with the same

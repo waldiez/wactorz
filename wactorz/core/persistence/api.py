@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The unified persist()/recall() API agents actually call.
 
 Routes each key to the store that suits it, so agent code needs no knowledge of

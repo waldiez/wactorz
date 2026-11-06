@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """PlannerAgent — On-demand task orchestrator with plan caching and auto-spawning.
 
 Spawned by MainActor when a task is too complex for a single agent.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where main knows an agent to be, and so which agents a name or an address finds.
 
 Every way a person or a program names an agent -- a chat mention, a

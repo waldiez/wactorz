@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The brokers Wactorz provides serve TLS once it has issued them a certificate.
 
 Three places package a broker, none able to see the others: the compose stack,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The history of a model's pointers: each move an action in the provenance graph.
 
 The store journals each change as it is made, whoever made it -- the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Configurable speech-to-text backends for the Reachy Mini voice interface.
 
 The module imports with the standard library alone. All optional dependencies,

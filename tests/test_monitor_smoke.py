@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end smoke test for the monitor's HTTP surface.
 
 Builds the *real* app via ``build_app()`` and drives every read-only route with

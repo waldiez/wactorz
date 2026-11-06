@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent that ends by itself leaves the dashboard, the same as a deleted one.
 
 Deleting through the UI removes the monitor's entry for the agent. An agent that

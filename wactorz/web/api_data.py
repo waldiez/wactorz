@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The data directory over the API: which sources are recorded, and what a window of one holds.
 
 - ``GET /api/data``: every source with files, what each holds (`wactorz.data.files.summary`)

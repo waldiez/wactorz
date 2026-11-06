@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The wiring: two agents joined by a topic, and a topic nobody reads, flagged.
 
 A package beside Wactorz brings four agents: one publishes pings, one reads

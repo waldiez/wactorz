@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An empty setting means "use the default", because that is what the template says.
 
 `.env.template` ships `TTS_VOICE=` under the line "Leave TTS_VOICE empty for the

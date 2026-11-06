@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An actor's subscriptions share one MQTT connection.
 
 Every `agent.subscribe()` used to open its own. Agent code is model-authored, so

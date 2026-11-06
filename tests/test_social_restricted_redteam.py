@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Red-team playtest of ``MainActor.process_user_input_restricted``.
 
 Simulates messaging the bot through Discord/Telegram, including a WORST-CASE

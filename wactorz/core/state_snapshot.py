@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Whether an agent's state can travel with it when it migrates.
 
 A migration ships the state as JSON over MQTT, with each blob -- a model, an

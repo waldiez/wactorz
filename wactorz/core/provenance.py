@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model loop's record of what it saw, was told, decided and did.
 
 One graph in main's database: nodes for observations, questions, labels,

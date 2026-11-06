@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A question an agent asked while the page was away is there when the page opens.
 
 The page hears of a question live, while it is open. The server keeps the book

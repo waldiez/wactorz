@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A migration snapshot instructs one spawn; it must not become a standing order.
 
 The runner treats `_initial_state` as ground truth and deletes the agent's state

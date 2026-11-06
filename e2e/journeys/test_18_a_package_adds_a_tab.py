@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A package installed beside Wactorz adds a tab to the dashboard: listed, it opens with
 what the package serves, keeps its own place in the address, and is ended when another
 view opens; left out of ``WACTORZ_EXTENSIONS``, it has no tab at all.

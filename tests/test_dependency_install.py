@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an agent's install reports, and what a caller waiting on it is told.
 
 The outcome decides whether an agent is started at all, so every way an install

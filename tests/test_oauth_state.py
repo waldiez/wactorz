@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The OAuth callback must prove it is answering *our* authorization request.
 
 The callback is an unauthenticated local URL, so anything that can reach it

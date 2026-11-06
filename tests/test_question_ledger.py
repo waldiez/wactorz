@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The server's ledger of questions, built from the books agents publish retained.
 
 Fed through ``parse_topic`` as the broker delivers each book, so an agent here

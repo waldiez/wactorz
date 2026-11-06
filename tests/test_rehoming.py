@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agents the model wrote before there was a sandbox are moved there.
 
 The first time the node model-written code goes to reports after a start, main

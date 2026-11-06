@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MQTT-topic → live-state transitions.
 
 ``parse_topic`` decodes each broker message into mutations of

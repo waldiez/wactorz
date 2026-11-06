@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an agent says to a person, and what the person answers.
 
 An agent reaches a person through a chat channel: the dashboard, Telegram,

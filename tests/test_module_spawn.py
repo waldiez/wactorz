@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`type: "module"`: an agent the deployment brings, spawned by its import path.
 
 Only a target that is registered as a plugin is spawned. A spawn config can be

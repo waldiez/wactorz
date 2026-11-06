@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A rule: when a message arrives on a topic and a condition holds, act.
 
 The glue between the stages of a pipeline, without a program per rule. A rule

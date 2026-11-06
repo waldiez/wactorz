@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The models an agent names: finding them on main, and loading them.
 
 An agent names artifacts -- models kept with ``wactorz-artifacts`` -- under keys

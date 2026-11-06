@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A migration in flight survives the process that started it.
 
 Both pending maps were in memory only, so a restart dropped the token and both

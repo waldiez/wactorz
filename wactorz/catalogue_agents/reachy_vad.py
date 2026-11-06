@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Incremental voice-activity capture for the Reachy Mini microphone.
 
 The Reachy WebRTC backend yields float32 stereo chunks at 16 kHz. This module

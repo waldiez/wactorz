@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """API-key enforcement for the monitor, and the rule that refuses to start.
 
 The monitor serves the dashboard, the whole API and the log endpoint, and until

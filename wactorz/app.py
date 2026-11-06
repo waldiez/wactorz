@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Application assembly and run loop.
 
 Builds the actor system (LLM provider, MQTT, persistence, supervision tree) and

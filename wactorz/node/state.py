@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's persistent state on a node, kept as JSON.
 
 Main keeps an agent's state as a pickle, which is the right choice there: it is

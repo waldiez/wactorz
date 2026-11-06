@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
 import importlib.util

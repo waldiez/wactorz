@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retry, backoff and per-attempt timeout around every LLM provider call."""
 
 import asyncio

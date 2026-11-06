@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The manifests agents publish, and the topic registry built from them.
 
 An agent announces what it publishes and subscribes to as a retained message on

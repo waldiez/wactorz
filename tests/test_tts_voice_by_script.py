@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which voice speaks a sentence, and when Reachy is allowed to change voices.
 
 A single-language voice handed Greek does not fail - it reads the Unicode

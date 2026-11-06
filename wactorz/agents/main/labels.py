@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Labels from the answers to agents' questions, recorded by main.
 
 An agent that asks the operator with a label spec (``ask_operator(...,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which agents may supply interface conversation context to main.
 
 Main admits this context only from reviewed local catalogue programs. Admission

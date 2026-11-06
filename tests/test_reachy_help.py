@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reachy help is discoverable, local, and usable without a robot connection."""
 
 import pytest

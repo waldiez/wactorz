@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """LLMAgent - An actor backed by a Large Language Model.
 Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenAIProvider — the OpenAI SDK, and the wire format others reuse."""
 
 import logging

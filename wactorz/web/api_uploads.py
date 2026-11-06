@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The chat attachment endpoints.
 
 `POST /api/upload` takes one multipart file and answers with the id the browser

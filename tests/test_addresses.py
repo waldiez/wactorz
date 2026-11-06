@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's address, ``name@node``, and what a name or an address finds.
 
 Two agents on different nodes may one day share a name. Whatever a person or

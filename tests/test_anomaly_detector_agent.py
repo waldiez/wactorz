@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The anomaly detector: baselines from history, scoring live readings, and reporting.
 
 The program is exec'd as it is at spawn and driven through a stand-in `agent`

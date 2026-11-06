@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A developer's registered agent is a building block for main and the planner.
 
 Declared with ``@wactorz.agent`` and registered, an agent is something chat

@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import headers from "eslint-plugin-headers";
 import eslintPluginPrettierRecommended from "eslint-plugin-prettier/recommended";
@@ -8,11 +7,10 @@ import importPlugin from "eslint-plugin-import";
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
-const owner = "Waldiez";
-const startYear = 2025;
+// The license line alone: the copyright is stated once, in NOTICE.md, so no
+// file changes when a year does. scripts/license_notices.py asks the same of
+// every other source file and of the built dashboard.
 const spdxIdentifier = "Apache-2.0";
-const currentYear = new Date().getFullYear();
-const ownerAndContributors = `${owner} & contributors`;
 
 const project = "./tsconfig.json";
 
@@ -127,11 +125,7 @@ const defaultConfig = defineConfig({
             "error",
             {
                 source: "string",
-                content: "{licenseLine}\n{copyrightLine}",
-                variables: {
-                    licenseLine: `SPDX-License-Identifier: ${spdxIdentifier}`,
-                    copyrightLine: `Copyright ${startYear} - ${currentYear} ${ownerAndContributors}`,
-                },
+                content: `SPDX-License-Identifier: ${spdxIdentifier}`,
             },
         ],
     },

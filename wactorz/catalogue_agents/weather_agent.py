@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """WeatherAgent - natural-language weather via Open-Meteo (no API key).
 
 Built for the way ordinary people actually ask:

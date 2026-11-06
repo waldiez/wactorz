@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """REST API interface — connect any chat platform via webhooks.
 
 `POST /chat` with `{"message": "..."}` returns `{"response": "..."}`; the

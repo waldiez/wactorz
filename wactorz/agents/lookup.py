@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Typed lookup for the agents that are known by a fixed registry name.
 
 `ActorRegistry.find_by_name` returns a plain `Actor`, which is the right answer

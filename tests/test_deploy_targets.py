@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Deploy targets: SSH credentials come from the environment, never from chat.
 
 ``/deploy <node> <host> <user> <password>`` handed the monitor a live SSH

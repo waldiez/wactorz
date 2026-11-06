@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Topic matching and the contract registry.
 
 Topic patterns decide which agent receives which message, so a matching bug is

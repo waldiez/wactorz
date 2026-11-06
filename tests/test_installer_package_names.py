@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A "package" must be a package name, not an instruction to pip or a shell.
 
 Two exposures, one answer. Locally the command is built as a *list*, so there

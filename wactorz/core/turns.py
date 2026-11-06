@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which chat turn, and which agent, the code running now belongs to.
 
 A turn is one message a person sent and everything done to answer it: main

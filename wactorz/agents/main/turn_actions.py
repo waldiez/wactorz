@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a turn did to the system, and the one sentence that reports it.
 
 A turn answers the user, and on the way it may spawn agents, delete them, or

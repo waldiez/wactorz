@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What Reachy can say about its own condition, and what it cannot.
 
 The robot reports one thing about its health that is worth warning about: the

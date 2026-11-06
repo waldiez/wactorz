@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Storing and serving chat attachments.
 
 The endpoint writes caller-supplied bytes to disk, and the state directory holds

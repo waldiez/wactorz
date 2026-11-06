@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for cost persistence, cost restoration on startup, and chat history API.
 

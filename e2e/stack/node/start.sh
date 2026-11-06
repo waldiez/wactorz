@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Accept this run's key for the `node` user, then serve SSH in the foreground.
 set -eu
 

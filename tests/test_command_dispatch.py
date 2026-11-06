@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A command from the dashboard must reach the actor, or say that it did not.
 
 Local actors are driven in process. The web layer used to publish every command

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main remembers about the agents it spawned.
 
 The spawn registry is what survives a restart: it is how an agent comes back,

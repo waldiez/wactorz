@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat routing for the monitor.
 
 Decides where a user message goes — slash command, @mention, the orchestrator

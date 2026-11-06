@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fit the model on the building's healthy week and store it on main.
 
     python -m air_quality.train                       # v1, threshold 5, made active

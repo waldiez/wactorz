@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sending a node the artifacts its agents name, when it asks.
 
 A spawn config may name artifacts -- models kept with `wactorz-artifacts` -- as

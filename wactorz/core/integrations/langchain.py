@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """LangChain and LangGraph beside Wactorz: the spend of a chain on the dashboard.
 
 A chain or a graph calls its model through LangChain, not through the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The catalog: ready-made agents spawned by name.
 
 Requests arrive in many shapes — a structured action, a `spawn` key, or a line

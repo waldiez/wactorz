@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """REST endpoints for actors: listing, inspection, and control.
 
 Read paths render the live registry (plus MQTT-reported state) into the

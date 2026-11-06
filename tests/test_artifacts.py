@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Models kept once by content, named by version, on main.
 
 An artifact is a file someone put in the store on purpose, for agents to load.

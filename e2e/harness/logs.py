@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The application log, and the things that must never be in it.
 
 A log is the one artefact that gets copied into a bug report, pasted into a chat

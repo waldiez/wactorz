@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agent: one function, one decorator.
 
 Subscribed to every IMU topic, it scores each reading with the trained model

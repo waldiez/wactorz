@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Starting a node: ``wactorz-node --node <name>``, or ``wactorz --node <name>``.
 
 The node half of :mod:`wactorz.cli`. Two checks happen before anything connects,

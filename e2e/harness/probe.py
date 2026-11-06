@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The three ways this suite talks to a running system: REST, WebSocket, MQTT.
 
 All three are synchronous. The scenarios are synchronous, Playwright's page

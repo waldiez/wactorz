@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The building: three rooms, an office week, and three faults on a Tuesday.
 
 Every reading is worked out from the seed, the room and the time alone, so the

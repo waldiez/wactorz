@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the extension discovery seam (wactorz.ext).
 
 Discovery is sandboxed by pointing the package ``__path__`` at a tmp dir of

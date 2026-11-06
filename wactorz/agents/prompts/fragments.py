@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every prompt fragment there is, in one place.
 
 Main's and the planner's prompt modules both render with "every fragment" by

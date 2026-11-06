@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The recorder keeps the readings of streams as Parquet, one source per device or topic.
 
 A library agent the package brings, spawned from the catalogue on main or on a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Everything a scenario is allowed to call.
 
 A scenario file imports from here and nowhere else: no Playwright, no asyncio, no

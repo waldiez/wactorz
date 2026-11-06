@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where an agent the model wrote runs: on main, or on a node made for it.
 
 Main holds every credential the deployment has, and the model writes code from

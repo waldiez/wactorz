@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main answering reads of its stored history for agents running on nodes.
 
 The time series, detections and Home Assistant state changes live in main's

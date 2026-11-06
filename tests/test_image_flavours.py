@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The app image comes in two flavours, built from one Dockerfile.
 
 `default` is small: Wactorz and its integrations. `ultra` adds what vision

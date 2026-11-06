@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reuse of a previous plan for a repeated task, while it still applies.
 
 A cached plan is only valid as long as the agents it delegates to are still

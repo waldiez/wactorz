@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """NIMProvider — NVIDIA NIM, OpenAI-shaped."""
 
 import logging

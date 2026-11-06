@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A streamed chat turn over `/ws`: chunks, the end of the stream, and stopping it.
 
 A streamed reply is shown chunk by chunk but stored once, whole, when the stream

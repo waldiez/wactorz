@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the tests of the example programs under ``examples/`` share.
 
 Each example is loaded from its folder by path, under a name of its own, since

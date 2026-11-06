@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """TTS extension — server-side text-to-speech via edge-tts.
 
 Optional dependency: ``pip install wactorz[tts]`` (installs edge-tts).

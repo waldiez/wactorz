@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where a turn's attachments go once routing picks a destination.
 
 `route_chat` reaches four differently-shaped entry points and two routes that

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One-time interactive OAuth login for the Google Calendar / Gmail agents.
 
 Run once per machine to mint the OAuth token the agents reuse. It opens a browser

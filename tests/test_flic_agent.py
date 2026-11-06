@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Flic buttons as triggers: what is published, and what is kept.
 
 The buttons themselves are not here — a paired button is a radio in another

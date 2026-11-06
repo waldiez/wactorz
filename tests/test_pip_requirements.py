@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Whether an agent's declared packages are installed, and what an install broke.
 
 Agents declare pip requirements, not module names: `reachy-mini==1.8.4`,

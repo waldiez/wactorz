@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What reaches the synthesiser, and what must never be spoken.
 
 edge-tts does not skip pictographs; it pronounces their Unicode names, so a

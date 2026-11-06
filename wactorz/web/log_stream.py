@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pushing application-log records to open dashboards as they are written.
 
 A pump watches the ring buffer and broadcasts what is new, so a page left open

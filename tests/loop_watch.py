@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Whether the event loop could run while a blocking call was in progress.
 
 A test wraps the call so it clears a flag and waits for a coroutine on the loop

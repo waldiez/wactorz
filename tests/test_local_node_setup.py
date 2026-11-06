@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Setting up a node on main's own machine, for the code main should not run.
 
 `sudo wactorz-node setup-local` runs once, as root, and leaves a user, a key, a

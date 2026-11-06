@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 r"""The detector as a recipe the train step runs: fit on a window's normal readings, score on the rest.
 
 What `train.py` does by hand on synthetic motion, from recorded readings:

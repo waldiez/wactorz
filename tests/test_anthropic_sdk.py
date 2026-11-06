@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Our Anthropic provider's sampling rule, held against the SDK that is installed.
 
 The provider's other tests use fake clients, so they say what it does with a

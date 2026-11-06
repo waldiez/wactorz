@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent made from one function.
 
 The smallest thing a developer brings to Wactorz is a callable: a model's

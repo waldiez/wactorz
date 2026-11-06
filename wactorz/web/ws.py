@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """WebSocket transport for the dashboard.
 
 Owns the ``/ws`` endpoint: pushes state snapshots and live events to connected

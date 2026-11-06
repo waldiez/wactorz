@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Development auto-reload: restart the process when source files change."""
 
 import logging

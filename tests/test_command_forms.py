@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The ways to type each command: one record for `/help`, the API and the chat box.
 
 A form that the registry does not route to its own command would be offered and

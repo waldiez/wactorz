@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a broker message or a chat turn writes, written in order on one background task.
 
 A write inside the dispatch of a message holds the event loop, and with it every

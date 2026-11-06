@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Base Actor - the foundation of the Actor Model framework.
 Every agent IS an actor. Actors communicate via message passing only.
 """

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Naming the emotion clips, across an SDK that names the accessor differently.
 
 An empty clip list is not cosmetic. `list_emotions` returns it, the planner

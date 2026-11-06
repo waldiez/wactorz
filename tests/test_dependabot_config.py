@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What Dependabot proposes, and what it is told to leave alone.
 
 A major release can need code changed before it can be merged. Grouped with

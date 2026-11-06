@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Releasing what generated code left open when the agent stops.
 
 `cleanup()` is optional and often missing or incomplete, so anything holding a

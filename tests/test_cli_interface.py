@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The interactive CLI: what each command does, and what it prints.
 
 `run()` is one long dispatch loop, and almost all of it was unreachable from a

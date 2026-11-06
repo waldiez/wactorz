@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Liveness and readiness probes, on the monitor and on the REST interface.
 
 Liveness answers whenever the process can answer, whatever it depends on is

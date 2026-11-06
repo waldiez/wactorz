@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What was recorded, over the API and from a terminal: the sources, a window's card, a copy.
 
 ``GET /api/data`` lists the sources with files, ``GET /api/data/{source}/profile``

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node reports about how close it is to running out.
 
 Main places agents from these readings, so each is either right or absent. The

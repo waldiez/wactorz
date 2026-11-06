@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The publisher's promise: a caller hands a message over and stops caring.
 
 Two things have to hold for that to be true. Publishing must not wait on the

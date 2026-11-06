@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent says something to a person, with a choice, and hears the pick.
 
 The agent publishes one ``agents/<id>/chat`` frame (``notify_user``); the

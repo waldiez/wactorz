@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What `MainActor.process_user_input` does with a command, pinned as it is.
 
 The command surface is an if-chain, and its *sequence* carries meaning: exact

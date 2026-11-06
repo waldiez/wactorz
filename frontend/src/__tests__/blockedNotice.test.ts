@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { BLOCKED_PACKAGES_KEY } from "../config/keys";

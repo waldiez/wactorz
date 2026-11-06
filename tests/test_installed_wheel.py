@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A wheel can be put together again from a package as it is installed.
 
 `/deploy` gives a node the package the server runs. A server installed from a

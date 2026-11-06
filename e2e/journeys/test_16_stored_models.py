@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stored models: the versions kept, the one served and the one tried, moved from the page.
 
 Two versions of a model are stored, and the first made active, from the command

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Ambient life, and the promise that it never takes the robot off you.
 
 The layer exists so Reachy does not read as switched off while nobody is

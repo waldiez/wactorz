@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How the terminal reaches an agent, and how it deploys a node.
 
 An agent named with `@` is answered by the most direct route it offers: a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Start Wactorz with the detector, its triage and the dashboard on.
 
 By default the minimal profile: the monitor and the given agents only, no

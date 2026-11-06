@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Everything this node sends to the broker, and the queue it waits in.
 
 Publishing is queued rather than awaited so a stalled broker never pushes back

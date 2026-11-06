@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The `/ws` endpoint: what a browser is told on connect, and what it may ask for.
 
 Coverage here is deliberately ahead of the authentication work, which lands in

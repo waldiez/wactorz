@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The weather agent against a stand-in Open-Meteo: lookups, memory, and replies.
 
 `tests/test_weather_agent.py` pins the natural-language parsing. This covers

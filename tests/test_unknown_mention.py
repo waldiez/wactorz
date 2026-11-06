@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A mention that names nothing must not strand the turn that sent it.
 
 The dashboard only promotes a leading ``@name`` to a routing target when it

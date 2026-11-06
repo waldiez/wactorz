@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading structure back out of an LLM response, and keying it for the cache."""
 
 import hashlib

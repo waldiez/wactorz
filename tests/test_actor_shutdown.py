@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stopping an actor must finish before it reports being stopped.
 
 ``cancel()`` only requests cancellation. ``stop()`` cancelled the actor's tasks

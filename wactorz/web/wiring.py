@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``GET /api/wiring``: who publishes what, who reads it, and where the data stops.
 
 The graph is `wactorz.core.wiring`'s, read from main's topic registry at the

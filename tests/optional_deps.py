@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stand-ins for optional dependencies, safe to use at module scope.
 
 The suite must run on a machine (or CI job) without the optional extras

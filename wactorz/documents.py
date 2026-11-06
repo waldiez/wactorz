@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where an agent may read a person's documents from, and write what it makes of them.
 
 An agent that converts a file is handed the file's path in a request a model

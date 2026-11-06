@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The models main keeps, and their pointers, for the dashboard.
 
 ``GET /api/models`` lists each name with its newest version and its pointers;

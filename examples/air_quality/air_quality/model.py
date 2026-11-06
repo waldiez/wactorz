@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model: what each room is usually like at each hour, and how far a reading is from it.
 
 For every room, the mean and the spread of each quantity at each hour of a

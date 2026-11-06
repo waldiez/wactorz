@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bringing an agent home from a remote node.
 
 Migrating an agent back to main asks its node to hand back the agent's

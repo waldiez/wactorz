@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A model's name carries a policy saying when its shadow becomes active, and main holds each trial to it.
 
 The policy lives beside the pointers in the store's index. Main reads every

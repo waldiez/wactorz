@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The one socket of a client, kept connected and shared by everyone listening.
 
 The stream is live state with no replay. A listener is told when the socket went

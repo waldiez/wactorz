@@ -1,3 +1,6 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // The Air tab: a card per room with its latest readings, and its score over the
 // simulated day, with the threshold, each episode shaded and each answer marked.
 // Live only: it shows what arrives while it is open.

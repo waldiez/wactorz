@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Serving the built dashboard and the docs, and starting the monitor server.
 
 Assets are served only from inside their own directories — a path that climbs

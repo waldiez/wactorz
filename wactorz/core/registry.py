@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ActorRegistry - Central registry and message router for all actors.
 ActorSystem orchestrates startup, shutdown, and actor lifecycle.
 Supervisor implements Erlang/OTP-style supervision trees.

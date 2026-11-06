@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fit the model on the house's noted week and store it on main.
 
     python -m household_energy.train                                  # v1: the watts alone, made active

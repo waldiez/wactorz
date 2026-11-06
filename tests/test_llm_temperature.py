@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for LLM_TEMPERATURE plumbing (config → providers)."""
 
 import types

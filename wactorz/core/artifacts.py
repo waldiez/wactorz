@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Models and other large files that main keeps once, by content, and names by version.
 
 An agent's own blobs (see `wactorz.core.blobs`) belong to that agent: written by

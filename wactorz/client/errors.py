@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What can go wrong talking to a server, each reason a class of its own."""
 
 import asyncio

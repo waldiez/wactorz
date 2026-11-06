@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Blocking network calls must not run on the shared event loop.
 
 Every actor in the process runs on one loop. A synchronous call made from inside

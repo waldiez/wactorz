@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Composition root: build the aiohttp app, wire routes, run the server.
 
 ``build_app`` is the single place every route is registered, which makes the

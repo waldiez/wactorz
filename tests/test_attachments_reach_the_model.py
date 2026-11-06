@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Getting a turn's attachments from the chat path into the model request.
 
 Two things are being pinned here. The first is that the blocks arrive at all —

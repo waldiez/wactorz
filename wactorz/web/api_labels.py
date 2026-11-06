@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The labels main keeps, for the dashboard.
 
 ``GET /api/labels`` lists labels, oldest recorded first, filtered by

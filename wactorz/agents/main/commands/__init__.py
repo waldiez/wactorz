@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The commands a user can type.
 
 The machinery lives in `dispatch`; a handler module imports from there, so

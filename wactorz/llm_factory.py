@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Per-call-site LLM provider resolution.
 
 The global ``LLM_PROVIDER`` / ``LLM_MODEL`` pair selects one model for every

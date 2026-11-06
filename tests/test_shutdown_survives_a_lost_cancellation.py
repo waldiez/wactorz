@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shutdown finishes even when a cancellation is lost.
 
 On Python 3.10 and 3.11 ``asyncio.wait_for`` returns its result from inside its

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard tabs extensions add: the list the page reads, and each one's script.
 
 The script is served under ``/api/``, which the service worker never caches: it

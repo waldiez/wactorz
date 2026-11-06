@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Installing an agent's packages before it spawns, and saying what came of it.
 
 The catalog and main both spawn agents that declare packages. An agent started

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Moving a running agent to a different machine.
 
 Three things can know where an agent currently is, and they are consulted in

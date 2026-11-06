@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's id goes with it: minted on main, kept on a node and back again.
 
 Main sends the id in the spawn and the node builds the agent under it, so over

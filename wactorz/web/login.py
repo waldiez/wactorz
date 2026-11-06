@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The sign-in page, and the two routes behind it.
 
 Server-rendered on purpose. The dashboard bundle is behind the gate, so the

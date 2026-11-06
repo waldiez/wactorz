@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A machine for a node to be deployed to, and what a scenario may ask of it.
 
 The suite does not start a node. It starts a machine -- a container with Python

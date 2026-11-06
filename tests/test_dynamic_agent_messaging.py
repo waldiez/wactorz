@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How generated agent code gets something out: publish, log, alert, delegate.
 
 `publish` does more than publish. It records the topic in the agent's manifest

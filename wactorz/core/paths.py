@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """State-directory resolution.
 
 Stdlib-only by design — imported at module scope

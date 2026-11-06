@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The questions agents have put to a person, as the server knows them.
 
 Each agent publishes its question book, retained, on ``agents/<id>/questions``

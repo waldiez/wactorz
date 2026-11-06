@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MainActor - Primary conversational agent and orchestrator.
 Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """

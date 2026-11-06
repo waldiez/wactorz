@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Intent routing for MainActor.
 
 Classifies each user turn (ACTUATE / HA / PIPELINE / OTHER) with one cheap LLM

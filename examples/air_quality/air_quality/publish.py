@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Play the building's Tuesday onto MQTT, faults and all.
 
     python -m air_quality.publish                 # 07:00 to 19:00, one step a second

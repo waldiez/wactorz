@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Readings are kept as Parquet files, one directory per source and hour, and read back as a frame.
 
 A file is written whole and never appended to; a batch that closes inside the

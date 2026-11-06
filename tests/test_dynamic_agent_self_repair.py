@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What happens when the model repairs a crashing agent's code at run time.
 
 A repaired program must be the one that runs afterwards. Both repair paths

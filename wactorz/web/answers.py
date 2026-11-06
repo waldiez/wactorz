@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's answer to a question an agent asked.
 
 A chat frame with options is shown on the dashboard as a card with buttons.

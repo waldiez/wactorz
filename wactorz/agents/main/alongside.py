@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A spawn of a name that already runs on another host: a move, a second agent, or a question.
 
 A name is unique on one host, not across them. So a spawn onto one node, of a

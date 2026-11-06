@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A program a node repaired reaches main's spawn registry, and only that way.
 
 An agent can be repaired by the LLM while it runs. On a node that repair lived

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A dashboard tab from an extension: what it declares, and what the server makes of it.
 
 A panel's script runs in the page with the signed-in session, so the server lists

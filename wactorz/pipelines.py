@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A pipeline: agents that work together, declared in one place.
 
 The planner builds one from a request; this is the same thing written down by

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Ask a person about a strong anomaly, and keep the answer as a label.
 
 On a jolt far past the detector's threshold, `triage` asks on the dashboard

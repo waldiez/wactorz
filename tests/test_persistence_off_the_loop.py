@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's pickled state lives in memory, and its file is written after.
 
 `persist()` and `recall()` are synchronous and called from the event loop. A

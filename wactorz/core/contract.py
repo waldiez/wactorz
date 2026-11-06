@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared app-state keys between core and extensions.
 
 Core provides its keys on the aiohttp app before ``setup_all()`` runs;

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The history of a model's pointers, as actions in the provenance graph.
 
 The store's index keeps where each pointer is now and the version it left,

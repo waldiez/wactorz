@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The two agents: one finds the runs in the meter and asks about each, the other names them.
 
 `guess` is a function: it takes one run and answers with the appliance it

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The detector inside a FastAPI app: one process, one event loop, both servers.
 
 The web app owns the loop and the signals. Wactorz runs on that loop as a

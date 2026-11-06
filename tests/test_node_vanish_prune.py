@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Vanish-detection tolerates a transient node-heartbeat gap.
 
 A registry-claimed remote agent that is missing from a single node heartbeat is a

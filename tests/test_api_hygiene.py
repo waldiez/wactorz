@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a failing endpoint tells the caller, and what it keeps to itself.
 
 An exception string answers a different question from the one the caller asked.

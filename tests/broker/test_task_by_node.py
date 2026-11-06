@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Two nodes running an agent of one name, each reached alone by its address.
 
 A task by name reaches every node that runs the name. One on a node's own

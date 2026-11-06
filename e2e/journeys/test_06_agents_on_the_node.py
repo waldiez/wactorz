@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agents on the node: started there, moved home and out again, and asking the model.
 
 The agent that is moved counts what it is sent and keeps the count, so each

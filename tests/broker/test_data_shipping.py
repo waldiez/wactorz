@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A recorder on a node files a reading, and the file reaches main's data directory, over a real broker.
 
 Every hop is a real one: main spawns the recorder on the node as a library

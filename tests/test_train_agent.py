@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The trainer runs one training on a task and answers when it ends; ``wactorz-train`` does the same from a terminal.
 
 A library agent the package brings, spawned from the catalogue on main with

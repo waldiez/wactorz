@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Commands that act on a single agent.
 
 Each of these changes what is running: restarting one, or moving it to another

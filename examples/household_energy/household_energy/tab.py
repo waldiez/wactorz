@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Energy tab: the meter over the day, each run named, and each answer beside its guess.
 
 An extension whose only part is a panel: the page reads everything it shows

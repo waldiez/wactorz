@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One slow browser must not stall the broker.
 
 The regression this pins: ``broadcast`` awaited ``send_str`` for every client in

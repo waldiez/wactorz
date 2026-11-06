@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The compose stacks always run the app with an API key.
 
 Inside its container the app listens on every interface, so everything on

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.main.memory.MemoryMixin``.
 
 Exercises the real mixin against a fake host that supplies the Actor/LLMAgent

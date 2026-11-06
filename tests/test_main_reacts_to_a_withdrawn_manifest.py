@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A withdrawn manifest removes the agent from main's spawn registry.
 
 The withdrawal is the one removal signal every ending publishes — an agent that

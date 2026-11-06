@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What each node collaborator requires of the actor that owns it.
 
 Typing-only, in the spirit of `mixins/host.py`: nothing here runs, nothing is

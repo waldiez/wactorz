@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A turn's attachments survive a reload.
 
 The chat thread is rebuilt from `chat_log` after a refresh, so an attachment

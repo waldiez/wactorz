@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's id is minted once, kept in main's spawn registry, and followed wherever it runs.
 
 Two agents may come to share a name (docs/design/agent-identity.md), so the id

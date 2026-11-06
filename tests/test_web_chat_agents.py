@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/agents` typed into the dashboard's chat.
 
 Main answers every form of it -- the list, a capability filter, and the verbs

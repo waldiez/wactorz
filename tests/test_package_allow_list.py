@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which packages are installed without asking, and how the operator allows the rest.
 
 A package an agent asks for is named by a model, and a plausible guess at a name

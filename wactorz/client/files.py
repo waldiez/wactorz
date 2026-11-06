@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Files stored on the server, to send with a message or read back."""
 
 import asyncio

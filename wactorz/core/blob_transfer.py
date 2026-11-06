@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Moving an agent's blobs to another machine, with the rest of its state.
 
 A migration ships an agent's state as JSON. A blob -- a model, an array, raw

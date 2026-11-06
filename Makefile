@@ -1,4 +1,4 @@
-.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
+.PHONY: help lint-licenses fmt-licenses dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
 		typecheck typecheck-py typecheck-frontend fmt fmt-py fmt-frontend lint lint-py lint-frontend lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
         up down logs shell mqtt-certs \
         run test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
@@ -141,7 +141,7 @@ typecheck-py: ## Type-check Python (basedpyright)
 typecheck-frontend: ## Type-check the frontend (fast)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck
 
-fmt: fmt-py fmt-frontend ## Format everything (Python + frontend)
+fmt: fmt-licenses fmt-py fmt-frontend ## Format everything (Python + frontend + license lines)
 
 format: fmt ## Format everything (Python + frontend)
 
@@ -152,7 +152,13 @@ fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the
 	$(PYTHON) -m ruff format wactorz tests scripts e2e examples
 	$(PYTHON) -m ruff check wactorz tests scripts e2e examples --fix
 
-lint: lint-py lint-frontend ## Lint everything (Python + frontend)
+lint: lint-py lint-frontend lint-licenses ## Lint everything (Python + frontend + license lines)
+
+lint-licenses: ## Check that every source file, and the built dashboard, opens with the license line
+	$(PYTHON) scripts/license_notices.py
+
+fmt-licenses: ## Write the license line into every source file missing it
+	$(PYTHON) scripts/license_notices.py --fix
 
 lint-frontend: ## Lint the frontend (typecheck + prettier + eslint + markdownlint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint

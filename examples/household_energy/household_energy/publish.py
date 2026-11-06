@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Play a day of the house's meter onto MQTT.
 
     python -m household_energy.publish              # the Saturday, 06:00 to 23:00, ten minutes a second

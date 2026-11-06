@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Focused tests for Reachy Mini's opt-in multi-turn voice session."""
 
 import asyncio

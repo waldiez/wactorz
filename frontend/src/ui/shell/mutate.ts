@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { requestJson, type Refusal } from "../../io/api";
 import { toast } from "../ToastManager";

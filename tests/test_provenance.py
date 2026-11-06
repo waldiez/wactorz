@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The provenance graph: nodes joined from cause to effect, and the walks over it.
 
 Against a real on-disk SQLite database, since the walks are recursive queries

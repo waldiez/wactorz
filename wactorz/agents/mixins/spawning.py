@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """SpawnMixin — the single, shared implementation of local agent spawning.
 
 Both ``MainActor`` and ``PlannerAgent`` previously carried their own near-copies

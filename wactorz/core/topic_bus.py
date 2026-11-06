@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """TopicBus — Reactive Pub/Sub Coordination Layer
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 This module is the core of Wactorz's shift from name-based RPC to

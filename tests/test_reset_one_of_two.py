@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A reset of one of two agents of a name: that agent's goes, the other's stays.
 
 A name is unique on a host, so what a host keeps by name is its own agent's;

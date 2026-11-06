@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Agent addresses: ``name@node``, and which agents a name or an address finds.
 
 An agent's name is unique on the host it runs on, and main is the node

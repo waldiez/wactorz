@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which installed packages may add to the system.
 
 A package installed beside Wactorz can register extensions, agents and pipelines

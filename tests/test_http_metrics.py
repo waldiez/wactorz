@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Both HTTP servers in the process count and time what they are asked.
 
 The REST interface serves `/metrics`; the dashboard's server carries the chat

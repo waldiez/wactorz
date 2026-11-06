@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reactive-pipeline path: standing rules that outlive the request.
 
 A pipeline request produces persistent agents rather than a one-shot answer, so

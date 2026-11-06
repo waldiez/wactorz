@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which packages may be installed without anyone being asked.
 
 A package an agent asks for is chosen by a model from a description, and a

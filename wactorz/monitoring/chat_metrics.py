@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How long a person waits in the chat.
 
 A turn starts when a message reaches the server and ends when the reply is

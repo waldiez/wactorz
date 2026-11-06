@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A key in a header spends the same allowance per address as the sign-in form.
 
 Over a real aiohttp application, because what is being held is the order of the

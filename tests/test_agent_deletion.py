@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Deleting an agent, and everything that has to go with it.
 
 Delete is not a stronger stop. A stop keeps the state so the agent can resume;

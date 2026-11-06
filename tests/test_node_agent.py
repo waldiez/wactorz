@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agent a node runs is the agent main runs.
 
 A node used to carry its own retelling of the agent contract, because the file

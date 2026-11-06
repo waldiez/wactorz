@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GmailAgent — search, read, label, and draft Gmail messages.
 
 Draft-first by design: like Google's hosted Gmail MCP, this agent never sends

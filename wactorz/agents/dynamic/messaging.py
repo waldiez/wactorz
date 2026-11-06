@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Getting something out: publishing to MQTT, delegating, alerting, logging."""
 
 import asyncio

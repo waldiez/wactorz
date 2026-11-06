@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Room air quality: a model of what is usual for each hour, and a person asked about the rest.
 
 `plant` is the simulated building, `model` what is usual, `train` stores it,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Server-side speech: what the TTS routes accept, and what they send back.
 
 Speech is synthesised by an outside service, so the route takes a POST with a

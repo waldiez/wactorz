@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One sentence, two requests, and the half that must not be dropped.
 
 `_embodied_command_for_text` matches a verb *anywhere* in a sentence and returns

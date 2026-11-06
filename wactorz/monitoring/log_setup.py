@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Root logging configuration: handlers, format, and redaction.
 
 Called once at startup rather than run as an import side effect. The side-effect

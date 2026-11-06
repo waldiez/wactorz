@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Each chat turn on a socket answers through its own replies.
 
 The turns a socket carries run at the same time. A turn that ends while another

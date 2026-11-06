@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A client for a running Wactorz, over the monitor's REST API and ``/ws``.
 
 Provisional: this surface may still change while its first users are built on it.

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Run the Reachy Mini agent against a simulated robot, with no hardware.
 
 Starts the robot SDK's own daemon in mock-up simulation (no MuJoCo, no camera,

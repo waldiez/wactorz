@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Helpers for providers speaking the OpenAI wire format.
 
 OpenAI, NIM and Ollama all accept OpenAI-shaped tool definitions and return

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Run the tests that need a real broker (tests/broker) against mosquittos
 # started for the run and removed after it.
 #

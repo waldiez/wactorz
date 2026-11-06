@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Commands that change what main remembers or has agreed to do.
 
 Grouped apart from the read-only reports because each of these has an effect:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A model version says what it is judged on, keeps it with the version, and passes it on.
 
 The declaration is checked as it is given; the store keeps it beside the

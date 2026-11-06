@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A spawn withdrawn while its node is away does not start when the node returns.
 
 A spawn published to an offline node waits in the node's broker session and is

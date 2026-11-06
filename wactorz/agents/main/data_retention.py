@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sweeping old hours out of main's data directory, on a cadence, when a retention is set.
 
 ``WACTORZ_DATA_RETENTION_DAYS`` says how long an hour of readings is kept on

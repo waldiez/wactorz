@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Asking with a label spec, writing a label from an agent, and a rule that records one.
 
 ``ask_operator(..., label=...)`` checks the spec before anything is sent and

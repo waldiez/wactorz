@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Loading extensions: a broken one is logged and skipped, never fatal.
 
 Extensions are discovered as modules under `wactorz/ext/`. Each is set up in a

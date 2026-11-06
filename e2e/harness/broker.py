@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The broker this suite starts, stops and takes away.
 
 It is the development stack's own mosquitto, taken as it is from

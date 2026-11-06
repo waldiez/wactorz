@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The two pointers on the model store: ``active``, the version agents serve, and ``shadow``, one on trial.
 
 They live in the store's index beside the versions, and nothing changes for a

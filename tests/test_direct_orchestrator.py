@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat in the minimal profile: the model-free orchestrator.
 
 No main runs there, so a message has to reach an agent on its own. ``@name

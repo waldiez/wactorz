@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Labels: periods of a source, as someone said, and how a later one overrides an earlier.
 
 Against a real on-disk SQLite database: supersession and resolution are what

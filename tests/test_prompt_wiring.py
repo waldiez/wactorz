@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The choice of prompt fragments travels from the configuration to main, and from
 main to the planners it spawns.
 

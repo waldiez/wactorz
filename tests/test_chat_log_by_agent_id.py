@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat history is kept by the agent's id, which a name no longer decides.
 
 Two agents may share a name, so a turn is filed under the id of the agent whose

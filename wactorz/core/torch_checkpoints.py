@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading a torch checkpoint without running code from it.
 
 ``torch.load(weights_only=True)`` builds tensors, containers and numbers, and

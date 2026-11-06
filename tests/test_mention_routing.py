@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Typing `@agent do the thing` and getting that agent's answer back.
 
 The direct form: the user names an agent and main hands the task straight to it,

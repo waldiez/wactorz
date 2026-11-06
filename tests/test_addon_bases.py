@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The add-ons' base images are named in three places, which must agree.
 
 `ha-addon/bases/Dockerfile` pins each base by digest, and is what the release

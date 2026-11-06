@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OllamaProvider — a local model over HTTP."""
 
 import json

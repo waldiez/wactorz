@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Taking the files a node's recorder sends, and filing them where main keeps the record.
 
 A node records readings where it is and sends each closed file to main

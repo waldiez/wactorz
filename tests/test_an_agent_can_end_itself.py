@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A generated agent has a way to say it is finished.
 
 Asked for an agent that stops after a while, a model reaches for `sys.exit()`,

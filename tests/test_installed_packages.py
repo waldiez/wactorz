@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Installed packages: only those named in WACTORZ_EXTENSIONS are loaded.
 
 The fixture installs a real distribution in a folder on the path, whose module

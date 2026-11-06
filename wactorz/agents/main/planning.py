@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Planning, dry-run, and pipeline execution for MainActor.
 
 Pipeline-rule and pending-plan persistence, plan-proposal formatting, the

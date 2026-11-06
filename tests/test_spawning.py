@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.mixins.spawning.SpawnMixin``.
 
 These exercise the real mixin against a lightweight fake Actor host. Routing is

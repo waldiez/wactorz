@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One session with a server: its address, its key, timeouts, and what a refusal means."""
 
 import asyncio

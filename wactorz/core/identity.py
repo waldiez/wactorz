@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an actor's id is: derived from its name, or given to it and checked.
 
 A leaf module, so that anything -- persistence, which ``core.actor`` itself

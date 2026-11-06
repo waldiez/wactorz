@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A library agent's code, as it goes to a node that does not have it.
 
 **The rule: an agent's own code lives in its own folder.** A library agent --

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the model says in this suite: every question a journey asks it, and its answer.
 
 The application runs on its scripted provider (``LLM_PROVIDER=fake``), which

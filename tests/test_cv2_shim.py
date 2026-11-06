@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The camera shim generated vision code gets in place of `cv2`.
 
 A camera that reports open and then delivers no frame is treated as not open:

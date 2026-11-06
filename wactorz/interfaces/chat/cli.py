@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Terminal interface, and the deploy commands it exposes."""
 
 import asyncio

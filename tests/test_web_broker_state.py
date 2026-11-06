@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's view of the broker: topics folded into state, and deletes sent out.
 
 Every retained or live frame is folded into one in-memory map the browsers are

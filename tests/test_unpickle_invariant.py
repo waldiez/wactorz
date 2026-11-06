@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Unpickling our own state files is safe only while nothing else can write them.
 
 The server reads `<state>/<agent>/state.pkl` back with `pickle.load`, and unpickling

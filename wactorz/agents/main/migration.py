@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bringing an agent back from the node that was running it.
 
 A migration home asks the node for the agent's persistent state, and spawns the

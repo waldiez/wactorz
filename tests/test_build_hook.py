@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the packaging build hook's rebuild decision.
 
 The hook decides whether ``static/app`` (committed, and shipped in the wheel)

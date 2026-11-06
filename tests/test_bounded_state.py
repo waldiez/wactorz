@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """In-memory maps that grow from untrusted input must have a ceiling.
 
 Three of them are fed by whatever reaches the broker or the monitor, and none

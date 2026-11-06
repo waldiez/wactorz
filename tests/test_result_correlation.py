@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A RESULT carrying a correlation id settles the future waiting on it.
 
 Request/reply is a convention, not a framework feature: a sender tags a TASK

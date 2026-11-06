@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The development auto-reloader: what it watches, and what it refuses to do.
 
 Everything worth pinning here is a *guard*, because the thing this module does

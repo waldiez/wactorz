@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The llm_notes example: notes in, one-line summaries out, with the model's cost kept.
 
 What it needs that is not installed for the suite is stood in for.

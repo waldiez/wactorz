@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GeminiProvider — Google Gemini, whose SDK is sync-only."""
 
 import asyncio

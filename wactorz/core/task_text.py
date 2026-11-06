@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Between what a person types for an agent and what the agent is sent, and back.
 
 Shared by the dashboard's chat and the model-free orchestrator, which both hand

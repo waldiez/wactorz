@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Who publishes what, who reads it, and where the data stops: the wiring, read from the registry.
 
 `wiring` turns main's topic registry (`wactorz.core.topic_bus`) into a graph a

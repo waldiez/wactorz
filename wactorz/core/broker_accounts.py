@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A broker account per node, and the access list that pens each one in.
 
 One shared account is what makes a stolen node worth stealing: it holds the

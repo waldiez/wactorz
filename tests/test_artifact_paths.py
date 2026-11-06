@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent opens the artifacts its spawn names, on main and on a node alike.
 
 The spawn names models by reference; whoever spawns the agent pins them and

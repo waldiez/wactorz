@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The household-energy example does what its README says.
 
 The house is the same on every run, the agent finds each run the meter shows

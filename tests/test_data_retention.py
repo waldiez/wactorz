@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Old hours of readings go after a retention, except the ones a stored model learned from.
 
 A retention is off unless set. With one, the sweep removes the hours older than

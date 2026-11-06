@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Judging a model's answers against the labels, the way its version says it is judged.
 
 A shadow trial keeps, for each input, what the active and the shadow version

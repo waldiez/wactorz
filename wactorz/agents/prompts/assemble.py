@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Prompts assembled from a core and the fragments an installation's integrations add.
 
 The prompts main and the planner work from describe what the whole system can

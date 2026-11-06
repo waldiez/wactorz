@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bringing an agent's stored state up to the version its code expects.
 
 An agent declares the shape of what it persists with a version number and a

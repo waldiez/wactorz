@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Write the command table in `docs/reference.md` from what `/help` lists.
 
 The table sits between two markers, and everything outside them is written by

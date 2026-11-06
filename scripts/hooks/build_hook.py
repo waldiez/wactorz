@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hatchling pre-build hook — ensures the Vite frontend is built before packaging.
 
 ``static/app/`` (Vite SPA) and ``static/docs/`` (docs site) are committed

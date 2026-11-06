@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """SQLite schema and its version.
 
 Kept apart from the connection manager so a schema change reads as a schema

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Values an agent persists that are kept as files of their own.
 
 A trained model, an array of readings, raw bytes: values like these are large,

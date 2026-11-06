@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Composable behaviour mixins for the agent classes.
 
 Each mixin bundles one concern (spawning, memory, …) and is mixed into an

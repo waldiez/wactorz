@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node agent's question, answered from the dashboard's API, kept as a label.
 
 Every hop is a real one: the agent on the node publishes its question book,

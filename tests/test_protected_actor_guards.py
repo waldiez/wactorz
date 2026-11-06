@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A protected actor must not be replaced or deleted out from under the system.
 
 `actor_id` is a uuid5 of the name and `ActorRegistry.register` replaces whatever

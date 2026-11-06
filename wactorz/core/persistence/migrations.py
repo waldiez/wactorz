@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """wactorz.core.persistence.migrations — Schema & State Migration Framework
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Handles version upgrades when users update wactorz (e.g. 0.3 → 0.4).

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Behaviour of the REST routes, with no key configured.
 
 Auth is covered separately; these exercise what each route does once a request

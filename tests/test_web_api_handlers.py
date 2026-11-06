@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's REST handlers for actors, cost, chat history and the feed.
 
 Each handler answers a malformed request with a 4xx in its own words, a missing

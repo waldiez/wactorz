@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """WhatsApp carries an agent's question out, numbered, and the number back.
 
 Twilio offers no buttons, so the options go as a numbered list under the

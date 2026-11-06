@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AnthropicProvider — Claude, via the anthropic SDK."""
 
 import inspect

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Central aiomqtt client factory.
 
 All in-process MQTT connections go through :func:`mqtt_client` so broker

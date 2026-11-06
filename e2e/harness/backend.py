@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The application, as a process.
 
 Not the app imported and driven in-process - that is what the unit suite does,

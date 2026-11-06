@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the socket hands a listener: the server's frames, and what happened to the socket.
 
 A frame is kept as the server sent it, so a frame or field this client does not

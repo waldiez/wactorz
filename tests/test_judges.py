@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A model's answers judged against the labels, as its kind says: detector, classifier, regressor.
 
 The statistics are checked against values worked out by hand or published

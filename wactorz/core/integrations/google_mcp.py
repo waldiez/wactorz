@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared base for Google hosted-MCP clients with a REST fallback.
 
 Google's hosted MCP servers (e.g. ``calendarmcp.googleapis.com``,

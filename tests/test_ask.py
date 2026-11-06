@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One way to ask an agent and wait: ``Actor.ask`` from an agent, ``wactorz.ask``
 from host code.
 

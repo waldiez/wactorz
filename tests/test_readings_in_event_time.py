@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A reading is kept under when it happened, with when it arrived beside it.
 
 The collector files each row under the payload's event time and keeps the

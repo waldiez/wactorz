@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Global LLM spend accounting and the configured cap.
 
 One counter per period plus an all-time total, both in the key-value store, so

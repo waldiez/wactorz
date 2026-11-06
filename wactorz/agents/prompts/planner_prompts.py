@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """System prompts for the planner.
 
 The decomposition, rule-conflict and pipeline-design prompts are templates

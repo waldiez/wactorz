@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A question answered from a phone: the Inbox holds what the agents wait on the person for.
 
 An agent on the node asks with its reason. On a page a phone's size the Inbox's

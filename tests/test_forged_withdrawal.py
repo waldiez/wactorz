@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A withdrawal is taken only where the agent could have sent it.
 
 An empty retained manifest says an agent is gone, and main then removes it from

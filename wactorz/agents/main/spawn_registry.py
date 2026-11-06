@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main remembers about the agents it spawned, one entry per agent.
 
 An entry is the config an agent was spawned from, with the node it runs on and

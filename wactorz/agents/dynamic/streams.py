@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Subscriptions, rolling windows, and the contracts an agent declares."""
 
 import asyncio

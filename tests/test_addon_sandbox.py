@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The add-ons can run a sandbox node beside Wactorz, for the code the model writes.
 
 With ``sandbox_node`` on, the start script runs a node in the same container

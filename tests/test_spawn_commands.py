@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Spawning agents the model asked for in its reply.
 
 The model writes a `<spawn>` block and this executes it. The guard that matters

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A run in the meter's readings, and which appliance it looks like.
 
 `RunFinder` takes the readings one at a time and says when a run has ended:

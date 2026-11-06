@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A scheduled agent at run time: validating, firing, restarting, and ending.
 
 `tests/test_schedule_times.py` pins the clock arithmetic. This pins what the

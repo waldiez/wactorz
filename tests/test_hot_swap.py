@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A running agent follows its model's pointer: when it moves, the agent serves the new version.
 
 The pointer watcher hands each move to the hot swap, which re-pins every agent

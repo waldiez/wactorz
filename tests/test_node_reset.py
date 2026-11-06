@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main asking the nodes to reset what their agents keep there, and hearing back."""
 
 import asyncio

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The time-series collector: what it buffers from each topic, and what reaches SQLite.
 
 The program is exec'd as it is at spawn and driven through a stand-in `agent`,

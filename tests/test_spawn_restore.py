@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bringing agents back at startup, and conjuring one on demand.
 
 Restore reads the spawn registry and puts back what should be running. The

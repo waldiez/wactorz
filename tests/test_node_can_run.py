@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which agent configs a node can run.
 
 A node runs an agent as generated code: what the config carries, or the bridge

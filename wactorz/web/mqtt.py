@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Broker link: subscribe, dispatch, and report connection state.
 
 Owns the long-lived MQTT listener that feeds every inbound broker message

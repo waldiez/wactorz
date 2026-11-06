@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The detector as one stage of a pipeline, with a notifier, triage, a rule and a schedule.
 
 Each step stays an agent of its own; the pipeline groups them, ticks the

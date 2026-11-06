@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node's heartbeat tells main, and what main does about it.
 
 Every remote node reports itself on `nodes/+/heartbeat`: who it is, which agents

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The questions agents have put to a person, and answering them."""
 
 from dataclasses import dataclass, field

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Air tab: a card per room, drawn from what the agents publish.
 
 An extension whose only part is a panel: the page reads everything it shows

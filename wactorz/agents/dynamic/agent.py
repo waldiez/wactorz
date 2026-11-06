@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """DynamicAgent - A generic actor shell whose behavior is defined by LLM-generated code.
 
 The LLM writes three async functions:

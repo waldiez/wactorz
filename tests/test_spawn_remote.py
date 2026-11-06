@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Putting an agent on another machine.
 
 Two configs leave this path and they are deliberately different. What goes over

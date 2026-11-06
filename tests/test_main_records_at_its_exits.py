@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """main stores a turn where it leaves, as the user had it.
 
 Most of what reaches main is answered without its model — a device, a Home

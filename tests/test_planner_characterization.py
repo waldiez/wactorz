@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Characterization of PlannerAgent's pure helpers.
 
 These tests record what the code does today, which is not always what it should

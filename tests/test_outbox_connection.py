@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The outbox keeps one connection, and knows when to let go of it.
 
 A QoS-1 message costs two statements, and each used to open, write, commit and

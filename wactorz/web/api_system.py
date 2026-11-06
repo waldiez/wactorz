@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """REST endpoints for system-level state: health, cost, config, and feeds.
 
 Everything here is about the deployment as a whole rather than an individual

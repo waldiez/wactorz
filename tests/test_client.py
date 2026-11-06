@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`wactorz.client` against the real monitor application.
 
 Nothing of the server is faked but what a turn says: the routes, the socket, the

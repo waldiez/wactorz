@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which node may speak for an agent: the rule main checks a node's signature against.
 
 A node signs what it publishes (see :mod:`wactorz.core.node_publications`), which

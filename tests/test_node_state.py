@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node agent's state is JSON on disk, and survives the round trip.
 
 JSON rather than the pickle main keeps, because this file has a second reader:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Cancelling a task you own must not absorb a cancellation aimed at you.
 
 Three shutdown helpers cancel a task they started and then wait for it. Catching

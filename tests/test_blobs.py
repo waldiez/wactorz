@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A model, an array or raw bytes is kept beside an agent's state, not inside it.
 
 Each is written to a file of its own when its key is persisted, and the state

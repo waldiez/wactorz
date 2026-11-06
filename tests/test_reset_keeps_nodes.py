@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A factory reset deletes the agents on nodes and keeps the nodes.
 
 A reset clears what was built on the install. A node is the machine it runs

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Runtime settings, read from the environment once at import.
 
 Two shapes, for one reason: an ``AppConfig`` instance carries the settings a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CatalogAgent — Pre-built Agent Recipe Library
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Holds a catalog of ready-made DynamicAgent recipes (name → full spawn config).

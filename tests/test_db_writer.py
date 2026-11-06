@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The writer that keeps what broker messages and chat turns write, off the event loop.
 
 Against a real database: what is checked is what ends up on disk, in what order,

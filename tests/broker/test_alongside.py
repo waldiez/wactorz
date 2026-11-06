@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent on main and a second agent of its name on a node, each reached alone by its address.
 
 `/agents copy` is the way a person asks for the second one. Over a real broker

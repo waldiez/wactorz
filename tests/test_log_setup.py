@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Root logging configuration, now an explicit call rather than an import.
 
 The regression pinned here: handlers must be built with redaction already

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bounds and lifecycle guarantees that only hold while their limits are enforced."""
 
 import contextlib

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agents a deployment brings: found, built and offered the way built-ins are.
 
 An entry point, a `WACTORZ_AGENTS` target or an object handed to `wactorz.run`

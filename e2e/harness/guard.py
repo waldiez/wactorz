@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What must not have happened while a scenario ran, whatever it was checking.
 
 A scenario asserts the things it is about. This asserts the rest, after every

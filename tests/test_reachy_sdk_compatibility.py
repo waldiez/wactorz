@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Exercise the optional SDK client against the audited HTTP dependencies.
 
 Run with the Reachy extra installed. A fresh process avoids SDK stubs that the

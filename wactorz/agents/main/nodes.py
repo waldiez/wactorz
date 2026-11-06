@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main knows about remote nodes, and the questions it answers about them.
 
 A node reports itself by heartbeat: who it is, which agents it is running, and

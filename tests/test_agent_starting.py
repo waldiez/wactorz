@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent the server has not heard from yet is listed as starting.
 
 An agent's `state` on the dashboard is the last one it reported, so "running"

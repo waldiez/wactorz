@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main's slash commands say and do, handler by handler.
 
 The handlers reach main only through `CommandContext.actor`, so a stand-in

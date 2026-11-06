@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Prometheus integration for the Python Wactorz runtime."""
 
 import asyncio

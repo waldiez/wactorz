@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Two agents of one name on different hosts: the registry that keeps them apart, and who acts on which.
 
 A name is unique on one host. The spawn registry keeps each agent by its id, so

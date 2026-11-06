@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Client ids must be stable across reconnects and unique per connection.
 
 A durable MQTT session is addressed by client id. Two connections sharing one

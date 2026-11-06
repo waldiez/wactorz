@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a chain, a graph or a job needs from an agent: its own directory, more
 than one message at a time, and a way to report spend made outside the system's
 providers."""

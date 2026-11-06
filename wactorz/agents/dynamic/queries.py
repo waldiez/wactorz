@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading back what agents have recorded: time series, detections, HA state.
 
 The history lives in main's database. On main a query answers at once, and its

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Cost + message-count accounting for the monitor.
 
 Owns the in-memory lifetime ledger (hydrated once from SQLite) and the

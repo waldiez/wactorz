@@ -1,6 +1,5 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /* Dashboard styles, split by area. Imported in cascade order (do not reorder). */
 @import "./dashboard-shell.css";

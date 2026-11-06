@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Putting an agent somewhere and remembering that it is there.
 
 The local half already lives in `mixins/spawning.py`, shared with the planner

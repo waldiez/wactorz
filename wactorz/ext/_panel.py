@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an extension declares to add a tab to the dashboard.
 
 A package's dashboard tab is a script it ships, which the page loads when the tab

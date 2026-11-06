@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The seam between the chat surfaces and whatever answers them.
 
 A person types somewhere -- the dashboard, the REST API, the terminal, Discord,

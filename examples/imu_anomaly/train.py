@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fit the model on synthetic normal motion, save it, and store it on main.
 
 Stands in for whatever training produced your model. What `agent.py` needs is a

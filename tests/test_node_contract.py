@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The contract between main and a node, pinned.
 
 A node is whatever answers on `nodes/<name>/...`. Main never sees what that is;

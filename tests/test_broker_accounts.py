@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Each node's broker account, and the access list that pens it in.
 
 The account's password is derived rather than stored, so these tests pin what

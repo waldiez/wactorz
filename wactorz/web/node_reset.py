@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Asking the nodes to reset what their agents keep, and hearing back.
 
 A reset of chat history, agent state or counters clears main's records, and

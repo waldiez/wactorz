@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node runs the same release series as main, or it is not given agents.
 
 A node runs the same package main does, and an agent sent to it is built from

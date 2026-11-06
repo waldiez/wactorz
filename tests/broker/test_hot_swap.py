@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A moved pointer reaches the agents that follow it, on main and on a node, over a real broker.
 
 Every hop is a real one: the pointer watcher finds the move, main swaps the

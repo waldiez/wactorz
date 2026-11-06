@@ -1,3 +1,6 @@
+/**
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // The Energy tab: the meter over the simulated day with a mark at each run's
 // start, saying whether its guess was right, each wrong guess shaded and named,
 // and a list of the runs with each answer beside its guess. Runs are many and

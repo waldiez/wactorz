@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Starting and ending a model's shadow trial in the agents that serve it.
 
 A trial begins when a model's ``shadow`` pointer is set and ends when it is

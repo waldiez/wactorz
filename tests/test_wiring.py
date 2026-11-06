@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The wiring: who publishes what, who reads it, and where the data stops.
 
 The graph is built from main's topic registry as it stands: agents and their

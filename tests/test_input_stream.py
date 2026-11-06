@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The streaming turn — what the CLI sees as an answer is produced.
 
 Same decisions as the non-streaming path, delivered differently: text arrives in

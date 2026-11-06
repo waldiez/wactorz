@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the server does with each broker message before browsers see it.
 
 `handle_message` is the half of the broker link with rules — its own docstring

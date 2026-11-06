@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A frame is cut into segments, split without shuffling, labelled, described and exported.
 
 Every split is a few row ranges and a manifest that says how it was made, so

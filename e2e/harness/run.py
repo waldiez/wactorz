@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One run of the suite: where it writes, the ports it uses, the secrets it made up.
 
 Everything a run needs that must not collide with anything else on the machine

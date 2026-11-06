@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A wheel of a package as it is installed here, for a machine that must run the same code.
 
 A node runs the package the server runs. Where the server was installed from a

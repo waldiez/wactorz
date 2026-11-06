@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The surface generated agent code is handed as `agent`.
 
 Two other places are written against this shape: the planner repairs generated

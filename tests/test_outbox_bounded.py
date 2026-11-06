@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The in-memory outbox has a ceiling, and telemetry is what gives way.
 
 A broker that is absent, or slower than the app publishes, grew this queue

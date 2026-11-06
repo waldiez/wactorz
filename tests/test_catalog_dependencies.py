@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Version and import-name regression checks for catalogue dependencies."""
 
 from unittest import mock

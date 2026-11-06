@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A rule acts when a message on its trigger topic satisfies its conditions.
 
 The glue of a pipeline without a program per rule: conditions on the payload,

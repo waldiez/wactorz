@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main turns answered questions into labels, taking each book only from where its agent is.
 
 An agent asks with a label spec and publishes its question book; main reads the

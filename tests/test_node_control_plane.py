@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How a message on the wire becomes a command the node carries out.
 
 The handlers are covered elsewhere by calling them. What is covered here is the

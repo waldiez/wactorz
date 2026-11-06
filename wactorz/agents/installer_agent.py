@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """InstallerAgent — pre-defined agent that installs Python packages on demand.
 Always uses sys.executable so packages land in the active venv (e.g. myenv),
 not the system Python.

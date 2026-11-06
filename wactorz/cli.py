@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Command-line entry point: argument parsing and process launch.
 
 System assembly and the run loop live in :mod:`wactorz.app`; the dev reloader in

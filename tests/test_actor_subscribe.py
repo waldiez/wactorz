@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every actor can subscribe to topics and keep rolling windows, not only generated ones.
 
 A native agent used to open a broker connection of its own for each topic it

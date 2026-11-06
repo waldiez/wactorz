@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The shared-state hub and the bus that owns it.
 
 `init_topic_bus` sets a module-level singleton, so every test here restores it;

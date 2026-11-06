@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The prompts a configured Home Assistant installation sends, pinned word for word.
 
 Main and the planner are being reshaped so that a system without Home Assistant

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which process is running on a state directory.
 
 A server or a node keeps much of its state in memory and writes it back to the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning a vague request into concrete topics and entities.
 
 A task names things the way a person would - "the door", "temperature". The

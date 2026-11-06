@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The process that runs Wactorz agents on an edge node.
 
 A node is a machine that is not the one main runs on — a Raspberry Pi, a VM, a

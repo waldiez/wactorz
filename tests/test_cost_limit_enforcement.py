@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reaching the spend cap stops the next paid call, whichever route it takes.
 
 The limit is enforced on `LLMProvider`'s public methods rather than at the

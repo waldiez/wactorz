@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A library agent's code goes with it to a node that does not have it.
 
 Main sends the folder its module is in, ``.py`` files only, and refuses a folder

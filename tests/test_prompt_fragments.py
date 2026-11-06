@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main's prompts with Home Assistant and without it.
 
 The templates in ``main_actor_prompts.py`` render with whatever fragments the

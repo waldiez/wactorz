@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The train step makes a version inside the loop: a recipe fitted in a child, stored, moved by a margin.
 
 A recipe is a module with ``train`` and ``score``. A run reads a window

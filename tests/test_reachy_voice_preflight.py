@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Voice input says what is missing before anyone speaks, and why it stopped.
 
 A recognizer that cannot run is found before recording starts: otherwise a

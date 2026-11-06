@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a model version is judged on: the labels its answers are held against.
 
 A model version is bytes; whether it is any good is a question about its

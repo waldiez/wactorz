@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which built-ins start: the Home Assistant agents only where Home Assistant is, and
 a minimal profile with none of the orchestration for a deployment that brings
 its own agents."""

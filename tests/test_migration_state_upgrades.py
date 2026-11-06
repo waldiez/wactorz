@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the state migration does to the data it finds, and what it leaves alone.
 
 `tests/test_migration_versions.py` covers the version bookkeeping. This covers

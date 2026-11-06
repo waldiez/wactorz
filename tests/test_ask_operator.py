@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent asks the operator something and gets the pick back.
 
 ``ask_operator`` sends the question as ``notify_user`` does and waits for the

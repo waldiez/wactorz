@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Keeping the spawn registry in step with a program a node repaired.
 
 An agent whose code fails can be repaired by the LLM while it runs. On a node

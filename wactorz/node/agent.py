@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A Wactorz agent, running on a node.
 
 :class:`NodeAgent` *is* a :class:`~wactorz.agents.DynamicAgent` — the same class

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Signing in: how a browser gets past the key check.
 
 With `API_KEY` set, a request is answered 401 unless it carries the key or a

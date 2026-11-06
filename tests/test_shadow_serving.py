@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A model's shadow version runs beside the served one, and the trial is compared and recorded.
 
 A function agent serving a model by its bare name takes the version the

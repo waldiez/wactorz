@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node does with the commands main sends it.
 
 Everything a node does is in answer to something on `nodes/<name>/...`. These

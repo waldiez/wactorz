@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A chat to an agent on a node, when there is no broker to carry it.
 
 The agent is somewhere only the broker reaches. The user is told at once that it

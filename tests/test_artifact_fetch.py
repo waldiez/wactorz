@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node fetches the models its agents name, once, and keeps them.
 
 A spawn names artifacts by reference; main pins each to the version and the

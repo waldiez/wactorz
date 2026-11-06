@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for wactorz.reset and the /api/reset HTTP handler.
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node sends main the files its recorder closed, and main files them where the record is.
 
 The node sends a notice and the bytes on the blob path, again if main does not

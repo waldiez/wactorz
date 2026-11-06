@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Learning what a remote agent actually publishes.
 
 An agent declares a `produces_schema` when it announces itself, and that

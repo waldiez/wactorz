@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node is told about itself: the settings in its ``.env``.
 
 A node learns its name, its broker, its signing key and its broker account from

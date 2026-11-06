@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retention: what is old enough goes, and nothing else does.
 
 Deleting is the one thing here that cannot be undone, so most of these pin what

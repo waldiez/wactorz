@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Commands that only read and report.
 
 Nothing here changes anything, which is why they are the first to move: a

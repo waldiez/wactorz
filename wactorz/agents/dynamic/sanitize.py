@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Removing the LLM self-setup a model writes out of habit.
 
 Generated code often imports `openai` and reaches for an API key of its own.

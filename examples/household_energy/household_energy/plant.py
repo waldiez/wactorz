@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The house: one power meter, a fridge, and four appliances that switch on and off.
 
 Every reading is worked out from the seed and the time alone, so the same call

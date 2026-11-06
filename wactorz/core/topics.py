@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What can go into an MQTT topic this process publishes.
 
 Two checks, for two moments. A topic is checked before it is queued, because

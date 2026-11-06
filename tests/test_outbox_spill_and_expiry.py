@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """QoS 1 that does not fit in memory waits on disk and comes back; old commands do not.
 
 A QoS 1 message published while the queue is full is already in the SQLite

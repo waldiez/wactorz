@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where a task for an agent goes: its node's own topic, or its name for an older node.
 
 ``agents/at/<node>/<name>/task`` reaches that node alone, so two agents of one

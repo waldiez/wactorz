@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An install that has just started: it wants the key, and then shows what it runs."""
 
 from harness import backend, browser, logs, waiting

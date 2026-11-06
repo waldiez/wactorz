@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node adds to any agent it runs, whatever the agent's own class.
 
 A node runs two kinds of agent: generated code (`NodeAgent`, a

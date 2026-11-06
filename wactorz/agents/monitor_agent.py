@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MonitorActor — System health observer and user notifier.
 
 Responsibilities:

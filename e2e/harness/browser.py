@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard, as a person uses it, with nothing it shows left unread.
 
 One page object, so that when the dashboard's markup moves one file changes.

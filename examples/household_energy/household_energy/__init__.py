@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Household energy: one power meter, a classifier naming the appliance, and a person asked if it was right.
 
 `plant` is the simulated house, `model` finds runs and names them, `train`

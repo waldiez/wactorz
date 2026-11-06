@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The list of third-party packages an image carries, and the license files beside it.
 
 An image passes on every package installed in it. `scripts/third_party.py`

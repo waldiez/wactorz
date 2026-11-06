@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Extension discovery.
 
 An extension is a module or package in wactorz/ext/, or one any installed

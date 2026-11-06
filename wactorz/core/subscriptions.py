@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every subscription an actor holds, carried on one MQTT connection.
 
 An actor that subscribes to several topics holds one authenticated session for

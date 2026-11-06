@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Gmail over REST, for the installs whose hosted MCP answer is PERMISSION_DENIED.
 
 `tests/test_gmail_mcp_client.py` covers the common reads. This covers the rest

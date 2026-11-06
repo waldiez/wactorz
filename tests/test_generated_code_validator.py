@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The check applied to model-written code before it is executed.
 
 ⚠ This reads the source, it is not a sandbox. It catches the names it lists,

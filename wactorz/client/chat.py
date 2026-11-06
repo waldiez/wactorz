@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A turn of conversation, and the history."""
 
 import asyncio

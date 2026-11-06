@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Home Assistant WebSocket calls must not wait forever — except where they should.
 
 `connect()` sets `ping_interval`/`ping_timeout`, so a *dead* socket is closed by

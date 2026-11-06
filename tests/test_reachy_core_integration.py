@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Strict recipe installation keeps the generic and security contracts intact."""
 
 from pathlib import Path

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Reading the environment must not be able to take the process down.
 
 `_env_int` raised a bare `ValueError` at *import* time, so one stray character

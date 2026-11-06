@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where an install is allowed to land, and what it is allowed to be.
 
 Two callers share this: the installer agent checks the names in a spawn config

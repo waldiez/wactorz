@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """wactorz-artifacts  —  keep models on main, by name and version.
 
 An artifact is a model, a set of weights or any large file that agents load and

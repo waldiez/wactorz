@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reset endpoint and its factory-reset keep-set.
 
 ``POST /api/reset`` supports several scopes (chat, metrics, spawns, state, all).

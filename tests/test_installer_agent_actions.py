@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the installer does with each action it is asked for.
 
 Locally it installs into the interpreter running Wactorz, one package at a

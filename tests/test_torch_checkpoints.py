@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A torch checkpoint is read without running code from it, numeric numpy arrays included.
 
 torch is optional and CI does not install it. The rules -- what is admitted,

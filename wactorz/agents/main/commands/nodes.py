@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Commands that act on a whole node.
 
 Removing or shutting down a node stops every agent on it, and deploying one

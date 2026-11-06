@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main answering LLM calls, and reads of its history, for agents on other machines.
 
 An edge node holds no API key. An agent there publishes its request to

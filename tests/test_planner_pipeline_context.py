@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the pipeline planner gathers before it designs a standing rule.
 
 A pipeline is designed once and then runs unattended, so the prompt that

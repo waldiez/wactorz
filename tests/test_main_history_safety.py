@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Raw, external and interrupted replies cannot persist delegation syntax."""
 
 import asyncio

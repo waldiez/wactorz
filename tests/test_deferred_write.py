@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A file is written a moment after it is asked for, off the event loop.
 
 Replacing a file safely ends in forcing it to the disk, which on an SD card

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GoogleCalendarAgent - Read and manage Google Calendar events."""
 
 import json

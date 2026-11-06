@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The artifacts a node has fetched, kept for the next agent that names them.
 
 An artifact is a model main keeps (see `wactorz.core.artifacts`). A node fetches

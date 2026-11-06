@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The yolo_watch example: a YOLO model as a function and as an actor, the model and camera stood in for.
 
 What it needs that is not installed for the suite is stood in for.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The long-running process on an edge node.
 
 It holds one connection for control messages from main, one for publishing, a

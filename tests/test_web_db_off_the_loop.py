@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The web routes read and write the database on a thread, never on the event loop.
 
 A database call on the loop holds every actor in the process, and the broker's

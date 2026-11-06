@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A restart that fails must not end supervision, and must not stall it.
 
 Two defects in the same twenty lines. ``_stop_actor`` clears ``spec.actor``

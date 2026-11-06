@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Installing pip packages on the machine this process runs on.
 
 Two callers share this: the installer agent validates the package names in a

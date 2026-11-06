@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Writing a file a moment later, from a worker thread.
 
 Replacing a file safely means writing a temporary, forcing it to the disk and

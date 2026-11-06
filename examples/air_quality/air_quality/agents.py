@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The two agents: one scores every reading, the other asks about what stood out.
 
 `detect` is a function: it scores each reading against the stored model and

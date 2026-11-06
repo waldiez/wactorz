@@ -82,6 +82,9 @@ DEFAULT_STATUSES = (VALID, INVALIDATED)
 #: still answers.
 MAX_DEPTH = 64
 
+#: How many ids one query names, each bound twice, within what SQLite lets a statement take.
+_IDS_PER_QUERY = 400
+
 #: The namespace stable ids are minted in.
 _NAMESPACE = uuid.UUID("5d7f0c0e-3f7b-4f39-9a52-2a6f1c9d7b31")
 
@@ -353,12 +356,13 @@ class Provenance:
         kind: str | None = None,
         *,
         source: str | None = None,
+        actor: str | None = None,
         statuses: Iterable[str] | None = None,
         since: float | None = None,
         until: float | None = None,
         limit: int | None = 1000,
     ) -> list[ProvNode]:
-        """Nodes by kind, source and status, oldest recorded first.
+        """Nodes by kind, source, actor and status, oldest recorded first.
 
         ``since`` and ``until`` keep the nodes whose window ``[ts, ts_end)``
         touches ``[since, until)``; a window with no end is open and reaches
@@ -366,6 +370,9 @@ class Provenance:
         """
         conditions: list[str] = []
         params: list[Any] = []
+        if actor is not None:
+            conditions.append("actor = ?")
+            params.append(actor)
         if until is not None:
             conditions.append("ts < ?")
             params.append(float(until))
@@ -400,6 +407,27 @@ class Provenance:
                 (node_id, node_id),
             ).fetchall()
         return [ProvEdge(str(r[0]), str(r[1]), str(r[2]), float(r[3])) for r in rows]
+
+    def edges_among(self, node_ids: Iterable[str]) -> list[ProvEdge]:
+        """Every edge into or out of any of ``node_ids``, each once, oldest first."""
+        wanted = list(dict.fromkeys(node_ids))
+        if not wanted:
+            return []
+        found: dict[tuple[str, str, str], ProvEdge] = {}
+        with self.db.transaction() as conn:
+            # Bound by SQLite's limit on the variables one statement may take.
+            for start in range(0, len(wanted), _IDS_PER_QUERY):
+                chunk = wanted[start : start + _IDS_PER_QUERY]
+                marks = ", ".join("?" for _ in chunk)
+                rows = conn.execute(
+                    "SELECT src, dst, relation, recorded FROM prov_edges "  # noqa: S608  # the marks are literal; every id is bound
+                    f"WHERE src IN ({marks}) OR dst IN ({marks})",
+                    [*chunk, *chunk],
+                ).fetchall()
+                for r in rows:
+                    edge = ProvEdge(str(r[0]), str(r[1]), str(r[2]), float(r[3]))
+                    found[(edge.src, edge.dst, edge.relation)] = edge
+        return sorted(found.values(), key=lambda e: (e.recorded, e.src, e.dst))
 
     def descendants(self, node_id: str, *, depth: int = MAX_DEPTH) -> list[ProvNode]:
         """Everything that followed from ``node_id``, however far down, oldest first."""

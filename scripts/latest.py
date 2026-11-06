@@ -1,15 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
 """Show the latest N entries from any table in wactorz.db that has a ts column.
 Timestamps are formatted from the actual stored unix-time value.
 
-Usage:
-    python latest.py                           # default: ha_state_changes, 20 rows
-    python latest.py --table chat_log
-    python latest.py --table ha_state_changes --n 50
-    python latest.py --all                     # latest from every table with ts
+Usage, from the repository root:
+    python scripts/latest.py                           # default: ha_state_changes, 20 rows
+    python scripts/latest.py --table chat_log
+    python scripts/latest.py --table ha_state_changes --n 50
+    python scripts/latest.py --all                     # latest from every table with ts
 """
 
 import argparse
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,7 +64,7 @@ def show(conn: sqlite3.Connection, table: str, n: int) -> None:
         print(f"  {fmt(ts)}   {rest}")
 
 
-def main() -> None:
+def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--db", default="./state/wactorz.db")
     p.add_argument("--table", default="ha_state_changes")
@@ -71,7 +73,8 @@ def main() -> None:
     args = p.parse_args()
 
     if not Path(args.db).exists():
-        raise SystemExit(f"DB not found: {args.db}")
+        print(f"DB not found: {args.db}", file=sys.stderr)
+        return 1
 
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -88,7 +91,8 @@ def main() -> None:
         show(conn, args.table, args.n)
 
     conn.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

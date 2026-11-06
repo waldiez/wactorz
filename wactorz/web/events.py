@@ -37,6 +37,11 @@ MAX_FEED_ENTRIES = 100
 #: REST and WebSocket delete paths cannot spell it differently.
 DELETE_AGENT_FRAME = "delete_agent"
 
+#: The state of an agent the server knows of but has not heard from: started,
+#: no heartbeat or status yet. Every other state is one the agent reported (or a
+#: command it accepted), so "running" keeps meaning ready, reachable over MQTT.
+STARTING = "starting"
+
 
 def _evict_stalest() -> None:
     """Drop the least recently updated agents once the map is over its ceiling.
@@ -85,6 +90,9 @@ def update_agent(agent_id: str, key: str, data) -> None:
             # without one sorts as infinitely stale — so a new arrival would be
             # the first thing dropped, including itself.
             "last_update": time.time(),
+            # A metric can open the entry before the first heartbeat, and says
+            # nothing about whether the agent is ready.
+            "state": STARTING,
         }
         _evict_stalest()
     runtime.state["agents"][agent_id][key] = data

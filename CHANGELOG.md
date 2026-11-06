@@ -29,6 +29,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **An agent not yet heard from is listed as `starting`.** In `/api/actors` and the WebSocket snapshot, an agent the
+  server knows of but has had no heartbeat or status from yet says `starting`, where it said `unknown`; the dashboard
+  shows it as starting, where it showed it running. `running` means what it did: reported over MQTT, so ready. A
+  client that handles each state by name has one more to know.
+
 - **A model's readings are watched for drift, and a rule retrains on it.** The `drift` library agent
   (`@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}`)
   reads two windows of the model's recorded source through the loader on a cadence (`WACTORZ_DRIFT_CHECK_S`,

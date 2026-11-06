@@ -72,6 +72,20 @@ List all registered actors with live metrics.
 ]
 ```
 
+`state` is the last state the agent reported over MQTT, in a heartbeat or a status: `running`,
+`idle` (built, not started), `stopped` or `failed`. So `running` means ready: the agent has been
+heard from, and the rest of the system can reach it. A client waiting for a system to be up can
+wait on it.
+
+Until an agent reports, its state is `starting`, and the dashboard shows it as starting. An agent
+of this process is in this list from the moment it is registered, before anything arrives from it.
+An agent on a node appears once its first message arrives; if that is a metric rather than a
+heartbeat, it is `starting` until the heartbeat follows.
+
+A WebSocket snapshot lists only agents the server has had a message from, with the same rule for
+`starting`. An agent that is registered and has sent nothing yet is only in this list, which the
+dashboard reads when it loads and on a timer.
+
 ---
 
 ### `GET /api/actors/{actor_id}`

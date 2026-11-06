@@ -220,7 +220,9 @@ async def actors_handler(request: web.Request) -> Response:
             payload = {
                 "id": actor.actor_id,
                 "name": actor.name,
-                "state": ag.get("state", "unknown"),
+                # An agent of this process is listed from the moment it is
+                # registered; until it reports, it is starting.
+                "state": ag.get("state", events.STARTING),
                 "protected": bool(getattr(actor, "protected", False)),
                 "mem": ag.get("mem"),
                 "task": ag.get("task"),

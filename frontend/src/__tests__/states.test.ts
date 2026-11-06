@@ -16,6 +16,10 @@ describe("parseAgentState", () => {
         expect(parseAgentState("idle")).toBe("initializing");
     });
 
+    it("reads the server's starting, an agent not yet heard from, as starting", () => {
+        expect(parseAgentState("starting")).toBe("initializing");
+    });
+
     it("reads the server's failed as failed, in either form", () => {
         expect(parseAgentState("failed")).toEqual({ failed: "" });
         expect(parseAgentState({ failed: "boom" })).toEqual({ failed: "boom" });

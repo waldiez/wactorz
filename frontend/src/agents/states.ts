@@ -13,8 +13,9 @@ import type { AgentState } from "../types/agent";
 
 /**
  * Read an untrusted state. The server's own words are `idle` (built, not yet
- * started, so starting here), `running`, `stopped` and `failed`; a failure may
- * also come as `{failed: reason}`. Anything else, a missing state included,
+ * started, so starting here), `starting` (started, not yet heard from),
+ * `running`, `stopped` and `failed`; a failure may also come as
+ * `{failed: reason}`. Anything else, a missing state included,
  * reads as running, so an agent the server lists without a state still counts
  * as live.
  */
@@ -22,7 +23,7 @@ export function parseAgentState(v: unknown): AgentState {
     if (v === "running" || v === "stopped" || v === "initializing") {
         return v;
     }
-    if (v === "idle") {
+    if (v === "idle" || v === "starting") {
         return "initializing";
     }
     if (v === "failed") {

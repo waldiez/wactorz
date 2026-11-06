@@ -63,6 +63,13 @@ describe("toAgentInfo", () => {
         expect(toAgentInfo({ agent_id: "a", state: "idle" } as StatePatchAgent).state).toBe("initializing");
     });
 
+    it("reads an agent the server has not heard from as starting", () => {
+        // A metric can open the server's entry before the first heartbeat.
+        expect(toAgentInfo({ agent_id: "a", state: "starting" } as StatePatchAgent).state).toBe(
+            "initializing",
+        );
+    });
+
     it("uses status when state is absent", () => {
         expect(toAgentInfo({ agent_id: "a", status: "stopped" } as StatePatchAgent).state).toBe("stopped");
     });
@@ -412,8 +419,11 @@ describe("reconcileActorList", () => {
         // The list arrives as the server's JSON: a state there is a plain string.
         const listed = (state: string): AgentInfo =>
             ({ id: state, name: state, state }) as unknown as AgentInfo;
-        const out = reconcileActorList([listed("failed"), listed("idle"), listed("unknown")], () => false);
-        expect(out.map(a => a.state)).toEqual([{ failed: "" }, "initializing", "running"]);
+        const out = reconcileActorList(
+            [listed("failed"), listed("idle"), listed("starting"), listed("unknown")],
+            () => false,
+        );
+        expect(out.map(a => a.state)).toEqual([{ failed: "" }, "initializing", "initializing", "running"]);
     });
 
     it("keeps an empty list empty and never mutates the input element", () => {

@@ -126,6 +126,13 @@ class UndecodableError(ValueError):
         super().__init__(f"Cannot decode file: {path}")
 
 
+class NoLLMError(RuntimeError):
+    """An agent spawned without an LLM, asked to outline a document."""
+
+    def __init__(self) -> None:
+        super().__init__("this agent was spawned without an LLM, and the outline needs one")
+
+
 def _read_txt(path: str) -> str:
     for enc in ("utf-8", "latin-1"):
         try:
@@ -328,6 +335,8 @@ async def _extract_outline(agent, doc_text, slide_count):
         slide_count=slide_count,
         doc_text=doc_text[:4000],
     )
+    if agent.llm is None:
+        raise NoLLMError()
     raw = await agent.llm.chat(prompt)
     if not isinstance(raw, str):
         raw = str(raw)

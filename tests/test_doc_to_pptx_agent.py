@@ -337,6 +337,10 @@ class TestTheOutline:
         assert "Produce exactly 3 slides" in llm.prompts[0]
         assert "x" * 4001 not in llm.prompts[0]
 
+    async def test_without_an_llm_it_says_so(self) -> None:
+        with pytest.raises(RuntimeError, match="spawned without an LLM"):
+            await NS["_extract_outline"](_Agent(None), "some text", 3)
+
 
 class TestTheDeck:
     @staticmethod

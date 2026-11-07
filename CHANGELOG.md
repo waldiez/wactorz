@@ -471,6 +471,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **doc-to-pptx says why it cannot outline a document without an LLM.** Spawned without one, it failed with
+  "'NoneType' object has no attribute 'chat'"; now it says the agent was spawned without an LLM and the outline needs
+  one.
 - **The WhatsApp webhook refuses a form that is not all text.** Twilio posts only text; a request with an upload in it
   failed with a 500 while its signature was checked. It is now refused with a 403 before that, as an unsigned request
   is.

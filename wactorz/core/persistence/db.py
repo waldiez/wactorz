@@ -391,6 +391,12 @@ class WactorzDB:
         return cur.rowcount or 0
 
     @_serialised
+    def kv_agents(self) -> list[str]:
+        """Every agent that has at least one key in the store."""
+        rows = self.conn.execute("SELECT DISTINCT agent FROM kv_store").fetchall()
+        return [row[0] for row in rows]
+
+    @_serialised
     def kv_all(self, agent: str) -> dict[str, Any]:
         """Return all key-value pairs for an agent."""
         rows = self.conn.execute(

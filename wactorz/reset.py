@@ -120,7 +120,7 @@ def reset_chat(
             f" for {agent_name!r}" if agent_name else "",
         )
 
-        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        agents: list[str] = [agent_name] if agent_name else db.kv_agents()
         for agent in agents if on_main else ():
             for key in _CHAT_KV_KEYS:
                 db.kv_delete(agent, key)
@@ -160,7 +160,7 @@ def reset_metrics(
         # The history is a record of these same counters over time; a reset that
         # zeroed them and kept their past would show a cliff in every trend.
         db.clear_metrics_history(agent_name, node)
-        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        agents: list[str] = [agent_name] if agent_name else db.kv_agents()
         for agent in agents if on_main else ():
             for key in _METRIC_KV_KEYS:
                 db.kv_delete(agent, key)
@@ -187,7 +187,7 @@ def reset_memory(agent_name: str | None = None, db_path: str | None = None) -> N
     that spawned them is exactly the half-reset this exists to prevent.
     """
     with _db(db_path) as db:
-        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        agents: list[str] = [agent_name] if agent_name else db.kv_agents()
         for agent in agents:
             for key in _MEMORY_KV_KEYS:
                 db.kv_delete(agent, key)
@@ -239,7 +239,7 @@ def reset_spawns(
         # and an agent persisting its own registry between the read and the
         # write would otherwise have that write clobbered — or clobber this one.
         with db.transaction():
-            for owner in _all_kv_agents(db):
+            for owner in db.kv_agents():
                 for key in _SPAWN_REGISTRY_KV_KEYS:
                     reg = db.kv_get(owner, key, None)
                     if not isinstance(reg, dict):
@@ -331,11 +331,6 @@ def reset_all(
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-
-def _all_kv_agents(db) -> list[str]:
-    rows = db._conn.execute("SELECT DISTINCT agent FROM kv_store").fetchall()
-    return [r[0] for r in rows]
 
 
 def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = None) -> None:

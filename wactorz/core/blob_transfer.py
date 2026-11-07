@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Moving an agent's blobs to another machine, with the rest of its state.
 
 A migration ships an agent's state as JSON. A blob -- a model, an array, raw
@@ -300,6 +301,9 @@ class _Arriving:
     hasher: Any
     size: int
     started: float
+    #: The most it can grow to, from the chunks it announced: what it holds of the
+    #: shared cap from its first chunk, so blobs started together cannot pass it.
+    reserved: int
 
 
 class Inbox:
@@ -335,6 +339,15 @@ class Inbox:
         index, count = _HEADER.unpack_from(message)
         data = message[_HEADER.size :]
         arriving = self._arriving.get(sha256)
+        if len(data) > CHUNK_BYTES:
+            # What a blob reserves is counted in chunks of this size, so a larger
+            # one would write more than was reserved for it.
+            logger.warning(
+                "[blobs] %s… sent a chunk over %s bytes; dropped", sha256[:12], CHUNK_BYTES
+            )
+            if arriving is not None:
+                await self._abandon(sha256)
+            return
         if arriving is not None and index < arriving.next_index:
             # Already written. The broker sends a QoS 1 message again when it
             # did not hear it was received, across a reconnect say, and the
@@ -357,9 +370,12 @@ class Inbox:
             await self._abandon(sha256)
             return
         arriving.size += len(data)
-        if arriving.size > self.max_bytes:
+        # What it reserved is never more than the cap, so this keeps it within both.
+        if arriving.size > arriving.reserved:
             logger.warning(
-                "[blobs] %s… is larger than %s bytes; dropped", sha256[:12], self.max_bytes
+                "[blobs] %s… is larger than the %s bytes it announced; dropped",
+                sha256[:12],
+                arriving.reserved,
             )
             await self._abandon(sha256)
             return
@@ -380,12 +396,15 @@ class Inbox:
             # Here already: a blob is its hash, so another copy adds nothing.
             self._arriving.pop(sha256, None)
             return False
-        in_progress = sum(a.size for a in self._arriving.values())
-        if in_progress > self.max_bytes:
+        wanted = min(count * CHUNK_BYTES, self.max_bytes)
+        reserved = sum(a.reserved for a in self._arriving.values())
+        if reserved + wanted > self.max_bytes:
             logger.warning("[blobs] Too much arriving at once; %s… dropped", sha256[:12])
             return False
         await asyncio.to_thread(_start_part, self._part(sha256))
-        self._arriving[sha256] = _Arriving(count, 0, hashlib.sha256(), 0, time.monotonic())
+        self._arriving[sha256] = _Arriving(
+            count, 0, hashlib.sha256(), 0, time.monotonic(), reserved=wanted
+        )
         return True
 
     async def _finish(self, sha256: str, arriving: _Arriving) -> None:

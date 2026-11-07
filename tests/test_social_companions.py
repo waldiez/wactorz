@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.build_social_companions``.
 
 Social channels (Discord/Telegram) run *alongside* the primary interface when

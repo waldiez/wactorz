@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A state migration that failed must be retried, not stamped as done.
 
 ``framework_version`` was a single number standing for two independent facts:

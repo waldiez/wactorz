@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An AG2 conversation as a Wactorz agent.
 
 Two AG2 agents, a writer and a critic, improve a draft between them. Wactorz

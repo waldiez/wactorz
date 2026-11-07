@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Broker link: subscribe, dispatch, and report connection state.
 
 Owns the long-lived MQTT listener that feeds every inbound broker message
@@ -23,21 +24,30 @@ from ..core.mqtt import (
     session_kwargs,
 )
 from ..core.outbound import numbered
+from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
-from . import events, relay, runtime, ws
+from . import cost, db_writer, events, relay, runtime, ws
 
 logger = logging.getLogger(__name__)
 
 
-async def broadcast_mqtt_msg(topic: str, payload: str) -> None:
-    """Broadcast a received mqtt message."""
+async def broadcast_mqtt_msg(topic: str, payload: str, thread_id: str = "") -> None:
+    """Broadcast a received mqtt message.
+
+    ``thread_id`` is the thread a chat message is in, when the server knows it:
+    the page keeps its threads by id, and a message relayed for another agent
+    names that agent only by name.
+    """
     parsed: Any = payload
     try:
         parsed = json.loads(payload)
     except Exception:  # noqa: S110  # non-JSON payloads are passed through as text
         # non-JSON: pass the string through
         pass
-    await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
+    frame: dict[str, Any] = {"type": "server_event", "topic": topic, "payload": parsed}
+    if thread_id:
+        frame["thread_id"] = thread_id
+    await ws.broadcast(frame)
 
 
 # Server-broker connection state, mirrored to browsers so the dashboard's "live"
@@ -60,7 +70,7 @@ async def handle_message(topic: str, payload: str) -> None:
     can publish one, so the dashboard is shown what main took from it instead,
     which main hands over once it has checked it (see `_watch_main_nodes`).
     """
-    if _is_node_heartbeat(topic) and _watch_main_nodes():
+    if _is_node_heartbeat(topic) and await _watch_main_nodes():
         return
     await _dispatch(topic, payload)
 
@@ -70,11 +80,15 @@ def _is_node_heartbeat(topic: str) -> bool:
     return len(parts) == 3 and parts[0] == "nodes" and parts[2] == "heartbeat"
 
 
-def _watch_main_nodes() -> bool:
+async def _watch_main_nodes() -> bool:
     """Whether main's node table is there to show nodes from, watching it if so.
 
-    Asked on each heartbeat rather than once at start: main may come up after
-    this server does. Watching is idempotent, so asking again costs a lookup.
+    Asked when the server connects to the broker, so a start has main watched
+    before any heartbeat arrives, and again on each heartbeat, for a main that
+    comes up after this server does. Watching is idempotent, so asking again
+    costs a lookup. When watching begins, the nodes main already holds are
+    shown: main and this server read the broker apart, and a heartbeat main
+    took before it was watched would otherwise reach no browser.
     """
     nodes = getattr(find_main_actor(runtime.registry), "nodes", None)
     watchers = getattr(nodes, "watchers", None)
@@ -82,6 +96,9 @@ def _watch_main_nodes() -> bool:
         return False
     if _show_node_heartbeat not in watchers:
         watchers.append(_show_node_heartbeat)
+        known = getattr(nodes, "known", None)
+        for node, held in list(known.items()) if isinstance(known, dict) else []:
+            await _show_node_heartbeat(node, held)
     return True
 
 
@@ -96,7 +113,8 @@ async def _dispatch(topic: str, payload: str) -> None:
     # State first, and for every message: the filter below decides only whether a
     # browser is shown the raw frame, not whether the server takes it in.
     if relay.is_relayed(topic):
-        await broadcast_mqtt_msg(topic, payload)
+        push = (event or {}).get("_push_chat") or {}
+        await broadcast_mqtt_msg(topic, payload, push.get("thread_id", ""))
     if not event or runtime.hard_resetting:
         return
 
@@ -104,6 +122,7 @@ async def _dispatch(topic: str, payload: str) -> None:
         # A patch only adds and updates, so a snapshot that no longer names the
         # agent still leaves its card on screen. This is the frame that removes
         # it, and the same one the REST and WebSocket delete paths send.
+        await cost.settled_totals()
         await ws.broadcast(
             {
                 "type": events.DELETE_AGENT_FRAME,
@@ -115,6 +134,8 @@ async def _dispatch(topic: str, payload: str) -> None:
 
     metric = event.get("metric", "")
     log_event = None if metric == "heartbeat" else event
+    if metric == "chat":
+        await cost.refresh_totals()
     # Totals are the only part of a snapshot that queries the database, so they
     # are not rebuilt for every broker message. `chat` is the exception: it is
     # the frame that follows an agent spending money, it is driven by user
@@ -145,16 +166,21 @@ async def _dispatch(topic: str, payload: str) -> None:
                 agent_name = (
                     push.get("to", "agent") if role == "user" else push.get("from", "agent")
                 )
-                # The options go into the stored text: a reloaded thread has no
-                # buttons, and a question without its choices reads as half of one.
-                stored = numbered(push["content"], push.get("options") or ())
-                runtime.db.write_chat_log(
-                    ts=push.get("timestamp", time.time()),
-                    agent_name=agent_name,
-                    role=role,
-                    # Same treatment as the WS path: an agent can quote back
-                    # something a user typed, and this row outlives the turn.
-                    content=redact(stored),
+                # The options go into the stored text, so a question reads whole
+                # wherever the row is shown; /api/chats gives a row the ledger
+                # still knows its buttons back (`questions.asked_in`).
+                stored = numbered(push["content"], push.get("options") or (), reply_hint=False)
+                # The event's own time, kept: queued, it is written a little later.
+                db_writer.writer.chat(
+                    ChatRow(
+                        ts=push.get("timestamp", time.time()),
+                        agent_name=agent_name,
+                        agent_id=push["thread_id"],
+                        role=role,
+                        # Same treatment as the WS path: an agent can quote back
+                        # something a user typed, and this row outlives the turn.
+                        content=redact(stored),
+                    )
                 )
         except Exception as exc:
             logger.debug("[chat-bridge] persist failed: %s", exc)
@@ -174,8 +200,11 @@ async def mqtt_listener() -> None:
                 ) as client:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
+                    # Before subscribing: main reads the same heartbeats on a
+                    # client of its own, and one it takes unwatched is not shown.
+                    await _watch_main_nodes()
 
-                    for topic in runtime.MQTT_TOPICS:
+                    for topic in (*runtime.MQTT_TOPICS, *relay.followed()):
                         await client.subscribe(topic, qos=1)
 
                     await set_mqtt_status(True)

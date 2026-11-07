@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Composition root: build the aiohttp app, wire routes, run the server.
 
 ``build_app`` is the single place every route is registered, which makes the
@@ -17,30 +18,39 @@ from aiohttp.typedefs import Handler
 from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from ..core.paths import ensure_state_dir
+from ..ext import PANELS, setup_all
 from ..monitoring import http_metrics
 from . import (
     answers,
     api_actors,
     api_commands,
+    api_data,
+    api_labels,
     api_log_capture,
     api_logs,
     api_models,
+    api_provenance,
     api_reset,
     api_system,
     api_uploads,
     auth,
     chat,
+    cost,
+    db_writer,
     log_stream,
     login,
     metrics,
     metrics_history,
     mqtt,
     origins,
+    panels,
     probes,
     questions,
+    relay,
     runtime,
     sessions,
     static_site,
+    wiring,
     ws,
 )
 
@@ -208,20 +218,33 @@ def build_app() -> web.Application:
     # are kept for the clients that called them before the prefix.
     app.router.add_get("/api/models", api_models.models_handler)
     app.router.add_get("/api/models/{name}", api_models.model_handler)
+    app.router.add_get("/api/models/{name}/moves", api_models.moves_handler)
+    app.router.add_get("/api/models/{name}/trial", api_models.trial_handler)
+    app.router.add_get("/api/models/{name}/trial/series", api_models.trial_series_handler)
+    app.router.add_get("/api/models/{name}/trials", api_models.trials_handler)
+    app.router.add_get("/api/models/{name}/drift", api_models.drift_handler)
     app.router.add_post("/api/models/{name}/active", api_models.set_active_handler)
     app.router.add_post("/api/models/{name}/shadow", api_models.set_shadow_handler)
     app.router.add_delete("/api/models/{name}/shadow", api_models.clear_shadow_handler)
     app.router.add_post("/api/models/{name}/promote", api_models.promote_handler)
     app.router.add_post("/api/models/{name}/rollback", api_models.rollback_handler)
+    app.router.add_put("/api/models/{name}/policy", api_models.set_policy_handler)
+    app.router.add_delete("/api/models/{name}/policy", api_models.clear_policy_handler)
+    app.router.add_get("/api/labels", api_labels.labels_handler)
+    app.router.add_get("/api/labels/effective", api_labels.effective_handler)
+    app.router.add_get("/api/provenance", api_provenance.nodes_handler)
+    app.router.add_get("/api/provenance/{id}", api_provenance.node_handler)
+    api_data.setup(app)
+    app.router.add_get("/api/wiring", wiring.wiring_handler)
     app.router.add_get("/api/questions", questions.questions_handler)
     app.router.add_post("/api/questions/{agent_id}/{question_id}/answer", answers.answer_handler)
 
     # Extensions (wactorz/ext/): additive features register their own routes
     # and startup/teardown hooks here. Must run BEFORE the docs/static
     # catch-alls below, or the /{path:.+} route shadows extension routes.
-    from ..ext import setup_all
-
     setup_all(app)
+    relay.follow(topic for panel in app[PANELS].values() for topic in panel.topics)
+    app.router.add_get("/api/ext/{name}/panel.js", panels.script_handler)
 
     app.router.add_get("/docs", static_site.docs_redirect)
     app.router.add_get("/docs/", static_site.docs_handler)
@@ -280,6 +303,11 @@ async def main(exit_on_failure: bool = False) -> None:
 
     origins.log_mode()
     origins.warn_loopback_proxies()
+    # Read once, on a thread, before the first message can arrive: the ledger,
+    # so banking spend never reads it on the loop, and the totals the dashboard
+    # is sent, so its first snapshot is not empty.
+    await cost.load_lifetime()
+    await cost.refresh_totals()
     app = build_app()
 
     runner = web.AppRunner(app)
@@ -322,6 +350,9 @@ async def main(exit_on_failure: bool = False) -> None:
         # port stays bound until the process exits, so an embedding application
         # that stops the monitor cannot start it again.
         await runner.cleanup()
+        # Last, once nothing can queue more: what is queued is written, or said
+        # to be lost, before the process closes the database after this returns.
+        await db_writer.writer.close()
 
 
 def cli_main() -> None:

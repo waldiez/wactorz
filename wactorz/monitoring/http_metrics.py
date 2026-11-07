@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the HTTP servers in this process are asked, and how they answer.
 
 Two servers run in one process: the REST interface, which also serves

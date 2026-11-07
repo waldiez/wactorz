@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AG2 1.x beside Wactorz: its agents on the system's model, their spend on the dashboard.
 
 An AG2 agent takes a model configuration of AG2's own. :func:`model_config`

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from wactorz.agents.catalog_agent import (
     BETA_WARNING,
     CatalogAgent,

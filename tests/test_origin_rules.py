@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Who a browser may act on this server's behalf for.
 
 Two checks that fail together. `Origin` identifies the page making the request;

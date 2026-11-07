@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The commit hooks check a commit with the project's own environment.
 
 They are `language: system` hooks, so a command in one is looked up on PATH. A

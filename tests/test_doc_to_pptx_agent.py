@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The doc-to-pptx agent: reading a document, placing its images, and building the deck.
 
 `test_pptx_theme_colors.py` holds the palette to six-digit colours,

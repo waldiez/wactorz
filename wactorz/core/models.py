@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The models an agent names: finding them on main, and loading them.
 
 An agent names artifacts -- models kept with ``wactorz-artifacts`` -- under keys
@@ -10,7 +11,8 @@ runs no code from the file:
 
 - ``npz`` and ``npy`` with numpy, ``allow_pickle=False``: a dict of arrays, or one;
 - ``safetensors`` with ``safetensors.numpy``: a dict of arrays, no torch needed;
-- ``state_dict`` with ``torch.load(weights_only=True)``, on the CPU;
+- ``state_dict`` with ``torch.load(weights_only=True)``, on the CPU, admitting
+  plain numeric numpy arrays beside the tensors (`torch_checkpoints`);
 - ``onnx`` as an ``onnxruntime.InferenceSession``;
 - ``raw`` as the bytes themselves.
 
@@ -28,7 +30,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from . import torch_checkpoints
 from .artifacts import ArtifactError, ArtifactStore, pinned_in
+from .torch_checkpoints import CheckpointRefusedError
 
 
 class ModelError(ArtifactError):
@@ -52,8 +56,24 @@ class ModelError(ArtifactError):
         return cls(f"loading it needs {library}: pip install {library}")
 
     @classmethod
+    def refused_checkpoint(
+        cls, entry: Mapping[str, Any], exc: CheckpointRefusedError
+    ) -> "ModelError":
+        return cls(
+            f"{entry.get('name')}:{entry.get('version')} cannot be read without running code "
+            f"({exc.reason}): save it with only tensors, numbers, containers and numeric numpy "
+            "arrays, or store it as --format torch with --allow-code if you would run its "
+            "maker's code"
+        )
+
+    @classmethod
     def cannot_start(cls, agent: str, exc: ArtifactError) -> "ModelError":
         return cls(f"{agent} cannot start without its models: {exc}")
+
+
+def served_models(resolved: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """Each resolved model's name, by the key its agent loads it under, as a manifest says it."""
+    return {key: str(entry["name"]) for key, entry in resolved.items() if entry.get("name")}
 
 
 def resolve_in_store(wanted: Mapping[str, Any], state_dir: str | Path) -> dict[str, dict[str, Any]]:
@@ -67,6 +87,25 @@ def resolve_in_store(wanted: Mapping[str, Any], state_dir: str | Path) -> dict[s
         key: {**entry, "path": str(store.readable_path(entry))}
         for key, entry in pinned_in({"artifacts": pinned}).items()
     }
+
+
+def resolve_shadow(entry: Mapping[str, Any], state_dir: str | Path) -> dict[str, Any] | None:
+    """The version on trial beside the model ``entry`` names, with its path here; None when none is.
+
+    For an entry that follows ``active``: where ``NAME:shadow`` stands, pinned
+    as a spawn would pin it and unpacked once, so a serving agent can run it
+    beside what it serves. None for an entry that named a version or follows
+    ``shadow`` itself, and while the pointer is unset. Raises `ArtifactError`
+    when the pointer names bytes the store no longer holds.
+    """
+    if entry.get("follows") != "active":
+        return None
+    store = ArtifactStore.in_state_dir(state_dir)
+    name = str(entry["name"])
+    if store.pointer(name, "shadow") is None:
+        return None
+    pinned = store.pin(f"{name}:shadow")
+    return {**pinned, "path": str(store.readable_path(pinned))}
 
 
 def load(entry: Mapping[str, Any], *, allow_code: bool = False) -> Any:
@@ -84,7 +123,10 @@ def load(entry: Mapping[str, Any], *, allow_code: bool = False) -> Any:
     loader = _LOADERS.get(fmt)
     if loader is None:
         raise ModelError.no_loader(fmt)
-    return loader(path)
+    try:
+        return loader(path)
+    except CheckpointRefusedError as exc:
+        raise ModelError.refused_checkpoint(entry, exc) from exc
 
 
 def _numpy() -> Any:
@@ -123,7 +165,10 @@ def _torch() -> Any:
 
 
 def _state_dict(path: Path) -> Any:
-    return _torch().load(path, map_location="cpu", weights_only=True)
+    try:
+        return torch_checkpoints.load(path)
+    except ImportError as exc:
+        raise ModelError.needs("torch") from exc
 
 
 def _onnx(path: Path) -> Any:

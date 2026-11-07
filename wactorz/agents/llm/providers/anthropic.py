@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """AnthropicProvider — Claude, via the anthropic SDK."""
 
 import inspect
@@ -239,7 +240,7 @@ def _replayable_block(block: Any) -> dict[str, Any] | None:
 
 class AnthropicProvider(LLMProvider):
     def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None):
-        import anthropic
+        import anthropic  # optional dependency: the `anthropic` extra
 
         # No retries of the SDK's own: `LLMProvider` retries, with one policy
         # for every provider, and the two would multiply. The timeout is the

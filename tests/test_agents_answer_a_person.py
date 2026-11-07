@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A reply a person can read, from the agents that do not converse.
 
 `web/chat.py` turns an agent's reply into chat text by looking for `reply`,

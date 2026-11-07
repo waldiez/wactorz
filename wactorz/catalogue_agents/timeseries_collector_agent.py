@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CATALOG AGENT — timeseries-collector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Background data collector. Subscribes to sensor, detection, HA state-change
@@ -79,6 +80,7 @@ from pathlib import Path
 
 from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import get_db
+from wactorz.data.files import event_time_of
 
 logger = logging.getLogger("timeseries-collector")
 
@@ -103,6 +105,24 @@ DEFAULT_PRUNE_INTERVAL_H = 6.0  # hours between prune passes
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+class _Readings:
+    """The sensor buffer as the routing fills it: each row filed under its event time.
+
+    A row is built with the arrival as its first element, as rows always were;
+    kept, it has the payload's event time there instead, with the arrival and
+    where the time came from appended, as ``docs/design/event-time.md`` asks.
+    """
+
+    def __init__(self, buffer: list, arrived: float, ts: float, time_source: str) -> None:
+        self._buffer = buffer
+        self._arrived = arrived
+        self._ts = ts
+        self._time_source = time_source
+
+    def append(self, row: tuple) -> None:
+        self._buffer.append((self._ts, *row[1:], self._arrived, self._time_source))
+
+
 def _route_message(agent, topic, payload):
     """Route an MQTT message to the correct buffer based on topic."""
     now = time.time()
@@ -110,255 +130,149 @@ def _route_message(agent, topic, payload):
     if not isinstance(payload, dict):
         return
 
-    sensor_buf = agent.state["sensor_buffer"]
+    ts, time_source = event_time_of(payload, arrived=now)
+    sensor_buf = _Readings(agent.state["sensor_buffer"], now, ts, time_source)
     detection_buf = agent.state["detection_buffer"]
     ha_buf = agent.state["ha_buffer"]
 
-    # ── Detection messages ─────────────────────────────────────────
     if "detections" in topic or "detection" in topic:
-        # Handle both single and batch detections
-        detections = payload.get("detections", [])
-        if not detections and "class" in payload:
-            detections = [payload]
-        src_agent = payload.get("agent", topic.split("/")[-1] if "/" in topic else "")
-        for det in detections:
-            detection_buf.append(
-                (
-                    now,
-                    src_agent,
-                    det.get("class", "unknown"),
-                    float(det.get("confidence", 0.0)),
-                    json.dumps(det.get("bbox", [])),
-                    int(det.get("frame_id", 0)),
-                    json.dumps(
-                        {
-                            k: v
-                            for k, v in det.items()
-                            if k not in ("class", "confidence", "bbox", "frame_id")
-                        }
-                    ),
-                    payload.get("node", ""),
-                )
-            )
-
-    # ── Sinergym observations ──────────────────────────────────────
+        _route_detections(detection_buf, now, topic, payload)
     elif "sinergym/" in topic and "/observation" in topic:
-        env_id = payload.get("env_id", "")
-        episode = int(payload.get("episode", 0))
-        step = int(payload.get("step", 0))
-        reward = payload.get("reward")
-        mode = payload.get("mode", "")
-        entity = f"sinergym.{env_id}" if env_id else "sinergym"
-
-        # Store reward as a sensor reading
-        if reward is not None:
-            sensor_buf.append(
-                (
-                    now,
-                    topic,
-                    entity,
-                    "reward",
-                    float(reward),
-                    "",
-                    "",
-                    f"sinergym-{mode}",
-                    "",
-                )
-            )
-
-        # Store each obs dimension as obs_0, obs_1, ...
-        obs = payload.get("obs", [])
-        if isinstance(obs, list):
-            for i, val in enumerate(obs):
-                if isinstance(val, (int, float)):
-                    sensor_buf.append(
-                        (
-                            now,
-                            topic,
-                            entity,
-                            f"obs_{i}",
-                            float(val),
-                            "",
-                            "",
-                            f"sinergym-{mode}",
-                            "",
-                        )
-                    )
-
-        # Store each action dimension
-        action = payload.get("action", [])
-        if isinstance(action, list):
-            for i, val in enumerate(action):
-                if isinstance(val, (int, float)):
-                    sensor_buf.append(
-                        (
-                            now,
-                            topic,
-                            entity,
-                            f"action_{i}",
-                            float(val),
-                            "",
-                            "",
-                            f"sinergym-{mode}",
-                            "",
-                        )
-                    )
-
-        # Store step and episode as metadata
-        sensor_buf.append(
-            (
-                now,
-                topic,
-                entity,
-                "step",
-                float(step),
-                "",
-                "",
-                f"sinergym-{mode}",
-                "",
-            )
-        )
-        sensor_buf.append(
-            (
-                now,
-                topic,
-                entity,
-                "episode",
-                float(episode),
-                "",
-                "",
-                f"sinergym-{mode}",
-                "",
-            )
-        )
-
-        # Store info dict fields (energy, comfort, etc.)
-        info = payload.get("info", {})
-        if isinstance(info, dict):
-            for k, v in info.items():
-                if isinstance(v, (int, float)):
-                    sensor_buf.append(
-                        (
-                            now,
-                            topic,
-                            entity,
-                            f"info_{k}",
-                            float(v),
-                            "",
-                            "",
-                            f"sinergym-{mode}",
-                            "",
-                        )
-                    )
-
-    # ── Sinergym episode events ────────────────────────────────────
+        _route_observation(sensor_buf, now, topic, payload)
     elif "sinergym/" in topic and "/episode" in topic:
-        event = payload.get("event", "")
-        if event == "episode_end":
-            # Store episode summary as sensor readings for easy querying
-            env_id = payload.get("env_id", "")
-            entity = f"sinergym.{env_id}" if env_id else "sinergym"
-            for field in (
-                "total_reward",
-                "mean_reward",
-                "steps",
-                "total_energy_W",
-                "comfort_violations_degC_steps",
-                "violation_timesteps",
-                "duration_s",
-            ):
-                val = payload.get(field)
-                if val is not None and isinstance(val, (int, float)):
-                    sensor_buf.append(
-                        (
-                            now,
-                            topic,
-                            entity,
-                            f"ep_{field}",
-                            float(val),
-                            "",
-                            "",
-                            "sinergym-bridge",
-                            "",
-                        )
-                    )
-
-    # ── HA state changes ───────────────────────────────────────────
+        _route_episode(sensor_buf, now, topic, payload)
     elif "state_changes" in topic:
-        entity_id = payload.get("entity_id", "")
-        new_state = payload.get("new_state", {})
-        old_state = payload.get("old_state", {})
+        _route_state_change(ha_buf, now, payload)
+    else:
+        _route_readings(sensor_buf, now, topic, payload)
 
-        # Handle both nested and flat formats
-        if isinstance(new_state, dict):
-            state_val = new_state.get("state", "")
-            attrs = json.dumps(new_state.get("attributes", {}))
-        else:
-            state_val = str(new_state)
-            attrs = "{}"
 
-        old_val = old_state.get("state", "") if isinstance(old_state, dict) else str(old_state)
-        domain = entity_id.split(".")[0] if "." in entity_id else ""
-        context = (
-            payload.get("context", {}).get("id", "")
-            if isinstance(payload.get("context"), dict)
-            else ""
-        )
-
-        ha_buf.append(
+def _route_detections(buffer, now, topic, payload):
+    """One row per detection, whether the payload carries a batch or is a single one."""
+    detections = payload.get("detections", [])
+    if not detections and "class" in payload:
+        detections = [payload]
+    src_agent = payload.get("agent", topic.split("/")[-1] if "/" in topic else "")
+    for det in detections:
+        buffer.append(
             (
                 now,
-                entity_id,
-                old_val,
-                state_val,
-                domain,
-                attrs,
-                context,
+                src_agent,
+                det.get("class", "unknown"),
+                float(det.get("confidence", 0.0)),
+                json.dumps(det.get("bbox", [])),
+                int(det.get("frame_id", 0)),
+                json.dumps(
+                    {
+                        k: v
+                        for k, v in det.items()
+                        if k not in ("class", "confidence", "bbox", "frame_id")
+                    }
+                ),
+                payload.get("node", ""),
             )
         )
 
-    # ── Sensor data (everything else) ──────────────────────────────
+
+def _sinergym_row(now, topic, entity, field, value, source):
+    """A sensor row for one number a Sinergym environment reported."""
+    return (now, topic, entity, field, float(value), "", "", source, "")
+
+
+def _numbers(values):
+    """The positions and values of the numbers in ``values``, a list; nothing when it is not one."""
+    if not isinstance(values, list):
+        return []
+    return [(i, val) for i, val in enumerate(values) if isinstance(val, (int, float))]
+
+
+def _route_observation(buffer, now, topic, payload):
+    """A Sinergym step: its reward, each observation and action dimension, the step, the episode and the info."""
+    env_id = payload.get("env_id", "")
+    episode = int(payload.get("episode", 0))
+    step = int(payload.get("step", 0))
+    reward = payload.get("reward")
+    source = f"sinergym-{payload.get('mode', '')}"
+    entity = f"sinergym.{env_id}" if env_id else "sinergym"
+
+    if reward is not None:
+        buffer.append(_sinergym_row(now, topic, entity, "reward", reward, source))
+    # Each observation dimension as obs_0, obs_1, ..., and each action as action_0, ...
+    for i, val in _numbers(payload.get("obs", [])):
+        buffer.append(_sinergym_row(now, topic, entity, f"obs_{i}", val, source))
+    for i, val in _numbers(payload.get("action", [])):
+        buffer.append(_sinergym_row(now, topic, entity, f"action_{i}", val, source))
+    buffer.append(_sinergym_row(now, topic, entity, "step", step, source))
+    buffer.append(_sinergym_row(now, topic, entity, "episode", episode, source))
+    # The info dict's numbers (energy, comfort, etc.)
+    info = payload.get("info", {})
+    if isinstance(info, dict):
+        for k, v in info.items():
+            if isinstance(v, (int, float)):
+                buffer.append(_sinergym_row(now, topic, entity, f"info_{k}", v, source))
+
+
+#: The fields of a Sinergym episode summary that are stored, as ``ep_<field>``.
+EPISODE_FIELDS = (
+    "total_reward",
+    "mean_reward",
+    "steps",
+    "total_energy_W",
+    "comfort_violations_degC_steps",
+    "violation_timesteps",
+    "duration_s",
+)
+
+
+def _route_episode(buffer, now, topic, payload):
+    """An episode's summary when it ends, as sensor readings for easy querying."""
+    if payload.get("event", "") != "episode_end":
+        return
+    env_id = payload.get("env_id", "")
+    entity = f"sinergym.{env_id}" if env_id else "sinergym"
+    for field in EPISODE_FIELDS:
+        val = payload.get(field)
+        if val is not None and isinstance(val, (int, float)):
+            buffer.append(_sinergym_row(now, topic, entity, f"ep_{field}", val, "sinergym-bridge"))
+
+
+def _route_state_change(buffer, now, payload):
+    """A Home Assistant state change, in its nested form or flattened."""
+    entity_id = payload.get("entity_id", "")
+    new_state = payload.get("new_state", {})
+    old_state = payload.get("old_state", {})
+    if isinstance(new_state, dict):
+        state_val = new_state.get("state", "")
+        attrs = json.dumps(new_state.get("attributes", {}))
     else:
-        entity_id = payload.get("entity_id", "")
-        src_agent = payload.get("agent", "")
-        node = payload.get("node", "")
+        state_val = str(new_state)
+        attrs = "{}"
+    old_val = old_state.get("state", "") if isinstance(old_state, dict) else str(old_state)
+    domain = entity_id.split(".")[0] if "." in entity_id else ""
+    context = (
+        payload.get("context", {}).get("id", "") if isinstance(payload.get("context"), dict) else ""
+    )
+    buffer.append((now, entity_id, old_val, state_val, domain, attrs, context))
 
-        # Extract each numeric field as a separate row
-        for field_name, value in payload.items():
-            if field_name.startswith("_"):
-                continue
-            if field_name in ("agent", "node", "entity_id", "timestamp", "ts"):
-                continue
 
-            if isinstance(value, (int, float)):
-                sensor_buf.append(
-                    (
-                        now,
-                        topic,
-                        entity_id,
-                        field_name,
-                        float(value),
-                        "",
-                        "",
-                        src_agent,
-                        node,
-                    )
-                )
-            elif isinstance(value, str) and value not in ("", "null"):
-                # Non-numeric but potentially useful (on/off, states)
-                sensor_buf.append(
-                    (
-                        now,
-                        topic,
-                        entity_id,
-                        field_name,
-                        None,
-                        value,
-                        "",
-                        src_agent,
-                        node,
-                    )
-                )
+#: Payload fields that say who sent a reading and when, rather than what it read.
+_NOT_READINGS = ("agent", "node", "entity_id", "timestamp", "ts")
+
+
+def _route_readings(buffer, now, topic, payload):
+    """One row per field of a sensor payload: numbers as values, other words (on/off, states) as text."""
+    entity_id = payload.get("entity_id", "")
+    src_agent = payload.get("agent", "")
+    node = payload.get("node", "")
+    for field_name, value in payload.items():
+        if field_name.startswith("_") or field_name in _NOT_READINGS:
+            continue
+        if isinstance(value, (int, float)):
+            buffer.append(
+                (now, topic, entity_id, field_name, float(value), "", "", src_agent, node)
+            )
+        elif isinstance(value, str) and value not in ("", "null"):
+            buffer.append((now, topic, entity_id, field_name, None, value, "", src_agent, node))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -625,8 +539,8 @@ def _number(value):
         return None
 
 
-async def handle_task(agent, payload):
-    # Parse JSON from "text" field when routed via @mention
+def _task_of(payload):
+    """The task as a dict: JSON in a mention's ``text`` read as one, anything not a dict as its action."""
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:
             parsed = json.loads(payload["text"])
@@ -634,170 +548,220 @@ async def handle_task(agent, payload):
                 payload = parsed
         except (ValueError, TypeError):
             pass  # not JSON: the text is the request
-
     if not isinstance(payload, dict):
         payload = {"action": str(payload)}
+    return payload
 
+
+async def handle_task(agent, payload):
+    payload = _task_of(payload)
     action = str(payload.get("action") or payload.get("text") or "").strip().lower()
+    answer = TASKS.get(action)
+    if answer is not None:
+        return await answer(agent, payload)
+    return await _understood(agent, payload, action)
 
-    if action == "stats":
-        db = get_db()
-        stats = db.stats() if db else {}
-        s = agent.state
+
+async def _stats(agent, _payload):
+    db = get_db()
+    stats = db.stats() if db else {}
+    s = agent.state
+    return {
+        "result": (
+            "Time-series collector stats:\n"
+            f"  Received: {s['total_received']} messages\n"
+            f"  Written:  {s['total_written']} rows\n"
+            f"  Buffers:  sensor={len(s['sensor_buffer'])}, "
+            f"detection={len(s['detection_buffer'])}, "
+            f"ha={len(s['ha_buffer'])}\n"
+            f"  Tables:   {stats}\n"
+            f"  Retention: {s['retention_days']} days"
+        ),
+        "total_received": s["total_received"],
+        "total_written": s["total_written"],
+        "buffer_sizes": {
+            "sensor": len(s["sensor_buffer"]),
+            "detection": len(s["detection_buffer"]),
+            "ha": len(s["ha_buffer"]),
+        },
+        "table_rows": stats,
+        "retention_days": s["retention_days"],
+    }
+
+
+async def _prune(agent, _payload):
+    pruned = _do_prune(agent)
+    return {
+        "result": f"Pruned {pruned} rows older than {agent.state['retention_days']} days.",
+        "pruned_rows": pruned,
+    }
+
+
+async def _flush_now(agent, _payload):
+    _flush(agent)
+    return {"result": "Buffers flushed to SQLite.", "total_written": agent.state["total_written"]}
+
+
+#: What `query` takes as a table name, and the table each one is.
+TABLES = {
+    **dict.fromkeys(("sensors", "sensor", "sensor_readings"), "sensors"),
+    **dict.fromkeys(("ha_states", "ha", "states", "ha_state_changes"), "ha_states"),
+    **dict.fromkeys(("detections", "detection"), "detections"),
+    **dict.fromkeys(("actuations", "actuation"), "actuations"),
+}
+
+
+def _rows_of(db, table, payload, hours, entity, limit):
+    """The rows of ``table``, one of `TABLES`' values, as the query asks for them."""
+    if table == "sensors":
+        return db.query_sensor(
+            hours=hours,
+            entity_id=entity,
+            topic=payload.get("topic") or None,
+            field=payload.get("field") or None,
+            limit=limit,
+        )
+    if table == "ha_states":
+        return db.query_ha_states(
+            hours=hours, entity_id=entity, domain=payload.get("domain") or None, limit=limit
+        )
+    if table == "detections":
+        return db.query_detections(hours=hours, limit=limit)
+    return db.query_actuations(hours=hours, entity_id=entity, limit=limit)
+
+
+async def _query(agent, payload):
+    """Serve stored history to other agents (e.g. an optimizer)."""
+    db = get_db()
+    if not db:
+        return {"result": "Persistence not initialised — no data.", "rows": []}
+    _flush(agent)  # include anything still buffered
+    table = str(payload.get("table") or "ha_states").strip().lower()
+    try:
+        hours = float(payload.get("hours") or 24)
+        limit = min(int(payload.get("limit") or 1000), 5000)
+    except (TypeError, ValueError):
+        return {"result": "hours and limit must be a number.", "rows": []}
+    entity = payload.get("entity_id") or None
+    if table not in TABLES:
         return {
-            "result": (
-                "Time-series collector stats:\n"
-                f"  Received: {s['total_received']} messages\n"
-                f"  Written:  {s['total_written']} rows\n"
-                f"  Buffers:  sensor={len(s['sensor_buffer'])}, "
-                f"detection={len(s['detection_buffer'])}, "
-                f"ha={len(s['ha_buffer'])}\n"
-                f"  Tables:   {stats}\n"
-                f"  Retention: {s['retention_days']} days"
-            ),
-            "total_received": s["total_received"],
-            "total_written": s["total_written"],
-            "buffer_sizes": {
-                "sensor": len(s["sensor_buffer"]),
-                "detection": len(s["detection_buffer"]),
-                "ha": len(s["ha_buffer"]),
-            },
-            "table_rows": stats,
-            "retention_days": s["retention_days"],
+            "result": f"Unknown table '{table}'. "
+            "Use: sensors | ha_states | detections | actuations."
         }
+    rows = _rows_of(db, TABLES[table], payload, hours, entity, limit)
+    return {
+        "result": f"{len(rows)} row(s) from {table} (last {hours:g} h"
+        + (f", entity={entity}" if entity else "")
+        + ").",
+        "table": table,
+        "hours": hours,
+        "count": len(rows),
+        "rows": rows,
+    }
 
-    if action == "prune":
-        pruned = _do_prune(agent)
-        return {
-            "result": f"Pruned {pruned} rows older than {agent.state['retention_days']} days.",
-            "pruned_rows": pruned,
-        }
 
-    if action == "flush":
-        _flush(agent)
-        return {
-            "result": "Buffers flushed to SQLite.",
-            "total_written": agent.state["total_written"],
-        }
+def _positive(payload, field):
+    """``payload[field]`` as a number above zero, or what is wrong with it, in words."""
+    value = _number(payload[field])
+    if value is None:
+        return f"{field} must be a number."
+    if value <= 0:
+        return f"{field} must be > 0."
+    return value
 
-    # ── query: serve stored history to other agents (e.g. an optimizer) ────
-    if action == "query":
-        db = get_db()
-        if not db:
-            return {"result": "Persistence not initialised — no data.", "rows": []}
-        _flush(agent)  # include anything still buffered
-        table = str(payload.get("table") or "ha_states").strip().lower()
-        try:
-            hours = float(payload.get("hours") or 24)
-            limit = min(int(payload.get("limit") or 1000), 5000)
-        except (TypeError, ValueError):
-            return {"result": "hours and limit must be a number.", "rows": []}
-        entity = payload.get("entity_id") or None
-        if table in ("sensors", "sensor", "sensor_readings"):
-            rows = db.query_sensor(
-                hours=hours,
-                entity_id=entity,
-                topic=payload.get("topic") or None,
-                field=payload.get("field") or None,
-                limit=limit,
-            )
-        elif table in ("ha_states", "ha", "states", "ha_state_changes"):
-            rows = db.query_ha_states(
-                hours=hours, entity_id=entity, domain=payload.get("domain") or None, limit=limit
-            )
-        elif table in ("detections", "detection"):
-            rows = db.query_detections(hours=hours, limit=limit)
-        elif table in ("actuations", "actuation"):
-            rows = db.query_actuations(hours=hours, entity_id=entity, limit=limit)
-        else:
-            return {
-                "result": f"Unknown table '{table}'. "
-                "Use: sensors | ha_states | detections | actuations."
-            }
-        return {
-            "result": f"{len(rows)} row(s) from {table} (last {hours:g} h"
-            + (f", entity={entity}" if entity else "")
-            + ").",
-            "table": table,
-            "hours": hours,
-            "count": len(rows),
-            "rows": rows,
-        }
 
-    # ── configure: change retention at runtime (persists across restarts) ──
-    if action == "configure":
-        changed = []
-        if payload.get("retention_days") is not None:
-            days = _number(payload["retention_days"])
-            if days is None:
-                return {"result": "retention_days must be a number."}
-            if days <= 0:
-                return {"result": "retention_days must be > 0."}
-            agent.state["retention_days"] = days
-            agent.persist("retention_days", days)
-            changed.append(f"retention_days={days:g}")
-        if payload.get("prune_interval_hours") is not None:
-            hrs = _number(payload["prune_interval_hours"])
-            if hrs is None:
-                return {"result": "prune_interval_hours must be a number."}
-            if hrs <= 0:
-                return {"result": "prune_interval_hours must be > 0."}
-            agent.state["prune_interval_s"] = hrs * 3600
-            agent.persist("prune_interval_hours", hrs)
-            changed.append(f"prune_interval_hours={hrs:g}")
-        if not changed:
-            return {"result": "Nothing to configure. Fields: retention_days, prune_interval_hours."}
-        pruned = _do_prune(agent)  # apply the new window immediately
-        return {
-            "result": f"Configured: {', '.join(changed)}. "
-            f"Pruned {pruned} row(s) outside the new window.",
-            "retention_days": agent.state["retention_days"],
-            "pruned_rows": pruned,
-        }
+async def _configure(agent, payload):
+    """Change retention at runtime; it persists across restarts."""
+    changed = []
+    if payload.get("retention_days") is not None:
+        days = _positive(payload, "retention_days")
+        if isinstance(days, str):
+            return {"result": days}
+        agent.state["retention_days"] = days
+        agent.persist("retention_days", days)
+        changed.append(f"retention_days={days:g}")
+    if payload.get("prune_interval_hours") is not None:
+        hrs = _positive(payload, "prune_interval_hours")
+        if isinstance(hrs, str):
+            return {"result": hrs}
+        agent.state["prune_interval_s"] = hrs * 3600
+        agent.persist("prune_interval_hours", hrs)
+        changed.append(f"prune_interval_hours={hrs:g}")
+    if not changed:
+        return {"result": "Nothing to configure. Fields: retention_days, prune_interval_hours."}
+    pruned = _do_prune(agent)  # apply the new window immediately
+    return {
+        "result": f"Configured: {', '.join(changed)}. "
+        f"Pruned {pruned} row(s) outside the new window.",
+        "retention_days": agent.state["retention_days"],
+        "pruned_rows": pruned,
+    }
 
-    # ── storage: on-demand size report (also published hourly) ─────────────
-    if action == "storage":
-        report = await _publish_storage_report(agent)
-        if "error" in report:
-            return {"result": report["error"]}
-        return {
-            "result": f"Database size: {report['db_size']} "
-            f"({report['db_bytes']} bytes) | rows: {report['table_rows']} | "
-            f"retention: {report['retention_days']:g} day(s).",
-            **report,
-        }
 
-    # ── natural-language fallback (non-expert users via @mention) ──────────
-    raw = str(payload.get("text") or action or "")
-    low = raw.lower()
-    m = re.search(
-        r"(?:keep|retain|store|hold)\D{0,24}?(\d+(?:\.\d+)?)\s*"
-        r"(day|days|d\b|hour|hours|hr|hrs|h\b|week|weeks|month|months)",
-        low,
-    )
+async def _storage(agent, _payload):
+    """The database's size on demand; it is also published hourly."""
+    report = await _publish_storage_report(agent)
+    if "error" in report:
+        return {"result": report["error"]}
+    return {
+        "result": f"Database size: {report['db_size']} "
+        f"({report['db_bytes']} bytes) | rows: {report['table_rows']} | "
+        f"retention: {report['retention_days']:g} day(s).",
+        **report,
+    }
+
+
+#: The actions a task names, and what answers each.
+TASKS = {
+    "stats": _stats,
+    "prune": _prune,
+    "flush": _flush_now,
+    "query": _query,
+    "configure": _configure,
+    "storage": _storage,
+}
+
+#: A request to keep so much data: a number and its unit.
+KEEP = re.compile(
+    r"(?:keep|retain|store|hold)\D{0,24}?(\d+(?:\.\d+)?)\s*"
+    r"(day|days|d\b|hour|hours|hr|hrs|h\b|week|weeks|month|months)"
+)
+
+
+def _days(n, unit):
+    """``n`` of ``unit`` (hours, days, weeks or months) in days."""
+    if unit.startswith("h"):
+        return n / 24
+    if unit.startswith("w"):
+        return n * 7
+    if unit.startswith("mo"):
+        return n * 30
+    return n
+
+
+def _hours_asked(low):
+    """The window a request for data names, in hours: 24 when it names none."""
+    hm = re.search(r"(\d+(?:\.\d+)?)\s*(hour|hours|h\b|day|days|d\b)", low)
+    if not hm:
+        return 24.0
+    return float(hm.group(1)) * (24 if hm.group(2).startswith("d") else 1)
+
+
+async def _understood(agent, payload, action):
+    """Answer a request in words (non-expert users via @mention), or say what is understood."""
+    low = str(payload.get("text") or action or "").lower()
+    m = KEEP.search(low)
     if m:
-        n = float(m.group(1))
-        unit = m.group(2)
-        if unit.startswith("h"):
-            days = n / 24
-        elif unit.startswith("w"):
-            days = n * 7
-        elif unit.startswith("mo"):
-            days = n * 30
-        else:
-            days = n
+        days = _days(float(m.group(1)), m.group(2))
         return await handle_task(agent, {"action": "configure", "retention_days": days})
     if any(k in low for k in ("storage", "how big", "db size", "disk", "space", "how much data")):
         return await handle_task(agent, {"action": "storage"})
     if any(k in low for k in ("give me", "send", "get", "query", "data of", "last ")) and any(
         k in low for k in ("data", "history", "readings", "states")
     ):
-        hm = re.search(r"(\d+(?:\.\d+)?)\s*(hour|hours|h\b|day|days|d\b)", low)
-        hours = 24.0
-        if hm:
-            hours = float(hm.group(1)) * (24 if hm.group(2).startswith("d") else 1)
-        return await handle_task(agent, {"action": "query", "table": "ha_states", "hours": hours})
-
+        return await handle_task(
+            agent, {"action": "query", "table": "ha_states", "hours": _hours_asked(low)}
+        )
     return {
         "result": "Available actions: stats, prune, flush, query, configure, storage. "
         "Natural language works too — e.g. 'keep only 1 day of data', "

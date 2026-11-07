@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Smoke-test a built Wactorz image beside a real broker.
 #
 # Passes when both servers answer liveness and readiness with 200, which means

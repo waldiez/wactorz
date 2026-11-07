@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """loads_lenient: the planner's JSON reader for model output.
 
 A plan carries generated Python inside a JSON string. A model writing that

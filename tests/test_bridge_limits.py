@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The bounds on how much of main's bridge one node may use."""
 
 import asyncio

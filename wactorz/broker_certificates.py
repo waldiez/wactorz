@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Issue the MQTT broker's TLS certificate: ``python -m wactorz.broker_certificates``.
 
 Run before a broker Wactorz provides starts -- by the add-on's ``run.sh`` and by

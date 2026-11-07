@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The store instances this process uses, and the accessors that reach them.
 
 Kept apart from the store classes themselves so those stay plain objects that a

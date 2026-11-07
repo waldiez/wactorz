@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Extension discovery.
 
 An extension is a module or package in wactorz/ext/, or one any installed
@@ -55,15 +56,19 @@ FUTURE: if an extension might need a teardown ordering or prerequisite like
 from __future__ import annotations
 
 import importlib
-import importlib.metadata
 import logging
 import pkgutil
 from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .. import installed
+from ._panel import PANEL_ICONS, PANELS, Panel, PanelIconError, icon_file_text, panel_problem
+
 if TYPE_CHECKING:
     from aiohttp.web import Application
+
+__all__ = ["PANELS", "PANEL_ICONS", "Panel"]
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +106,9 @@ class Extension(Protocol):  # pylint: disable=too-few-public-methods
     # Optional, checked with hasattr:
     #   def public_config(self, app: Application) -> dict[str, Any]: ...
     #     Non-secret config for the browser; merged into /api/config.
+    #
+    #   def panel(self, app: Application) -> Panel: ...
+    #     A dashboard tab: see ``_panel.py``.
     #
     #   __deps__: list[str] = ["swid"]
     #     Other extension short names that must finish setup() before on_ready().
@@ -174,7 +182,7 @@ def _from_entry_points(taken: set[str], *, refresh: bool = False) -> list[Extens
 
 def _entry_points() -> list[Any]:
     try:
-        return list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+        return installed.entry_points(ENTRY_POINT_GROUP)
     except Exception as exc:  # pragma: no cover - a broken installation
         log.warning("[ext] Could not read %s entry points: %s", ENTRY_POINT_GROUP, exc)
         return []
@@ -195,14 +203,20 @@ def setup_all(app: Application) -> None:
     __deps__ so they run after every setup()'s own on_startup hooks.
     """
     mods = discover()
+    panels: dict[str, Panel] = {}
+    icons: dict[str, str] = {}
 
     # Phase 1
     for mod in mods:
         try:
             mod.setup(app)
             log.info("[ext] %s loaded", getattr(mod, "__name__", mod))
+            _add_panel(panels, icons, mod, app)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             log.warning("[ext] %s setup failed: %s", getattr(mod, "__name__", mod), exc)
+
+    app[PANELS] = panels
+    app[PANEL_ICONS] = icons
 
     # Phase 2  — register, don't call; aiohttp runs them at server start
     for mod in _topo_sort_on_ready(mods):
@@ -210,6 +224,33 @@ def setup_all(app: Application) -> None:
         if hasattr(mod, "on_ready"):
             app.on_startup.append(mod.on_ready)  # pyright: ignore[reportAttributeAccessIssue]
             log.info("[ext] %s on_ready registered", name)
+
+
+def _add_panel(
+    panels: dict[str, Panel], icons: dict[str, str], mod: Extension, app: Application
+) -> None:
+    """Take the panel ``mod`` declares, if it declares one that can be shown, and its icon file."""
+    provider = getattr(mod, "panel", None)
+    if provider is None:
+        return
+    name = _short_name(mod)
+    try:
+        panel = provider(app)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        log.warning("[ext] %s has no dashboard tab: panel() failed: %s", name, exc)
+        return
+    problem = panel_problem(name, panel)
+    if problem:
+        log.warning("[ext] %s has no dashboard tab: %s", name, problem)
+        return
+    panels[name] = panel
+    try:
+        text = icon_file_text(panel)
+    except PanelIconError as exc:
+        log.warning("[ext] %s's tab has the default icon: %s", name, exc)
+        return
+    if text is not None:
+        icons[name] = text
 
 
 def collect_public_config(app: Application) -> dict[str, Any]:

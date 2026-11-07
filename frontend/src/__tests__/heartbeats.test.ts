@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * The two bits of a card that say when an agent was last heard from.
@@ -12,8 +11,8 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 
-import { Heartbeats } from "../ui/dashboard/heartbeats";
-import { QUIET_MS, STALE_MS } from "../ui/dashboard/agentState";
+import { Heartbeats } from "../ui/overview/heartbeats";
+import { QUIET_MS, STALE_MS } from "../agents/liveness";
 
 let root: HTMLElement;
 

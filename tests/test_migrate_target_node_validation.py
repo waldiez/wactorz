@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """migrate_agent refuses targets that don't exist or are offline.
 
 Migrating to a node nobody has heard of (typo, powered-off Pi, runner never

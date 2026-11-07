@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The programs the catalogue hands to a DynamicAgent compile, and keep to the rules.
 
 A catalogue program is source sent in a spawn config's `code` and exec'd at

@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+import base64
 import hashlib
+import json
 import unittest
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -345,7 +349,6 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
         self.assertEqual(result, "2026-06-27T15:00:00+00:00")
 
     def test_to_utc_naive_treated_as_local(self):
-        from datetime import datetime, timezone
 
         naive = "2026-06-27T17:00:00"
         result = ha_helper.to_utc(naive)
@@ -371,7 +374,6 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
         ts = result["sensor.temp"][0]["last_changed"]
         # Converted to local tz — must no longer be UTC (+00:00) if local offset is non-zero,
         # but always a valid ISO string parseable by fromisoformat.
-        from datetime import datetime
 
         dt = datetime.fromisoformat(ts)
         self.assertIsNotNone(dt.tzinfo)
@@ -389,7 +391,6 @@ class HomeAssistantHelperPureTest(unittest.TestCase):
         }
         result = ha_helper.localise_history_timestamps(history)
         ts = result["sensor.temp"][0]["last_changed"]
-        from datetime import datetime
 
         dt = datetime.fromisoformat(ts)
         self.assertIsNotNone(dt.tzinfo)
@@ -1036,7 +1037,6 @@ class HomeAssistantHelperCameraTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_get_camera_snapshot_success(self):
-        import base64
 
         image_bytes = b"\xff\xd8\xff" + b"\x00" * 10  # minimal fake JPEG
         _FakeClientSession.get_results = [
@@ -1301,7 +1301,6 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
     # -- start_time / end_time as datetime ---------------------------------
 
     async def test_start_time_datetime_appears_in_url_path(self):
-        from datetime import datetime, timezone
 
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
         dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -1313,7 +1312,6 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(dt.isoformat(), called_url)
 
     async def test_end_time_datetime_appears_in_params(self):
-        from datetime import datetime, timezone
 
         _FakeClientSession.get_results = [_FakeResponse(status=200, json_data=[])]
         dt = datetime(2024, 6, 2, 0, 0, 0, tzinfo=timezone.utc)
@@ -1507,9 +1505,8 @@ class CompactDevicesForPromptTest(unittest.TestCase):
         self.assertNotIn("attributes", result[2]["entities"][0])
 
     def test_is_substantially_smaller(self):
-        import json as _json
 
         payload = self._payload()
-        before = len(_json.dumps(payload))
-        after = len(_json.dumps(ha_helper.compact_devices_for_prompt(payload)))
+        before = len(json.dumps(payload))
+        after = len(json.dumps(ha_helper.compact_devices_for_prompt(payload)))
         self.assertLess(after, before * 0.6)

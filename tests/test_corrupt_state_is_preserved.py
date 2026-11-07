@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An unreadable state file must survive being unreadable.
 
 Every load path treated a corrupt file as absent: log it, start with empty state,

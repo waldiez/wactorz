@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How long an actor's messages wait in its mailbox, and how long it takes over them.
 
 Every actor takes its messages one at a time, so a slow handler shows twice:

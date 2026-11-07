@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CATALOG AGENT — anomaly-detector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Learns "normal" patterns from historical time-series data (SQLite), then
@@ -626,30 +627,31 @@ async def _rebuild_baselines(agent) -> None:
     await agent.log(f"Baselines rebuilt: {built} ready / {len(baselines)} total entities")
 
 
+def _entity_ids(db) -> list[str]:
+    """The entity ids the time-series tables hold, sorted. Run on a thread.
+
+    Through `transaction()`, which holds the store's lock: the connection is shared
+    with every other writer in the process. Not a newer helper of the store's: this
+    program runs on nodes too, which may be on an earlier release of the series.
+    """
+    found: set[str] = set()
+    with db.transaction() as conn:
+        for table in ("sensor_readings", "ha_state_changes"):
+            rows = conn.execute(
+                f"SELECT DISTINCT entity_id FROM {table} WHERE entity_id != '' LIMIT 200"  # noqa: S608 - table from the tuple above
+            ).fetchall()
+            found.update(str(r[0]) for r in rows)
+    return sorted(found)
+
+
 async def _discover_entities(agent) -> list[str]:
-    """Auto-discover entities from the time-series store."""
-    entities = set()
-
+    """Auto-discover entities from the time-series store, read on a thread."""
     try:
-        # Check sensor_readings for distinct entity_ids
         db = get_db()
-        if db:
-            rows = db.conn.execute(
-                "SELECT DISTINCT entity_id FROM sensor_readings WHERE entity_id != '' LIMIT 200"
-            ).fetchall()
-            for r in rows:
-                entities.add(r[0])
-
-            # Check ha_state_changes for distinct entity_ids
-            rows = db.conn.execute(
-                "SELECT DISTINCT entity_id FROM ha_state_changes WHERE entity_id != '' LIMIT 200"
-            ).fetchall()
-            for r in rows:
-                entities.add(r[0])
+        return await asyncio.to_thread(_entity_ids, db) if db else []
     except Exception:
         logger.debug("could not list entities from the time-series tables", exc_info=True)
-
-    return sorted(entities)
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════

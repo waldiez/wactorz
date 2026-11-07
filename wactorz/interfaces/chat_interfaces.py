@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat interfaces — connect users to the orchestrator via different channels.
 
 Each channel lives in `interfaces.chat`; this module composes them and keeps

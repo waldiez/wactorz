@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the generic dynamic-agent to Main interface bridge."""
 
 import asyncio
@@ -61,7 +62,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
             sent.append((target, message_type, payload))
             replied.set()
 
-        actor.process_user_input = AsyncMock(side_effect=process)
+        actor.process_user_input_restricted = AsyncMock(side_effect=process)
         actor.send = send  # pyright: ignore[reportAttributeAccessIssue]
         # The robot as main finds it: a catalogue agent running the catalogue's program.
         robot = types.SimpleNamespace(name="reachy-mini", _trusted=True)

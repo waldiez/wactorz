@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Wactorz docs builder.
 
 Converts docs/*.md → static/docs/*.html using a custom dark template that matches
@@ -13,6 +14,7 @@ Usage:
 
 import argparse
 import http.server
+import json
 import os
 import re
 import shutil
@@ -351,6 +353,26 @@ def _redirect(target: str) -> str:
     return f'<!DOCTYPE html><meta http-equiv="refresh" content="0; url={target}"><a href="{target}">{target}</a>\n'
 
 
+#: A 1x1 transparent ICO, for a checkout whose frontend has no icon.
+_PLACEHOLDER_ICO = bytes.fromhex(
+    "000001000100010100000100010030000000160000002800000001000000020000000100010000"
+    "000000080000000000000000000000020000000000000000000000ffffff000000000000000000"
+)
+
+
+def write_favicon(site_dir: Path, public: Path = ROOT / "frontend" / "public") -> None:
+    """Give the site the dashboard's icon, copied on every build so a changed one reaches it.
+
+    Where the frontend has no icon, a placeholder keeps the dev server free of 404s.
+    """
+    favicon = site_dir / "favicon.ico"
+    for candidate in (public / "icon.ico", public / "favicon.ico"):
+        if candidate.exists():
+            shutil.copy(candidate, favicon)
+            return
+    favicon.write_bytes(_PLACEHOLDER_ICO)
+
+
 def build(site_dir: Path = SITE) -> None:
     _ensure_markdown()
 
@@ -361,101 +383,7 @@ def build(site_dir: Path = SITE) -> None:
     if assets_src.is_dir():
         shutil.copytree(assets_src, site_dir / "assets", dirs_exist_ok=True)
 
-    # Favicon placeholder (1x1 transparent ICO — avoids 404 noise in dev server)
-    favicon = site_dir / "favicon.ico"
-    if not favicon.exists():
-        frontend_dir = ROOT / "frontend"
-        front_icon = frontend_dir / "public" / "icon.ico"
-        if not front_icon.exists():
-            front_icon = frontend_dir / "public" / "favicon.ico"
-        if not front_icon.exists():
-            # Minimal valid ICO file (1x1 transparent)
-            favicon.write_bytes(
-                bytes(
-                    [
-                        0,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        1,
-                        1,
-                        0,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        48,
-                        0,
-                        0,
-                        0,
-                        22,
-                        0,
-                        0,
-                        0,
-                        40,
-                        0,
-                        0,
-                        0,
-                        1,
-                        0,
-                        0,
-                        0,
-                        2,
-                        0,
-                        0,
-                        0,
-                        1,
-                        0,
-                        1,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        8,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        2,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        255,
-                        255,
-                        255,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                    ]
-                )
-            )
-        else:
-            shutil.copy(front_icon, favicon)
+    write_favicon(site_dir)
 
     # Copy landing page, stamping the current version into the badge
     version = _get_version()
@@ -468,7 +396,6 @@ def build(site_dir: Path = SITE) -> None:
         print(f"  landing  → static/docs/index.html  (v{version})")
 
     # Write versions.json with the current release
-    import json
 
     versions = [
         {"version": "latest", "title": "latest", "aliases": ["stable"]},
@@ -713,9 +640,8 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
             path = path.split("?", 1)[0].split("#", 1)[0]
             result = super().translate_path(path)
             # serve index.html for bare directory paths
-            from pathlib import Path as P
 
-            p = P(result)
+            p = Path(result)
             if p.is_dir():
                 idx = p / "index.html"
                 if idx.exists():

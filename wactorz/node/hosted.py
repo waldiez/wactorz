@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node adds to any agent it runs, whatever the agent's own class.
 
 A node runs two kinds of agent: generated code (`NodeAgent`, a
@@ -166,6 +167,15 @@ class NodeHosted(_Base):
     @property
     def node(self) -> str:
         return self._node
+
+    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+        """Send ``manifest`` naming this node, and that a task reaches it on the node's own topic.
+
+        Whatever kind of agent this is, so a node that resolves an address from
+        the manifests it hears (`wactorz.core.agent_directory`) knows where every
+        agent of a node of this release runs, and how to send to it.
+        """
+        await super()._send_manifest({**manifest, "node": self._node, "tasks_by_node": True})
 
     # ── Tasks, which arrive on a topic rather than in a mailbox ───────────────
 

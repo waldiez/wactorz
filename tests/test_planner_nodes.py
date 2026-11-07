@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The planner is told which machines there are, and how an agent reads its own.
 
 A request such as "monitor the CPU on raspberrypi" names a machine and asks for
@@ -9,8 +10,6 @@ is told instead: the nodes, what each machine is and whether it takes an agent
 now, that an agent reads its machine with psutil, and that a plan which cannot
 be built says so rather than spawning something to ask.
 """
-
-from __future__ import annotations
 
 import dataclasses
 from pathlib import Path

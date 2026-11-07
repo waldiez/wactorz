@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``sudo wactorz-node setup-local``: a node on this machine, for code main should not run.
 
 Main holds every credential the deployment has. Code a model writes, possibly

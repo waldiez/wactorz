@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An interrupted state save must not destroy the state it was replacing.
 
 Writing in place truncates the file first, so a crash partway through left a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Refreshing model prices from LiteLLM's catalogue.
 
 The fetch happens at most once a day and never twice at once. Only entries that

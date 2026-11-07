@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A subscribe callback that keeps failing is repaired in place, memory intact.
 
 The same path a crashing process() takes: at three straight failures the model

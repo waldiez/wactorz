@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Following the log live, without the stream feeding itself.
 
 An open page keeps up with the log instead of showing whatever it fetched when

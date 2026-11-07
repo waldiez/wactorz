@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """User-facing chat interfaces (CLI, Discord, Telegram, WhatsApp).
 
 An explicit package rather than an implicit namespace one: a directory of the

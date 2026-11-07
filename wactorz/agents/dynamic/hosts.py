@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the AgentAPI mixins require of the object they are mixed into.
 
 Typing-only, like `agents/planner/hosts.py` and `agents/mixins/host.py`: nothing

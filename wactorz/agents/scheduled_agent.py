@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ScheduledAgent — first-class scheduled trigger primitive.
 
 Fires an MQTT event at a configured schedule. Designed to be paired with a
@@ -66,11 +67,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # Python < 3.9 — should not happen in this codebase
-    ZoneInfo = None  # type: ignore[assignment]
+from zoneinfo import ZoneInfo
 
 from ..core.actor import Actor, Message, MessageType
 from .lookup import find_main_actor
@@ -202,7 +199,7 @@ def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
     """
     candidates = [spec_tz, user_tz]
     for cand in candidates:
-        if cand and ZoneInfo is not None:
+        if cand:
             try:
                 return ZoneInfo(cand)
             except Exception:
@@ -300,7 +297,7 @@ def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
     Falls back to ValueError if not, with a hint to use structured form.
     """
     try:
-        from croniter import croniter
+        from croniter import croniter  # optional dependency: the `cron` extra
     except ImportError as e:
         raise ScheduleError.no_croniter() from e
     try:
@@ -592,7 +589,7 @@ class ScheduledAgent(Actor):
             main = find_main_actor(self._registry)
             if main:
                 try:
-                    main._remove_from_spawn_registry(self.name)
+                    main._remove_from_spawn_registry(self.name, actor_id=self.actor_id)
                 except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                     pass
         await self.stop()

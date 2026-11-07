@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Signing what a node publishes, so main can tell which node said it.
 
 Every node's broker account may write the topics agents share -- a task's

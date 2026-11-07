@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Model pricing: the catalogue fetch, the fallback table, and cost arithmetic.
 
 The fallback is used when the fetch fails or a model is absent upstream. Prefix

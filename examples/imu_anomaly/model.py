@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model: the mean of normal motion and the inverse of its covariance.
 
 Two named arrays, saved as an ``.npz`` and kept on main with
@@ -21,6 +22,8 @@ MODEL_FILE = Path(__file__).with_name("imu_model.npz")
 #: `run.py` finds.
 STATE_DIR = Path(__file__).with_name("state")
 AXES = ("ax", "ay", "az")
+#: Readings this far from normal, in units of its spread, are anomalies.
+THRESHOLD = 4.0
 
 
 def fit(samples: np.ndarray) -> dict[str, np.ndarray]:

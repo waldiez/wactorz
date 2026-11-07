@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Server-side speech: what the TTS routes accept, and what they send back.
 
 Speech is synthesised by an outside service, so the route takes a POST with a
@@ -8,6 +9,7 @@ signal for the dashboard to fall back to the browser's own speech.
 Driven through the real extension routes with a stand-in `edge_tts`.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -80,6 +82,24 @@ class TestVoices:
         monkeypatch.setattr(_EdgeTts, "list_voices", _refuse)
 
         assert await (await client.get("/api/tts/voices")).json() == []
+
+    async def test_a_service_that_never_answers_lists_none_rather_than_waiting(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The list is read while the server starts: an answer that never comes
+        # must not hold the start back with it.
+        tts._tts_state.voices = None
+        monkeypatch.setattr(tts, "VOICE_LIST_TIMEOUT_S", 0.05)
+
+        async def _never() -> list[dict[str, str]]:
+            await asyncio.Event().wait()
+            return []
+
+        monkeypatch.setattr(_EdgeTts, "list_voices", _never)
+
+        response = await asyncio.wait_for(client.get("/api/tts/voices"), 30)
+
+        assert await response.json() == []
 
     async def test_without_edge_tts_nothing_is_fetched(
         self, monkeypatch: pytest.MonkeyPatch

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """FlicAgent — Flic buttons as MQTT triggers.
 
 Pairs buttons over Bluetooth from chat (`@flic pair`, `@flic scan`,...) and turns

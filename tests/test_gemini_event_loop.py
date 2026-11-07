@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GeminiProvider must not block the shared event loop.
 
 Every actor in the process runs on one loop. A provider that calls the

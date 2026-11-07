@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * AmbientManager — procedural background soundscapes via Web Audio API.
@@ -254,11 +253,18 @@ export class AmbientManager {
     constructor() {
         this._track = readTrack();
         this._volume = readVolume();
+    }
 
-        // Listen for TTS audio events — decoupled via the event bus so
-        // TTSManager doesn't need to import AmbientManager directly.
-        listen("tts-audio-start", () => this.duck(true));
-        listen("tts-audio-end", () => this.duck(false));
+    /**
+     * Duck while speech plays; returns the way to stop. Decoupled via the event
+     * bus so TTSManager doesn't need to import AmbientManager directly.
+     */
+    followSpeech(): () => void {
+        const stops = [
+            listen("tts-audio-start", () => this.duck(true)),
+            listen("tts-audio-end", () => this.duck(false)),
+        ];
+        return () => stops.forEach(stop => stop());
     }
 
     /** Currently selected track id. */

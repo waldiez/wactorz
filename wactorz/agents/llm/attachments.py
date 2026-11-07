@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning stored attachments into something a model can read.
 
 A chat turn carries attachment ids; a model request carries content blocks. This

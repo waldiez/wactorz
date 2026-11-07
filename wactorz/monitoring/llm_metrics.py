@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How many requests reach each LLM provider, how they end, and how long they take.
 
 Recorded where every provider is called from, `LLMProvider`'s public methods,

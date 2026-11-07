@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How much of main's bridge one node may use.
 
 The bridge answers model calls and history reads for agents on nodes, and the
@@ -25,8 +26,6 @@ lane (see :mod:`.llm_bridge`), so a node cannot spend another's allowance. With
 take a fresh allowance under an invented name: the limits are per node, and only
 signing makes a node's name its own.
 """
-
-from __future__ import annotations
 
 import asyncio
 import time

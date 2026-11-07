@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+import base64
 import json
 import os
 import tempfile
@@ -116,7 +118,6 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(method, "POST")
         self.assertEqual(path, "/users/me/drafts")
         raw = client._rest_request.await_args_list[-1].kwargs["json_body"]["message"]["raw"]
-        import base64
 
         decoded = base64.urlsafe_b64decode(raw).decode()
         self.assertIn("To: sam@x.com", decoded)
@@ -124,7 +125,6 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("running late", decoded)
 
     async def test_read_email_extracts_body_and_decodes(self):
-        import base64
 
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent's name becomes a directory, so it has to be refused as one.
 
 Replacing separators is not enough: `..` contains none, so it survived the

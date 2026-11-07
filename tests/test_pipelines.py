@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A pipeline declared in code: steps, a schedule and rules, wired and checked.
 
 Each step stays an agent of its own; the pipeline is the record that groups

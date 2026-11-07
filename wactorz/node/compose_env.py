@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``python -m wactorz.node.compose_env``: the sandbox node's settings, in the compose stack.
 
 In the compose stack the sandbox node is a container, not a machine ``/deploy``

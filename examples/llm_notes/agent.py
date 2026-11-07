@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent that uses the system's language model.
 
 Notes arrive on MQTT; the agent asks the model for a one-line summary and

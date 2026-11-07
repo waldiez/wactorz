@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * What the dashboard tells assistive technology about the elements a person
@@ -8,11 +7,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { buildWactorCard, type WactorCardCallbacks } from "../ui/dashboard/cards";
-import { buildNodeCard } from "../ui/dashboard/nodeCard";
-import { buildHeader, buildBottomNav, releaseBottomNav, releaseHeaderPopovers } from "../ui/dashboard/header";
-import { buildChatPane, buildChatSidebar } from "../ui/dashboard/chatLayout";
-import { confirmDialog } from "../ui/dashboard/confirmDialog";
+import { buildWactorCard, type WactorCardCallbacks } from "../ui/overview/cards";
+import { buildNodeCard } from "../ui/overview/nodeCard";
+import { buildHeader, buildBottomNav, releaseBottomNav, releaseHeaderPopovers } from "../ui/shell/header";
+import { buildChatPane, buildChatSidebar } from "../ui/chat/chatLayout";
+import { confirmDialog } from "../ui/shell/confirmDialog";
 import type { AgentInfo } from "../types/agent";
 import { allByRole, allByTestId, byRole, byTestId, nameOf } from "./queries";
 
@@ -78,7 +77,15 @@ describe("the header", () => {
     it("puts the view buttons in a navigation landmark, the open one marked current", () => {
         const nav = byRole(header(), "navigation", "Views");
 
-        expect(allByRole(nav, "button").map(nameOf)).toEqual(["Overview", "Feed", "Chat", "Settings"]);
+        expect(allByRole(nav, "button").map(nameOf)).toEqual([
+            "Overview",
+            "Wiring",
+            "Feed",
+            "Chat",
+            "Models",
+            "Inbox",
+            "Settings",
+        ]);
         expect(byRole(nav, "button", "Chat").getAttribute("aria-current")).toBe("page");
     });
 

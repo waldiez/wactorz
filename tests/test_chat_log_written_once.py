@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A chat turn is stored once, by whichever side carried it.
 
 The dashboard's WebSocket writes both halves of every turn it routes, and

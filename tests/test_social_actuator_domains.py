@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The actuator's domain gate — the layer under ``process_user_input_restricted``.
 
 The restricted entry point refuses spawn/delete/code, but it *allows* device

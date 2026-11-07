@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main's stored history, as read from a node.
 
 A node keeps no time series, detections or Home Assistant state changes: those

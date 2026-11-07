@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Values JSON cannot hold come back as what they were.
 
 An agent's state is JSON wherever it leaves its process: a node's state file and

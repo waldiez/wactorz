@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import json as json_
 import unittest
 from unittest.mock import patch

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The seam between the chat surfaces and whatever answers them.
 
 A person types somewhere -- the dashboard, the REST API, the terminal, Discord,
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from .agents.lookup import MAIN_ACTOR_NAME
 from .agents.main.commands import registry as main_command_registry
 from .agents.main.commands.dispatch import REWRITES, Form
-from .core.actor import Actor, ActorState
+from .core.actor import Actor, ActorState, declared_topics
 from .core.task_text import reply_text, task_payload
 from .core.turns import acting_as
 from .errors import StartupError
@@ -307,13 +308,9 @@ def _declared_topics(actor: Actor) -> tuple[tuple[str, ...], tuple[str, ...]]:
         publishes = (spec.publishes,) if spec.publishes else ()
         return tuple(spec.subscribes), publishes
     cls = type(actor)
-    return _topic_tuple(getattr(cls, "SUBSCRIBES", ())), _topic_tuple(getattr(cls, "PUBLISHES", ()))
-
-
-def _topic_tuple(value: Any) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return (value,) if value else ()
-    return tuple(str(topic) for topic in value or ())
+    return declared_topics(getattr(cls, "SUBSCRIBES", ())), declared_topics(
+        getattr(cls, "PUBLISHES", ())
+    )
 
 
 def _split_mention(text: str) -> tuple[str, str]:

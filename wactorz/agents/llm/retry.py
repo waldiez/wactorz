@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Retry, backoff and a per-attempt timeout for LLM requests.
 
 Applied in ``LLMProvider``'s public methods, so every provider inherits this the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The agents a deployment brings: found, built and offered the way built-ins are.
 
 An entry point, a `WACTORZ_AGENTS` target or an object handed to `wactorz.run`
@@ -12,8 +13,9 @@ from typing import Any, ClassVar
 
 import pytest
 
-from wactorz import plugins
+from wactorz import app, plugins
 from wactorz.agents.function_agent import FunctionAgent, agent
+from wactorz.agents.recorder_agent import RecorderAgent
 from wactorz.core.actor import Actor, Message
 
 
@@ -127,12 +129,119 @@ class TestBuild:
         assert callable(recipe["factory"])
 
 
+class TakesAnything(Actor):
+    """Hands whatever it is given on to Actor, as a subclass written in a hurry does."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.extra = kwargs.pop("extra", None)
+        super().__init__(**kwargs)
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+class NamesTheModel(Actor):
+    def __init__(self, llm_provider: Any = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.llm_provider = llm_provider
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+class BehindPassThrough(NamesTheModel):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+
+
+class TestBuildingAClassThatTakesKeywords:
+    """``**kwargs`` usually reaches Actor.__init__, which refuses what it does not know."""
+
+    def test_it_is_not_given_the_model_it_never_names(self, tmp_path: Path) -> None:
+        plugin = plugins.plugin_from(TakesAnything)
+
+        with_model = plugin.build(persistence_dir=str(tmp_path), llm_provider=object())
+        without = plugin.build(persistence_dir=str(tmp_path))
+
+        assert isinstance(with_model, TakesAnything) and isinstance(without, TakesAnything)
+
+    def test_it_still_gets_every_option_the_spawn_names(self, tmp_path: Path) -> None:
+        built = plugins.plugin_from(TakesAnything).build(
+            persistence_dir=str(tmp_path), options={"extra": 5}
+        )
+
+        assert isinstance(built, TakesAnything) and built.extra == 5
+
+    def test_a_model_named_further_up_is_still_given(self, tmp_path: Path) -> None:
+        provider = object()
+
+        built = plugins.plugin_from(BehindPassThrough).build(
+            persistence_dir=str(tmp_path), llm_provider=provider
+        )
+
+        assert isinstance(built, BehindPassThrough) and built.llm_provider is provider
+
+    def test_the_id_kept_for_it_reaches_actor(self, tmp_path: Path) -> None:
+        kept = "0b6c2a52-6f7e-4d0a-9a39-0c1f3e6f2d11"
+
+        built = plugins.plugin_from(TakesAnything).build(
+            persistence_dir=str(tmp_path), actor_id=kept
+        )
+
+        assert built.actor_id == kept
+
+
+class MachineRecorder(RecorderAgent):
+    AGENT_NAME = "machine-recorder"
+
+
+class Waits(Actor):
+    AUTOSTART = False
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+def _started_with(objs: list[Any]) -> set[str]:
+    """The names a system started with ``objs``, as `wactorz.serve` gives them, would start."""
+    with plugins.registered(objs):
+        return {p.name for p in app.startable_plugins(plugins.discover(env="").values())}
+
+
+class TestGivenToServe:
+    def test_a_recorder_subclass_is_started(self) -> None:
+        assert "machine-recorder" in _started_with([MachineRecorder])
+
+    def test_an_agent_that_says_it_waits_still_waits(self) -> None:
+        assert "waits" not in _started_with([Waits])
+
+    def test_the_packages_own_recorder_is_not_started(self) -> None:
+        assert app.startable_plugins(plugins.built_in().values()) == []
+
+
+#: What the package brings of its own, found whatever a deployment names.
+BUILT_IN = {"recorder", "trainer", "drift"}
+
+
 class TestDiscover:
     def test_targets_named_in_the_environment_are_loaded(self) -> None:
         found = plugins.discover(env="tests.test_plugins:Probe, tests.test_plugins:decorated")
 
         assert set(found) == {"probe", "decorated"}
         assert found["probe"].target == "tests.test_plugins:Probe"
+
+    def test_the_packages_own_agents_are_apart_from_the_deployments(self) -> None:
+        assert set(plugins.discover(env="")) == set()
+        own = plugins.built_in()
+
+        assert set(own) == BUILT_IN
+        recorder = own["recorder"]
+        assert recorder.target == "wactorz.agents.recorder_agent:RecorderAgent"
+        assert recorder.autostart is False
+        assert recorder.recipe()["type"] == "native"
+        assert plugins.for_name("recorder") is not None
+        assert plugins.for_target(recorder.target) is not None
+        assert recorder.target in plugins.targets()
 
     def test_a_bad_target_is_skipped_not_fatal(self, caplog: pytest.LogCaptureFixture) -> None:
         found = plugins.discover(env="no.such.module:Thing json:dumps tests.test_plugins:Probe")

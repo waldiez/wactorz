@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Small network predicates shared by the layers that make exposure decisions.
 
 Its own module because two unrelated places ask the same question — the MQTT

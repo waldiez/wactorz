@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Results that can be awaited without doing anything.
 
 Several agent API calls are synchronous but get `await`ed anyway by generated

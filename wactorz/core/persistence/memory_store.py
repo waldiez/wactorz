@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Process-local store for ephemeral values, with optional per-key expiry.
 
 Holds the high-frequency values that normal operation regenerates — observed

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The model routes: reading the store, and moving its pointers from the dashboard.
 
 Each move is the store's own, recorded as made by the dashboard, and refused in
@@ -115,6 +116,31 @@ async def test_clearing_the_shadow_ends_the_trial(client: TestClient, store: Art
 
     assert response.status == 200
     assert store.pointer("imu", "shadow") is None
+
+
+async def test_a_clear_keeps_its_reason(client: TestClient, store: ArtifactStore) -> None:
+    await client.post("/api/models/imu/shadow", json={"version": 2})
+
+    response = await client.delete("/api/models/imu/shadow", json={"reason": " too noisy "})
+
+    assert response.status == 200
+    cleared = store.pointer_changes()[0][-1]
+    assert (cleared["change"], cleared["by"], cleared["reason"]) == (
+        "cleared",
+        "dashboard",
+        "too noisy",
+    )
+
+
+async def test_a_clear_with_a_reason_that_is_not_text_is_refused(
+    client: TestClient, store: ArtifactStore
+) -> None:
+    await client.post("/api/models/imu/shadow", json={"version": 2})
+
+    response = await client.delete("/api/models/imu/shadow", json={"reason": 3})
+
+    assert response.status == 400
+    assert store.pointer("imu", "shadow") is not None
 
 
 @pytest.mark.parametrize(

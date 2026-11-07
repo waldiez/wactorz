@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """``GET /api/nodes``: the nodes main knows, for a page that opens after they said so.
 
 A node's manifest is retained, so it reaches the server once, when it

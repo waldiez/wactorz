@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What MainActor reports about remote nodes, pinned as it is.
 
 Four readers share one dict of heartbeats: the node listing the dashboard and

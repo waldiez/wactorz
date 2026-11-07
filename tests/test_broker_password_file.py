@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every broker Wactorz configures can rewrite its own password file.
 
 `mosquitto_passwd -c` creates the file and refuses when one is already there,
@@ -12,6 +13,8 @@ compose runs, which is the one the broker tests run against.
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -100,19 +103,31 @@ def _compose_broker(name: str) -> str:
     return compose["services"]["mosquitto"]["image"]
 
 
-def _tested_broker() -> str:
-    text = (ROOT / "ci" / "tools" / "Dockerfile").read_text(encoding="utf-8")
-    found = re.search(rf"^FROM {_BROKER_IMAGE} AS mosquitto$", text, re.MULTILINE)
-    assert found is not None, "the tools Dockerfile pins mosquitto by tag and digest"
-    return found.group(1)
+def test_the_dev_stack_runs_the_broker_the_stack_runs() -> None:
+    # Both compose files belong to Dependabot's compose updater, so a bump moves
+    # them in one pull request; a difference is an edit made by hand to one.
+    assert _compose_broker("compose.dev.yaml") == _compose_broker("compose.yaml")
 
 
-@pytest.mark.parametrize("name", ["compose.yaml", "compose.dev.yaml"])
-def test_compose_runs_the_broker_the_broker_tests_run(name: str) -> None:
-    # Dependabot moves the two in separate pull requests. What each rule of the
-    # access list allows is checked against the tools image, so a compose broker
-    # on another release would be running a list nothing had tried on it.
-    assert _compose_broker(name) == _tested_broker(), (
-        f"Dependabot moved one of them: give {name}'s mosquitto and the `AS mosquitto` "
-        "line in ci/tools/Dockerfile the same image, then run `make test-broker`"
+@pytest.mark.skipif(sys.platform == "win32", reason="runs make, which the Windows runner lacks")
+def test_the_broker_tests_run_the_broker_compose_runs() -> None:
+    # What each rule of the access list allows is checked against the broker the
+    # tests start, so the stack must run that same one. It is pinned once, in
+    # compose.yaml, and the Makefile reads it from there for `test-broker`,
+    # `soak` and `image-smoke`: a second pin elsewhere would be bumped by another
+    # updater, in a pull request of its own that neither half could pass.
+    printed = subprocess.run(
+        ["make", "-s", "tool-image", "NAME=mosquitto"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    ).stdout.strip()
+
+    assert re.fullmatch(_BROKER_IMAGE, printed), "compose.yaml pins mosquitto by tag and digest"
+    assert printed == _compose_broker("compose.yaml")
+    tools = (ROOT / "ci" / "tools" / "Dockerfile").read_text(encoding="utf-8")
+    assert not re.search(r"^FROM eclipse-mosquitto", tools, re.MULTILINE), (
+        "one pin, in compose.yaml"
     )

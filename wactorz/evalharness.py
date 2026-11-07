@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Call-site evaluation harness — compare SLMs/LLMs per framework call site.
 
 Runs a benchmark of prompts for each LLM call site against one or more model

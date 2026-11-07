@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the operator refused lately, so a model trying again is not asked again.
 
 A model that is told no often tries the same thing once more, sometimes in the

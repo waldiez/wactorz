@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the packaging build hook's rebuild decision.
 
 The hook decides whether ``static/app`` (committed, and shipped in the wheel)
@@ -8,7 +9,9 @@ bundled dashboard does not match its source.
 """
 
 import importlib.util
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -82,8 +85,6 @@ class TestIsStale:
         """The reason this is content-hashed rather than timestamped."""
         hook._record_fingerprint(_frontend(project))
         src = _frontend(project) / "src" / "main.ts"
-        import os
-        import time
 
         os.utime(src, (time.time() + 10_000, time.time() + 10_000))
         assert not hook._is_stale(_dist(project), _frontend(project))

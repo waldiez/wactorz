@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A library agent on a node has its models, and answers as it does on main.
 
 A function declared with ``@wactorz.agent`` names its models in its code, which

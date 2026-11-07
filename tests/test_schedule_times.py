@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Working out when a scheduled agent should next fire.
 
 These are pure functions over a supplied "now", so every case pins a real clock

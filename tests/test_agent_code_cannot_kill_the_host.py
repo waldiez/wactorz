@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Generated code cannot take the process down with it.
 
 An agent's program is written by a model, and a model asked for an agent that

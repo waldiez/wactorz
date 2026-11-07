@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Running a plan: making sure its agents exist, then driving the steps.
 
 Steps marked parallel run together; the rest wait on what they depend on. The

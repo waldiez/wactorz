@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A deploy puts a node on TLS only when its broker answers TLS from that node.
 
 Switching a node to TLS on a broker that serves none would strand it: the runner

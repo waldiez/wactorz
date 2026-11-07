@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A Gemini stream that stops early must say so.
 
 The provider bridges the synchronous SDK generator to async through a queue. If

@@ -267,7 +267,7 @@ uvicorn with <code>--loop asyncio:SelectorEventLoop</code>, or set
 kernel already uses the selector loop.</p>
 <h2 id="or-register-it-and-start-wactorz-as-usual">Or register it, and start <code>wactorz</code> as usual</h2>
 <p>For a deployment that runs the <code>wactorz</code> command, name the agent instead of
-writing a script. Three ways, all equivalent:</p>
+writing a script:</p>
 <table>
 <thead>
 <tr>
@@ -284,12 +284,12 @@ writing a script. Three ways, all equivalent:</p>
 </tr>
 <tr>
 <td><code>[project.entry-points."wactorz.agents"]</code> in <code>pyproject.toml</code></td>
-<td>your package</td>
-<td>anything <code>pip install</code>ed</td>
+<td>your package, named in <code>WACTORZ_EXTENSIONS</code></td>
+<td>an installed package</td>
 </tr>
 <tr>
 <td><code>[project.entry-points."wactorz.extensions"]</code> in <code>pyproject.toml</code></td>
-<td>your package</td>
+<td>your package, named in <code>WACTORZ_EXTENSIONS</code></td>
 <td>a server extension (routes, <code>/api/config</code> values) loaded like those in <code>wactorz/ext/</code>; see the extensions guide</td>
 </tr>
 <tr>
@@ -299,7 +299,9 @@ writing a script. Three ways, all equivalent:</p>
 </tr>
 </tbody>
 </table>
-<p>The target must be importable from where <code>wactorz</code> starts: a package that is
+<p>A package's entry points load only once its distribution is in
+<code>WACTORZ_EXTENSIONS</code> (<code>*</code> for all); installing it is not enough. The target must be
+importable from where <code>wactorz</code> starts: a package that is
 installed, or a folder on <code>PYTHONPATH</code>. One that is not is reported at startup
 and left out. A registered agent is supervised, listed by <code>@catalog list</code>,
 restored after a restart, and may be spawned under another name with a
@@ -330,7 +332,7 @@ environment is skipped. Two agents on one node cannot both have a module of
 the same name, so give an agent's module a name of its own (<code>imu_detector.py</code>
 rather than <code>agent.py</code>) when several will share a node.</p>
 <p>A node that has the agent installed itself -- the package in its environment
-and the target in <code>WACTORZ_AGENTS</code> there, or a <code>wactorz.agents</code> entry point --
+and the target in <code>WACTORZ_AGENTS</code> there, or a <code>wactorz.agents</code> entry point of a package in the node's <code>WACTORZ_EXTENSIONS</code> --
 builds it from that instead, and is sent no code; that is how to run code that
 cannot follow the rule. A node from before this release takes no code from
 main, and is refused the move until it is deployed again.</p>
@@ -382,8 +384,9 @@ connection per actor that closes when the actor stops:</p>
 <code>INPUT_SCHEMA</code> and <code>OUTPUT_SCHEMA</code> on the class become the catalogue entry and
 the wiring a pipeline checks against; <code>AGENT_NAME</code> names it (default
 <code>PumpWatch</code> → <code>pump-watch</code>); <code>AUTOSTART = False</code> keeps it in the catalogue
-until asked for. A subclass that takes <code>llm_provider</code> in its constructor is
-given the system's model.</p>
+until asked for. A subclass whose constructor names <code>llm_provider</code> (its own,
+or one it hands <code>**kwargs</code> on to) is given the system's model; spawn options
+reach a constructor that names them or takes <code>**kwargs</code>.</p>
 <p>A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
 camera frame. Messages on one topic are handled one at a time, in order,
@@ -451,7 +454,7 @@ library, once, off the event loop, the way that runs no code from the file:</p>
 </tr>
 <tr>
 <td><code>state_dict</code></td>
-<td>the tensors, through <code>torch.load(weights_only=True)</code> on the CPU</td>
+<td>what the checkpoint holds, through <code>torch.load(weights_only=True)</code> on the CPU: tensors, numbers and containers, and numeric numpy arrays beside them</td>
 </tr>
 <tr>
 <td><code>onnx</code></td>
@@ -466,7 +469,118 @@ library, once, off the event loop, the way that runs no code from the file:</p>
 <p>A pickle, a joblib file and a whole torch module run code when they load, so
 <code>load_model</code> refuses them unless given <code>allow_code=True</code>. GGUF, TFLite, skops
 and directories are opened through <code>artifact_path</code> by the library that reads
-them. <code>me.artifacts</code> lists each model with its name, version, format and path.</p>
+them. <code>me.artifacts</code> lists each model with its name, version, format and path,
+and its <code>metadata</code>: what was said of the version when it was added
+(<code>--meta k_sigma=5</code>), so a threshold or a calibration constant can live with
+the version it belongs to. A version's metadata does not change once stored;
+a different threshold is a new version, which a trial can then compare. On a
+shadow pass, <code>me.artifacts</code> is the version on trial's, metadata included.</p>
+<h2 id="training-a-version">Training a version</h2>
+<p>A version can be trained inside the loop rather than by a script you run: the
+<code>trainer</code> library agent, or <code>wactorz-train</code> from a terminal, runs a <em>recipe</em>
+you write on a window of recorded readings (<code>docs/design/train-step.md</code>). A
+recipe is a module, named by its importable name or its <code>.py</code> file (which may
+import the modules beside it), with two functions and an optional third:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># examples/imu_anomaly/recipe.py</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">train</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">settings</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Fit on an Arrow table from the loader; settings is what the run was given."""</span>
+    <span class="n">rows</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">column_stack</span><span class="p">([</span><span class="n">frame</span><span class="o">.</span><span class="n">column</span><span class="p">(</span><span class="n">axis</span><span class="p">)</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">()</span> <span class="k">for</span> <span class="n">axis</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"ax"</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">)])</span>
+    <span class="k">return</span> <span class="n">fit</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>                       <span class="c1"># a mapping of numpy arrays</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">score</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">frame</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Figures on rows the model was not fitted on: a mapping of numbers, each named."""</span>
+    <span class="o">...</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"caught"</span><span class="p">:</span> <span class="n">caught</span><span class="p">,</span> <span class="s2">"false_alarms"</span><span class="p">:</span> <span class="n">false_alarms</span><span class="p">}</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">directory</span><span class="p">):</span>               <span class="c1"># optional: without it, arrays go as model.npz</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="n">directory</span> <span class="o">/</span> <span class="s2">"model.npz"</span>
+    <span class="n">np</span><span class="o">.</span><span class="n">savez</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">**</span><span class="n">model</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">path</span>
+</code></pre></div>
+
+<p>The frame carries a <code>label</code> column, the effective label at each row's event
+time, when the version compared against says what it is judged on, or when
+the run asks for it. Spawn the agent with the recipe, the model's name, the
+source and what a move depends on:</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn trainer {"recipe": "examples/imu_anomaly/recipe.py", "model": "imu-detector",
+                        "source": "sensors/imu", "metric": "caught", "margin": 0.02}
+</code></pre></div>
+
+<p>A task to it runs one training: <code>{"since": ..., "until": ..., "split": {"kind":
+"time_split", "at": ...}, "settings": {...}, "reason": "regime change at 14:02"}</code>,
+from chat, from a rule's <code>task</code> action or from another agent. What the task does
+not say takes the agent's options; the default window is the last week the
+source has seen, ending at its newest recorded reading held back by <code>lateness_s</code>
+(a minute), with its last fifth held out, and a split is <code>holdout</code>, <code>time_split</code>, <code>rolling_origin</code> or
+<code>leave_k_out</code>, as the loader makes them. The fit runs in a child process with
+the agent's <code>timeout_s</code> and <code>memory_mb</code>. The version is stored with the recipe's
+hash, the seed, the settings, the window, the split's manifest and the figures,
+and the pointer the agent is for (<code>pointer</code>, <code>shadow</code> unless said) moves only
+when the new version beats the one served by the margin on the same held-out
+rows, with the figures in the move's reason. <code>{"action": "status"}</code> says what is
+running or what the last run came to. From a terminal:</p>
+<div class="highlight"><pre><span></span><code>wactorz-train<span class="w"> </span>check<span class="w"> </span>examples/imu_anomaly/recipe.py
+wactorz-train<span class="w"> </span>run<span class="w"> </span>examples/imu_anomaly/recipe.py<span class="w"> </span>--model<span class="w"> </span>imu-detector<span class="w"> </span>--source<span class="w"> </span>sensors/imu<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--metric<span class="w"> </span>caught<span class="w"> </span>--margin<span class="w"> </span><span class="m">0</span>.02<span class="w"> </span>--split<span class="w"> </span>time:1760050920<span class="w"> </span>--reason<span class="w"> </span><span class="s2">"regime change at 14:02"</span>
+</code></pre></div>
+
+<p>Each run is an <code>action</code> in the provenance graph and each version a <code>model</code>
+node, with <code>produced</code>, <code>trained</code> and <code>led_to</code> edges, so <code>GET /api/labels</code> and
+the model's history say what a version learned from and why it was tried. A
+task that names an <code>observation</code>, the id of a drift alarm, has its run joined
+<code>led_to</code> from it.</p>
+<h2 id="watching-for-drift">Watching for drift</h2>
+<p>The <code>drift</code> library agent watches one model's recorded readings and says when
+they no longer look like what the served version learned from
+(<code>docs/design/drift.md</code>). Spawn it with the model, and the recorded source of
+its inputs when the version does not say what it read:</p>
+<div class="highlight"><pre><span></span><code>@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}
+</code></pre></div>
+
+<p>Every <code>check_s</code> seconds (<code>WACTORZ_DRIFT_CHECK_S</code>, ten minutes unless set) it
+reads two windows through the loader, in event time: the current one, the last
+<code>window_s</code> (a day) ending at the source's own now, its newest recorded reading
+held back by <code>lateness_s</code> (a minute), so a replayed day is checked at the
+replay's own moments; and the reference, the window the served version was
+trained on when the <code>trainer</code> made it, else <code>reference</code> as spawned, else the
+window of the same length before the current one. Over them it runs, on every numeric
+column (or <code>columns</code>), PSI, which alarms at <code>0.2</code>, and the two-sample KS test,
+which alarms at <code>D &gt;= 0.1</code> with <code>p &lt; 0.05</code>; and, when <code>scores</code> names a recorded
+source of the model's scores (its <code>score_column</code>, <code>score</code> unless said), the same
+on the scores and ADWIN over the current window, which says the moment the
+scores changed. Each test runs only when both windows hold <code>min_rows</code> (100).
+The thresholds are spawn options with these names.</p>
+<p>A test over its threshold on a column raises an episode, once: an <code>observation</code>
+node about the model, a line on the feed, a message on <code>models/&lt;name&gt;/drift</code>
+with the observation's id, and the gauges <code>wactorz_model_drift{model,test,column}</code>
+and <code>wactorz_model_drift_alarm</code>. The episode stays raised, the gauges following,
+until a check finds the statistic back under its threshold; a promotion moves
+the reference to the new version and starts afresh; after a restart the episodes
+of the version served are read back from the graph. <code>GET /api/models/{name}/drift</code>
+lists the alarms, and <code>{"action": "check"}</code> as a task runs a check now.</p>
+<p>What follows from an alarm is a rule's, so the loop closes without a person: a
+rule on the topic sends the trainer a task with the window and split it names
+and the alarm's observation, and the policy decides the promotion.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rule"</span><span class="p">,</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"imu-retrain"</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"triggers"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"models/imu-detector/drift"</span><span class="p">],</span>
+<span class="w"> </span><span class="nt">"conditions"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"test"</span><span class="p">,</span><span class="w"> </span><span class="nt">"op"</span><span class="p">:</span><span class="w"> </span><span class="s2">"in"</span><span class="p">,</span><span class="w"> </span><span class="nt">"value"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"psi"</span><span class="p">,</span><span class="w"> </span><span class="s2">"adwin"</span><span class="p">]}],</span>
+<span class="w"> </span><span class="nt">"actions"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"task"</span><span class="p">,</span><span class="w"> </span><span class="nt">"agent"</span><span class="p">:</span><span class="w"> </span><span class="s2">"trainer"</span><span class="p">,</span>
+<span class="w">              </span><span class="nt">"payload"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"split"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"time_split"</span><span class="p">,</span><span class="w"> </span><span class="nt">"at"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{at}"</span><span class="p">},</span>
+<span class="w">                          </span><span class="nt">"observation"</span><span class="p">:</span><span class="w"> </span><span class="s2">"{observation}"</span><span class="p">,</span>
+<span class="w">                          </span><span class="nt">"reason"</span><span class="p">:</span><span class="w"> </span><span class="s2">"drift: {test} on {column} ({statistic})"</span><span class="p">}}],</span>
+<span class="w"> </span><span class="nt">"cooldown_seconds"</span><span class="p">:</span><span class="w"> </span><span class="mi">86400</span><span class="p">}</span>
+</code></pre></div>
+
+<p>A rule's placeholder that is a value on its own, <code>"at": "{at}"</code>, is the
+trigger's value as it is, a number staying a number, and placeholders are filled
+inside nested objects, so the split above reaches the trainer as it reads it.
+The cooldown makes however many columns alarm at once one retrain; it counts
+the alarms' own time, so a replayed day is a day.</p>
 <h2 id="your-own-files">Your own files</h2>
 <p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
 directory under the state directory: for model weights, a checkpoint store, a
@@ -569,9 +683,10 @@ dicts, which are the spelling chat and JSON use:</p>
         <span class="s2">"cooldown_seconds"</span><span class="p">:</span> <span class="mi">30</span><span class="p">}]</span>
 </code></pre></div>
 
-<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name), <code>webhook</code> and
+<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name), <code>webhook</code>,
 <code>ask_operator</code> (a question to the person, with options, whose pick is published
-when it comes; see <em>Asking and waiting</em> in the interfaces guide).
+when it comes; see <em>Asking and waiting</em> in the interfaces guide) and <code>label</code>
+(a record that a source was doing something from the trigger's time on).
 Conditions take <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>in</code>, <code>contains</code>,
 <code>exists</code>, <code>absent</code>, with dotted fields such as <code>reading.ax</code>; an action's
 payload may name trigger fields in braces and carries the trigger under
@@ -580,7 +695,7 @@ payload may name trigger fields in braces and carries the trigger under
 topic nothing in the pipeline publishes, and not named in <code>inputs</code>, raises
 <code>ValueError</code> before anything starts. The first step may listen to the outside
 world without saying so. A pipeline declared at module level is found through
-<code>WACTORZ_PIPELINES=mypkg.flows:watch</code>, a <code>wactorz.pipelines</code> entry point, or
+<code>WACTORZ_PIPELINES=mypkg.flows:watch</code>, a <code>wactorz.pipelines</code> entry point (of a package named in <code>WACTORZ_EXTENSIONS</code>), or
 <code>wactorz.run(pipelines_=[watch])</code>.</p>
 <h2 id="from-chat">From chat</h2>
 <p>A registered agent is a building block for main and the planner, with nothing
@@ -723,6 +838,12 @@ model-free orchestrator described above.</p>
 <ul>
 <li><code>imu_anomaly/</code>: a trained model watching IMU readings, as a script, a
   pipeline, a notebook and inside a FastAPI app.</li>
+<li><code>air_quality/</code>: a model of each room's usual air per hour, an agent that
+  asks a person about the rest and keeps the answers as labels, and a
+  dashboard tab, as one installable package.</li>
+<li><code>household_energy/</code>: one power meter, a classifier naming the appliance
+  behind each run, a person asked whether it was right, and a dashboard tab
+  with its own icon, as one installable package.</li>
 <li><code>llm_notes/</code>: an agent that calls the system's language model through
   <code>me.llm</code>, with the cost kept across restarts.</li>
 <li><code>yolo_watch/</code>: a YOLO model as an agent, as a function answering snapshots
@@ -819,8 +940,12 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>a message to the person on a chat channel, with a choice; the pick comes back on the agent's topic (see <em>Messages from an agent</em> in the interfaces guide)</td>
 </tr>
 <tr>
-<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
-<td>the same, waiting for the pick; a question outlives a restart</td>
+<td><code>ask_operator(text, options=[...], channel=..., user=..., timeout=..., label=..., context=...)</code>, <code>wait_for_answer</code>, <code>open_questions</code>, <code>on_operator_answer</code></td>
+<td>the same, waiting for the pick; a question outlives a restart, and with <code>label=</code> its answer becomes a label</td>
+</tr>
+<tr>
+<td><code>label(source, value, start=..., end=...)</code></td>
+<td>a label written as the agent's own, on main (see <em>Answers that become labels</em> in the interfaces guide)</td>
 </tr>
 <tr>
 <td><code>models=</code> on <code>wactorz.agent</code>, <code>MODELS</code> on an <code>Actor</code>, with <code>artifact_path</code>, <code>load_model</code> and <code>artifacts</code></td>

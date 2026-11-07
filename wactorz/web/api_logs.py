@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The application-log endpoint.
 
 `GET /api/logs` serves the in-memory ring buffer the root logger writes to, in

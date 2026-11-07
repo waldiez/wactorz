@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What generated code is refused for, and what is only warned about.
 
 A check in front of an exec that happens by design. The refusals come from

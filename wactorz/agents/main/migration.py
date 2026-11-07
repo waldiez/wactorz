@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bringing an agent back from the node that was running it.
 
 A migration home asks the node for the agent's persistent state, and spawns the
@@ -23,18 +24,23 @@ agent it places on a node, and receives them with one a node hands back.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
 import functools
 import json
 import logging
 import secrets
 import sys
 import time
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
+from ...core import topic_bus
+from ...core.addresses import MAIN_NODE
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
     BlobsTooLarge,
@@ -63,7 +69,9 @@ from ...core.mqtt import (
 from ...core.paths import resolve_state_dir
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from ...plugins import MODULE_TYPE, is_module_config
-from .spawns import why_a_node_cannot_run, with_code_for, without_transient_keys
+from .addresses import registered_agent
+from .spawn_registry import SpawnRegistry, address_of, without_transient_keys
+from .spawns import why_a_node_cannot_run, with_code_for
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -133,6 +141,25 @@ PENDING_MIGRATIONS_KEY = "_pending_migrations"
 #: `_purge_local_source`.
 _TRANSIENT_ENTRY_FIELDS = ("local_actor",)
 
+#: A move as the guard against a second one knows it: the agent's name, the
+#: place it is leaving and the place it is going, "" for main.
+Move = tuple[str, str, str]
+
+
+def _place(node: Any) -> str:
+    """A node name as a place a move leaves or reaches: "" for main, however it was written."""
+    text = str(node or "").strip()
+    return "" if text.lower() in ("local", "main") else text
+
+
+def _move_of(pending: Mapping[str, Any]) -> Move:
+    """The move a pending return or spawn is part of."""
+    return (
+        str(pending.get("agent_name") or ""),
+        _place(pending.get("from_node")),
+        _place(pending.get("target_node")),
+    )
+
 
 class Migration:
     """Agents in flight between main and a node."""
@@ -150,6 +177,11 @@ class Migration:
         self._inbox: Inbox | None = None
         #: State returns waiting on their blobs, held so none is collected.
         self._returns: set[asyncio.Task[None]] = set()
+        #: Moves being started, or finished, with no pending entry to show it:
+        #: a move asked for until it is sent, and a return or a confirmation
+        #: from when its entry is taken until the agent is placed or put back.
+        #: Counted, as a return waiting on its blobs holds its move twice.
+        self._in_hand: Counter[Move] = Counter()
 
     @property
     def inbox(self) -> Inbox:
@@ -317,6 +349,12 @@ class Migration:
             return
         self.pending_returns.pop(token)
         self._save_pending()
+        # Still under way until the agent is placed, though its entry is gone.
+        with self._holding(_move_of(started)):
+            await self._take_returned(started, data)
+
+    async def _take_returned(self, started: dict[str, Any], data: dict[str, Any]) -> None:
+        """Place an agent its node handed back, or leave it there if the node refused."""
         agent_name = started["agent_name"]
         from_node = started["from_node"]
         if data.get("refused"):
@@ -334,7 +372,9 @@ class Migration:
 
         if isinstance(state, dict) and references(state):
             # Off the listener: the blobs arrive through it, and it would
-            # otherwise be waiting for itself.
+            # otherwise be waiting for itself. The task holds the move until
+            # it ends, from before it is started.
+            self._in_hand[_move_of(started)] += 1
             task = asyncio.create_task(
                 self._place_returned_or_restart(agent_name, started, cfg, state, left_behind)
             )
@@ -395,8 +435,8 @@ class Migration:
         """
         if self.host is None:
             return None
-        entry = self.host._get_spawn_registry().get(agent_name) or library_agent_config(
-            agent_name, self.host._registry
+        entry = _entry_on(self.host._get_spawn_registry(), agent_name, from_node) or (
+            library_agent_config(agent_name, self.host._registry)
         )
         if not entry:
             logger.warning(
@@ -451,6 +491,8 @@ class Migration:
                 await self._restart_on_source(
                     agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
                 )
+        finally:
+            self._release(_move_of(started))
 
     def moving_to(self, agent_name: str) -> str:
         """The node a move under way is starting ``agent_name`` on, or "" for none.
@@ -466,6 +508,44 @@ class Migration:
             ),
             "",
         )
+
+    def move_under_way(self, move: Move) -> Move | None:
+        """The move under way that ``move`` would cross, or None.
+
+        Under way from the moment a move is asked for until the agent is
+        confirmed where it went or put back where it was. Two moves cross when
+        they are of agents of one name and share a place: one leaving it or
+        arriving there while the other does. Agents of one name on two other
+        hosts move apart.
+        """
+        name, leaving, going = move
+        under_way = [
+            *(_move_of(p) for p in self.pending_returns.values()),
+            *(_move_of(p) for p in self.pending_spawns.values()),
+            *(m for m, held in self._in_hand.items() if held > 0),
+        ]
+        return next(
+            (
+                other
+                for other in under_way
+                if other[0] == name and {other[1], other[2]} & {leaving, going}
+            ),
+            None,
+        )
+
+    @contextlib.contextmanager
+    def _holding(self, move: Move) -> Iterator[None]:
+        """Count ``move`` as under way while the block runs."""
+        self._in_hand[move] += 1
+        try:
+            yield
+        finally:
+            self._release(move)
+
+    def _release(self, move: Move) -> None:
+        self._in_hand[move] -= 1
+        if self._in_hand[move] <= 0:
+            del self._in_hand[move]
 
     def _placed(self, agent_name: str) -> bool:
         """Whether a handed-back agent is running here, or waiting on a target to confirm it.
@@ -650,6 +730,14 @@ class Migration:
             return
         self.pending_spawns.pop(token)
         self._save_pending()
+        # Still under way until it is committed or put back, though its entry is gone.
+        with self._holding(_move_of(pending)):
+            await self._confirmed(pending, data)
+
+    async def _confirmed(self, pending: dict[str, Any], data: dict[str, Any]) -> None:
+        """Commit a move its target confirmed, or put the agent back if the target refused it."""
+        if self.host is None:
+            return
         if data.get("refused"):
             await self._put_back(pending, str(data["refused"]))
             return
@@ -781,7 +869,8 @@ class Migration:
                 continue
             self.pending_spawns.pop(token, None)
             self._save_pending()
-            await self._put_back(pending, None)
+            with self._holding(_move_of(pending)):
+                await self._put_back(pending, None)
 
     async def _put_back(self, pending: dict[str, Any], refused: str | None) -> None:
         """Restore an agent on its source after its target did not take it.
@@ -914,7 +1003,7 @@ class Migration:
             from_node = started.get("from_node", "")
             if not agent_name or not from_node:
                 continue
-            config = self.host._get_spawn_registry().get(agent_name)
+            config = _entry_on(self.host._get_spawn_registry(), agent_name, from_node)
             if not config:
                 logger.warning(
                     "[%s] %r never came back from %r and is not in the registry — "
@@ -932,7 +1021,8 @@ class Migration:
             )
             restored = dict(config)
             restored["node"] = from_node
-            await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
+            with self._holding(_move_of(started)):
+                await self.host._spawn_remote(restored, from_node, save=True, restoring=True)
             self._announce(
                 f"'{agent_name}' did not come back from '{from_node}' — "
                 f"it has been restarted there.",
@@ -1058,6 +1148,22 @@ class Migration:
     async def migrate_agent(
         self, agent_name: str, target_node: str, *, force: bool = False
     ) -> dict[str, Any]:
+        """Move a running agent to a different node; see `_migrate_agent`.
+
+        Returns {"success": bool, "message": str}. The move counts as under way
+        from its checks until it is sent, so a second one asked meanwhile is
+        refused (`move_under_way`); once sent, its pending entry says so.
+        """
+        held: list[Move] = []
+        try:
+            return await self._migrate_agent(agent_name, target_node, force=force, held=held)
+        finally:
+            for move in held:
+                self._release(move)
+
+    async def _migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool, held: list[Move]
+    ) -> dict[str, Any]:
         """Move a running agent to a different node.
 
         A move that would lose state is refused before anything stops: keys
@@ -1066,7 +1172,8 @@ class Migration:
         a node checks its own, from the same two values sent with the request.
 
         Sources of truth, in priority order:
-          1. Spawn registry — has the full config including code.
+          1. Spawn registry — has the full config including code; with the
+             agent running in main's own process, settles that it is on main.
           2. Agent manifest — has node, description, schemas (no code).
           3. Node heartbeats — minimum: tells us which node the agent runs on.
 
@@ -1077,225 +1184,215 @@ class Migration:
 
         Returns {"success": bool, "message": str}
         """
-        if self.host is None or self.host_nodes is None:
+        host, nodes = self.host, self.host_nodes
+        if host is None or nodes is None:
             return {}
-        reg = self.host._get_spawn_registry()
-        config = reg.get(agent_name)
-        if config is None:
-            # A library agent started with the system has no entry: its config
-            # is what a `type: module` spawn of it would say.
-            config = library_agent_config(agent_name, self.host._registry)
-        have_code = bool(config and config.get("code"))
+        named, refusal = registered_agent(host, agent_name)
+        if refusal:
+            return _refused(refusal)
+        found = _locate(host, nodes, named)
+        # "local", "main" or nothing at all names main as the target.
+        target = "" if target_node.strip().lower() in ("", "local", "main") else target_node
 
-        # ── Locate the agent via every source we have ─────────────────────────
-        # Registry first, then manifest, then heartbeats. We need at least to
-        # know WHERE the agent is to do anything useful.
-        manifest = self.host._agent_manifests.get(agent_name, {})
-        current_node = ""
-        if config:
-            current_node = (config.get("node") or "").strip()
-        if not current_node and manifest:
-            current_node = (manifest.get("node") or "").strip()
-        if not current_node:
-            # Last resort — the live heartbeats, which may know a node the spawn
-            # registry does not record.
-            current_node = self.host_nodes.running_agent(agent_name)
+        # Before anything waits: two moves asked at once must not both pass.
+        move = (found.name, _place(found.node), target)
+        refusal = self._refusal_before_holding(found, move)
+        if refusal:
+            return _refused(refusal)
+        self._in_hand[move] += 1
+        held.append(move)
+        refusal = self._refusal_of_target(host, nodes, found, target)
+        if refusal:
+            return _refused(refusal)
 
-        # ── Verify the agent exists *somewhere* ───────────────────────────────
+        if found.node and target:
+            return await self._move_between_nodes(host, found, target, force)
+        if found.node:
+            return await self._bring_home(host, found, force)
+        return await self._send_out(host, found, target, force)
+
+    def _refusal_before_holding(self, found: _Found, move: Move) -> str | None:
+        """Why the move cannot even be held: nothing to move, another move under way, or nowhere to go."""
         # If we found nothing — not in registry, not in manifest, not heart-
         # beating from any node, not in the local registry — we genuinely
         # can't migrate what doesn't exist.
-        local_alive = bool(self.host._registry and self.host._registry.find_by_name(agent_name))
-        if not config and not manifest and not current_node and not local_alive:
-            return {
-                "success": False,
-                "message": f"Agent '{agent_name}' not found anywhere (no registry "
-                f"entry, no manifest, no heartbeat). Nothing to migrate.",
-            }
+        if not found.config and not found.manifest and not found.node and not found.local_alive:
+            return (
+                f"Agent '{found.name}' not found anywhere (no registry "
+                f"entry, no manifest, no heartbeat). Nothing to migrate."
+            )
+        crossed = self.move_under_way(move)
+        if crossed is not None:
+            # Until a move is confirmed, the registry still places the agent
+            # where it left, while it may already run where it is going: a
+            # second move would start from the wrong one.
+            return (
+                f"'{found.name}' is moving from '{crossed[1] or 'local'}' to "
+                f"'{crossed[2] or 'local'}'; ask again once that move is done."
+            )
+        if found.node == move[2]:
+            return f"Agent '{found.name}' is already on '{found.node or 'local'}'."
+        return None
 
-        if current_node == target_node:
-            return {
-                "success": False,
-                "message": f"Agent '{agent_name}' is already on '{target_node or 'local'}'.",
-            }
-
-        if current_node and not config:
+    def _refusal_of_target(
+        self, host: MigrationHost, nodes: NodeReaders, found: _Found, target: str
+    ) -> str | None:
+        """Why the agent cannot go to ``target`` ("" for main), checked before anything stops."""
+        where = found.node or "local"
+        if found.node and not found.config:
             # Wherever it goes, it is placed from main's registry entry; the
             # node supplies only its state. Refused now, while it still runs.
-            return {
-                "success": False,
-                "message": f"Cannot migrate '{agent_name}': main holds no program for it "
+            return (
+                f"Cannot migrate '{found.name}': main holds no program for it "
                 f"(it is not in the spawn registry), and a node's own copy is not run "
-                f"elsewhere. It stays on '{current_node}'.",
-            }
-
-        # Normalise "local" as a target so users can type /migrate agent-name local
-        is_target_local = target_node.strip().lower() in ("", "local", "main")
-
-        # ── Verify the target node exists and is online ────────────────────────
-        # This must happen BEFORE anything destructive. Without it, a typo'd or
-        # offline target made the agent vanish: the source stopped the agent
-        # (deleting its state file) and published the hand-off to a node topic
-        # nobody was listening on. Refuse up front instead — the agent keeps
-        # running where it is.
-        if not is_target_local and not self.host._node_is_online(target_node):
-            if target_node in self.host_nodes.known:
-                reason = f"node '{target_node}' is known but offline (no heartbeat in the last 30s)"
-            else:
-                reason = f"node '{target_node}' does not exist (never sent a heartbeat)"
-            online = self.host._online_node_names()
-            hint = (
-                f"Online nodes: {', '.join(online)}."
-                if online
-                else "No remote nodes are currently online."
+                f"elsewhere. It stays on '{found.node}'."
             )
-            return {
-                "success": False,
-                "message": f"Cannot migrate '{agent_name}': {reason}. {hint} "
-                f"Migration aborted — the agent stays on "
-                f"'{current_node or 'local'}'.",
-            }
-
-        mismatch = None
-        if not is_target_local:
-            mismatch = self.host._node_version_mismatch(target_node)
-            unheard = self.host._node_refuses_tasks(target_node)
-            mismatch = mismatch or (f"{unheard}." if unheard else None)
+        occupied = self._occupied(
+            found.name, target, str((found.config or {}).get("actor_id") or "")
+        )
+        if occupied:
+            return f"Cannot migrate '{found.name}': {occupied} It stays on '{where}'."
+        if not target:
+            return None
+        # The target must exist and be online BEFORE anything destructive.
+        # Otherwise a typo'd or offline target would make the agent vanish: the
+        # source would stop it (deleting its state file) and publish the
+        # hand-off to a node topic nobody is listening on. Refused up front,
+        # the agent keeps running where it is.
+        if not host._node_is_online(target):
+            return (
+                f"Cannot migrate '{found.name}': {_why_offline(host, nodes, target)} "
+                f"Migration aborted — the agent stays on '{where}'."
+            )
+        mismatch = host._node_version_mismatch(target)
+        unheard = host._node_refuses_tasks(target)
+        mismatch = mismatch or (f"{unheard}." if unheard else None)
         if mismatch:
             # Same footing as an offline target: nothing has moved yet, so the
             # agent simply stays where it is.
-            return {
-                "success": False,
-                "message": f"Cannot migrate '{agent_name}': {mismatch} "
-                f"Migration aborted — the agent stays on "
-                f"'{current_node or 'local'}'.",
-            }
+            return (
+                f"Cannot migrate '{found.name}': {mismatch} "
+                f"Migration aborted — the agent stays on '{where}'."
+            )
+        return None
 
-        if current_node and not is_target_local:
-            # ── Remote → Remote migration ────────────────────────────────────
-            # The source node still has the agent's compiled code and state;
-            # it does the heavy lifting via its own _migrate_agent handler.
-            # Main needs to update BOTH nodes' desired_state retained messages
-            # so neither tries to re-spawn the agent in the wrong place after
-            # a restart: source must forget the agent, target must remember it.
-            logger.info(
-                "[%s] Migrating %r from node %r → %r",
-                self.host.name,
-                agent_name,
-                current_node,
-                target_node,
-            )
-            # Checked before the source stops it, as a move from main is: the
-            # target is sent main's own config, so main can tell now whether
-            # the target can take it.
-            _ready, unrunnable = await self._ready_for(dict(config or {}), target_node)
-            if unrunnable:
-                return {
-                    "success": False,
-                    "message": f"Cannot migrate '{agent_name}' to '{target_node}': {unrunnable}. "
-                    f"It stays on '{current_node}'.",
-                }
-            # Routed through main, in two legs: ask the source to hand the
-            # agent back (the `@main` machinery), then place it on the target
-            # ourselves. The source no longer publishes to another node's spawn
-            # topic -- that was lateral remote code execution, and a node holding
-            # a signing key refuses a spawn not signed by main.
-            return_token = secrets.token_hex(8)
-            self.pending_returns[return_token] = {
-                "agent_name": agent_name,
-                "from_node": current_node,
-                "target_node": target_node,
-                "started_at": time.time(),
-            }
-            self._save_pending()
-            await self.host._mqtt_publish(
-                f"nodes/{current_node}/migrate",
-                self._hand_back_request(agent_name, return_token, force),
-                qos=1,
-            )
-            # Nothing is pre-staged. The registry and both nodes' desired state
-            # move only once the target says the agent started -- until then the
-            # agent is stopped but intact on the source, which is what a
-            # rollback needs.
-            msg = (
-                f"Migrating '{agent_name}' from '{current_node}' → '{target_node}' "
-                f"(via main; waiting for the source to hand it over)."
-            )
-            logger.info("[%s] %s", self.host.name, msg)
-            return {"success": True, "message": msg}
+    async def _move_between_nodes(
+        self, host: MigrationHost, found: _Found, target_node: str, force: bool
+    ) -> dict[str, Any]:
+        """Move an agent from the node it runs on to another node, through main.
 
-        if current_node and is_target_local:
-            # ── Remote → Local migration ─────────────────────────────────────
-            # Always use the '@main' sentinel mechanism so the remote node
-            # ships its persistent state (conversation history, counters,
-            # calibration, etc.) back to main BEFORE the agent is stopped.
-            #
-            # Earlier versions had a "fast path" when main already had the
-            # code in its spawn registry — it just sent a plain stop and
-            # re-spawned locally, but that silently lost ALL of the agent's
-            # accumulated memory. For LLM-based agents like chat-agent this
-            # was particularly bad: every migrate-back wiped their history.
-            #
-            # The @main path is slightly slower (one MQTT round-trip) but
-            # always correct. The state_return listener handles the spawn
-            # once the remote node replies.
-            logger.info(
-                "[%s] Migrating %r from node %r → local (via @main sentinel)",
-                self.host.name,
-                agent_name,
-                current_node,
+        Main needs to update BOTH nodes' desired_state retained messages so
+        neither tries to re-spawn the agent in the wrong place after a
+        restart: the source must forget the agent, the target must remember it.
+        """
+        agent_name, current_node = found.name, found.node
+        logger.info(
+            "[%s] Migrating %r from node %r → %r", host.name, agent_name, current_node, target_node
+        )
+        # Checked before the source stops it, as a move from main is: the
+        # target is sent main's own config, so main can tell now whether
+        # the target can take it.
+        _ready, unrunnable = await self._ready_for(dict(found.config or {}), target_node)
+        if unrunnable:
+            return _refused(
+                f"Cannot migrate '{agent_name}' to '{target_node}': {unrunnable}. "
+                f"It stays on '{current_node}'."
             )
-            return_token = secrets.token_hex(8)
-            # Stash the token so the listener knows this return is ours
-            # and not from some other concurrent migration.
-            self.pending_returns[return_token] = {
-                "agent_name": agent_name,
-                "from_node": current_node,
-                "started_at": time.time(),
-            }
-            self._save_pending()
-            await self.host._mqtt_publish(
-                f"nodes/{current_node}/migrate",
-                self._hand_back_request(agent_name, return_token, force),
-                qos=1,
-            )
-            msg = (
-                f"Migration of '{agent_name}' from '{current_node}' → local "
-                f"initiated (waiting for state from remote node)."
-            )
-            logger.info("[%s] %s", self.host.name, msg)
-            return {"success": True, "message": msg}
+        # Routed through main, in two legs: ask the source to hand the agent
+        # back (the `@main` machinery), then place it on the target ourselves.
+        # The source never publishes to another node's spawn topic: that would
+        # let one node run code on another, and a node holding a signing key
+        # refuses a spawn not signed by main.
+        await self._ask_for_hand_back(host, agent_name, current_node, force, target_node)
+        # Nothing is pre-staged. The registry and both nodes' desired state
+        # move only once the target says the agent started -- until then the
+        # agent is stopped but intact on the source, which is what a
+        # rollback needs.
+        msg = (
+            f"Migrating '{agent_name}' from '{current_node}' → '{target_node}' "
+            f"(via main; waiting for the source to hand it over)."
+        )
+        logger.info("[%s] %s", host.name, msg)
+        return {"success": True, "message": msg}
 
-        # ── Local → Remote migration ─────────────────────────────────────
+    async def _bring_home(self, host: MigrationHost, found: _Found, force: bool) -> dict[str, Any]:
+        """Move an agent from the node it runs on back to main.
+
+        Always through the '@main' sentinel, so the node ships the agent's
+        persistent state (conversation history, counters, calibration, etc.)
+        back to main BEFORE the agent is stopped. Stopping it and spawning it
+        here again from the registry entry would be one round-trip quicker,
+        and would lose everything the agent accumulated: an LLM agent its
+        whole history. The state_return listener handles the spawn once the
+        node replies.
+        """
+        agent_name, current_node = found.name, found.node
+        logger.info(
+            "[%s] Migrating %r from node %r → local (via @main sentinel)",
+            host.name,
+            agent_name,
+            current_node,
+        )
+        await self._ask_for_hand_back(host, agent_name, current_node, force)
+        msg = (
+            f"Migration of '{agent_name}' from '{current_node}' → local "
+            f"initiated (waiting for state from remote node)."
+        )
+        logger.info("[%s] %s", host.name, msg)
+        return {"success": True, "message": msg}
+
+    async def _ask_for_hand_back(
+        self,
+        host: MigrationHost,
+        agent_name: str,
+        from_node: str,
+        force: bool,
+        target_node: str | None = None,
+    ) -> None:
+        """Ask ``from_node`` to hand ``agent_name`` back, under a token that marks the reply as this move's.
+
+        The pending entry names the node the agent then goes to, when it is not main.
+        """
+        return_token = secrets.token_hex(8)
+        self.pending_returns[return_token] = {
+            "agent_name": agent_name,
+            "from_node": from_node,
+            **({"target_node": target_node} if target_node is not None else {}),
+            "started_at": time.time(),
+        }
+        self._save_pending()
+        await host._mqtt_publish(
+            f"nodes/{from_node}/migrate",
+            self._hand_back_request(agent_name, return_token, force),
+            qos=1,
+        )
+
+    async def _send_out(
+        self, host: MigrationHost, found: _Found, target_node: str, force: bool
+    ) -> dict[str, Any]:
+        """Move an agent running here to ``target_node``, with its state and live topic contract."""
+        agent_name = found.name
         # Requires the agent to be running locally. If it isn't, the
         # spawn-registry config would also be useless (no code shipped
         # over MQTT) so error early.
-        if not local_alive and not have_code:
-            return {
-                "success": False,
-                "message": f"Agent '{agent_name}' not running locally and "
-                f"no config in registry — cannot migrate.",
-            }
-
+        if not found.local_alive and not found.have_code:
+            return _refused(
+                f"Agent '{agent_name}' not running locally and no config in registry — cannot migrate."
+            )
         # Before anything stops: a node handed a config with no program starts
         # an empty agent and confirms it, and the migration would then purge
         # the only copy that worked.
-        config, unrunnable = await self._ready_for(dict(config or {}), target_node)
+        config, unrunnable = await self._ready_for(dict(found.config or {}), target_node)
         if unrunnable:
-            return {
-                "success": False,
-                "message": f"Cannot migrate '{agent_name}' to '{target_node}': {unrunnable}. "
-                f"It stays on 'local'.",
-            }
-
+            return _refused(
+                f"Cannot migrate '{agent_name}' to '{target_node}': {unrunnable}. "
+                f"It stays on 'local'."
+            )
         logger.info(
-            "[%s] Migrating LOCAL agent %r → remote node %r",
-            self.host.name,
-            agent_name,
-            target_node,
+            "[%s] Migrating LOCAL agent %r → remote node %r", host.name, agent_name, target_node
         )
 
-        local = self.host._registry.find_by_name(agent_name) if self.host._registry else None
+        local = host._registry.find_by_name(agent_name) if host._registry else None
         # Asked while the agent still runs, so a refusal stops nothing. The
         # snapshot that is shipped is taken again after the stop, below.
         before = self._local_values(agent_name, local)
@@ -1307,75 +1404,18 @@ class Migration:
             max_bytes=MIGRATION_MAX_STATE_BYTES,
         )
         if refusal:
-            return {
-                "success": False,
-                "message": f"Cannot migrate '{agent_name}': {refusal} It stays on 'local'.",
-            }
+            return _refused(f"Cannot migrate '{agent_name}': {refusal} It stays on 'local'.")
 
-        # Snapshot the live topic contract from the TopicBus, then merge it
-        # into the config we ship to the remote node. The spawn registry
-        # only has what was REQUESTED at spawn time, but the local agent
-        # may have learned new topics at runtime (via publish/subscribe
-        # auto-registration or declare_contract). Without this merge those
-        # topics would be lost across the migration and the remote agent
-        # would publish a manifest missing them — breaking auto-wiring.
-        live_contract: dict[str, Any] = {}
-        try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
-            if bus:
-                c = bus.registry.get(agent_name)
-                if c is not None:
-                    live_contract = {
-                        "publishes": list(c.publishes or []),
-                        "subscribes": list(c.subscribes or []),
-                        "triggers_when": dict(c.triggers_when or {}),
-                        "produces_schema": dict(c.produces_schema or {}),
-                        "consumes_schema": dict(c.consumes_schema or {}),
-                    }
-                    # observed_samples is a separate field on the contract
-                    if hasattr(c, "observed_samples") and c.observed_samples:
-                        live_contract["observed_samples"] = dict(c.observed_samples)
-                    logger.info(
-                        "[%s] Captured live contract for %r: pub=%s sub=%s",
-                        self.host.name,
-                        agent_name,
-                        live_contract["publishes"],
-                        live_contract["subscribes"],
-                    )
-        except Exception as _e:
-            logger.debug("[%s] Could not capture live contract: %s", self.host.name, _e)
-
-        # Stop the local instance, and keep everything it persisted.
-        #
-        # The snapshot below is the copy being shipped out; this one is what
-        # the migration comes back to if the target never confirms. Purging it
-        # here would put the agent nowhere the moment a spawn failed on the
-        # node -- the same window the other legs close by deleting only on the
-        # ack -- so it is purged there instead, in `_purge_local_source`.
-        stopped: Any | None = None
-        if self.host._registry and local:
-            try:
-                # Forgotten by the supervisor first, as main's delete does:
-                # an entry left holding the stopped instance would stop it
-                # again at shutdown, running its on_stop and saves twice. A
-                # rollback spawns it afresh, which gives it a new entry.
-                supervisor = getattr(self.host._registry, "_supervisor_ref", None)
-                if supervisor is not None:
-                    supervisor.drop_supervised(agent_name)
-                await self.host._registry.unregister(local.actor_id)
-                await local.stop()
-                self.host._agent_manifests.pop(agent_name, None)
-                stopped = local
-                await asyncio.sleep(0.3)
-            except Exception as e:
-                logger.warning(
-                    "[%s] Could not stop local %r: %s",
-                    self.host.name,
-                    agent_name,
-                    e,
+        live_contract = _live_contract(host, agent_name)
+        stopped = None
+        if host._registry and local:
+            failed = await _stop_local(host, agent_name, local)
+            if failed:
+                return _refused(
+                    f"Cannot migrate '{agent_name}': it could not be stopped here ({failed}). "
+                    "It stays on 'local'."
                 )
+            stopped = local
 
         # Taken after the stop: `on_stop` and the save that follows it are the
         # agent's last writes, and a snapshot taken before them would leave
@@ -1384,18 +1424,17 @@ class Migration:
         # values are read here, on it, since the database is not the thread's.
         values = self._local_values(agent_name, local)
         packed = await asyncio.to_thread(pack, values, code_allowed=True)
-        initial_state, left_behind = packed.state, packed.left_behind
-        if left_behind:
+        if packed.left_behind:
             # Only what the agent wrote while stopping can land here: anything
             # earlier was refused above unless the move was forced.
             logger.warning(
                 "[%s] Local→remote migrate %r: %s cannot go with it and is left behind",
-                self.host.name,
+                host.name,
                 agent_name,
-                ", ".join(left_behind),
+                ", ".join(packed.left_behind),
             )
         too_large = why_it_cannot_travel(
-            initial_state,
+            packed.state,
             [],
             force=True,
             max_bytes=MIGRATION_MAX_STATE_BYTES,
@@ -1405,20 +1444,7 @@ class Migration:
         if too_large:
             return await self._keep_local(agent_name, config, too_large)
 
-        # Update config with new node target and inject captured state +
-        # live contract data. Live values take precedence over stale spawn
-        # config values (e.g. a topic the local agent actually published
-        # to is more authoritative than what was declared at spawn time).
-        new_config = dict(config or {})
-        new_config.setdefault("name", agent_name)
-        new_config["node"] = target_node
-        new_config.pop("replace", None)
-        if initial_state:
-            new_config["_initial_state"] = initial_state
-        for k, v in live_contract.items():
-            if v:  # don't overwrite with empty values
-                new_config[k] = v
-
+        new_config = _outgoing_config(config, agent_name, target_node, packed.state, live_contract)
         token = secrets.token_hex(8)
         new_config["_migration_token"] = token
         self.pending_spawns[token] = {
@@ -1428,7 +1454,7 @@ class Migration:
             # Without the snapshot: a rollback restarts from the local copy,
             # which is kept until the ack, so only the spawn message needs it.
             "config": without_transient_keys(new_config),
-            "left_behind": left_behind,
+            "left_behind": packed.left_behind,
             "local_actor": stopped,
             "started_at": time.time(),
             "ttl": _ttl(packed.blob_bytes),
@@ -1436,14 +1462,40 @@ class Migration:
         self._save_pending()
         # Nothing is committed yet: the registry still places this agent here,
         # so a restart before the ack brings it back rather than losing it.
-        await self.host._spawn_remote(new_config, target_node, save=False)
+        await host._spawn_remote(new_config, target_node, save=False)
         await self._send_blobs(packed.blobs, target_node)
         msg = (
             f"Migrating '{agent_name}' from 'local' → '{target_node}' "
             f"(waiting for it to confirm it started)."
         )
-        logger.info("[%s] %s", self.host.name, msg)
+        logger.info("[%s] %s", host.name, msg)
         return {"success": True, "message": msg}
+
+    def _occupied(self, agent_name: str, target_node: str, moving_id: str = "") -> str | None:
+        """Why ``target_node`` ("" for main) cannot take ``agent_name``: it runs one of the name already.
+
+        A name is unique on a host, so a move there would leave two agents
+        answering to one address. Renaming one on the way is not offered: it
+        would break every address that names it. What runs under the moving
+        agent's own id, ``moving_id``, is that agent -- main keeps its copy
+        until a move out is confirmed -- and is not another one.
+        """
+        if self.host is None:
+            return None
+        here = self.host._registry.find_by_name(agent_name) if self.host._registry else None
+        if here is not None and moving_id and here.actor_id == moving_id:
+            here = None
+        kept = self.host._get_spawn_registry().at(agent_name, target_node)
+        if kept is not None and moving_id and kept["actor_id"] == moving_id:
+            kept = None
+        listed = (
+            bool(target_node)
+            and self.host_nodes is not None
+            and (agent_name in self.host_nodes.known.get(target_node, {}).get("agents", []))
+        )
+        if kept is None and not listed and (target_node or here is None):
+            return None
+        return f"{address_of({'name': agent_name, 'node': target_node})} already runs."
 
     @staticmethod
     def _hand_back_request(agent_name: str, return_token: str, force: bool) -> dict[str, Any]:
@@ -1518,8 +1570,7 @@ class Migration:
         if self.host is None:
             return
         # Build desired state from spawn registry filtered to this node
-        reg = self.host._get_spawn_registry()
-        agents = {name: cfg for name, cfg in reg.items() if cfg.get("node", "").strip() == node}
+        agents = {cfg["name"]: cfg for cfg in self.host._get_spawn_registry().on_node(node)}
 
         # Apply pending change before publishing. Stripped, because this message
         # is retained: the runner reconciles from it on every reboot, and a
@@ -1546,6 +1597,11 @@ class Migration:
             qos=1,
         )
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
+
+
+def _entry_on(registry: SpawnRegistry, agent_name: str, node: str) -> dict[str, Any] | None:
+    """The registry entry of ``agent_name`` on ``node``, or else its only entry, or None."""
+    return registry.at(agent_name, node) or registry.only(agent_name)
 
 
 def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) -> bool:
@@ -1625,3 +1681,185 @@ def _read_all(received: Mapping[str, Path], state: Mapping[str, Any]) -> dict[st
     """The bytes of each blob ``state`` refers to, from the files they arrived in."""
     wanted = {ref["sha256"] for ref in references(state).values()}
     return {sha: path.read_bytes() for sha, path in received.items() if sha in wanted}
+
+
+@dataclasses.dataclass(frozen=True)
+class _Found:
+    """Where an agent asked to move is, and what main holds for it."""
+
+    name: str
+    #: Main's registry entry for it, or the config a library agent's spawn would have.
+    config: dict[str, Any] | None
+    have_code: bool
+    #: Its manifest, which may be one retained from where it ran before.
+    manifest: dict[str, Any]
+    #: Whether it runs in main's own process.
+    local_alive: bool
+    #: The node it runs on, "" for main.
+    node: str
+
+
+def _refused(message: str) -> dict[str, Any]:
+    """The answer to a move that is not made."""
+    return {"success": False, "message": message}
+
+
+def _locate(host: MigrationHost, nodes: NodeReaders, named: Any) -> _Found:
+    """Where the agent ``named`` is, from every source main has.
+
+    What main holds first: a registry entry says where the agent is, its empty
+    node meaning main itself, and an agent running in this process is here.
+    Only an agent main has neither for is looked for in the manifests, then
+    the heartbeats: a manifest retained from where the agent ran before would
+    otherwise send the move to a node that no longer has it. A name kept in
+    more than one place always has its entry here: `registered_agent` takes
+    only an address for it.
+    """
+    agent_name = named.name
+    config = named.entry
+    if config is None:
+        # A library agent started with the system has no entry: its config
+        # is what a `type: module` spawn of it would say.
+        config = library_agent_config(agent_name, host._registry)
+    manifest = host._agent_manifests.get(agent_name, {})
+    local_alive = bool(host._registry and host._registry.find_by_name(agent_name))
+    current_node = named.node
+    placed_by_main = named.entry is not None or local_alive
+    if not placed_by_main and manifest:
+        current_node = (manifest.get("node") or "").strip()
+    if not current_node and not placed_by_main:
+        # Last resort — the live heartbeats, which may know a node the spawn
+        # registry does not record.
+        current_node = nodes.running_agent(agent_name)
+    return _Found(
+        name=agent_name,
+        config=config,
+        have_code=bool(config and config.get("code")),
+        manifest=manifest,
+        local_alive=local_alive,
+        node=current_node,
+    )
+
+
+def _why_offline(host: MigrationHost, nodes: NodeReaders, target_node: str) -> str:
+    """Why ``target_node`` cannot take a move now, and which nodes could."""
+    if target_node in nodes.known:
+        reason = f"node '{target_node}' is known but offline (no heartbeat in the last 30s)"
+    else:
+        reason = f"node '{target_node}' does not exist (never sent a heartbeat)"
+    online = host._online_node_names()
+    hint = (
+        f"Online nodes: {', '.join(online)}." if online else "No remote nodes are currently online."
+    )
+    return f"{reason}. {hint}"
+
+
+def _live_contract(host: MigrationHost, agent_name: str) -> dict[str, Any]:
+    """The topic contract the agent running here has now, from the TopicBus; empty when there is none.
+
+    The spawn registry only has what was REQUESTED at spawn time, but the
+    agent may have learned new topics at runtime (via publish/subscribe
+    auto-registration or declare_contract). Shipped without them, those
+    topics would be lost across the migration and the remote agent would
+    publish a manifest missing them — breaking auto-wiring.
+    """
+    live_contract: dict[str, Any] = {}
+    try:
+        bus = topic_bus.get_topic_bus()
+        c = bus.registry.at(agent_name, MAIN_NODE) if bus else None
+        if c is not None:
+            live_contract = {
+                "publishes": list(c.publishes or []),
+                "subscribes": list(c.subscribes or []),
+                "triggers_when": dict(c.triggers_when or {}),
+                "produces_schema": dict(c.produces_schema or {}),
+                "consumes_schema": dict(c.consumes_schema or {}),
+            }
+            # observed_samples is a separate field on the contract
+            if getattr(c, "observed_samples", None):
+                live_contract["observed_samples"] = dict(c.observed_samples)
+            logger.info(
+                "[%s] Captured live contract for %r: pub=%s sub=%s",
+                host.name,
+                agent_name,
+                live_contract["publishes"],
+                live_contract["subscribes"],
+            )
+    except Exception as exc:
+        logger.debug("[%s] Could not capture live contract: %s", host.name, exc)
+    return live_contract
+
+
+async def _stop_local(host: MigrationHost, agent_name: str, local: Any) -> str | None:
+    """Stop the agent running here and keep everything it persisted; why it could not be, or None.
+
+    The snapshot taken after this is the copy being shipped out; what the
+    agent persisted is what the migration comes back to if the target never
+    confirms. Purging it here would put the agent nowhere the moment a spawn
+    failed on the node -- the same window the other legs close by deleting
+    only on the ack -- so it is purged there instead, in `_purge_local_source`.
+
+    A stop that fails puts the agent back as it was, registered and
+    supervised, so the move can stop there: sent on, it would leave a copy
+    running here that nothing knows of beside the one started on the target.
+    """
+    registry = host._registry
+    # Released while it stops, so the watchdog does not read the stop as a
+    # crash; the spec is kept until the stop has succeeded, which is what lets
+    # a failed one be undone.
+    supervisor = getattr(registry, "_supervisor_ref", None)
+    if supervisor is not None:
+        supervisor.release(agent_name)
+    try:
+        await registry.unregister(local.actor_id)
+        await local.stop()
+    except Exception as exc:
+        logger.warning("[%s] Could not stop local %r: %s", host.name, agent_name, exc)
+        await _put_back(registry, supervisor, agent_name, local)
+        return str(exc) or type(exc).__name__
+    if supervisor is not None:
+        # Forgotten now, as main's delete does: a rollback spawns the agent
+        # afresh, which gives it a new entry.
+        supervisor.drop_supervised(agent_name)
+    host._agent_manifests.pop(agent_name, None)
+    await asyncio.sleep(0.3)
+    return None
+
+
+async def _put_back(registry: Any, supervisor: Any, agent_name: str, local: Any) -> None:
+    """Register ``local`` again and link it back to its supervisor, after a stop that failed.
+
+    Supervised again, a half-stopped agent is one the supervisor restarts from
+    its factory, and one the stop never reached goes on as it was.
+    """
+    try:
+        await registry.register(local)
+        if supervisor is not None:
+            supervisor.resupervise(agent_name, local)
+    except Exception:
+        logger.exception("[migration] Could not put %r back after its stop failed", agent_name)
+
+
+def _outgoing_config(
+    config: dict[str, Any] | None,
+    agent_name: str,
+    target_node: str,
+    initial_state: Any,
+    live_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """The spawn config an agent going out is sent with: placed on ``target_node``, with its state.
+
+    Live contract values take precedence over stale spawn config values (a
+    topic the local agent actually published to is more authoritative than
+    what was declared at spawn time), but an empty one overwrites nothing.
+    """
+    new_config = dict(config or {})
+    new_config.setdefault("name", agent_name)
+    new_config["node"] = target_node
+    new_config.pop("replace", None)
+    if initial_state:
+        new_config["_initial_state"] = initial_state
+    for k, v in live_contract.items():
+        if v:
+            new_config[k] = v
+    return new_config

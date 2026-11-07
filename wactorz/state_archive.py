@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """wactorz-state  —  export a state directory to one file, and import it back.
 
 What a server or a node remembers lives in its state directory: the database,

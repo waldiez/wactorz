@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A value the JSON-backed stores cannot hold is refused at the write.
 
 Stored as its ``str()``, a datetime or a numpy float came back as a string after

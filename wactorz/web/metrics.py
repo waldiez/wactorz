@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`/metrics` on the dashboard's server.
 
 The REST interface serves `/metrics` too, but it runs only when it is the

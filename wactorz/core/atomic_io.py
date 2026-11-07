@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Replacing a file's contents without a window where it is neither.
 
 Writing in place truncates first, so a crash between the truncate and the last

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Finding the command a message calls, and what a handler may reach.
 
 Matching is on the whole stripped message, not on a leading slash. Several

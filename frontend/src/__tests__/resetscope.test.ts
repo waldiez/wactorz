@@ -1,13 +1,12 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
-import { buildResetPopover, type ResetPopover } from "../ui/dashboard/popovers";
-import { nodesSay, openAgent } from "../ui/dashboard/resetScope";
+import { buildResetPopover, type ResetPopover } from "../ui/shell/popovers";
+import { nodesSay, openAgent } from "../ui/shell/resetScope";
 import { emit } from "../events";
 import { toast } from "../ui/ToastManager";
 import { blockingFindings } from "./axe";
@@ -45,7 +44,7 @@ describe("whom a reset is for", () => {
     });
 
     afterEach(() => {
-        pop?._release();
+        pop?.release();
         pop = null;
         vi.unstubAllGlobals();
         location.hash = "";
@@ -128,7 +127,7 @@ describe("whom a reset is for", () => {
         expect(allByRole(pop, "radio")).toEqual([]);
         expect(rows(pop)).toHaveLength(6);
 
-        pop._release();
+        pop.release();
         emit("af-route", { view: "chat", path: ["lamp"] });
         expect(allByRole(pop, "radio")).toEqual([]);
     });

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for POST /chat/stop (web.chat.rest_chat_stop_handler).
 
 The handler must work in both runtime modes:

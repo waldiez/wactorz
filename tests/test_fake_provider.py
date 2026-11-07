@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The provider that answers without a model.
 
 Its whole value is that a system built on it behaves the same way twice, so the

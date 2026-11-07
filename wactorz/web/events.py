@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MQTT-topic → live-state transitions.
 
 ``parse_topic`` decodes each broker message into mutations of
@@ -11,10 +12,9 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..agents.llm.cost import get_global_alltime_cost
 from ..core import outbound
 from ..core.questions import QUESTIONS_LEAF
-from . import cost, runtime
+from . import chat, cost, runtime
 from . import questions as question_ledger
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,11 @@ MAX_FEED_ENTRIES = 100
 #: will not remove it, because a patch only adds and updates. Kept here so the
 #: REST and WebSocket delete paths cannot spell it differently.
 DELETE_AGENT_FRAME = "delete_agent"
+
+#: The state of an agent the server knows of but has not heard from: started,
+#: no heartbeat or status yet. Every other state is one the agent reported (or a
+#: command it accepted), so "running" keeps meaning ready, reachable over MQTT.
+STARTING = "starting"
 
 
 def _evict_stalest() -> None:
@@ -62,6 +67,17 @@ def _evict_stalest() -> None:
     )
 
 
+def _known_name(agent_id: str) -> str:
+    """The name to file a newly seen agent under until it says its own.
+
+    A metric or a status can arrive before an agent's first heartbeat, which is
+    what names it here. An agent of this process is named by the registry; any
+    other, an agent on a node, by the start of its id until it is heard from.
+    """
+    actor = runtime.registry.get(agent_id) if runtime.registry is not None else None
+    return actor.name if actor is not None else agent_id[:8]
+
+
 def update_agent(agent_id: str, key: str, data) -> None:
     """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
@@ -69,12 +85,15 @@ def update_agent(agent_id: str, key: str, data) -> None:
     if agent_id not in runtime.state["agents"]:
         runtime.state["agents"][agent_id] = {
             "agent_id": agent_id,
-            "name": agent_id[:8],
+            "name": _known_name(agent_id),
             "first_seen": time.time(),
             # Set here as well as below: eviction ranks on it, and an entry
             # without one sorts as infinitely stale — so a new arrival would be
             # the first thing dropped, including itself.
             "last_update": time.time(),
+            # A metric can open the entry before the first heartbeat, and says
+            # nothing about whether the agent is ready.
+            "state": STARTING,
         }
         _evict_stalest()
     runtime.state["agents"][agent_id][key] = data
@@ -416,8 +435,24 @@ def _on_chat(agent_id: str, data: Any) -> dict[str, Any]:
     frame: dict[str, Any] = {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
     if message["content"]:
         add_log({"type": "chat", "agent_id": agent_id, **message})
-        frame["_push_chat"] = {"type": "chat", **message}
+        frame["_push_chat"] = {
+            "type": "chat",
+            **message,
+            "thread_id": _thread_id(agent_id, message),
+        }
     return frame
+
+
+def _thread_id(agent_id: str, message: dict[str, Any]) -> str:
+    """The id of the agent whose thread ``message``, heard on ``agent_id``'s topic, is in.
+
+    Usually that agent's own. A voice agent relays a user's words as from the
+    user to another agent, and those are in that agent's thread.
+    """
+    owner = message["to"] if message["from"] == "user" else message["from"]
+    if owner == _name_of(agent_id):
+        return agent_id
+    return chat.agent_id_of(str(owner))
 
 
 def _on_answer(agent_id: str, data: Any) -> None:
@@ -516,11 +551,9 @@ def node_online(last_seen: float, threshold: float = 45.0) -> bool:
 def snapshot(include_totals: bool = True) -> dict[str, Any]:
     """Render the dashboard state for a websocket client.
 
-    Everything here reads from ``runtime.state`` — in memory, cheap — **except**
-    the two headline totals, which are the only part that touches the database.
-    Resolving them costs one query per agent whose cost is not in an MQTT frame
-    (``best_cost`` falls through to the ``_final_cost`` row), plus two full scans
-    of ``kv_store``.
+    Everything here is read from memory: ``runtime.state``, and for the headline
+    totals what the database last held (`cost.stored_totals`), which a caller
+    refreshes on a thread (`cost.refresh_totals`) when it needs it current.
 
     ``include_totals=False`` omits them, for callers on a hot path. The browser
     keeps whatever it last received: ``WSClient._applyStatePatch`` assigns each
@@ -592,10 +625,7 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # the counter accrued its spend at call time). Use it as a third floor so the
     # headline never drops below money already spent — and so it can never read
     # lower than the "this period" spend shown beside it.
-    try:
-        alltime_cost = get_global_alltime_cost()
-    except Exception:
-        alltime_cost = 0.0
+    alltime_cost = cost.stored_totals().alltime
     total_cost = max(
         live_cost + cost.historical_cost_usd(live_names),
         cost.lifetime_cost_total(),

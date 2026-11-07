@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.main.planning.PlanningMixin``.
 
 Covers the pure / cheaply-testable surface: pipeline-rule and pending-plan

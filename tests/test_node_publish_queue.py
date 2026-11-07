@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node's publish queue is bounded, and gives way in a stated order.
 
 Unbounded, a broker outage on a node that keeps publishing grows the queue until

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The REST chat endpoints — POST /api/chat and POST /api/actors/{id}/message.
 
 Nothing here had test coverage: the HTTP smoke test walks GET routes only, which

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Databases as older releases left them, for tests of what an upgrade does.
 
 A database made today is created current, so a test of a migration has to make

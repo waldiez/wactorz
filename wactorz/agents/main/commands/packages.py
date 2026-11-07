@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which packages an agent may have installed without the operator being asked.
 
 The list is the operator's: a slash command is read from what was typed, never

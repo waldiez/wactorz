@@ -9,7 +9,7 @@ ARG FLAVOUR=default
 # uv, at build time only: it turns uv.lock into the list the install below
 # checks every package against, and is never copied into the image. Pinned by
 # digest like the base. CI installs the uv this line names (.github/actions/setup-uv).
-FROM ghcr.io/astral-sh/uv:0.13.3@sha256:bee0a2a458fd956c5df7b8b4c5fed2257b0af34866e3da7b51db0be3acb375d1 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
 # Each base is pinned by digest in a literal FROM line, so Dependabot proposes its
 # updates (.github/dependabot.yml) and every build starts from the same bytes.
@@ -55,33 +55,24 @@ ARG FLAVOUR
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE NOTICE.md uv.lock ./
-COPY wactorz/ ./wactorz/
-COPY static/ ./static/
-COPY scripts/ ./scripts/
+# The dependencies first, from the lockfile alone, so their layer -- most of the
+# image, and all of it that takes long to build -- is reused until uv.lock or
+# pyproject.toml change; a change to Wactorz's own code rebuilds only the small
+# layer below it.
+COPY pyproject.toml uv.lock ./
 
 # The dependencies are the versions uv.lock pins, each checked against its hash,
 # so the image holds what CI tested and a package altered on its way here fails
 # the build. uv only writes that list; pip installs it, and stays in the image
-# for the packages agents install at runtime. Wactorz itself goes in last, with
-# nothing left to resolve.
+# for the packages agents install at runtime.
 #
 # Installed into the root-owned system site-packages on purpose: the runtime user
-# must not be able to rewrite the code it is running. The build inputs are removed
-# in the same layer, or they stay in the image as a second, shadowing copy of the
-# package that `python` picks up ahead of the installed one.
+# must not be able to rewrite the code it is running.
 #
 # The `ultra` image adds the `ml` and `vision` extras. Their PyTorch is locked to
 # PyTorch's own CPU build, which is not on PyPI, so pip is told where that index
 # is; every file from it is checked against the lockfile's hash like the rest.
 #
-#
-# An image passes on every package installed in it, so it says what they are:
-# THIRD_PARTY.txt lists each with its version and license, beside Wactorz's own
-# LICENSE and NOTICE, which stay in /app. The texts of the others are where pip
-# put them, in each package's .dist-info folder.
-#
-# `.` is this checkout, and its dependencies are pinned by hash the line before.
 # `$extras` and `$indexes` are unquoted on purpose: each is a list of arguments,
 # or none.
 # hadolint ignore=DL3013,SC2086
@@ -95,9 +86,26 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
     && uv export --quiet --frozen --no-emit-project $extras --format requirements.txt \
         --output-file /tmp/requirements.txt \
     && pip install --no-cache-dir --require-hashes $indexes -r /tmp/requirements.txt \
-    && pip install --no-cache-dir --no-deps . \
+    && rm /tmp/requirements.txt
+
+COPY README.md LICENSE NOTICE.md ./
+COPY wactorz/ ./wactorz/
+COPY static/ ./static/
+COPY scripts/ ./scripts/
+
+# Wactorz itself, with nothing left to resolve: `.` is this checkout, and its
+# dependencies are installed by hash above. The build inputs are removed in the
+# same layer, or they stay in the image as a second, shadowing copy of the
+# package that `python` picks up ahead of the installed one.
+#
+# An image passes on every package installed in it, so it says what they are:
+# THIRD_PARTY.txt lists each with its version and license, beside Wactorz's own
+# LICENSE and NOTICE, which stay in /app. The texts of the others are where pip
+# put them, in each package's .dist-info folder.
+# hadolint ignore=DL3013
+RUN pip install --no-cache-dir --no-deps . \
     && python scripts/third_party.py > /app/THIRD_PARTY.txt \
-    && rm -rf /tmp/requirements.txt /app/wactorz /app/static /app/scripts \
+    && rm -rf /app/wactorz /app/static /app/scripts \
         /app/pyproject.toml /app/README.md /app/uv.lock
 
 # Unprivileged runtime user. The entrypoint chowns the state directory before

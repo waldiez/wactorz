@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The node signing mode is reachable from the Home Assistant add-on.
 
 Configured by three files that cannot see each other: `wactorz/config.py` reads

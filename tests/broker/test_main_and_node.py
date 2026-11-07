@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main and a node agree on, exercised over a real broker.
 
 Each test is one thing a deployment depends on: the node is seen, a signed

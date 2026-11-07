@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Memory and system-prompt construction for MainActor.
 
 Holds user-fact persistence/extraction and the dynamic system-prompt rebuild

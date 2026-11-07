@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the call-site evaluation harness (wactorz/evalharness.py)."""
 
 import json

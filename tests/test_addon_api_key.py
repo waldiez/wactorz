@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Home Assistant add-on always runs with an API key.
 
 The panel does not need one: ingress requests are recognised as the

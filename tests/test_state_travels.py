@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A date, a set or a tuple in an agent's state goes wherever the agent goes.
 
 A node keeps an agent's state as JSON, and a migration carries it as JSON, in

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Version bookkeeping across a database upgrade.
 
 Runs against a real on-disk SQLite database, because the questions are about

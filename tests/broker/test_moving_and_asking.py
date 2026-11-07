@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent moved between main and a node, and the calls that cross between them.
 
 Each of these is a path with a hop in it that a fake cannot stand in for: the

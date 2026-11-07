@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The unified persist()/recall() API agents actually call.
 
 Routes each key to the store that suits it, so agent code needs no knowledge of
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Keys that go to SQLite (durable, structured, queryable)
 SQLITE_KEYS = {
+    # Main's spawn registry, by actor id; and where a store from before ids
+    # were kept holds it by name, read once on the way up.
+    "_spawned_agents_by_id",
     "_spawned_agents",
     # Migrations waiting on a node to confirm. Declared rather than left to fall
     # through to pickle: this has to survive the restart it exists to survive,

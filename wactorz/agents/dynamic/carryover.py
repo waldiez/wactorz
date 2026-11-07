@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an agent remembers across an in-place code repair.
 
 A repair compiles the model's new code into a fresh namespace, so anything the

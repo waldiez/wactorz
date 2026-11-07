@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The commands a user can type.
 
 The machinery lives in `dispatch`; a handler module imports from there, so
@@ -10,6 +11,7 @@ stated here rather than left to emerge from anything.
 """
 
 from .agents import (
+    copy_agent,
     delete_agent,
     list_agents,
     migrate_agent_cmd,
@@ -28,7 +30,14 @@ from .info import (
     show_registry,
     show_topics,
 )
-from .models import activate_model, clear_model_pointer, promote_model, shadow_model
+from .models import (
+    activate_model,
+    clear_model_pointer,
+    judge_model,
+    policy_model,
+    promote_model,
+    shadow_model,
+)
 from .nodes import deploy_node, remove_node, restart_node, run_on_node, shutdown_node
 from .packages import manage_packages
 from .state import (
@@ -47,6 +56,8 @@ registry.add(activate_model)
 registry.add(shadow_model)
 registry.add(promote_model)
 registry.add(clear_model_pointer)
+registry.add(judge_model)
+registry.add(policy_model)
 registry.add(show_artifacts)
 registry.add(show_mqtt_status)
 registry.add(show_bus)
@@ -62,6 +73,7 @@ registry.add(manage_packages)
 registry.add(migrate_agent_cmd)
 registry.add(deploy_node)
 registry.add(restart_agent)
+registry.add(copy_agent)
 registry.add(remove_node)
 registry.add(restart_node)
 registry.add(run_on_node)

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The address says which view is open: a refresh returns to it, Back steps through the views
 visited, a link opens what it names, and an address with no view opens the last one.
 """

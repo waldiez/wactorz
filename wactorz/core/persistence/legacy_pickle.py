@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One-time migration of pre-SQLite pickle state."""
 
 import logging

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """WhatsApp interface, via Twilio webhooks."""
 
 import asyncio
@@ -178,8 +179,10 @@ class WhatsAppInterface:
 
     def build_app(self) -> web.Application:
         """Assemble the webhook route, without binding a port."""
-        from twilio.request_validator import RequestValidator
-        from twilio.rest import Client as TwilioClient
+        from twilio.request_validator import (  # optional dependency: the `whatsapp` extra
+            RequestValidator,
+        )
+        from twilio.rest import Client as TwilioClient  # optional dependency: the `whatsapp` extra
 
         twilio = TwilioClient(self.account_sid, self.auth_token)
         validator = RequestValidator(self.auth_token)

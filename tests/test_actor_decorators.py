@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end: an extension's actor_decorator enriches the /api/actors payload.
 
 Proves the seam is wired through the real handler — the monitor applies whatever

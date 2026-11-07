@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning up the detail on one logger, at runtime.
 
 Diagnosing something usually means wanting more from *one* library — the MQTT

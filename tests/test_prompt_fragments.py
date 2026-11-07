@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main's prompts with Home Assistant and without it.
 
 The templates in ``main_actor_prompts.py`` render with whatever fragments the
@@ -7,8 +8,6 @@ for byte check is ``tests/test_prompts_are_pinned.py``), and with none it never
 mentions Home Assistant, so a model on an installation without one is never
 taught to answer about lights.
 """
-
-from __future__ import annotations
 
 import re
 from operator import attrgetter

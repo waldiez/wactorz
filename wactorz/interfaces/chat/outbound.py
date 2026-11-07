@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The outbox: where a message from an agent meets the channel that reaches the person.
 
 An agent, on main or on a node, publishes what it has to say on its own

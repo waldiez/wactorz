@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Does a request describe a standing pipeline or a one-shot task?
 
 A pipeline verdict spawns a persistent agent, so a false positive here costs

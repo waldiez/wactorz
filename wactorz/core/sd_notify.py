@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Telling systemd this process is alive, when systemd asked to be told.
 
 A unit with ``WatchdogSec=`` set expects a message at least that often and

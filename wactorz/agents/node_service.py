@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Install the node runner as a systemd service, at the least-privileged rung.
 
 The deploy used to launch the runner with `nohup`, which does not survive a

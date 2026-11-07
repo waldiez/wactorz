@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Model pricing lookup.
 
 Costs are computed from a table keyed by model-name *prefix*, so a dated or

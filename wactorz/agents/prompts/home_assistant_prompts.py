@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Prompts of the Home Assistant agents, and what Home Assistant adds to main's."""
 
 from .assemble import PromptFragment

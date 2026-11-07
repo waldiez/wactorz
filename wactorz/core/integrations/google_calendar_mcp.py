@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Google Calendar MCP integration client (hosted MCP + REST fallback)."""
 
 from datetime import datetime

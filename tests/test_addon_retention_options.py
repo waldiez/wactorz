@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every retention window is reachable from the Home Assistant add-on.
 
 A window is configured by three files that have no way of knowing about each

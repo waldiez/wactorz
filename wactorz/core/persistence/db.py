@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """SQLite connection management and typed accessors."""
 
 import json
@@ -6,17 +7,17 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, NamedTuple
 
 from .json_value import encode
 from .migrations import stamp_new_database
-from .schema import SCHEMA_SQL, SCHEMA_VERSION
+from .schema import ADDED_COLUMN_INDEXES, SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,18 @@ class ClosedError(RuntimeError):
         super().__init__("WactorzDB connection is closed")
 
 
+class ChatRow(NamedTuple):
+    """One chat turn to keep, as `WactorzDB.write_chat_logs` takes it."""
+
+    ts: float
+    agent_name: str
+    agent_id: str
+    role: str
+    content: str
+    attachments: list[dict[str, Any]] | None = None
+    session_id: str = ""
+
+
 class WactorzDB:
     """SQLite connection manager. One instance per process, created at startup.
 
@@ -208,6 +221,8 @@ class WactorzDB:
         new = not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone()
         self.conn.executescript(SCHEMA_SQL)
         if new:
+            for statement in ADDED_COLUMN_INDEXES:
+                self.conn.execute(statement)
             stamp_new_database(self.conn)
         elif not self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone():
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -344,6 +359,21 @@ class WactorzDB:
                 return row[0]
         return default
 
+    @_serialised
+    def kv_values(self, key: str) -> list[tuple[str, Any]]:
+        """Every agent's value for ``key``, as ``(agent, value)``; a value that is not JSON as stored."""
+        rows = self.conn.execute(
+            "SELECT agent, value FROM kv_store WHERE key=?",
+            (key,),
+        ).fetchall()
+        found: list[tuple[str, Any]] = []
+        for agent, raw in rows:
+            try:
+                found.append((str(agent), json.loads(raw)))
+            except (json.JSONDecodeError, TypeError):
+                found.append((str(agent), raw))
+        return found
+
     def kv_delete(self, agent: str, key: str) -> None:
         """Remove one key for one agent. Missing keys are not an error."""
         with self.transaction() as conn:
@@ -387,23 +417,42 @@ class WactorzDB:
         unit: str = "",
         agent: str = "",
         node: str = "",
+        arrived: float | None = None,
+        time_source: str = "",
     ) -> None:
+        """One reading: ``ts`` is its event time, ``arrived`` when it was received, ``time_source`` which ``ts`` is."""
         with self.transaction() as conn:
             conn.execute(
                 "INSERT INTO sensor_readings "
-                "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (ts, topic, entity_id, field, value, value_str, unit, agent, node),
+                "(ts, topic, entity_id, field, value, value_str, unit, agent, node, arrived, time_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ts,
+                    topic,
+                    entity_id,
+                    field,
+                    value,
+                    value_str,
+                    unit,
+                    agent,
+                    node,
+                    arrived,
+                    time_source,
+                ),
             )
 
     def write_sensor_batch(self, rows: list[tuple]) -> None:
-        """Batch insert sensor readings. Each tuple matches write_sensor args."""
+        """Batch insert sensor readings. Each tuple matches write_sensor args.
+
+        A tuple of nine, as rows were before readings kept their arrival apart
+        from their event time, is written with the two time columns empty.
+        """
         with self.transaction() as conn:
             conn.executemany(
                 "INSERT INTO sensor_readings "
-                "(ts, topic, entity_id, field, value, value_str, unit, agent, node) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                rows,
+                "(ts, topic, entity_id, field, value, value_str, unit, agent, node, arrived, time_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [tuple(row) if len(row) == 11 else (*row, None, "") for row in rows],
             )
 
     def write_detection(
@@ -472,44 +521,67 @@ class WactorzDB:
         content: str,
         session_id: str = "",
         attachments: list[dict[str, Any]] | None = None,
+        *,
+        agent_id: str,
     ) -> None:
         """Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema lives in :mod:`.schema`.
+
+        ``agent_id`` is the id of the agent whose thread the turn is in, which
+        the history is kept by; ``agent_name`` is how the turn names it. Required:
+        a writer that knows only a name must look the id up, since two agents
+        may share a name.
 
         ``attachments`` are stored on the row rather than resolved from disk on
         read: the files are immutable, so there is nothing to keep in step, and a
         chip should still say what was attached even once the file behind it is
         gone.
         """
+        self.write_chat_logs(
+            [ChatRow(ts, agent_name, agent_id, role, content, attachments, session_id)]
+        )
+
+    def write_chat_logs(self, rows: Sequence[ChatRow]) -> None:
+        """Persist several chat turns in one transaction: all of them, or none."""
         with self.transaction() as conn:
-            conn.execute(
-                "INSERT INTO chat_log (ts, agent_name, role, content, session_id, attachments) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    ts,
-                    agent_name,
-                    role,
-                    content,
-                    session_id,
-                    json.dumps(attachments) if attachments else "",
-                ),
+            conn.executemany(
+                "INSERT INTO chat_log "
+                "(ts, agent_name, agent_id, role, content, session_id, attachments) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        row.ts,
+                        row.agent_name,
+                        row.agent_id,
+                        row.role,
+                        row.content,
+                        row.session_id,
+                        json.dumps(row.attachments) if row.attachments else "",
+                    )
+                    for row in rows
+                ],
             )
 
-    def clear_chat_log(self, agent_name: str | None = None) -> int:
-        """Delete chat_log rows. Pass agent_name to limit to one agent."""
+    def clear_chat_log(self, agent_name: str | None = None, agent_id: str | None = None) -> int:
+        """Delete chat_log rows: ``agent_id``'s, every agent's called ``agent_name``, or all."""
         with self.transaction() as conn:
-            if agent_name:
+            if agent_id:
+                cur = conn.execute("DELETE FROM chat_log WHERE agent_id=?", (agent_id,))
+            elif agent_name:
                 cur = conn.execute("DELETE FROM chat_log WHERE agent_name=?", (agent_name,))
             else:
                 cur = conn.execute("DELETE FROM chat_log")
         return cur.rowcount
 
     @_serialised
-    def chat_attachment_ids(self, agent_name: str | None = None) -> set[str]:
+    def chat_attachment_ids(
+        self, agent_name: str | None = None, agent_id: str | None = None
+    ) -> set[str]:
         """Every upload id a kept chat turn refers to: what the upload sweep must keep.
 
-        With `agent_name`, only the turns in that agent's thread: what a reset of
-        that thread may take with it, less whatever another thread still names.
+        With `agent_name`, or `agent_id` where two share it, only the turns in
+        that agent's thread: what a reset of that thread may take with it, less
+        whatever another thread still names.
         A row whose attachments cannot be read counts as naming none, as it does
         everywhere else a row is read.
         """
@@ -517,11 +589,12 @@ class WactorzDB:
         query = (
             "SELECT attachments FROM chat_log WHERE attachments IS NOT NULL AND attachments != ''"
         )
-        rows = (
-            self.conn.execute(f"{query} AND agent_name=?", (agent_name,))
-            if agent_name
-            else self.conn.execute(query)
-        )
+        if agent_id:
+            rows = self.conn.execute(f"{query} AND agent_id=?", (agent_id,))
+        elif agent_name:
+            rows = self.conn.execute(f"{query} AND agent_name=?", (agent_name,))
+        else:
+            rows = self.conn.execute(query)
         for (raw,) in rows:
             for item in _with_attachments({"attachments": raw})["attachments"]:
                 if isinstance(item, dict) and item.get("id"):
@@ -535,13 +608,24 @@ class WactorzDB:
         role: str | None = None,
         since: float | None = None,
         limit: int = 200,
+        *,
+        agent_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return chat_log rows newest-first as plain dicts. Used by the
         /api/chats endpoint and by feed_handler to seed the UI feed.
+
+        ``agent_id`` gives one agent's history; ``agent_name`` every agent's
+        that went by that name.
         """
-        sql = "SELECT id, ts, agent_name, role, content, session_id, attachments FROM chat_log"
+        sql = (
+            "SELECT id, ts, agent_name, agent_id, role, content, session_id, attachments "
+            "FROM chat_log"
+        )
         clauses: list[str] = []
         params: list = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
         if agent_name:
             clauses.append("agent_name = ?")
             params.append(agent_name)
@@ -553,7 +637,8 @@ class WactorzDB:
             params.append(float(since))
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
-        sql += " ORDER BY ts DESC LIMIT ?"
+        # Then by id: two turns kept with one time keep the order they were written in.
+        sql += " ORDER BY ts DESC, id DESC LIMIT ?"
         params.append(int(limit))
         rows = self.conn.execute(sql, params).fetchall()
         # rows are sqlite3.Row because connect() set row_factory; coerce to dict
@@ -806,9 +891,17 @@ class WactorzDB:
         ).fetchall()
         return [_node_sample(r) for r in reversed(rows)]
 
-    def clear_metrics_history(self, agent: str | None = None) -> int:
-        """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed."""
+    def clear_metrics_history(self, agent: str | None = None, node: str | None = None) -> int:
+        """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed.
+
+        ``node`` limits it to the agent of that name on that node, "" for main's.
+        """
         with self.transaction() as conn:
+            if agent and node is not None:
+                cur = conn.execute(
+                    "DELETE FROM agent_metrics_history WHERE agent = ? AND node = ?", (agent, node)
+                )
+                return cur.rowcount
             if agent:
                 cur = conn.execute("DELETE FROM agent_metrics_history WHERE agent = ?", (agent,))
                 return cur.rowcount

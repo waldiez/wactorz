@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared pieces for the social chat channels.
 
 Rate limiting and the checks that decide whether a channel may start at all —

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Repair of the agent code an LLM generates for a pipeline step.
 
 The model reliably makes the same few mistakes -- awaiting synchronous agent

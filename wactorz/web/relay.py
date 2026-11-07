@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which broker messages are forwarded to browsers.
 
 The server subscribes to whole subtrees — `agents/#`, `system/#`, `nodes/#` and
@@ -5,6 +6,8 @@ the Home Assistant state-change topic — because agents publish freely within
 them, and to `models/+/+`, where main says where each model's pointers stand. The dashboard, though, consumes a fixed and knowable set. Forwarding the
 remainder puts whatever any agent happens to publish onto every open browser's
 socket, and that surface grows with each new agent rather than with this file.
+
+A panel adds to this: what it declares in `topics` is relayed and subscribed to.
 
 The patterns mirror what the frontend's `ServerEventRouter` dispatches, the
 feed-only suffixes its `raw` fallback maps in `agents/mapping.ts`, and the
@@ -18,13 +21,16 @@ Matching the *subscribed* Home Assistant prefix is deliberate — a topic the
 server never subscribed to cannot arrive, so there is nothing to relay.
 """
 
+from collections.abc import Iterable
+
 from ..core.artifacts import POINTERS
+from ..core.topic_bus import topic_matches
 
 #: `agents/{id}/<leaf>` topics the dashboard acts on. `actuations` and `anomaly`
 #: are consumed not by `ServerEventRouter` but by the raw-fallback feed mappers
 #: in `frontend/src/agents/mapping.ts` (actuation audit trail, anomaly alerts) —
 #: the other place a topic addition must mirror. `questions` is each agent's
-#: question book, relayed so the dashboard can follow it live; no view reads it yet.
+#: question book, relayed so the Inbox follows it live.
 _AGENT_LEAVES = frozenset(
     {
         "heartbeat",
@@ -56,10 +62,27 @@ _MODEL_POINTERS = frozenset(POINTERS)
 #: a prefix because the bridge publishes one topic per entity beneath it.
 _HA_PREFIX = "homeassistant/state_changes"
 
+#: The topic filters panels declared, which this file cannot know: a panel is a
+#: consumer of the dashboard's that ships apart from it.
+_followed: tuple[str, ...] = ()
+
+
+def follow(filters: Iterable[str]) -> None:
+    """Relay what ``filters`` match too, replacing what was followed before."""
+    global _followed
+    _followed = tuple(dict.fromkeys(filters))
+
+
+def followed() -> tuple[str, ...]:
+    """The filters being followed, for the server to subscribe to."""
+    return _followed
+
 
 def is_relayed(topic: str) -> bool:
     """Whether a browser has any use for this topic's raw payload."""
     if topic in _SYSTEM_TOPICS:
+        return True
+    if any(topic_matches(pattern, topic) for pattern in _followed):
         return True
     if topic == _HA_PREFIX or topic.startswith(f"{_HA_PREFIX}/"):
         return True

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """wactorz.core.persistence — the storage layer behind persist()/recall().
 
 Three stores, chosen per key by :class:`PersistenceAPI`:

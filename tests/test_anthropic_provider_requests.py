@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the Anthropic provider sends, and how it survives a model that refuses it.
 
 Reasoning is the part that changed under this provider. Older Claude models

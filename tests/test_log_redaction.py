@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Secret redaction on the logging path.
 
 The regression these pin: a secret that reaches a log record is readable by

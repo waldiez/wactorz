@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What main's slash commands say and do, handler by handler.
 
 The handlers reach main only through `CommandContext.actor`, so a stand-in
@@ -12,6 +13,7 @@ not started, and a plan that is not pending cannot be approved twice.
 
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -24,9 +26,10 @@ from wactorz.agents.main.commands import nodes as node_cmds
 from wactorz.agents.main.commands import packages as package_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
+from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.config import CONFIG
 from wactorz.core import topic_bus
-from wactorz.core.actor import ActorState
+from wactorz.core.actor import Actor, ActorState
 from wactorz.core.topic_bus import TopicBus, TopicContract
 
 
@@ -44,6 +47,19 @@ class _Agent:
         if self.error:
             raise self.error
         return self.accept
+
+
+class _BreaksOnRestart(Actor):
+    """A real actor whose own setup raises once `broken` is set."""
+
+    broken = False
+
+    async def on_start(self) -> None:
+        if self.broken:
+            raise RuntimeError("setup crashed")
+
+    async def handle_message(self, message: Any) -> None:  # pragma: no cover - never delivered
+        return None
 
 
 class _Registry:
@@ -144,8 +160,8 @@ class _Main:
         return self.capability_list
 
     # agents
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]:
-        return self.spawn_registry
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry.from_names(self.spawn_registry)
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0
@@ -161,7 +177,7 @@ class _Main:
             raise self.migrate_result
         return self.migrate_result
 
-    async def delete_spawned_agent(self, name: str) -> None:
+    async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
         if self.delete_error:
             raise self.delete_error
         self.calls.append(("delete", name))
@@ -652,6 +668,15 @@ class TestMigrate:
 
         assert await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor rpi") == reply
 
+    async def test_an_address_names_the_agent_it_moves(self, main: _Main) -> None:
+        main.migrate_result = {"success": True, "message": "moved"}
+        main.spawn_registry = {"sensor": {"node": "pc"}}
+
+        await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor@pc rpi")
+
+        # The move takes the address: which agent of the name, it decides there.
+        assert ("migrate", ("sensor@pc", "rpi", False)) in main.calls
+
     @pytest.mark.parametrize(
         ("argument", "force"),
         [("sensor rpi", False), ("sensor rpi --force", True), ("--force sensor rpi", True)],
@@ -680,10 +705,136 @@ class TestRestart:
         assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
         assert "on node 'rpi'" in text
 
+    async def test_the_full_address_restarts_the_agent_on_that_node(self, main: _Main) -> None:
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+
+        await agent_cmds.restart_agent(_ctx(main), "cam@rpi")
+
+        assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
+
+    async def test_an_address_naming_another_node_acts_on_nothing(self, main: _Main) -> None:
+        # Typed for an agent on the PC, it must not restart the Pi's.
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+
+        text = await agent_cmds.restart_agent(_ctx(main), "cam@pc")
+
+        assert text == "'cam' is on 'rpi', not on 'pc'."
+        assert main.published == []
+
+    async def test_an_address_on_a_node_that_keeps_no_such_agent_acts_on_nothing(
+        self, main: _Main
+    ) -> None:
+        text = await agent_cmds.stop_agent(_ctx(main), "weather@pc")
+
+        assert text == "No agent 'weather' is kept on node 'pc'."
+        assert main.published == []
+
+    async def test_an_agent_on_main_is_named_by_any_of_mains_names(self, main: _Main) -> None:
+        running = _Agent("weather")
+        main._registry = _Registry(running)
+        main.spawn_registry = {"weather": {"type": "native", "node": ""}}
+
+        assert await agent_cmds.restart_agent(_ctx(main), "weather@local") == (
+            "Agent 'weather' restarted locally."
+        )
+
     async def test_an_unknown_local_agent_is_refused(self, main: _Main) -> None:
         text = await agent_cmds.restart_agent(_ctx(main), "ghost")
 
-        assert text == "Agent 'ghost' not found in spawn registry."
+        assert text == "Agent 'ghost' not found locally."
+        main._registry = None
+        assert (
+            await agent_cmds.restart_agent(_ctx(main), "ghost")
+            == "Agent 'ghost' not found locally."
+        )
+
+    async def test_an_agent_handed_in_by_code_is_stopped_and_started_in_place(
+        self, main: _Main
+    ) -> None:
+        # Running, but kept nowhere: `run(agents=...)` hands it to the system
+        # without a spawn config, so there is nothing to build a new one from.
+        running = _Agent("detector")
+        registry = _Registry(running)
+        main._registry = registry
+
+        text = await agent_cmds.restart_agent(_ctx(main), "detector")
+
+        assert text == "Agent 'detector' restarted locally."
+        assert running.commands == ["stop", "start"]
+        assert registry.unregistered == []
+        assert [c for c in main.calls if c[0] == "spawn"] == []
+
+    async def test_a_stopped_one_is_only_started(self, main: _Main) -> None:
+        stopped = _Agent("detector", ActorState.STOPPED)
+        main._registry = _Registry(stopped)
+
+        assert await agent_cmds.restart_agent(_ctx(main), "detector") == (
+            "Agent 'detector' restarted locally."
+        )
+        assert stopped.commands == ["start"]
+
+    async def test_one_that_refuses_stop_is_left_running(self, main: _Main) -> None:
+        essential = _Agent("monitor")
+        essential.accept = False
+        main._registry = _Registry(essential)
+
+        text = await agent_cmds.restart_agent(_ctx(main), "monitor")
+
+        assert text == "'monitor' refused stop (it may be essential), so it was not restarted."
+        assert essential.commands == ["stop"]
+
+    async def test_a_failed_start_says_it_stopped(self, main: _Main) -> None:
+        class _FailsToStart(_Agent):
+            async def apply_command(self, command: str) -> bool:
+                self.commands.append(command)
+                if command == "start":
+                    raise RuntimeError("setup crashed")
+                return True
+
+        flaky = _FailsToStart("detector")
+        main._registry = _Registry(flaky)
+
+        text = await agent_cmds.restart_agent(_ctx(main), "detector")
+
+        assert text == "'detector' stopped, but failed to start again: setup crashed"
+
+    async def test_a_real_actor_whose_start_fails_is_left_stopped(
+        self, main: _Main, tmp_path: Path
+    ) -> None:
+        # The fakes above stand in for apply_command; this is a real actor,
+        # whose start marks it running before its own setup runs.
+        flaky = _BreaksOnRestart(name="detector", persistence_dir=str(tmp_path))
+        await flaky.start()
+        flaky.broken = True
+        main._registry = _Registry(cast(_Agent, flaky))
+        try:
+            text = await agent_cmds.restart_agent(_ctx(main), "detector")
+            state_after, loops_after = flaky.state, list(flaky._tasks)
+        finally:
+            await flaky.stop()
+
+        assert text == "'detector' stopped, but failed to start again: setup crashed"
+        assert state_after == ActorState.STOPPED
+        assert loops_after == []
+
+    async def test_a_refused_start_says_it_stopped(self, main: _Main) -> None:
+        class _RefusesStart(_Agent):
+            async def apply_command(self, command: str) -> bool:
+                self.commands.append(command)
+                return command != "start"
+
+        main._registry = _Registry(_RefusesStart("detector"))
+
+        text = await agent_cmds.restart_agent(_ctx(main), "detector")
+
+        assert text == "'detector' stopped, but refused start."
+
+    async def test_main_does_not_restart_itself(self, main: _Main) -> None:
+        main._registry = _Registry(cast(_Agent, main))
+
+        text = await agent_cmds.restart_agent(_ctx(main), "main")
+
+        assert text == "'main' cannot restart itself: it is running this command."
 
     async def test_a_local_agent_is_stopped_then_respawned_trusted(self, main: _Main) -> None:
         running = _Agent("weather")

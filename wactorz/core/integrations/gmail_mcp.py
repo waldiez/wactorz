@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Gmail MCP integration client (hosted MCP + REST fallback).
 
 Mirrors the Calendar integration: Google's hosted Gmail MCP

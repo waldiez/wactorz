@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Providers must talk to the endpoint they were configured with.
 
 A dropped `base_url` does not fail loudly — it silently redirects traffic to the

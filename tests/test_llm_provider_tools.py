@@ -1,8 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 """Test LLM provider tools."""
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
-
-from __future__ import annotations
 
 import types
 import unittest
@@ -198,7 +197,7 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
         posted_payloads: list[dict[str, Any]] = []
 
         class _Response:
-            async def __aenter__(self) -> _Response:
+            async def __aenter__(self) -> "_Response":
                 return self
 
             async def __aexit__(
@@ -231,7 +230,7 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
                 }
 
         class _Session:
-            async def __aenter__(self) -> _Session:
+            async def __aenter__(self) -> "_Session":
                 return self
 
             async def __aexit__(

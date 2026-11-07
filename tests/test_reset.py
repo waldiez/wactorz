@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for wactorz.reset and the /api/reset HTTP handler.
 
@@ -17,14 +18,19 @@ Covers:
 import json
 import logging
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from wactorz import app as app_module
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import WactorzDB
+from wactorz.core.registry import ActorSystem
 from wactorz.reset import reset_chat
 from wactorz.web import api_reset, cost, runtime
 
@@ -142,7 +148,6 @@ class ResetLogsTest(unittest.TestCase):
         The lock has to be probed from another thread: handlers use an RLock, so
         the thread that leaked it could re-acquire it and see nothing wrong.
         """
-        import threading
 
         from wactorz.reset import reset_logs
 
@@ -550,6 +555,35 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 reg = db.kv_get("main", "_spawned_agents", None)
                 self.assertEqual(reg, {"b": {"node": "n1"}})
 
+    def test_all_clears_the_registry_kept_by_id_and_the_one_by_name(self):
+        # Main reads the old one when the new one is absent, so both go, or a
+        # cleared registry would come back from the older store.
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}})
+                db.kv_set("main", "_spawned_agents_by_id", {"id-a": {"name": "a", "node": ""}})
+                reset_spawns(db_path=db_path)
+                self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
+                self.assertIsNone(db.kv_get("main", "_spawned_agents_by_id", None))
+
+    def test_single_agent_pops_every_entry_of_that_name_by_id(self):
+        from wactorz.reset import reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                db.kv_set(
+                    "main",
+                    "_spawned_agents_by_id",
+                    {"id-a": {"name": "a", "node": ""}, "id-b": {"name": "b", "node": "n1"}},
+                )
+                reset_spawns(agent_name="a", db_path=db_path)
+                reg = db.kv_get("main", "_spawned_agents_by_id", None)
+                self.assertEqual(reg, {"id-b": {"name": "b", "node": "n1"}})
+
     def test_restart_read_sees_empty_registry_after_wipe(self):
         """End-to-end of the actual symptom: after a wipe, the registry read
         that main._restore_spawned_agents() performs on the NEXT startup must
@@ -695,7 +729,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # publish. `recall` already answers None for an unset key.
         main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main._get_spawn_registry = lambda: {"agentX": {"node": "n1"}}  # type: ignore[method-assign]
+        main._get_spawn_registry = lambda: SpawnRegistry.from_names({"agentX": {"node": "n1"}})  # type: ignore[method-assign]
 
         fake_registry = MagicMock()
         fake_registry.all_actors.return_value = [main]
@@ -815,16 +849,21 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         self.assertFalse(api_reset.survives_factory_reset("weather-agent", False))
         self.assertFalse(api_reset.survives_factory_reset("my-catalog-spawn", False))
 
-    def test_keep_set_covers_every_app_py_supervised_agent(self):
-        """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
-        kept. If a new .supervise("x") is added, either mark it protected or add
-        it to HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
-        import re
+    def test_keep_set_covers_every_built_in_agent(self):
+        """Drift guard: every agent a fresh boot supervises must be kept. If a new
+        built-in is added, either mark it protected or add it to
+        HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
 
-        app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
-        src_txt = app_src.read_text(encoding="utf-8", errors="ignore")
-        supervised = re.findall(r'supervise\(\s*"([^"]+)"', src_txt)
-        self.assertGreaterEqual(len(supervised), 7, "app.py supervise chain not found")
+        supervised: list[str] = []
+        system = types.SimpleNamespace(
+            supervisor=types.SimpleNamespace(
+                supervise=lambda name, *_args, **_kwargs: supervised.append(name)
+            )
+        )
+        # Every built-in on: the full profile, with Home Assistant configured.
+        with patch.object(app_module, "home_assistant_agents_enabled", return_value=True):
+            app_module._supervise_built_ins(cast(ActorSystem, system), MagicMock(), minimal=False)
+        self.assertGreaterEqual(len(supervised), 7, "the built-ins were not all supervised")
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.
         protected = {"main", "monitor", "installer", "catalog"}
@@ -891,9 +930,30 @@ class ResetUploadsTest(unittest.TestCase):
             self._stored(uploads, unsent)
             db_path = str(Path(tmp) / "wactorz.db")
             db = WactorzDB(db_path)
-            db.write_chat_log(1.0, "counter", "user", "look", attachments=[{"id": mine}])
-            db.write_chat_log(2.0, "counter", "user", "and", attachments=[{"id": shared}])
-            db.write_chat_log(3.0, "main", "user", "this too", attachments=[{"id": shared}])
+            db.write_chat_log(
+                1.0,
+                "counter",
+                "user",
+                "look",
+                attachments=[{"id": mine}],
+                agent_id=derive_actor_id("counter"),
+            )
+            db.write_chat_log(
+                2.0,
+                "counter",
+                "user",
+                "and",
+                attachments=[{"id": shared}],
+                agent_id=derive_actor_id("counter"),
+            )
+            db.write_chat_log(
+                3.0,
+                "main",
+                "user",
+                "this too",
+                attachments=[{"id": shared}],
+                agent_id=derive_actor_id("main"),
+            )
             db.close()
 
             reset_chat(agent_name="counter", db_path=db_path, state_dir=tmp)

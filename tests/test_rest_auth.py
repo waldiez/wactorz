@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The REST API key guards every route except the probe endpoints.
 
 The guard lives in a middleware rather than in each handler: a route added

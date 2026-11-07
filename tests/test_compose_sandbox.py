@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The compose stack's sandbox node: told what any node is told, and nothing of main's.
 
 In the compose stack the sandbox node is a container, not a machine ``/deploy``

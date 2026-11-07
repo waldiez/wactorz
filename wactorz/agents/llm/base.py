@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What every provider implements, and the shapes they exchange.
 
 The three public methods check the spend cap, apply the retry and timeout policy

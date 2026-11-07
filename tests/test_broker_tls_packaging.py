@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The brokers Wactorz provides serve TLS once it has issued them a certificate.
 
 Three places package a broker, none able to see the others: the compose stack,
@@ -157,6 +158,13 @@ def test_the_certificate_folder_is_always_in_the_checkout() -> None:
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "infra/mosquitto/generated/*" in ignored
     assert "!infra/mosquitto/generated/.gitkeep" in ignored
+
+
+def test_the_broker_files_a_run_in_an_example_writes_stay_out_of_the_repository() -> None:
+    # Main writes them under the folder it runs from: an example's run makes its own
+    # `infra/`, with an access list and node accounts in it.
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "examples/*/infra/" in ignored
 
 
 def test_both_compose_files_start_the_broker_the_same_way() -> None:

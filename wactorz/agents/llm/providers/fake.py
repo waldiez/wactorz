@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A provider that answers deterministically, for end-to-end runs and demos.
 
 Not a mock: it is a real ``LLMProvider`` reached through the ordinary factory, so

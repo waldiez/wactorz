@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A library agent's code, as it goes to a node that does not have it.
 
 **The rule: an agent's own code lives in its own folder.** A library agent --
@@ -37,6 +38,8 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any
+
+from .pip import refresh_import_caches
 
 logger = logging.getLogger(__name__)
 
@@ -359,7 +362,7 @@ def prepare_import(directory: Path, bundles_dir: Path, in_use: set[Path]) -> Non
             raise BundleError.name_taken(name, where)
     kept = [p for p in sys.path if not _stale_entry(p, bundles_dir, in_use | {directory})]
     sys.path[:] = [str(directory), *(p for p in kept if p != str(directory))]
-    importlib.invalidate_caches()
+    refresh_import_caches()
 
 
 def local_names_in(directory: Path) -> set[str]:

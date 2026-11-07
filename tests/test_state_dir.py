@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """State-directory resolution — one path, resolved one way.
 
 The regression these pin: agent factories and the central stores used to

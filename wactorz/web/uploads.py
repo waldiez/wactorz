@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Storage rules for chat file attachments.
 
 Three properties, each load-bearing:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A node acts only on control messages main signed for it.
 
 A node runs the code a spawn carries and starts every agent a desired state lists,

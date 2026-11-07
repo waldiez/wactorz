@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Chat routing for the monitor.
 
 Decides where a user message goes — slash command, @mention, the orchestrator
@@ -10,9 +11,8 @@ import asyncio
 import inspect
 import json
 import logging
-import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from aiohttp import web
@@ -24,6 +24,8 @@ from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..agents.main.commands import registry as main_command_registry
 from ..agents.main.commands.dispatch import Form
 from ..core.actor import ActorState, Message, MessageType
+from ..core.addresses import MAIN_NODE, Address, Resolution, node_of, parse, resolve
+from ..core.identity import derive_actor_id, given_actor_id
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
 from ..core.task_text import reply_text, task_payload
@@ -84,62 +86,117 @@ NO_MAIN_FOR_NODES = (
 )
 
 
-def remote_node_for(name: str) -> str | None:
-    """The node running ``name``, or None if no node recently said it has it.
+def resolution_of(wanted: str) -> Resolution:
+    """Which agents ``wanted``, a bare name or ``name@node``, finds from here.
 
-    A node's heartbeat is what says so. Just after main starts no node has
-    reported yet, though the nodes kept running, so for that long the spawn
-    registry answers instead: an agent it places on a node main has not heard
-    from since starting is taken to be there. Once the node reports, or the
-    window passes, only the heartbeat counts -- a node that never comes back is
-    then said to have nothing, rather than every message to it waiting out the
-    reply timeout.
+    Main knows its own agents and the nodes'; a node counts only while it has
+    reported recently (see `NODE_FRESH_SECONDS`), so a message is not sent to
+    wait out its reply timeout on a node that is gone. Without main there are
+    no nodes, and only the agents in this process are found.
     """
-    # Main itself, not the orchestrator: the node table is main's.
     main_actor = find_main_actor(runtime.registry)
-    if not main_actor:
-        return None
-    known = main_actor._known_nodes
-    for node_name, nd in known.items():
-        if (
-            time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS
-            and name in nd.get("agents", [])
-            and main_actor.nodes.speaks_for(node_name, name)
-        ):
-            return node_name
-    if time.time() - main_actor.metrics.start_time >= NODE_FRESH_SECONDS:
-        return None
-    placed = str(main_actor._get_spawn_registry().get(name, {}).get("node") or "").strip()
-    return placed if placed and placed not in known else None
+    if main_actor is not None:
+        return main_actor.resolve_address(wanted, heard_within=NODE_FRESH_SECONDS)
+    registry = runtime.registry
+    names = dict.fromkeys((wanted.strip(), parse(wanted).name))
+    here = [
+        Address(name, MAIN_NODE)
+        for name in names
+        if name and registry is not None and registry.find_by_name(name)
+    ]
+    return resolve(wanted, here)
 
 
-def routable(name: str) -> bool:
-    """Whether a message addressed to ``name`` has somewhere to go."""
-    if not name:
+def agent_id_of(name: str) -> str:
+    """The id of the agent ``name``, a bare name or ``name@node``, addresses.
+
+    The agent it finds, if it finds one: running here, or one this server has
+    heard from on that node. Otherwise, by its name alone: one this server has
+    heard from, then the id main's spawn registry keeps for it, and for a name
+    none of them knows, the one derived from it -- what such an agent would
+    have had.
+    """
+    address = resolution_of(name).found or parse(name)
+    if address.node in ("", MAIN_NODE) and runtime.registry is not None:
+        running = runtime.registry.find_by_name(address.name)
+        if running is not None:
+            return str(running.actor_id)
+    for actor_id, record in runtime.state["agents"].items():
+        if isinstance(record, dict) and _is_at(record, address):
+            return str(actor_id)
+    main_actor = find_main_actor(runtime.registry)
+    kept = (
+        main_actor._registered_actor_id(address.name, address.node or None)
+        if main_actor is not None
+        else None
+    )
+    return kept or derive_actor_id(address.name)
+
+
+def _is_at(record: dict[str, Any], address: Address) -> bool:
+    """Whether the agent ``record`` describes is the one ``address`` names; a bare name names any node."""
+    if record.get("name") != address.name:
         return False
-    if runtime.registry is not None and runtime.registry.find_by_name(name):
-        return True
-    return remote_node_for(name) is not None
+    return not address.node or node_of(str(record.get("node") or MAIN_NODE)) == address.node
+
+
+class TurnOwner(NamedTuple):
+    """The agent a turn belongs to: its thread on the dashboard and its chat history."""
+
+    name: str
+    agent_id: str
+
+
+def turn_owner(content: str, declared: str = "", declared_id: object = None) -> TurnOwner:
+    """`turn_attribution`, with the id of the agent it names.
+
+    The thread the sender says it is in comes with that thread's id, which is
+    taken as it is: it is what the page keyed the thread by. A mention of
+    another agent gives that agent's id, on the node it was found on -- and so
+    does a mention that names a node, since an agent of the thread's name on
+    another node is another agent.
+    """
+    name = turn_attribution(content, declared)
+    given = given_actor_id(declared_id)
+    found = _mentioned(content)
+    names_a_node = found is not None and bool(parse(parse_mention(content)[0]).node)
+    if name == declared and given and not names_a_node:
+        return TurnOwner(name, given)
+    return TurnOwner(name, agent_id_of(str(found) if found is not None else name))
 
 
 def turn_attribution(content: str, declared: str = "") -> str:
     """Which agent a turn belongs to — its reply frames and its ``chat_log`` rows.
 
-    The mention when it can be routed to, so a reply is filed with the agent that
-    answers it. Otherwise the thread the sender says it is in: a mention that
-    resolves to nothing is answered by the transport, and that answer belongs
-    where the user is looking rather than in a thread for an agent that does not
-    exist, which no view would ever show. ``declared`` is not checked against the
-    running agents on purpose — a node that has gone quiet leaves the dashboard
-    offering a thread this process will not route to, and that thread is still
-    where the exchange belongs.
+    The mention when it finds one agent, so a reply is filed with the agent
+    that answers it. Otherwise the thread the sender says it is in: a mention
+    that finds nothing, or more than one agent, is answered by the transport,
+    and that answer belongs where the user is looking rather than in a thread
+    for an agent that does not exist, which no view would ever show.
+    ``declared`` is not checked against the running agents on purpose — a
+    node that has gone quiet leaves the dashboard offering a thread this
+    process will not route to, and that thread is still where the exchange
+    belongs.
     """
     if content.startswith("/"):
         return MAIN_ACTOR_NAME
-    mentioned, _ = parse_mention(content)
-    if routable(mentioned):
-        return mentioned
+    found = _mentioned(content)
+    if found is not None:
+        return found.name
     return declared or MAIN_ACTOR_NAME
+
+
+def _mentioned(content: str) -> Address | None:
+    """The one agent ``content`` reaches, by its mention or main without one.
+
+    None for a command, and for a mention that reaches no agent: one that finds
+    none, finds several, or finds one a task cannot be sent to yet.
+    """
+    if content.startswith("/"):
+        return None
+    mentioned, _ = parse_mention(content)
+    found = resolution_of(mentioned).found if mentioned else None
+    return found if found is not None and not _task_refusal(found) else None
 
 
 # ── Catalog / experimental-agent presentation ──────────────────────────────
@@ -283,64 +340,75 @@ async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) 
     `reply_fn` is an async callable that sends a string back to the user as a
     message of its own. Main's commands answer through `stream_fn` instead, one
     message built up chunk by chunk and closed with `stream_end_fn`, so /deploy
-    shows its progress as it goes; without them each chunk is a reply.
+    shows its progress as it goes; without them each chunk is a reply. Given
+    `stream_end_fn`, every command answered here ends with it, whichever way it
+    answered, so the turn it is part of always ends.
     """
-    parts = text.split()
-    cmd = parts[0].lower()
+    cmd = text.split()[0].lower()
+    if cmd in MAIN_COMMANDS:
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is not None:
+            await _say_main_command(main_actor, text, stream_fn or reply_fn)
+        else:
+            await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
+    else:
+        answer = _server_answer(cmd)
+        if answer is None:
+            return False
+        await reply_fn(answer)
+    if stream_end_fn is not None:
+        await stream_end_fn()
+    return True
 
+
+async def _say_main_command(
+    main_actor: Any, text: str, chunk_fn: Callable[[str], Awaitable[Any]]
+) -> None:
+    """Say main's answer to one of its own commands, piece by piece.
+
+    Main itself, not the orchestrator: nodes, and moving agents between them,
+    are main's, and these are main's own commands as any channel reaches them.
+    """
+    async for chunk in main_actor.process_user_input_stream(text):
+        if isinstance(chunk, dict):
+            continue
+        await chunk_fn(str(chunk))
+
+
+def _server_answer(cmd: str) -> str | None:
+    """This server's answer to ``cmd``, or None when the command is not one it answers."""
     if cmd == "/clear-plans":
         # Main itself, not the orchestrator: the plan cache is main's.
         main_actor = find_main_actor(runtime.registry)
         if main_actor:
             main_actor.persist("_plan_cache", {})
-        await reply_fn("[System: Plan cache cleared.]")
-        return True
-
+        return "[System: Plan cache cleared.]"
     if cmd == "/agents" and not answered_past_the_server(cmd):
         # Main answers every /agents command: the list with its descriptions,
         # a capability filter, and the verbs (stop, delete, restart), and an
         # orchestrator that claims /agents answers it its own way. Where
         # neither would, the running agents are listed here.
-        if runtime.registry is None:
-            await reply_fn("[agents] Registry not available.")
-            return True
-        lines = []
-        for actor in runtime.registry.all_actors():
-            status = actor.get_status() if hasattr(actor, "get_status") else {}
-            st = status.get("state", "?")
-            protected = " [protected]" if getattr(actor, "protected", False) else ""
-            node = f" [{status['node']}]" if status.get("node") else ""
-            lines.append(f"  [{st:8s}] @{actor.name:<22s} {actor.actor_id[:8]}{protected}{node}")
-        await reply_fn("Agents:\n" + "\n".join(lines) if lines else "No agents running.")
-        return True
-
+        return _agents_listing()
     if cmd == "/nodes" and find_main_actor(runtime.registry) is None:
         # Main answers /nodes, remote nodes included. Without it (the minimal
         # profile) there are no remote nodes, and this process is the one node.
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
-        await reply_fn(
-            f"Nodes:\n  local    online   {', '.join('@' + n for n in local) or '(none)'}"
-        )
-        return True
+        return f"Nodes:\n  local    online   {', '.join('@' + n for n in local) or '(none)'}"
+    return None
 
-    if cmd in MAIN_COMMANDS:
-        # Main itself, not the orchestrator: nodes, and moving agents between
-        # them, are main's, and these are main's own commands as any channel
-        # reaches them.
-        main_actor = find_main_actor(runtime.registry)
-        if main_actor is None:
-            await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
-            return True
-        chunk_fn = stream_fn or reply_fn
-        async for chunk in main_actor.process_user_input_stream(text):
-            if isinstance(chunk, dict):
-                continue
-            await chunk_fn(str(chunk))
-        if stream_end_fn is not None:
-            await stream_end_fn()
-        return True
 
-    return False
+def _agents_listing() -> str:
+    """The agents running in this process, one line each."""
+    if runtime.registry is None:
+        return "[agents] Registry not available."
+    lines = []
+    for actor in runtime.registry.all_actors():
+        status = actor.get_status() if hasattr(actor, "get_status") else {}
+        st = status.get("state", "?")
+        protected = " [protected]" if getattr(actor, "protected", False) else ""
+        node = f" [{status['node']}]" if status.get("node") else ""
+        lines.append(f"  [{st:8s}] @{actor.name:<22s} {actor.actor_id[:8]}{protected}{node}")
+    return "Agents:\n" + "\n".join(lines) if lines else "No agents running."
 
 
 def _takes_attachments(fn: Callable[..., Any]) -> bool:
@@ -374,6 +442,10 @@ class Destination(NamedTuple):
     target: Any = None
     #: The node running it, when it is not here but a node is.
     remote_node: str | None = None
+    #: Why it goes nowhere, when the name fits more than one agent.
+    refusal: str = ""
+    #: The addresses the name fits, for a sender that can offer them to pick from.
+    choices: tuple[str, ...] = ()
 
 
 def command_word(content: str) -> str:
@@ -395,14 +467,33 @@ def destination_of(content: str) -> Destination:
     if not content.startswith("@") and runtime.orchestrator is not None:
         return Destination(chat_metrics.ORCHESTRATOR, MAIN_ACTOR_NAME, content)
     name, text = parse_mention(content)
-    target = runtime.registry.find_by_name(name) if runtime.registry else None
-    if target is not None:
-        return Destination(chat_metrics.LOCAL, name, text, target)
-    # None without main, which is what relays a message to a node.
-    remote_node = remote_node_for(name)
-    if remote_node:
-        return Destination(chat_metrics.REMOTE, name, text, remote_node=remote_node)
-    return Destination(chat_metrics.UNROUTED, name, text)
+    resolution = resolution_of(name)
+    found = resolution.found
+    if found is None:
+        if not resolution.ambiguous:
+            return Destination(chat_metrics.UNROUTED, name, text)
+        return Destination(
+            chat_metrics.UNROUTED,
+            name,
+            text,
+            refusal=resolution.refusal(mention=True),
+            choices=tuple(str(address) for address in resolution.matches),
+        )
+    if found.node == MAIN_NODE:
+        target = runtime.registry.find_by_name(found.name) if runtime.registry else None
+        if target is not None:
+            return Destination(chat_metrics.LOCAL, found.name, text, target)
+        return Destination(chat_metrics.UNROUTED, found.name, text)
+    refusal = _task_refusal(found)
+    if refusal:
+        return Destination(chat_metrics.UNROUTED, found.name, text, refusal=refusal)
+    return Destination(chat_metrics.REMOTE, found.name, text, remote_node=found.node)
+
+
+def _task_refusal(found: Address) -> str:
+    """Why a task for the agent at ``found`` cannot be sent yet, or "": only main knows of nodes."""
+    main_actor = find_main_actor(runtime.registry)
+    return (main_actor.task_refusal(found) if main_actor is not None else None) or ""
 
 
 async def _answer_through(
@@ -432,6 +523,7 @@ async def route_chat(
     stream_fn=None,
     stream_end_fn=None,
     attachments: list[dict[str, Any]] | None = None,
+    choices_fn=None,
 ) -> None:
     """Route one chat turn, and record how long the person waited for it.
 
@@ -439,6 +531,10 @@ async def route_chat(
     passes through, and every one of them ends by sending the reply. A turn the
     person stops is cancelled, and not recorded; nor is one that raises, which
     the caller reports as the failure it is.
+
+    ``choices_fn(text, addresses)``, when given, answers a mention that fits more
+    than one agent in place of ``reply_fn``: a sender that can offer the
+    addresses to pick from says the same words with them.
     """
     destination = destination_of(content)
     timer = chat_metrics.TurnTimer(destination.kind)
@@ -452,8 +548,39 @@ async def route_chat(
             timer.watch(stream_fn) if stream_fn is not None else None,
             stream_end_fn,
             attachments,
+            timer.watch(choices_fn) if choices_fn is not None else None,
         )
     timer.finish()
+
+
+#: How long a chat turn waits for an agent that answers by message, here or on a node.
+TASK_REPLY_SECONDS = 150
+
+
+class _Channels(NamedTuple):
+    """How one chat turn speaks, and the files it brought.
+
+    ``reply`` sends a whole message, ``chunk`` one piece of a streamed one (the
+    caller's ``reply_fn`` when it streams nothing), and ``end`` says the turn is
+    over. ``blocks`` are the attachments read into content blocks; the records
+    they came from name them when they cannot be sent.
+    """
+
+    reply: Callable[..., Awaitable[Any]]
+    chunk: Callable[..., Awaitable[Any]]
+    end: Callable[[], Awaitable[Any]]
+    attachments: list[dict[str, Any]]
+    blocks: list[dict[str, Any]]
+
+    async def files_not_sent(self, why: str) -> None:
+        """Say which attachments did not go with the message, and why."""
+        names = ", ".join(str(a.get("name") or "attachment") for a in self.attachments)
+        await self.chunk(f"[note] {names} not sent — {why}.")
+
+    async def finish(self, text: str) -> None:
+        """Say ``text`` and end the turn."""
+        await self.reply(text)
+        await self.end()
 
 
 async def _route_chat(
@@ -463,6 +590,7 @@ async def _route_chat(
     stream_fn=None,
     stream_end_fn=None,
     attachments: list[dict[str, Any]] | None = None,
+    choices_fn=None,
 ) -> None:
     """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
@@ -470,182 +598,182 @@ async def _route_chat(
     stream_fn(chunk)      — send one streaming chunk (optional; falls back to reply_fn)
     stream_end_fn()       — signal that streaming is done (optional)
     attachments           — stored records for this turn, resolved by the caller
+    choices_fn(text, addresses) — say a refusal with the addresses to pick from (optional)
 
     The records are read into content blocks here rather than by the agent: the
     files are the web layer's, and only this side knows how to reach them. Every
     route that cannot carry them says so instead of answering as though the user
     attached nothing.
     """
-    _chunk_fn = stream_fn or reply_fn
-    _end_fn = stream_end_fn or no_op_async
-    blocks = to_blocks(attachments, uploads.read_bytes) if attachments else []
-
-    async def _say_files_not_sent(why: str) -> None:
-        names = ", ".join(str(a.get("name") or "attachment") for a in attachments or [])
-        await _chunk_fn(f"[note] {names} not sent — {why}.")
-
+    channels = _Channels(
+        reply=reply_fn,
+        chunk=stream_fn or reply_fn,
+        end=stream_end_fn or no_op_async,
+        attachments=attachments or [],
+        blocks=to_blocks(attachments, uploads.read_bytes) if attachments else [],
+    )
     if content.startswith("/"):
-        if blocks:
-            await _say_files_not_sent("a command does not take attachments")
-        handled = await handle_slash(content, reply_fn, stream_fn, stream_end_fn)
-        if not handled:
-            # The rest of the command set (/help, /plans, /memory, /rules,
-            # /topics, ...) is the orchestrator's, if it says it answers it.
-            orchestrator = runtime.orchestrator
-            if orchestrator is not None and command_word(content) in orchestrator.commands():
-                await _answer_through(orchestrator, content, [], _chunk_fn, _end_fn)
-            elif orchestrator is None and (main_actor := find_main_actor(runtime.registry)):
-                # No orchestrator installed: main from the registry, as before.
-                async for chunk in main_actor.process_user_input_stream(content):
-                    if isinstance(chunk, dict):
-                        continue
-                    await _chunk_fn(str(chunk))
-                await _end_fn()
+        await _route_command(content, channels)
+    elif destination.kind == chat_metrics.ORCHESTRATOR:
+        await _route_to_orchestrator(destination, channels)
+    elif destination.target is None:
+        await _route_elsewhere(destination, channels, choices_fn)
+    else:
+        await _route_to_agent(destination, channels)
+
+
+async def _say_stream(stream: AsyncIterator[Any], channels: _Channels) -> None:
+    """Say each piece of ``stream`` that is words; the rest (progress, plans) is not for the chat."""
+    async for chunk in stream:
+        if isinstance(chunk, dict):
+            continue
+        await channels.chunk(str(chunk))
+
+
+async def _route_command(content: str, channels: _Channels) -> None:
+    """Answer a slash command: this server's own, then the orchestrator's."""
+    if channels.blocks:
+        await channels.files_not_sent("a command does not take attachments")
+    if await handle_slash(content, channels.reply, channels.chunk, channels.end):
+        return
+    # The rest of the command set (/help, /plans, /memory, /rules,
+    # /topics, ...) is the orchestrator's, if it says it answers it.
+    orchestrator = runtime.orchestrator
+    if orchestrator is not None and command_word(content) in orchestrator.commands():
+        await _answer_through(orchestrator, content, [], channels.chunk, channels.end)
+    elif orchestrator is None and (main_actor := find_main_actor(runtime.registry)):
+        # No orchestrator installed: main from the registry answers it.
+        await _say_stream(main_actor.process_user_input_stream(content), channels)
+        await channels.end()
+    else:
+        await channels.finish("Unknown command. Type /help for available commands.")
+
+
+async def _route_to_orchestrator(destination: Destination, channels: _Channels) -> None:
+    """Hand a message that names no agent to the orchestrator."""
+    orchestrator = runtime.orchestrator
+    if orchestrator is None:
+        # Gone between deciding the destination and acting on it, which a
+        # shutdown under way can do: say so, rather than answer as nobody.
+        await channels.finish("[error] No orchestrator is running.")
+        return
+    logger.info("[io-gateway] → orchestrator: %r", destination.text[:60])
+    await _answer_through(
+        orchestrator, destination.text, channels.blocks, channels.chunk, channels.end
+    )
+
+
+async def _route_elsewhere(destination: Destination, channels: _Channels, choices_fn) -> None:
+    """Send a message for an agent not in this process to its node, or say why it goes nowhere."""
+    # Main itself, not the orchestrator: a node is reached over main's broker link.
+    main_actor = find_main_actor(runtime.registry)
+    remote_node = destination.remote_node
+    if main_actor and remote_node:
+        refusal = main_actor.nodes.refuses_tasks(remote_node)
+        if refusal:
+            await channels.finish(f"[error] @{destination.name} was not asked: {refusal}.")
+        else:
+            await _ask_node(main_actor, destination.name, remote_node, destination.text, channels)
+        return
+    # A turn nothing answered still ends: the caller waits on the ending
+    # rather than on the reply, and holds its composer until one arrives.
+    if destination.choices and choices_fn is not None:
+        await choices_fn(destination.refusal, destination.choices)
+    else:
+        await channels.reply(destination.refusal or f"Agent @{destination.name} not found.")
+    await channels.end()
+
+
+async def _ask_node(main_actor: Any, name: str, node: str, text: str, channels: _Channels) -> None:
+    """Send ``text`` to the agent ``name`` on ``node`` over MQTT, and say its reply."""
+    if channels.blocks:
+        # The files are on this disk; a remote node cannot read them,
+        # and shipping them means megabytes of base64 through the
+        # broker and into its outbox. The broker is the wrong pipe.
+        await channels.files_not_sent(f"@{name} runs on {node}")
+    reply_topic = f"main/reply/io-gateway/{uuid.uuid4().hex[:8]}"
+    payload = {"text": text, "payload": text, "_reply_topic": reply_topic, "_remote_task": True}
+    try:
+        async with mqtt_client(
+            main_actor._mqtt_broker, main_actor._mqtt_port, **v5_kwargs()
+        ) as client:
+            # Subscribe first, then publish — avoids race condition
+            await client.subscribe(reply_topic)
+            await main_actor._mqtt_publish(main_actor.task_topic_for(Address(name, node)), payload)
+            logger.info("[io-gateway] Routed @%s → %s via MQTT", name, node)
+            try:
+                text_out = await asyncio.wait_for(
+                    _node_reply(client, node, reply_topic), timeout=TASK_REPLY_SECONDS
+                )
+            except asyncio.TimeoutError:
+                await channels.finish(
+                    f"[error] @{name} on {node} did not reply within {TASK_REPLY_SECONDS}s."
+                )
             else:
-                await reply_fn("Unknown command. Type /help for available commands.")
-        return
+                await channels.finish(
+                    text_out
+                    if text_out is not None
+                    else f"[error] The connection closed before @{name} on {node} replied."
+                )
+    except (OSError, MqttError) as exc:
+        # The broker is not there to carry it. That is an outage,
+        # which every listener is already reporting: a warning with
+        # the reason, and no traceback of code that did its job.
+        logger.warning("[io-gateway] Could not reach @%s on %s: %s", name, node, exc)
+        await channels.finish(f"[error] Could not reach @{name} on {node}: {exc}")
+    except Exception as exc:
+        logger.exception("[io-gateway] Remote @%s routing failed", name)
+        await channels.finish(f"[error] Could not reach @{name} on {node}: {exc}")
 
-    if destination.kind == chat_metrics.ORCHESTRATOR:
-        orchestrator = runtime.orchestrator
-        if orchestrator is None:
-            # Gone between deciding the destination and acting on it, which a
-            # shutdown under way can do: say so, rather than answer as nobody.
-            await reply_fn("[error] No orchestrator is running.")
-            await _end_fn()
-            return
-        logger.info("[io-gateway] → orchestrator: %r", destination.text[:60])
-        await _answer_through(orchestrator, destination.text, blocks, _chunk_fn, _end_fn)
-        return
 
-    target_name, text = destination.name, destination.text
-    target = destination.target
+async def _node_reply(client: Any, node: str, reply_topic: str) -> str | None:
+    """The text of the first reply on ``reply_topic`` that is ``node``'s word, or None if none comes."""
+    async for msg in client.messages:
+        # Any node can answer here: only the one
+        # the task went to is listened to.
+        if not admit(
+            node, reply_topic, bytes(msg.payload or b""), user_properties(msg), "a task reply"
+        ):
+            continue
+        try:
+            data = json.loads(msg.payload.decode())
+            text_out = reply_text(data)
+        except Exception:
+            text_out = msg.payload.decode()
+        return str(text_out)
+    return None
 
-    if target is None:
-        # Main itself, not the orchestrator: a node is reached over main's broker link.
-        main_actor = find_main_actor(runtime.registry)
-        # ── Remote agent fallback ─────────────────────────────────────────────
-        # Agent not in local registry — check if it's running on a remote node.
-        # If so, route the message via MQTT and stream the reply back.
-        if main_actor:
-            remote_node = destination.remote_node
 
-            refusal = main_actor.nodes.refuses_tasks(remote_node) if remote_node else None
-            if refusal:
-                await reply_fn(f"[error] @{target_name} was not asked: {refusal}.")
-                await _end_fn()
-                return
+#: What a chat to an agent in a state that ends its mailbox says instead.
+#: Keyed by value, not member: ActorState is a str-enum compared by value
+#: everywhere else in the codebase, and identity is not safe here — the test
+#: suite has wactorz.core.actor loaded under two module identities, so the enum
+#: members are distinct objects with equal values.
+_UNAVAILABLE = {
+    ActorState.STOPPED.value: "is stopped. Start it to send messages.",
+    ActorState.FAILED.value: "has failed. It should restart shortly.",
+}
 
-            if remote_node:
-                if blocks:
-                    # The files are on this disk; a remote node cannot read them,
-                    # and shipping them means megabytes of base64 through the
-                    # broker and into its outbox. The broker is the wrong pipe.
-                    await _say_files_not_sent(f"@{target_name} runs on {remote_node}")
-                reply_topic = f"main/reply/io-gateway/{uuid.uuid4().hex[:8]}"
-                payload = {
-                    "text": text,
-                    "payload": text,
-                    "_reply_topic": reply_topic,
-                    "_remote_task": True,
-                }
-                try:
-                    async with mqtt_client(
-                        main_actor._mqtt_broker, main_actor._mqtt_port, **v5_kwargs()
-                    ) as client:
-                        # Subscribe first, then publish — avoids race condition
-                        await client.subscribe(reply_topic)
-                        await main_actor._mqtt_publish(
-                            f"agents/by-name/{target_name}/task",
-                            payload,
-                        )
-                        logger.info(
-                            "[io-gateway] Routed @%s → %s via MQTT", target_name, remote_node
-                        )
-                        try:
 
-                            async def _get_reply():
-                                async for msg in client.messages:
-                                    # Any node can answer here: only the one
-                                    # the task went to is listened to.
-                                    if not admit(
-                                        remote_node,
-                                        reply_topic,
-                                        bytes(msg.payload or b""),
-                                        user_properties(msg),
-                                        "a task reply",
-                                    ):
-                                        continue
-                                    try:
-                                        data = json.loads(msg.payload.decode())
-                                        text_out = reply_text(data)
-                                    except Exception:
-                                        text_out = msg.payload.decode()
-                                    return str(text_out)
-                                return None
-
-                            text_out = await asyncio.wait_for(_get_reply(), timeout=150.0)
-                            await reply_fn(text_out)
-                            await _end_fn()
-                        except asyncio.TimeoutError:
-                            await reply_fn(
-                                f"[error] @{target_name} on {remote_node} did not reply within 150s."
-                            )
-                            await _end_fn()
-                            return
-                        else:
-                            return
-                except (OSError, MqttError) as exc:
-                    # The broker is not there to carry it. That is an outage,
-                    # which every listener is already reporting: a warning with
-                    # the reason, and no traceback of code that did its job.
-                    logger.warning(
-                        "[io-gateway] Could not reach @%s on %s: %s", target_name, remote_node, exc
-                    )
-                    await reply_fn(
-                        f"[error] Could not reach @{target_name} on {remote_node}: {exc}"
-                    )
-                    await _end_fn()
-                    return
-                except Exception as exc:
-                    logger.exception("[io-gateway] Remote @%s routing failed", target_name)
-                    await reply_fn(
-                        f"[error] Could not reach @{target_name} on {remote_node}: {exc}"
-                    )
-                    await _end_fn()
-                    return
-
-        # A turn nothing answered still ends: the caller waits on the ending
-        # rather than on the reply, and holds its composer until one arrives.
-        await reply_fn(f"Agent @{target_name} not found.")
-        await _end_fn()
-        return
-
+async def _route_to_agent(destination: Destination, channels: _Channels) -> None:
+    """Ask the agent in this process, through whichever entry point it has."""
+    target, text = destination.target, destination.text
     # Every path below reaches into the agent directly rather than through its
     # mailbox, so a state that ends the mailbox does not stop it answering on its
     # own: a stopped agent keeps replying after its message loop is cancelled
     # unless the state is checked here.
-    #
-    # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
-    # else in the codebase, and identity is not safe here — the test suite has
-    # wactorz.core.actor loaded under two module identities, so the enum members
-    # are distinct objects with equal values.
-    _unavailable = {
-        ActorState.STOPPED.value: "is stopped. Start it to send messages.",
-        ActorState.FAILED.value: "has failed. It should restart shortly.",
-    }
-    reason = _unavailable.get(getattr(target.state, "value", target.state))
+    reason = _UNAVAILABLE.get(getattr(target.state, "value", target.state))
     if reason is not None:
-        await reply_fn(f"@{target.name} {reason}")
-        await _end_fn()
+        await channels.finish(f"@{target.name} {reason}")
         return
 
     logger.info("[io-gateway] → %s: %r", target.name, text[:60])
 
     # First user message to an experimental/beta agent gets a one-time warning
     # banner, emitted through the same channel the reply will use.
-    banner = experimental_first_use_banner(target_name)
+    banner = experimental_first_use_banner(destination.name)
     if banner:
-        await _chunk_fn(banner)
+        await channels.chunk(banner)
 
     # The agent's work, though it does not come through its mailbox.
     with acting_as(target.name):
@@ -653,84 +781,93 @@ async def _route_chat(
             target, "chat_stream", None
         )
         if gen_fn:
-            if blocks and not _takes_attachments(gen_fn):
-                await _say_files_not_sent(f"@{target.name} cannot read attachments")
-            kwargs = {"attachments": blocks} if blocks and _takes_attachments(gen_fn) else {}
-            try:
-                async for chunk in gen_fn(text, **kwargs):  # pylint: disable=not-callable
-                    if isinstance(chunk, dict):
-                        continue
-                    await _chunk_fn(str(chunk))
-            finally:
-                await _end_fn()
+            await _stream_from(target, gen_fn, text, channels)
         elif hasattr(target, "process_user_input"):
-            if blocks:
-                await _say_files_not_sent(f"@{target.name} cannot read attachments")
-            result = await target.process_user_input(text)  # pyright: ignore[reportAttributeAccessIssue]
-            await reply_fn(str(result))
-            await _end_fn()
+            await _answer_once(target, text, channels)
+        elif hasattr(target, "chat") and not hasattr(target, "_fn_handle_task"):
+            # manual-agent: its native chat() handles plain text well.
+            await _chat_with(target, text, channels)
         else:
-            # Agents that only speak via handle_task/TASK+RESULT message passing:
-            # - catalog-agent (no LLM)
-            # - dynamic agents (generated code, timeseries-collector, etc.)
-            # - manual-agent (fallback if chat() not present)
-            #
-            # Strategy: call handle_message() directly, with a reply slot of the
-            # registry as the address the RESULT is sent to.
+            # Agents that only speak through TASK and RESULT: catalog-agent (no
+            # LLM) and the dynamic agents (generated code, timeseries-collector).
+            await _task_through_mailbox(target, destination.name, text, channels)
 
-            # manual-agent: prefer its native chat() — it handles plain text well
-            if hasattr(target, "chat") and not hasattr(target, "_fn_handle_task"):
-                if blocks:
-                    await _say_files_not_sent(f"@{target.name} cannot read attachments")
-                try:
-                    result = await target.chat(text)  # pyright: ignore[reportAttributeAccessIssue]
-                    await reply_fn(str(result))
-                except Exception as exc:
-                    logger.exception("[io-gateway] chat() on %s failed", target.name)
-                    await reply_fn(f"[error] {target.name}: {exc}")
-                await _end_fn()
-                return
 
-            # All other message-passing agents: a chat turn is not an actor, so the
-            # reply address is a slot of the registry, which a RESULT sent to it
-            # settles; the slot is gone when the turn ends, however it ends.
-            if blocks:
-                await _say_files_not_sent(f"@{target.name} cannot read attachments")
-            # The target came out of this registry, so it is there; said for the
-            # type checker, which only knows the attribute may be unset.
-            registry = runtime.registry
-            if registry is None:
-                await reply_fn("[error] registry not available")
-                await _end_fn()
-                return
-            try:
-                async with registry.reply_slot() as (slot_id, reply):
-                    msg = Message(
-                        type=MessageType.TASK,
-                        sender_id=slot_id,
-                        reply_to=slot_id,
-                        payload=task_payload(text),
-                    )
-                    await target.handle_message(msg)
-                    payload = await asyncio.wait_for(reply, timeout=150.0)
+async def _stream_from(
+    target: Any, gen_fn: Callable[..., AsyncIterator[Any]], text: str, channels: _Channels
+) -> None:
+    """Stream an agent's answer, with the files when it reads them."""
+    reads_files = _takes_attachments(gen_fn)
+    if channels.blocks and not reads_files:
+        await channels.files_not_sent(f"@{target.name} cannot read attachments")
+    kwargs = {"attachments": channels.blocks} if channels.blocks and reads_files else {}
+    try:
+        await _say_stream(gen_fn(text, **kwargs), channels)
+    finally:
+        await channels.end()
 
-                text_out = reply_text(payload)
-                if (
-                    isinstance(payload, dict)
-                    and "agents" in payload
-                    and isinstance(payload["agents"], list)
-                ):
-                    text_out = format_catalog_agents_response(payload)
 
-                await reply_fn(text_out)
+async def _answer_once(target: Any, text: str, channels: _Channels) -> None:
+    """Say an agent's single answer."""
+    if channels.blocks:
+        await channels.files_not_sent(f"@{target.name} cannot read attachments")
+    result = await target.process_user_input(text)
+    await channels.finish(str(result))
 
-            except asyncio.TimeoutError:
-                await reply_fn(f"[error] @{target_name} did not reply within 150s.")
-            except Exception as exc:
-                logger.exception("[io-gateway] task dispatch to %s failed", target.name)
-                await reply_fn(f"[error] {target.name}: {exc}")
-            finally:
-                await _end_fn()
+
+async def _chat_with(target: Any, text: str, channels: _Channels) -> None:
+    """Say what an agent's ``chat`` answers, or how it failed."""
+    if channels.blocks:
+        await channels.files_not_sent(f"@{target.name} cannot read attachments")
+    try:
+        result = await target.chat(text)
+        await channels.reply(str(result))
+    except Exception as exc:
+        logger.exception("[io-gateway] chat() on %s failed", target.name)
+        await channels.reply(f"[error] {target.name}: {exc}")
+    await channels.end()
+
+
+async def _task_through_mailbox(target: Any, name: str, text: str, channels: _Channels) -> None:
+    """Hand an agent a TASK and say the RESULT it sends back.
+
+    A chat turn is not an actor, so the reply address is a slot of the
+    registry, which a RESULT sent to it settles; the slot is gone when the
+    turn ends, however it ends.
+    """
+    if channels.blocks:
+        await channels.files_not_sent(f"@{target.name} cannot read attachments")
+    # The target came out of this registry, so it is there; said for the
+    # type checker, which only knows the attribute may be unset.
+    registry = runtime.registry
+    if registry is None:
+        await channels.finish("[error] registry not available")
+        return
+    try:
+        async with registry.reply_slot() as (slot_id, reply):
+            msg = Message(
+                type=MessageType.TASK,
+                sender_id=slot_id,
+                reply_to=slot_id,
+                payload=task_payload(text),
+            )
+            await target.handle_message(msg)
+            payload = await asyncio.wait_for(reply, timeout=TASK_REPLY_SECONDS)
+        await channels.reply(_result_text(payload))
+    except asyncio.TimeoutError:
+        await channels.reply(f"[error] @{name} did not reply within {TASK_REPLY_SECONDS}s.")
+    except Exception as exc:
+        logger.exception("[io-gateway] task dispatch to %s failed", target.name)
+        await channels.reply(f"[error] {target.name}: {exc}")
+    finally:
+        await channels.end()
+
+
+def _result_text(payload: Any) -> str:
+    """What a RESULT says in the chat: the catalog's agent listing as a list, anything else as its text."""
+    if isinstance(payload, dict) and isinstance(payload.get("agents"), list):
+        return format_catalog_agents_response(payload)
+    return reply_text(payload)
 
 
 # ── REST chat endpoints ────────────────────────────────────────────────────
@@ -748,12 +885,20 @@ async def rest_chat_handler(request: web.Request) -> Response:
     agent_name = data.get("agent_name", MAIN_ACTOR_NAME)
     if not message:
         return web.json_response({"error": "message required"}, status=400)
-    target = runtime.registry.find_by_name(agent_name)
-    if target is None:
+    resolution = resolution_of(str(agent_name))
+    if resolution.ambiguous:
+        return web.json_response({"error": resolution.refusal()}, status=409)
+    found = resolution.found
+    if found is None:
         return web.json_response({"error": f"agent '{agent_name}' not found"}, status=404)
+    refusal = _task_refusal(found)
+    if refusal:
+        return web.json_response({"error": refusal}, status=409)
     # As above: route to the named agent, since route_chat would otherwise
-    # default to main when the message carries no @mention.
-    routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
+    # default to main when the message carries no @mention. Its whole address
+    # when it is on a node, so the route finds the same one.
+    mention = found.name if found.node == MAIN_NODE else str(found)
+    routed = message if message.startswith(("@", "/")) else f"@{mention} {message}"
     track_chat_task(asyncio.create_task(route_chat(routed, discard_reply)))
     return web.json_response({"status": "sent", "agent": agent_name})
 

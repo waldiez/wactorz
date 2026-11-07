@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main knows which models are kept, and says so to the user and to its model.
 
 `/artifacts` lists them in chat. Main's system prompt lists them too, read off

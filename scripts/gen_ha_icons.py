@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Generate icon.png (128x128) and logo.png (250x100) for each HA addon variant from the SVG."""
 
 import subprocess

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Behaviour of the REST routes, with no key configured.
 
 Auth is covered separately; these exercise what each route does once a request
@@ -8,6 +9,8 @@ covers the monitor app, whose lifecycle verbs are registered under both the
 """
 
 from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -343,6 +346,99 @@ class TestProbesAndSnapshots:
             assert (await client.get("/ha-map")).status == 404
         finally:
             await client.close()
+
+    @pytest.mark.parametrize(
+        ("map_actor", "status"),
+        [
+            (SimpleNamespace(recall=lambda _key, _default: {"devices": []}), 200),
+            (SimpleNamespace(recall=lambda _key, _default: "not a snapshot"), 404),
+            (SimpleNamespace(), 404),
+        ],
+        ids=["remembered", "remembered as something else", "neither kept nor remembered"],
+    )
+    async def test_a_snapshot_is_read_from_memory_when_the_agent_keeps_none(
+        self, map_actor: Any, status: int
+    ) -> None:
+        async with _serving(_make(_Actor(), map_actor=map_actor)[1]) as client:
+            assert (await client.get("/ha-map")).status == status
+
+
+@asynccontextmanager
+async def _serving(iface: RESTInterface) -> AsyncIterator[TestClient]:
+    client = TestClient(TestServer(iface.build_app()))
+    await client.start_server()
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+class TestAnActorThatIsNotThere:
+    async def test_a_message_to_it_is_404(self, client: TestClient) -> None:
+        assert (await client.post("/actors/nope/message", json={"content": "hi"})).status == 404
+
+    async def test_its_metrics_are_404(self, client: TestClient) -> None:
+        assert (await client.get("/actors/nope/metrics")).status == 404
+
+    async def test_a_state_other_than_idle_is_reported_as_it_is(
+        self, client: TestClient, actor: _Actor, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(actor, "get_status", lambda: {"state": "running"})
+        assert (await (await client.get("/actors/a1")).json())["state"] == "running"
+
+    async def test_one_its_delete_already_unregistered_is_not_unregistered_again(self) -> None:
+        main, iface = _make(_Actor())
+
+        async def _delete_itself(command: str) -> bool:
+            main._registry.actor = None
+            return True
+
+        actor = main._registry.actor
+        assert actor is not None
+        actor.apply_command = _delete_itself  # pyright: ignore[reportAttributeAccessIssue]
+        async with _serving(iface) as client:
+            assert (await client.delete("/actors/a1")).status == 200
+        assert main._registry.unregistered == []
+
+
+class TestWithoutARegistry:
+    """Main not registered anywhere: nothing is listed, and every actor is not found."""
+
+    @pytest.fixture(name="bare")
+    async def bare_fixture(self) -> AsyncIterator[TestClient]:
+        main, iface = _make(_Actor(), map_actor=_MapActor())
+        main._registry = None  # pyright: ignore[reportAttributeAccessIssue]
+        async with _serving(iface) as client:
+            yield client
+
+    async def test_nothing_is_listed(self, bare: TestClient) -> None:
+        assert await (await bare.get("/actors")).json() == []
+        assert await (await bare.get("/agents")).json() == []
+
+    async def test_a_registry_main_joins_after_the_app_is_built_is_read(self) -> None:
+        # The routes read main's registry when a request arrives, so an
+        # interface built before main is registered answers once it is.
+        main, iface = _make(_Actor())
+        registry = main._registry
+        main._registry = None  # pyright: ignore[reportAttributeAccessIssue]
+        async with _serving(iface) as client:
+            assert (await client.get("/actors/a1")).status == 404
+            main._registry = registry
+            assert (await client.get("/actors/a1")).status == 200
+            assert [a["name"] for a in await (await client.get("/actors")).json()] == ["worker"]
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("GET", "/actors/a1"),
+            ("GET", "/actors/a1/metrics"),
+            ("POST", "/actors/a1/stop"),
+            ("DELETE", "/actors/a1"),
+            ("GET", "/ha-map"),
+        ],
+    )
+    async def test_an_actor_is_not_found(self, bare: TestClient, method: str, path: str) -> None:
+        assert (await bare.request(method, path)).status == 404
 
 
 class TestMonitorStopRoute:

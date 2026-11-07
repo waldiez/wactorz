@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
  * Deletion guard for the live agent grid — mirrors the backend's
@@ -58,4 +57,22 @@ export function createDeletionGuard(
             return true;
         },
     };
+}
+
+/**
+ * Tombstone every agent of `agents` a wipe took away, as a deleted one is, so a
+ * heartbeat still on its way cannot put its card back. Cards are otherwise kept
+ * until a delete says so, and a wipe sends none per agent.
+ */
+export function tombstoneWiped(
+    agents: Iterable<{ id: string }>,
+    survivors: readonly string[],
+    markDeleted: DeletionGuard["markDeleted"],
+): void {
+    const kept = new Set(survivors);
+    for (const agent of agents) {
+        if (!kept.has(agent.id)) {
+            markDeleted(agent.id);
+        }
+    }
 }

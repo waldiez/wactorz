@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's headline totals keep updating while agents are working.
 
 Totals are the one part of a snapshot that queries the database, so a timer
@@ -206,7 +207,7 @@ class TestTheChatFrameCarriesTotals:
 
         monkeypatch.setattr(events, "parse_topic", lambda t, p: {"metric": metric})
 
-        async def _noop_mqtt(topic: str, payload: str) -> None:
+        async def _noop_mqtt(topic: str, payload: str, thread_id: str = "") -> None:
             return None
 
         monkeypatch.setattr(mqtt, "broadcast_mqtt_msg", _noop_mqtt)

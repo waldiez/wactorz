@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A bounded in-memory ring of recent log records.
 
 Holds what the dashboard's log view will read, in the envelope the view renders,

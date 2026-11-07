@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What the model says in this suite: every question a journey asks it, and its answer.
 
 The application runs on its scripted provider (``LLM_PROVIDER=fake``), which
@@ -9,8 +10,6 @@ journey planned for is caught by the guard.
 Kept as Python and not as JSON: the answers that start an agent carry its
 program, and a program is readable as a string here and not as one escaped line.
 """
-
-from __future__ import annotations
 
 import datetime
 import json
@@ -60,6 +59,47 @@ async def setup(agent):
 async def handle_task(agent, payload):
     said = await agent.ask_llm(str(payload.get("text", "")), timeout=30)
     return {"result": "the model said: " + said}
+"""
+
+#: What the asker asks the person, once.
+QUESTION = "Is the probe in place?"
+
+#: An agent that asks the person one question when it starts, waits for the
+#: answer as long as it runs, and says what was picked.
+ASKS_THE_OPERATOR = f"""
+async def setup(agent):
+    agent.state["asked"] = bool(agent.recall("asked"))
+
+
+async def process(agent):
+    if agent.state["asked"]:
+        return
+    agent.state["asked"] = True
+    agent.persist("asked", True)
+    picked = await agent.ask_operator({QUESTION!r}, options=["Yes", "No"])
+    await agent.notify_user("picked " + picked)
+"""
+
+
+#: What the checker asks the person, and why it says it asks.
+CHECK = "Is the valve closed?"
+CHECK_CONTEXT = "Flow rose after the valve was last reported closed."
+
+#: An agent that asks one question with its reason, and says what was picked.
+ASKS_WITH_A_REASON = f"""
+async def setup(agent):
+    agent.state["asked"] = bool(agent.recall("asked"))
+
+
+async def process(agent):
+    if agent.state["asked"]:
+        return
+    agent.state["asked"] = True
+    agent.persist("asked", True)
+    picked = await agent.ask_operator(
+        {CHECK!r}, options=["Closed", "Open"], context={CHECK_CONTEXT!r}
+    )
+    await agent.notify_user("checked: " + picked)
 """
 
 
@@ -212,6 +252,25 @@ SCRIPT = {
         description="Counts the messages it is sent",
         capabilities=["tallying"],
         code=COUNTER,
+    ),
+    # Naming no node, after model code is sent to one: it asks from there.
+    "start an asker": _starts(
+        "Starting it.",
+        name="asker",
+        type="dynamic",
+        description="Asks the person one question",
+        capabilities=["asking"],
+        poll_interval=1,
+        code=ASKS_THE_OPERATOR,
+    ),
+    "start a checker": _starts(
+        "Starting it.",
+        name="checker",
+        type="dynamic",
+        description="Asks the person to check a valve",
+        capabilities=["checking"],
+        poll_interval=1,
+        code=ASKS_WITH_A_REASON,
     ),
     "start a finisher on the node": _starts(
         "Starting it there.",

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The compose stacks cap what each container can take, and publish to this host only.
 
 Without a ceiling, a leak or a runaway agent ends with the host out of memory or

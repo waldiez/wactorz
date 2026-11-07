@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Each key persisted through an actor lands in the store that suits it.
 
 Agent code calls `persist`/`recall` without knowing where a value lives, so the

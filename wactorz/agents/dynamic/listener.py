@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The subscription hub of a generated program: one connection, repaired callbacks.
 
 The connection, the bindings and the per-topic queues are the shared hub in

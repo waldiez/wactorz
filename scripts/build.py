@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Build script for Wactorz — produces a PyPI-ready wheel and sdist.
 
 Usage:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CI and the app image use one uv, written in one place.
 
 The image exports its locked dependencies with the uv its Dockerfile pins, and

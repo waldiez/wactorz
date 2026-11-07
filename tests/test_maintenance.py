@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Housekeeping runs on a timer, off the loop, and cannot take the loop with it.
 
 The reason this exists at all is that SQLite folds its WAL back inline, on

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every feed entry carries a ``source`` discriminator.
 
 The unified feed view renders two kinds of entry — broker-derived agent activity

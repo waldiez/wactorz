@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """An agent says something to a person, with a choice, and hears the pick.
 
 The agent publishes one ``agents/<id>/chat`` frame (``notify_user``); the
@@ -11,8 +12,6 @@ Everything here runs without a broker: the outbox is driven frame by frame,
 the channels are stand-ins that record what they were handed, and the broker
 link is a recorder.
 """
-
-from __future__ import annotations
 
 import json
 import logging
@@ -36,9 +35,10 @@ from wactorz.core.outbound import (
     numbered,
     pick_option,
 )
+from wactorz.core.persistence.db import ChatRow
 from wactorz.interfaces.chat.outbound import Outbox, PendingChoices, Sender
 from wactorz.interfaces.chat_interfaces import build_social_companions
-from wactorz.web import answers, events, mqtt, relay, runtime, ws
+from wactorz.web import answers, db_writer, events, mqtt, relay, runtime, ws
 
 # ── the vocabulary ───────────────────────────────────────────────────────────
 
@@ -82,6 +82,9 @@ class TestNumberedChoices:
         assert text.startswith("Changed?\n\n1. yes\n2. no\n")
         assert text.endswith("Reply with the number.")
         assert numbered("plain", []) == "plain"
+
+    def test_without_the_hint_the_list_is_only_a_record(self) -> None:
+        assert numbered("Changed?", ["yes", "no"], reply_hint=False) == "Changed?\n\n1. yes\n2. no"
 
     @pytest.mark.parametrize(
         ("reply", "index"),
@@ -545,21 +548,23 @@ class TestTheDashboardShowsTheQuestion:
         events.parse_topic("agents/agent-1/answer", json.dumps({"index": 0}))
         assert runtime.state["log_feed"] == []
 
-    async def test_a_question_is_stored_with_its_options(
+    async def test_a_question_is_stored_with_its_options_and_no_reply_hint(
         self, quiet_monitor: list, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows: list[dict[str, Any]] = []
 
         class _DB:
-            def write_chat_log(self, **row: Any) -> None:
-                rows.append(row)
+            def write_chat_logs(self, batch: "list[ChatRow]") -> None:
+                rows.extend(row._asdict() for row in batch)
 
         monkeypatch.setattr(runtime, "db", _DB())
         await mqtt.handle_message("agents/agent-1/chat", _telegram_frame())
+        await db_writer.writer.settled()
         (row,) = rows
         assert row["agent_name"] == "hvac"
         assert row["role"] == "assistant"
-        assert row["content"] == "Changed?\n\n1. yes\n2. no\n\nReply with the number."
+        # The dashboard answers with a button: "reply with the number" would be wrong there.
+        assert row["content"] == "Changed?\n\n1. yes\n2. no"
 
 
 class TestTheDashboardAnswers:

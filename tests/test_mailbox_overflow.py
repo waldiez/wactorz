@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A full mailbox holds its sender for a bounded time, and a reporter not at all.
 
 An actor reads its mailbox one message at a time, and a message can take

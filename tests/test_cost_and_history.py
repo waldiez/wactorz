@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for cost persistence, cost restoration on startup, and chat history API.
 
@@ -7,11 +8,12 @@ Covers three recent features:
   - GET /api/actors/{id}/history endpoint filters and returns conversation history
 """
 
+import asyncio
 import json
-import sqlite3
 import tempfile
 import types
 import unittest
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
@@ -20,7 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # real aiohttp Response objects, read via _payload() below.
 from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
 from wactorz.core import agent_reset
-from wactorz.web import api_actors, cost, events, runtime
+from wactorz.core.persistence.db import WactorzDB
+from wactorz.web import api_actors, cost, db_writer, events, runtime
 
 ensure_importable("openai")
 
@@ -178,17 +181,12 @@ class PersistCostTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_kv_db(entries: list[dict]) -> object:
-    """Return a minimal db stub backed by in-memory SQLite with kv_store rows."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
+def _make_kv_db(entries: list[dict]) -> WactorzDB:
+    """A real database in memory, holding these kv_store rows."""
+    db = WactorzDB(":memory:")
     for e in entries:
-        conn.execute(
-            "INSERT INTO kv_store (agent, key, value) VALUES (?, ?, ?)",
-            (e["agent"], e["key"], json.dumps(e["value"])),
-        )
-    conn.commit()
-    return types.SimpleNamespace(conn=conn)
+        db.kv_set(e["agent"], e["key"], e["value"])
+    return db
 
 
 def _close_installed_db(original: object) -> None:
@@ -204,6 +202,9 @@ def _close_installed_db(original: object) -> None:
     """
     installed = runtime.db
     if installed is None or installed is original:
+        return
+    if isinstance(installed, WactorzDB):
+        installed.close()
         return
     conn = getattr(installed, "conn", None)
     if conn is not None:
@@ -251,6 +252,7 @@ class HistoricalCostTest(unittest.TestCase):
         )
         runtime.state["agents"] = {}  # no live agents
 
+        cost.use_stored_totals(cost.read_stored_totals())
         total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.08, places=6)
 
@@ -274,23 +276,24 @@ class HistoricalCostTest(unittest.TestCase):
             "live-agent": {"name": "live-agent", "cost_usd": 0.10},
         }
 
+        cost.use_stored_totals(cost.read_stored_totals())
         total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.04, places=6)
 
     def test_ignores_malformed_rows(self):
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
-        conn.execute(
-            "INSERT INTO kv_store VALUES (?, ?, ?)", ("broken", "_final_cost", "not-valid-json{{{")
+        db = _make_kv_db(
+            [{"agent": "ok", "key": "_final_cost", "value": {"name": "ok", "cost_usd": 0.02}}]
         )
-        conn.execute(
-            "INSERT INTO kv_store VALUES (?, ?, ?)",
-            ("ok", "_final_cost", json.dumps({"name": "ok", "cost_usd": 0.02})),
-        )
-        conn.commit()
-        runtime.db = types.SimpleNamespace(conn=conn)
+        # Written past kv_set, which would refuse it: a row an older version left.
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, 0)",
+                ("broken", "_final_cost", "not-valid-json{{{"),
+            )
+        runtime.db = db
         runtime.state["agents"] = {}
 
+        cost.use_stored_totals(cost.read_stored_totals())
         total = cost.historical_cost_usd(self._live_names())
         self.assertAlmostEqual(total, 0.02, places=6)
 
@@ -356,9 +359,11 @@ class LifetimeCostLedgerTest(unittest.TestCase):
 
     def test_persists_to_db_and_reloads(self):
         cost.record_lifetime_cost("a1", 0.07)
+        asyncio.run(db_writer.writer.settled())
         # Simulate a monitor restart: drop in-memory state, keep the db.
         cost.lifetime_cost.clear()
         cost.lifetime_loaded = False
+        asyncio.run(cost.load_lifetime())
         self.assertAlmostEqual(cost.lifetime_cost_total(), 0.07, places=6)
 
     def test_no_db_is_safe(self):
@@ -440,6 +445,7 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main": {"name": "main", "cost_usd": 0.0381},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213},
         }
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
 
@@ -457,6 +463,7 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main": {"name": "main", "cost_usd": 0.0381, "messages_processed": 1},
             "reachy-mini": {"name": "reachy-mini", "cost_usd": 0.0213, "messages_processed": 3},
         }
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         # Old behaviour summed only registry actors -> 0.0381. Must be the full sum.
         self.assertAlmostEqual(snap["total_cost_usd"], 0.0594, places=6)
@@ -483,6 +490,7 @@ class SnapshotTotalsTest(unittest.TestCase):
             "main-id": {"name": "main", "cost_usd": 0.038124, "messages_processed": 1},
             "reachy-id": {"name": "reachy-mini", "messages_processed": 3},  # no cost_usd
         }
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.059409, places=6)
         self.assertEqual(snap["total_messages"], 4)
@@ -518,6 +526,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         runtime.registry = types.SimpleNamespace(all_actors=lambda: [main_a, reachy_a])
         runtime.state["agents"] = {"m": {"name": "main"}, "r": {"name": "reachy-mini"}}
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         # Must NOT double-count: _final_cost is used for the live sum, and
         # historical (also _final_cost) must skip names already counted.
@@ -541,6 +550,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         )
         runtime.registry = types.SimpleNamespace(all_actors=lambda: [in_state, not_yet])
         runtime.state["agents"] = {"main": {"name": "main", "cost_usd": 0.05}}
+        cost.use_stored_totals(cost.read_stored_totals())
         snap = events.snapshot()
         self.assertAlmostEqual(snap["total_cost_usd"], 0.07, places=6)
 
@@ -650,12 +660,11 @@ class _SerializedKV:
 
 
 def _fixed_datetime(y, mo, d):
-    from datetime import datetime as _dt
 
-    class _DT(_dt):
+    class _DT(datetime):
         @classmethod
         def now(cls, tz=None):
-            return _dt(y, mo, d, 12, 0, 0, tzinfo=tz)
+            return datetime(y, mo, d, 12, 0, 0, tzinfo=tz)
 
     return _DT
 

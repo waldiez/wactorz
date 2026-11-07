@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Main's stored history, read by an agent on a node.
 
 The rows live in main's SQLite. A node's agent asks for them over the broker and

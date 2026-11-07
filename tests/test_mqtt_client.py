@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for the central aiomqtt client factory (wactorz.core.mqtt)."""
 
 import types

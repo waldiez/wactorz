@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Suite-wide fixtures.
 
 The point of the fixture below is that a test run must not depend on the machine
@@ -16,11 +17,19 @@ import pytest
 
 from wactorz import config, llm_factory
 from wactorz.agents import llm_agent
-from wactorz.core import mqtt
+from wactorz.core import mqtt, pip
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
 from wactorz.node import state as node_state
+from wactorz.web import cost as web_cost
+from wactorz.web import db_writer, throttle
 from wactorz.web import runtime as web_runtime
+
+
+@pytest.fixture(autouse=True)
+def _no_pending_package_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a fresh interpreter's package-restart state."""
+    monkeypatch.setattr(pip, "_RESTART_REQUIRED", set())
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +88,23 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     the default.
     """
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_db_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test a writer of its own, so nothing one queued is written in another."""
+    monkeypatch.setattr(db_writer, "writer", db_writer.DbWriter())
+    monkeypatch.setattr(web_cost, "_stored", web_cost.StoredTotals())
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_key_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test an allowance of its own for wrong keys.
+
+    The running server's throttle is one object per process and every test client
+    calls from the same address, so wrong keys in one test would refuse the next.
+    """
+    monkeypatch.setattr(throttle, "throttle", throttle.LoginThrottle())
 
 
 #: The settings that put broker connections on TLS.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The WhatsApp webhook only accepts requests Twilio signed.
 
 `From` is matched against the allow-list, but a forged POST can name any

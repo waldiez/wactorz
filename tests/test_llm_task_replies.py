@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """`LLMAgent._handle_task` must always answer the caller.
 
 A task arrives with `_reply_to` / `_task_id` so the sender's `send_to()` future

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Terminal interface, and the deploy commands it exposes."""
 
 import asyncio
@@ -6,8 +7,10 @@ import logging
 import socket
 import threading
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
+from ...agents.main.addresses import registered_agent
 from ...config import (
     deploy_env_prefix,
     deploy_target,
@@ -15,6 +18,7 @@ from ...config import (
     deploy_target_help,
     deploy_target_names,
 )
+from ...core.addresses import MAIN_NODE, Address, parse
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
 from ...core.state_snapshot import FORCE_FLAG
@@ -132,12 +136,20 @@ class CLIInterface:
             return str(result)
         return f"[{agent_name}] Task sent (no synchronous response)"
 
-    async def _get_remote_agent_response(self, agent_name: str, message: str) -> str:
-        """Route a message to a remote agent via MQTT and wait for reply."""
+    def _here(self, address: Address) -> Any:
+        """The agent ``address`` names in this process, or None when it is on a node or nowhere."""
+        registry = self.agent._registry
+        if registry is None or address.node not in ("", MAIN_NODE):
+            return None
+        return registry.find_by_name(address.name)
+
+    async def _get_remote_agent_response(
+        self, agent_name: str, message: str, remote_node: str = ""
+    ) -> str:
+        """Route a message to ``agent_name`` on ``remote_node`` via MQTT and wait for reply."""
         main = self.agent
 
-        remote_node = main.nodes.node_for(agent_name)
-        if not remote_node:
+        if not remote_node or remote_node == MAIN_NODE:
             known = [a for nd in main._known_nodes.values() for a in nd.get("agents", [])]
             if known:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
@@ -173,7 +185,7 @@ class CLIInterface:
         await asyncio.sleep(0.15)  # let subscriber connect first
 
         await main._mqtt_publish(
-            f"agents/by-name/{agent_name}/task",
+            main.task_topic_for(Address(agent_name, remote_node)),
             {
                 "text": message,
                 "payload": message,
@@ -302,199 +314,229 @@ class CLIInterface:
         print("\nWactorz CLI | Type /help for commands\n")
         while True:
             try:
-                user_input = await self._prompt("You: ")
-                text = user_input.strip()
+                text = (await self._prompt("You: ")).strip()
                 if not text:
                     continue
                 # Everything done to answer this line, wherever it is done.
                 begin_turn()
-
                 if text.lower() in ("quit", "exit"):
                     break
-
-                if text.lower() in ("/help", "help"):
-                    self._print_help()
-                    continue
-
-                if text.lower() == "/clear-plans":
-                    self.agent.persist("_plan_cache", {})
-                    print("\n[System: Plan cache cleared.]\n")
-                    continue
-
-                if text.lower() in ("/agents", "agents"):
-                    agents = await self.agent.list_agents()
-                    print()
-                    for a in agents:
-                        protected = " [protected]" if a.get("protected") else ""
-                        node = f" [{a['node']}]" if a.get("node") else ""
-                        print(
-                            f"  [{a['state']:8s}] @{a['name']:<22s} {a['actor_id'][:8]}{protected}{node}"
-                        )
-                    print()
-                    continue
-
-                if text.lower() in ("/nodes", "nodes"):
-                    # Show remote nodes from heartbeat tracking + local agents by node
-                    remote_nodes = []
-                    if hasattr(self.agent, "list_nodes"):
-                        remote_nodes = self.agent.list_nodes()
-                    agents = await self.agent.list_agents()
-
-                    # Build local node group from actor registry
-                    local_names = [a["name"] for a in agents if not a.get("node")]
-                    print()
-                    print(
-                        f"  {'local':20s} {'online':6s}  {', '.join('@' + n for n in local_names) or '(none)'}"
-                    )
-                    for nd in sorted(remote_nodes, key=lambda x: x["node"]):
-                        status = "online" if nd["online"] else "OFFLINE"
-                        names = ", ".join("@" + n for n in nd["agents"]) or "(no agents)"
-                        print(f"  {nd['node']:20s} {status:6s}  {names}")
-                    if not remote_nodes:
-                        print(
-                            "  (no remote nodes seen yet — deploy one with /deploy <node> <host>)"
-                        )
-                    print()
-                    continue
-
-                if text.lower().startswith("/migrate"):
-                    # /migrate <agent-name> <target-node> [--force]
-                    words = text.split()
-                    force = FORCE_FLAG in words
-                    parts = [w for w in words if w != FORCE_FLAG]
-                    if len(parts) < 3:
-                        print("[usage] /migrate <agent-name> <target-node> [--force]")
-                        print("        Moves a running agent to a different node.")
-                        print("        Example: /migrate temp-sensor rpi-bedroom")
-                        print()
-                    elif not hasattr(self.agent, "migrate_agent"):
-                        print("[error] migrate_agent not available on this actor.\n")
-                    else:
-                        agent_name = parts[1]
-                        target_node = parts[2]
-                        print(f"[Migrating @{agent_name} to {target_node}...]")
-                        result = await self.agent.migrate_agent(
-                            agent_name, target_node, force=force
-                        )
-                        ok = result.get("success", False)
-                        sym = "OK" if ok else "FAIL"
-                        print(f"[{sym}] {result.get('message', '')}\n")
-                    continue
-
-                if text.lower().startswith("/deploy-pkg"):
-                    # /deploy-pkg <node-name|host> <pkg1> [pkg2 ...]
-                    parts = text.split()
-                    if len(parts) < 3:
-                        print("[usage] /deploy-pkg <node-name> <package> [package2 ...]")
-                        print("        e.g.  /deploy-pkg rpi-kitchen adafruit-circuitpython-dht")
-                        print()
-                    elif not hasattr(self.agent, "delegate_to_installer"):
-                        print("[error] installer not available\n")
-                    else:
-                        # Accept either the node name or its address; both resolve
-                        # to the same configured target. This used to prompt for
-                        # an SSH password at the terminal and put it in the task
-                        # payload — the installer now reads credentials from the
-                        # environment and ignores any a payload carries.
-                        node = parts[1]
-                        packages = parts[2:]
-                        pkg_target = deploy_target(node) or deploy_target_for_host(node)
-                        if pkg_target is None:
-                            print("[error] " + deploy_target_help(node) + "\n")
-                            continue
-                        host = pkg_target.host or node
-                        # Typed here, so allowed here: the installer would
-                        # otherwise ask on the dashboard about what was just typed.
-                        await self.agent.delegate_to_installer(
-                            {"action": "packages_allow", "packages": packages}, timeout=10.0
-                        )
-                        print(f"  Installing {packages} on {host}...")
-                        result = await self.agent.delegate_to_installer(
-                            {
-                                "action": "node_install",
-                                "host": host,
-                                "node_name": pkg_target.name,
-                                "packages": packages,
-                            },
-                            timeout=120.0,
-                        )
-                        ok = result.get("success", False)
-                        if ok:
-                            print(f"  [OK] {packages} installed on {host}\n")
-                        else:
-                            print(f"  [FAIL] {result.get('error', result)}\n")
-                    continue
-
-                if text.lower().startswith("/deploy"):
-                    parts = text.split()
-                    if len(parts) < 2:
-                        listing = "\n".join(f"  {n}" for n in deploy_target_names())
-                        print(
-                            f"[usage] /deploy <node-name>\nConfigured targets:\n{listing or '  (none configured)'}\n"
-                        )
-                    elif len(parts) > 2:
-                        # The old form took a host override here, which would aim
-                        # one target's credentials at a machine of the caller's
-                        # choosing. Targets are whole, or they are not used.
-                        print("[error] /deploy takes a node name only.\n")
-                        print(deploy_target_help(parts[1]) + "\n")
-                    else:
-                        await self._deploy(parts[1])
-                    continue
-
-                if text.startswith("@"):
-                    parts = text[1:].split(" ", 1)
-                    agent_name = parts[0].strip()
-                    message = parts[1].strip() if len(parts) > 1 else ""
-                    if not message:
-                        print(f"[usage] @{agent_name} <your message>\n")
-                        continue
-                    print(f"\n[routing to @{agent_name}]")
-                    target = (
-                        self.agent._registry.find_by_name(agent_name)
-                        if self.agent._registry
-                        else None
-                    )
-                    # @main goes through the full orchestration pipeline
-                    if target is self.agent:
-                        print(f"\n@{agent_name}: ", end="", flush=True)
-                        system_msg = ""
-                        with acting_as(self.agent.name):
-                            async for chunk in self.agent.process_user_input_stream(message):
-                                if isinstance(chunk, dict):
-                                    system_msg = chunk.get("system_msg", "")
-                                else:
-                                    print(chunk, end="", flush=True)
-                        print()
-                        if system_msg:
-                            print(f"[System: {system_msg}]")
-                        print()
-                        continue
-                    # Stream if target is an LLMAgent with chat_stream support
-                    if target and hasattr(target, "chat_stream"):
-                        print(f"\n@{agent_name}: ", end="", flush=True)
-                        with acting_as(agent_name):
-                            async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
-                                if not isinstance(chunk, dict):
-                                    print(chunk, end="", flush=True)
-                        print("\n")
-                    elif target:
-                        response = await self._get_agent_response(agent_name, message)
-                        print(f"\n@{agent_name}: {response}\n")
-                    else:
-                        # Not found locally — try remote nodes
-                        response = await self._get_remote_agent_response(agent_name, message)
-                        print(f"\n@{agent_name}: {response}\n")
-                    continue
-
-                print("\n@main: ", end="", flush=True)
-                # The orchestrator labels its own work; what it has to say
-                # about the turn, it says in the stream.
-                async for chunk in self.orchestrator.handle_turn_stream(text, channel=CLI):
-                    print(chunk, end="", flush=True)
-                print()  # newline after streamed response
-                print()
-
+                await self._answer(text)
             except (KeyboardInterrupt, EOFError):
                 break
         print("\nGoodbye!")
+
+    async def _answer(self, text: str) -> None:
+        """Answer one line: a command, a mention of an agent, or the orchestrator's turn."""
+        command = self._command_for(text.lower())
+        if command is not None:
+            await command(text)
+        elif text.startswith("@"):
+            await self._mention(text)
+        else:
+            await self._ask_orchestrator(text)
+
+    def _command_for(self, lowered: str) -> Callable[[str], Awaitable[None]] | None:
+        """The handler for the command ``lowered`` is, if it is one.
+
+        The words are matched whole, the verbs that take arguments by how the
+        line starts: ``/deploy-pkg`` before ``/deploy``, which it also starts with.
+        """
+        words: dict[str, Callable[[str], Awaitable[None]]] = {
+            "/help": self._help,
+            "help": self._help,
+            "/clear-plans": self._clear_plans,
+            "/agents": self._list_agents,
+            "agents": self._list_agents,
+            "/nodes": self._list_nodes,
+            "nodes": self._list_nodes,
+        }
+        if lowered in words:
+            return words[lowered]
+        verbs: tuple[tuple[str, Callable[[str], Awaitable[None]]], ...] = (
+            ("/migrate", self._migrate),
+            ("/deploy-pkg", self._deploy_packages),
+            ("/deploy", self._deploy_command),
+        )
+        for prefix, handler in verbs:
+            if lowered.startswith(prefix):
+                return handler
+        return None
+
+    # ── Commands ───────────────────────────────────────────────────────────
+
+    async def _help(self, _text: str) -> None:
+        self._print_help()
+
+    async def _clear_plans(self, _text: str) -> None:
+        self.agent.persist("_plan_cache", {})
+        print("\n[System: Plan cache cleared.]\n")
+
+    async def _list_agents(self, _text: str) -> None:
+        agents = await self.agent.list_agents()
+        print()
+        for a in agents:
+            protected = " [protected]" if a.get("protected") else ""
+            node = f" [{a['node']}]" if a.get("node") else ""
+            print(f"  [{a['state']:8s}] @{a['name']:<22s} {a['actor_id'][:8]}{protected}{node}")
+        print()
+
+    async def _list_nodes(self, _text: str) -> None:
+        """The nodes main has heard from, after this process's own agents as ``local``."""
+        remote_nodes = self.agent.list_nodes() if hasattr(self.agent, "list_nodes") else []
+        agents = await self.agent.list_agents()
+        local_names = [a["name"] for a in agents if not a.get("node")]
+        print()
+        print(
+            f"  {'local':20s} {'online':6s}  {', '.join('@' + n for n in local_names) or '(none)'}"
+        )
+        for nd in sorted(remote_nodes, key=lambda x: x["node"]):
+            status = "online" if nd["online"] else "OFFLINE"
+            names = ", ".join("@" + n for n in nd["agents"]) or "(no agents)"
+            print(f"  {nd['node']:20s} {status:6s}  {names}")
+        if not remote_nodes:
+            print("  (no remote nodes seen yet — deploy one with /deploy <node> <host>)")
+        print()
+
+    async def _migrate(self, text: str) -> None:
+        """``/migrate <agent-name> <target-node> [--force]``: move a running agent to another node."""
+        words = text.split()
+        force = FORCE_FLAG in words
+        parts = [w for w in words if w != FORCE_FLAG]
+        if len(parts) < 3:
+            print("[usage] /migrate <agent-name> <target-node> [--force]")
+            print("        Moves a running agent to a different node.")
+            print("        Example: /migrate temp-sensor rpi-bedroom")
+            print()
+        elif not hasattr(self.agent, "migrate_agent"):
+            print("[error] migrate_agent not available on this actor.\n")
+        elif refusal := registered_agent(self.agent, parts[1])[1]:
+            print(f"[error] {refusal}\n")
+        else:
+            print(f"[Migrating @{parse(parts[1]).name} to {parts[2]}...]")
+            result = await self.agent.migrate_agent(parts[1], parts[2], force=force)
+            sym = "OK" if result.get("success", False) else "FAIL"
+            print(f"[{sym}] {result.get('message', '')}\n")
+
+    async def _deploy_packages(self, text: str) -> None:
+        """``/deploy-pkg <node-name|host> <pkg1> [pkg2 ...]``: install packages on a node."""
+        parts = text.split()
+        if len(parts) < 3:
+            print("[usage] /deploy-pkg <node-name> <package> [package2 ...]")
+            print("        e.g.  /deploy-pkg rpi-kitchen adafruit-circuitpython-dht")
+            print()
+            return
+        if not hasattr(self.agent, "delegate_to_installer"):
+            print("[error] installer not available\n")
+            return
+        # Either the node name or its address: both resolve to the same
+        # configured target. The installer reads credentials from the
+        # environment and ignores any a payload carries, so none are asked for.
+        node, packages = parts[1], parts[2:]
+        pkg_target = deploy_target(node) or deploy_target_for_host(node)
+        if pkg_target is None:
+            print("[error] " + deploy_target_help(node) + "\n")
+            return
+        host = pkg_target.host or node
+        # Typed here, so allowed here: the installer would
+        # otherwise ask on the dashboard about what was just typed.
+        await self.agent.delegate_to_installer(
+            {"action": "packages_allow", "packages": packages}, timeout=10.0
+        )
+        print(f"  Installing {packages} on {host}...")
+        result = await self.agent.delegate_to_installer(
+            {
+                "action": "node_install",
+                "host": host,
+                "node_name": pkg_target.name,
+                "packages": packages,
+            },
+            timeout=120.0,
+        )
+        if result.get("success", False):
+            print(f"  [OK] {packages} installed on {host}\n")
+        else:
+            print(f"  [FAIL] {result.get('error', result)}\n")
+
+    async def _deploy_command(self, text: str) -> None:
+        """``/deploy <node-name>``: set up a configured target as a node."""
+        parts = text.split()
+        if len(parts) < 2:
+            listing = "\n".join(f"  {n}" for n in deploy_target_names())
+            print(
+                f"[usage] /deploy <node-name>\nConfigured targets:\n{listing or '  (none configured)'}\n"
+            )
+        elif len(parts) > 2:
+            # A host given here would aim one target's credentials at a machine
+            # of the caller's choosing. Targets are whole, or they are not used.
+            print("[error] /deploy takes a node name only.\n")
+            print(deploy_target_help(parts[1]) + "\n")
+        else:
+            await self._deploy(parts[1])
+
+    # ── Talking to agents ──────────────────────────────────────────────────
+
+    async def _mention(self, text: str) -> None:
+        """``@name <message>``: send the message to that agent, here or on a node."""
+        parts = text[1:].split(" ", 1)
+        agent_name = parts[0].strip()
+        message = parts[1].strip() if len(parts) > 1 else ""
+        if not message:
+            print(f"[usage] @{agent_name} <your message>\n")
+            return
+        resolution = self.agent.resolve_address(agent_name)
+        if resolution.ambiguous:
+            print(f"\n[error] {resolution.refusal(mention=True)}\n")
+            return
+        found = resolution.found or Address(agent_name)
+        if refusal := self.agent.task_refusal(found):
+            print(f"\n[error] {refusal}\n")
+            return
+        print(f"\n[routing to @{found}]")
+        await self._say_reply(found, message)
+
+    async def _say_reply(self, found: Address, message: str) -> None:
+        """Print the reply of the agent at ``found``, streamed when it streams."""
+        agent_name = found.name
+        target = self._here(found)
+        if target is self.agent:
+            # @main goes through the full orchestration pipeline.
+            await self._stream_main(agent_name, message)
+        elif target and hasattr(target, "chat_stream"):
+            print(f"\n@{agent_name}: ", end="", flush=True)
+            with acting_as(agent_name):
+                async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
+                    if not isinstance(chunk, dict):
+                        print(chunk, end="", flush=True)
+            print("\n")
+        elif target:
+            response = await self._get_agent_response(agent_name, message)
+            print(f"\n@{agent_name}: {response}\n")
+        else:
+            # Not found locally — try remote nodes
+            response = await self._get_remote_agent_response(agent_name, message, found.node)
+            print(f"\n@{agent_name}: {response}\n")
+
+    async def _stream_main(self, agent_name: str, message: str) -> None:
+        """Print main's streamed answer, then what it says about the turn."""
+        print(f"\n@{agent_name}: ", end="", flush=True)
+        system_msg = ""
+        with acting_as(self.agent.name):
+            async for chunk in self.agent.process_user_input_stream(message):
+                if isinstance(chunk, dict):
+                    system_msg = chunk.get("system_msg", "")
+                else:
+                    print(chunk, end="", flush=True)
+        print()
+        if system_msg:
+            print(f"[System: {system_msg}]")
+        print()
+
+    async def _ask_orchestrator(self, text: str) -> None:
+        print("\n@main: ", end="", flush=True)
+        # The orchestrator labels its own work; what it has to say
+        # about the turn, it says in the stream.
+        async for chunk in self.orchestrator.handle_turn_stream(text, channel=CLI):
+            print(chunk, end="", flush=True)
+        print()  # newline after streamed response
+        print()

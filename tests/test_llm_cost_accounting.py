@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where the spend figures come from, and how an upgrade seeds them.
 
 `tests/test_cost_limit_enforcement.py` covers the cap stopping a call. This

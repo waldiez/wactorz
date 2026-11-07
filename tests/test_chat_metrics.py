@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """How long a person waits in the chat, from the server's side.
 
 Every message from the dashboard is routed through `route_chat`, and every

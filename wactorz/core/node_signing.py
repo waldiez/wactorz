@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Signing the control messages main sends to a remote node.
 
 A node acts on whatever arrives on its control topics: a spawn runs the code in
@@ -70,6 +71,8 @@ CONTROL_LEAVES = frozenset(
         "migrate",
         "code_request",
         "reset",
+        "swap_model",
+        "data_ack",
     }
 )
 

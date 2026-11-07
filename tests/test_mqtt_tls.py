@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """TLS for the broker connection: one rule for trusting the broker, and its certificates.
 
 Every connection to the broker follows one rule, written in

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What an agent says about itself every heartbeat.
 
 Agents share one process, and so one CPU reading. The monitor publishes it once,

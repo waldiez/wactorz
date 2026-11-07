@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node agent's model requests take, there through main and back.
 
 The model call itself is timed on main, where it is made. A node agent waits

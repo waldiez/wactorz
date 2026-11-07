@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every provider translates attachment blocks into its own wire shape.
 
 `supports_blocks()` tells the agent a list-of-blocks content is safe to send,

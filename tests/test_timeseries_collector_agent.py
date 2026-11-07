@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The time-series collector: what it buffers from each topic, and what reaches SQLite.
 
 The program is exec'd as it is at spawn and driven through a stand-in `agent`,
@@ -248,6 +249,23 @@ class TestRouting:
         assert rows["reward"]["entity_id"] == "sinergym.office"
         assert rows["step"]["value"] == 40.0
         assert rows["obs_0"]["agent"] == "sinergym-train"
+
+    async def test_an_observation_without_a_reward_or_its_lists_keeps_its_step(
+        self, agent: _Agent, db: WactorzDB
+    ) -> None:
+        # obs, action and info in a shape the collector cannot spread are skipped,
+        # not misread; the step and the episode are kept whatever else is there.
+        _route(
+            agent,
+            "sinergym/env/office/observation",
+            {"step": 3, "obs": "20.0", "action": {"a": 1}, "info": [12.5]},
+        )
+        NS["_flush"](agent)
+
+        rows = {r["field"]: r for r in _rows(db, "sensor_readings")}
+        assert set(rows) == {"step", "episode"}
+        assert rows["step"]["entity_id"] == "sinergym"
+        assert rows["episode"]["value"] == 0.0
 
     async def test_only_an_episode_end_is_kept(self, agent: _Agent, db: WactorzDB) -> None:
         _route(agent, "sinergym/env/office/episode", {"event": "episode_start"})

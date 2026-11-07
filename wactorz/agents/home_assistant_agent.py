@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """HomeAssistantAgent - Unified Home Assistant agent.
 
 Handles all HA operations in a single agent:

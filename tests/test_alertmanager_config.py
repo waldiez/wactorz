@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where the compose stack's alerts go is decided in `.env`, and nowhere by default.
 
 Prometheus raises the alerts; Alertmanager, started beside it, delivers them.

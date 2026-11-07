@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The application log, and the things that must never be in it.
 
 A log is the one artefact that gets copied into a bug report, pasted into a chat
@@ -12,8 +13,6 @@ either false alarms on an agent's own output or a rule so loose it never fires.
 If the broker password appears in the log, that is not a heuristic - the process
 was given that string and wrote it down.
 """
-
-from __future__ import annotations
 
 from pathlib import Path
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The dashboard's answer to a question an agent asked.
 
 A chat frame with options is shown on the dashboard as a card with buttons.
@@ -24,6 +25,7 @@ from typing import Any
 
 from aiohttp import web
 
+from ..core.labels import vouch
 from ..core.outbound import Answer, TakesDashboardAnswers, check_options, note_text
 from ..core.topics import topic_name_error
 from . import questions, runtime
@@ -97,6 +99,10 @@ async def _send(answer: Answer) -> str | None:
     except Exception as exc:
         logger.warning("[answers] could not publish an answer for %s: %s", answer.agent_id[:8], exc)
         return "The answer could not be sent to the agent."
+    # Once it is sent, and only then: a label from this answer is a person's
+    # signed in to the dashboard, not anyone's on the broker. The agent's book
+    # saying it was answered comes back over the broker, after this.
+    vouch(answer.agent_id, answer.id, answer.option)
     logger.info("[answers] %s picked %r for %s", "dashboard", answer.option, answer.agent_id[:8])
     return None
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The install every journey runs against, and what is checked after each.
 
 One install for the whole run: a broker, the application as a process, and a
@@ -11,8 +12,6 @@ that journey and is reported with it.
 A run that passes removes its directory under ``e2e/out``. One that fails keeps
 it: the backend's console, the broker's, and a browser trace.
 """
-
-from __future__ import annotations
 
 import shutil
 import sys

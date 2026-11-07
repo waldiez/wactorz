@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Where an agent may read a person's documents from and write what it makes.
 
 The paths come from requests a model wrote, so these tests pin the fence: the

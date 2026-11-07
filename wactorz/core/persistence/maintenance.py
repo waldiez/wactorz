@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Housekeeping the storage owes itself, on a timer and off the event loop.
 
 Nothing on the server ran periodic work before this, which is why the WAL

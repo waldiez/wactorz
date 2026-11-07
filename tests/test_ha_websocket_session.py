@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A Home Assistant WebSocket session against a real server that speaks the protocol.
 
 The server here authenticates with a token, answers commands by id, interleaves

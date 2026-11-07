@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Secret redaction for the logging path.
 
 Redaction happens at the **sink**, not the call site: a filter here cannot be

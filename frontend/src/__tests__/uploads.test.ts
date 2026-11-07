@@ -1,9 +1,8 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi } from "vitest";
-import { isAccepted, humanSize, isImage, uploadFile } from "../ui/dashboard/uploads";
+import { isAccepted, humanSize, isImage, uploadFile } from "../ui/chat/uploads";
 
 function file(name: string, type: string): File {
     return new File([new Uint8Array(8)], name, { type });

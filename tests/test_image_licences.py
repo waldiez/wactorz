@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Every image says which licences it carries, and only the ultra ones carry AGPL.
 
 Wactorz is Apache-2.0. The ultra app image and the ultra add-on install

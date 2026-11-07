@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
@@ -11,7 +10,7 @@ import {
     sortAgents,
     relTime,
     MESSAGEABLE_PRIORITY,
-} from "../ui/dashboard/agentState";
+} from "../ui/overview/agentState";
 import type { AgentState } from "../types/agent";
 
 describe("MESSAGEABLE_PRIORITY", () => {
@@ -49,6 +48,15 @@ describe("messageableNames", () => {
                 { name: "" }, // empty → dropped
             ]),
         ).toEqual(["main", "worker"]);
+    });
+
+    it("calls each what the label says, so a shared name is offered as each address", () => {
+        const agents = [{ name: "counter" }, { name: "counter", node: "pi" }];
+
+        expect(messageableNames(agents, a => `${a.name}@${a.node ?? "main"}`)).toEqual([
+            "counter@main",
+            "counter@pi",
+        ]);
     });
 });
 

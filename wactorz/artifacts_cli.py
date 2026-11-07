@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """wactorz-artifacts  —  keep models on main, by name and version.
 
 An artifact is a model, a set of weights or any large file that agents load and
@@ -7,6 +8,8 @@ nobody writes to: it changes by gaining a new version. See
 Usage
 -----
     wactorz-artifacts add PATH NAME [--format F] [--meta KEY=VALUE]... [--allow-code]
+                          [--kind KIND] [--positive VALUE]... [--field FIELD]
+                          [--label-source SOURCE]
     wactorz-artifacts list [NAME]
     wactorz-artifacts show REFERENCE
     wactorz-artifacts remove REFERENCE [--every-version]
@@ -14,7 +17,11 @@ Usage
     wactorz-artifacts activate NAME:V [--reason TEXT]
     wactorz-artifacts shadow NAME:V [--reason TEXT]
     wactorz-artifacts promote NAME [--reason TEXT]
-    wactorz-artifacts clear {active,shadow} NAME
+    wactorz-artifacts clear {active,shadow} NAME [--reason TEXT]
+    wactorz-artifacts judge REFERENCE ([--kind KIND] (--positive VALUE... | --field FIELD)
+                                       [--label-source SOURCE] | --clear)
+    wactorz-artifacts policy NAME [--metric F] [--margin X] [--min-days D] [--min-labelled N]
+                          [--significant|--no-significant] [--automatic|--manual] | --clear
 
 A reference is ``NAME:3`` for the third version, ``NAME:latest`` for the
 newest, ``NAME:active`` or ``NAME:shadow`` for the version a pointer names, and
@@ -33,6 +40,21 @@ ending does not say, as for a ``.pt`` file, which may hold a ``state_dict`` or
 a whole module. A directory is kept as one archive of it. Formats that run code
 when they load -- a pickle, a joblib file, a whole torch module -- are refused
 unless ``--allow-code`` is given.
+
+``--kind`` and what follows it say what a version is judged on
+(`wactorz.core.judgement`): for a ``detector``, the default, ``--positive``
+names the label values that count as a fault it should flag; a
+``classifier`` or a ``regressor`` names with ``--field`` the output field its
+class or its number is in, held against the label's value. Each input is held
+against the labels of its own source, unless ``--label-source`` names one for
+all. A version added without it takes the previous version's; ``judge`` sets
+or changes it on a version already stored, and keeps what it replaced.
+
+``policy`` says when a name's shadow may become active (`wactorz.core.promotion`):
+the figure compared, the margin, the days and labelled inputs the trial must
+hold, whether the difference must be significant, and whether main promotes on
+its own (``--automatic``) or asks on the dashboard. What is not said keeps what
+was set, else the default; ``--clear`` unsets it.
 
 Adding and removing work while the server runs.
 """
@@ -56,7 +78,10 @@ from wactorz.core.artifacts import (
     human_size,
     parse_reference,
 )
+from wactorz.core.judgement import DETECTOR, KINDS, Judgement, JudgementError, declared
 from wactorz.core.paths import resolve_state_dir
+from wactorz.core.promotion import METRICS, Policy, PolicyError
+from wactorz.core.promotion import declared as policy_declared
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +158,15 @@ def _add(args: argparse.Namespace) -> None:
             format_name=args.format,
             metadata=_metadata(args.meta),
             allow_code=args.allow_code,
+            judged_on=_judgement(args),
         )
     except CodeRefusedError as exc:
         raise CliError.code_refused(exc) from exc
     logger.info("Stored %s (%s, %s)", artifact.pinned, artifact.format, _size(artifact.size))
     logger.info("in %s", store.root.resolve())
+    judgement = artifact.judgement
+    if judgement is not None:
+        logger.info("Judged on %s", _judged(judgement))
     if new_state_dir:
         logger.warning(
             "There was no state directory at %s, so a new one was made. Wactorz reads its "
@@ -176,6 +205,8 @@ def _show(args: argparse.Namespace) -> None:
     shown["pointers"] = {
         which: pointer.payload() for which, pointer in store.pointers(artifact.name).items()
     }
+    policy = store.policy(artifact.name)
+    shown["policy"] = None if policy is None else policy.to_json()
     sys.stdout.write(json.dumps(shown, indent=2) + "\n")
 
 
@@ -195,8 +226,75 @@ def _promote(args: argparse.Namespace) -> None:
 
 
 def _clear(args: argparse.Namespace) -> None:
-    was = _store(args).clear(args.pointer, args.name)
+    was = _store(args).clear(args.pointer, args.name, by="cli", reason=args.reason)
     logger.info("%s has no %s version now (was %s)", was.name, was.pointer, was.reference)
+
+
+def _judge(args: argparse.Namespace) -> None:
+    store = _store(args)
+    judgement = None if args.clear else _declared(args)
+    judged = store.judge(args.reference, judgement)
+    if judged.judgement is None:
+        logger.info("%s is judged on nothing now", judged.reference)
+    else:
+        logger.info("%s is judged on %s", judged.reference, _judged(judged.judgement))
+
+
+def _judgement(args: argparse.Namespace) -> Judgement | None:
+    """What the command line says a version is judged on, or None when it says nothing."""
+    if not (args.positive or args.label_source or args.field or args.kind):
+        return None
+    return _declared(args)
+
+
+def _declared(args: argparse.Namespace) -> Judgement:
+    """The declaration the command line gives. Raises `JudgementError` saying what it lacks."""
+    return declared(
+        kind=args.kind or DETECTOR,
+        positive=args.positive,
+        source=args.label_source,
+        field=args.field,
+        by="cli",
+    )
+
+
+def _judged(judgement: Judgement) -> str:
+    """``fault, bearing as positive, against each input's own source``, as a line says it."""
+    where = f"the labels of {judgement.source}" if judgement.source else "each input's own source"
+    copied = f" (from version {judgement.from_version})" if judgement.from_version else ""
+    if judgement.kind == DETECTOR:
+        said = f"{', '.join(judgement.positive)} as positive"
+    else:
+        said = f"its {judgement.field!r} field as a {judgement.kind}"
+    return f"{said}, against {where}{copied}"
+
+
+def _policy(args: argparse.Namespace) -> None:
+    store = _store(args)
+    if args.clear:
+        was = store.clear_policy(args.name)
+        logger.info("%s has no policy now%s", args.name, f" (was: {was.words()})" if was else "")
+        return
+    given = {
+        name: value
+        for name, value in (
+            ("metric", args.metric),
+            ("margin", args.margin),
+            ("min_days", args.min_days),
+            ("min_labelled", args.min_labelled),
+            ("significant", args.significant),
+            ("automatic", args.automatic),
+        )
+        if value is not None
+    }
+    policy = store.set_policy(
+        args.name, policy_declared(given, over=store.policy(args.name), by="cli")
+    )
+    logger.info("%s is promoted when its shadow shows %s", args.name, _policy_words(policy))
+
+
+def _policy_words(policy: Policy) -> str:
+    return policy.words()
 
 
 def _remove(args: argparse.Namespace) -> None:
@@ -229,7 +327,31 @@ def _build_parser() -> argparse.ArgumentParser:
         "--state-dir", metavar="DIR", help="default: WACTORZ_STATE_DIR or ./state"
     )
 
-    add = commands.add_parser("add", parents=[state_dir], help="store a file or directory")
+    judging = argparse.ArgumentParser(add_help=False)
+    judging.add_argument(
+        "--positive",
+        action="append",
+        default=[],
+        metavar="VALUE",
+        help="a label value that counts as what the model should flag; repeatable",
+    )
+    judging.add_argument(
+        "--label-source",
+        metavar="SOURCE",
+        help="judge every input against this label source; default: each input's own",
+    )
+    judging.add_argument(
+        "--kind",
+        choices=KINDS,
+        help=f"how its answers are read (default: {DETECTOR})",
+    )
+    judging.add_argument(
+        "--field",
+        metavar="FIELD",
+        help="the output field a classifier's class or a regressor's number is in",
+    )
+
+    add = commands.add_parser("add", parents=[state_dir, judging], help="store a file or directory")
     add.add_argument("path", help="the file or directory to store")
     add.add_argument("name", help="the name to store it under; each add is a new version")
     add.add_argument("--format", choices=sorted(FORMATS), help="default: guessed from the ending")
@@ -238,7 +360,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="say where it came from or how good it is: dataset=..., metric=0.93; repeatable",
+        help=(
+            "say where it came from, how good it is or what an agent reads with it: dataset=..., "
+            "metric=0.93, k_sigma=5; repeatable; reaches the agent as its metadata (64 KiB at most)"
+        ),
     )
     add.add_argument(
         "--allow-code",
@@ -271,9 +396,41 @@ def _build_parser() -> argparse.ArgumentParser:
         "promote", parents=[state_dir, reason], help="make the shadow version active"
     )
     promote.add_argument("name", help="the model whose shadow becomes active")
-    clear = commands.add_parser("clear", parents=[state_dir], help="unset a pointer")
+    clear = commands.add_parser("clear", parents=[state_dir, reason], help="unset a pointer")
     clear.add_argument("pointer", choices=POINTERS, help="which pointer")
     clear.add_argument("name", help="the model")
+    judge = commands.add_parser(
+        "judge", parents=[state_dir, judging], help="say what a stored version is judged on"
+    )
+    judge.add_argument("reference", help="NAME:3, NAME:active, NAME:shadow or NAME:latest")
+    judge.add_argument("--clear", action="store_true", help="say it is judged on nothing")
+    policy = commands.add_parser(
+        "policy", parents=[state_dir], help="say when a model's shadow may become active"
+    )
+    policy.add_argument("name", help="the model")
+    policy.add_argument(
+        "--metric",
+        choices=METRICS,
+        help="the figure compared (default: the main one of its kind: f1, macro_f1 or mae)",
+    )
+    policy.add_argument("--margin", type=float, help="how much better the shadow must be")
+    policy.add_argument("--min-days", type=float, help="how long the trial must have run")
+    policy.add_argument("--min-labelled", type=int, help="how many labelled inputs it must hold")
+    significance = policy.add_mutually_exclusive_group()
+    significance.add_argument(
+        "--significant", action="store_true", default=None, help="the difference must not be chance"
+    )
+    significance.add_argument(
+        "--no-significant", action="store_false", dest="significant", help="any difference will do"
+    )
+    automatic = policy.add_mutually_exclusive_group()
+    automatic.add_argument(
+        "--automatic", action="store_true", default=None, help="main promotes when it is met"
+    )
+    automatic.add_argument(
+        "--manual", action="store_false", dest="automatic", help="main asks on the dashboard"
+    )
+    policy.add_argument("--clear", action="store_true", help="unset the policy")
     return parser
 
 
@@ -287,6 +444,8 @@ _COMMANDS = {
     "shadow": _shadow,
     "promote": _promote,
     "clear": _clear,
+    "judge": _judge,
+    "policy": _policy,
 }
 
 
@@ -294,7 +453,7 @@ def _run(args: argparse.Namespace) -> Exception | None:
     """Do what ``args`` asks; the reason it could not, or None."""
     try:
         _COMMANDS[args.command](args)
-    except (ArtifactError, OSError) as exc:
+    except (ArtifactError, JudgementError, PolicyError, OSError) as exc:
         return exc
     return None
 

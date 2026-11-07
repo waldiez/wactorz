@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Deleting a remote agent must stop it on its node even when the spawn registry
 no longer records the node.
 

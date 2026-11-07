@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Process-wide store instances, created once at startup."""
 
 import logging

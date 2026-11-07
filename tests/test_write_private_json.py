@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A file written by `write_private_json` is never readable by anyone but its owner.
 
 It holds secrets: the Google MCP integration's OAuth tokens, and the pairing

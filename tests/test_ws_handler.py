@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The `/ws` endpoint: what a browser is told on connect, and what it may ask for.
 
 Coverage here is deliberately ahead of the authentication work, which lands in
@@ -21,7 +22,9 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from wactorz.web import events, runtime, ws
+from wactorz.core.identity import derive_actor_id
+from wactorz.core.persistence.db import ChatRow
+from wactorz.web import db_writer, events, runtime, ws
 
 
 class _Registry:
@@ -38,7 +41,11 @@ class _Registry:
         return []
 
     def find_by_name(self, name: str) -> Any | None:
-        return SimpleNamespace(name=name) if name in self._running else None
+        return (
+            SimpleNamespace(name=name, actor_id=derive_actor_id(name))
+            if name in self._running
+            else None
+        )
 
 
 class _Db:
@@ -49,6 +56,10 @@ class _Db:
 
     def write_chat_log(self, **kwargs: Any) -> None:
         self.rows.append(kwargs)
+
+    def write_chat_logs(self, rows: "list[ChatRow]") -> None:
+        for row in rows:
+            self.write_chat_log(**row._asdict())
 
 
 @pytest.fixture(name="db")
@@ -155,10 +166,13 @@ class TestChatTurnAttribution:
         async with client.ws_connect("/ws") as socket:
             await _opening(socket)
             await socket.send_str(json.dumps(frame))
-            for _ in range(50):
+            # The row goes through the writer, a thread hop later: generous, for a
+            # loaded runner, and settled after so a batch half written is whole.
+            for _ in range(500):
                 if db.rows:
                     break
                 await asyncio.sleep(0.01)
+            await db_writer.writer.settled()
 
     async def test_a_mention_attributes_the_turn_to_that_agent(
         self, client: TestClient[Any, Any], db: _Db
@@ -247,6 +261,8 @@ class TestChatTurnAttribution:
                 await asyncio.sleep(0.05)
 
         route.assert_not_called()
+        # Waited for: with nothing to wait for, "not stored" would hold for a row still queued.
+        await db_writer.writer.settled()
         assert not db.rows
 
     async def test_a_malformed_frame_does_not_drop_the_connection(
@@ -260,6 +276,109 @@ class TestChatTurnAttribution:
             await asyncio.sleep(0.05)
 
             assert not socket.closed
+
+
+class TestWhoseTurnItIs:
+    """The page keeps its threads by id; the server says which agent a turn reached.
+
+    The page sends the id of the thread it is in. A mention names an agent by
+    name, so the server says which agent that is before anything else of the
+    turn, and the page files the user's own message there.
+    """
+
+    PAGE_THREAD = "0b6a6c1e-6a0f-4c2e-9a83-5f6f0b1d2c3e"
+
+    async def _turn(
+        self, client: TestClient[Any, Any], frame: dict[str, Any], replies: int = 1
+    ) -> list[dict[str, Any]]:
+        async def _route(text: str, reply: Any, **_kwargs: Any) -> None:
+            await reply("done")
+
+        with patch.object(ws.chat, "route_chat", new=_route):
+            async with client.ws_connect("/ws") as socket:
+                await _opening(socket)
+                await socket.send_str(json.dumps({"type": "chat", **frame}))
+                return await _frames(socket, 1 + replies)
+
+    async def test_a_mention_is_named_with_the_mentioned_agents_id_first(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        turn, reply = await self._turn(
+            client, {"content": "@catalog list", "agent_name": "main", "id": "m-1"}
+        )
+
+        assert turn == {
+            "type": "turn",
+            "agent_id": derive_actor_id("catalog"),
+            "name": "catalog",
+            "id": "m-1",
+            "turn_id": "m-1",
+            "timestamp": turn["timestamp"],
+        }
+        assert reply["agent_id"] == derive_actor_id("catalog")
+        assert {row["agent_id"] for row in db.rows} == {derive_actor_id("catalog")}
+
+    async def test_the_thread_the_page_is_in_keeps_the_pages_id(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        frame = {"content": "hello", "agent_name": "main", "agent_id": self.PAGE_THREAD}
+
+        turn, reply = await self._turn(client, frame)
+
+        assert turn["agent_id"] == reply["agent_id"] == self.PAGE_THREAD
+        assert {row["agent_id"] for row in db.rows} == {self.PAGE_THREAD}
+
+    async def test_an_id_that_is_no_id_is_looked_up_instead(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        frame = {"content": "hello", "agent_name": "main", "agent_id": "agents/#"}
+
+        turn, _reply = await self._turn(client, frame)
+
+        assert turn["agent_id"] == derive_actor_id("main")
+
+
+class TestANameSeveralAgentsShare:
+    """A mention that fits more than one agent is answered with the addresses to pick from."""
+
+    async def test_the_answer_offers_the_addresses_and_names_the_message_a_pick_resends(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        async def _route(_text: str, _reply: Any, **kwargs: Any) -> None:
+            await kwargs["choices_fn"]("More than one.", ("counter@pi", "counter@pc"))
+
+        with patch.object(ws.chat, "route_chat", new=_route):
+            async with client.ws_connect("/ws") as socket:
+                await _opening(socket)
+                frame = {
+                    "type": "chat",
+                    "content": "@counter five",
+                    "agent_name": "main",
+                    "id": "m-7",
+                }
+                await socket.send_str(json.dumps(frame))
+                _turn, reply = await _frames(socket, 2)
+
+        assert reply["content"] == "More than one."
+        assert reply["choices"] == ["counter@pi", "counter@pc"]
+        assert reply["retry_of"] == "m-7"
+        await db_writer.writer.settled()
+        assert [row["content"] for row in db.rows if row["role"] == "assistant"] == [
+            "More than one."
+        ]
+
+    async def test_an_ordinary_answer_offers_nothing(self, client: TestClient[Any, Any]) -> None:
+        async def _route(_text: str, reply: Any, **_kwargs: Any) -> None:
+            await reply("done")
+
+        with patch.object(ws.chat, "route_chat", new=_route):
+            async with client.ws_connect("/ws") as socket:
+                await _opening(socket)
+                await socket.send_str(json.dumps({"type": "chat", "content": "hi", "id": "m-8"}))
+                _turn, reply = await _frames(socket, 2)
+
+        assert "choices" not in reply
+        assert "retry_of" not in reply
 
 
 class TestAnAnswerTheBrowserCanAttribute:
@@ -279,8 +398,9 @@ class TestAnAnswerTheBrowserCanAttribute:
             await socket.send_str(
                 json.dumps({"type": "chat", "content": "@weather Athens", "agent_name": "catalog"})
             )
-            frames = await _frames(socket, 2)
+            turn, *frames = await _frames(socket, 3)
 
+        assert (turn["type"], turn["name"]) == ("turn", "catalog")
         assert [f["type"] for f in frames] == ["chat", "stream_end"]
         assert "not found" in frames[0]["content"]
         assert {f["from"] for f in frames} == {"catalog"}
@@ -476,4 +596,5 @@ class TestProvingTheConnectionIsAlive:
             await socket.send_str(json.dumps({"type": "ping"}))
             await _frames(socket, 1)
 
+        await db_writer.writer.settled()
         assert not db.rows

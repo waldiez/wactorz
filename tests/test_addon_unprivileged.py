@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The Home Assistant add-ons run Wactorz as an ordinary user, on a read-only `/config`.
 
 Wactorz runs code a model wrote. In the add-on that code ran as root, with Home

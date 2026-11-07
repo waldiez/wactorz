@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A generated agent has a way to say it is finished.
 
 Asked for an agent that stops after a while, a model reaches for `sys.exit()`,
@@ -84,7 +85,7 @@ def make_main(dropped: list[str]) -> Any:
     AttributeError would surface far from the cause."""
     main = MainActor.__new__(MainActor)
     main.name = "main"
-    setattr(main, "_remove_from_spawn_registry", dropped.append)
+    setattr(main, "_remove_from_spawn_registry", lambda name, *_, **__: dropped.append(name))
     return main
 
 

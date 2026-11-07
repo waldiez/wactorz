@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pickle store — agent.state objects only.
 
 Each agent's state is one file, and it is kept in memory once read: a recall is

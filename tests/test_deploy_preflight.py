@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A deploy proves the node can talk to the broker before it reports success.
 
 "Runner started" used to be the last thing a deploy said. It meant one thing: the

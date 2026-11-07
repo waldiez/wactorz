@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Two people talking to the same agent must not get each other's replies.
 
 Message-passing agents reply to `msg.reply_to or msg.sender_id`, and a chat turn

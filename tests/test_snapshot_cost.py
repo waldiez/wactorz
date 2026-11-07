@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The per-event snapshot must not touch the database.
 
 The regression this pins: ``events.snapshot()`` is broadcast on every broker
@@ -13,7 +14,7 @@ whatever the code does.
 
 import pytest
 
-from wactorz.web import events, runtime
+from wactorz.web import cost, events, runtime
 
 
 class _CountingCursor:
@@ -45,6 +46,10 @@ class _CountingDB:
         self.queries[0] += 1
         return
 
+    def kv_values(self, *_args: object, **_kwargs: object) -> list[tuple[str, object]]:
+        self.queries[0] += 1
+        return []
+
 
 @pytest.fixture(name="db")
 def db_fixture(monkeypatch: pytest.MonkeyPatch) -> _CountingDB:
@@ -73,9 +78,14 @@ class TestHotPathDoesNoQueries:
         events.snapshot(include_totals=False)
         assert db.queries[0] == 0, "the per-event snapshot queried the database"
 
-    def test_totals_do_query(self, db: _CountingDB) -> None:
-        """The comparison that gives the previous assertion meaning."""
+    def test_totals_are_read_from_memory_too(self, db: _CountingDB) -> None:
+        # What the database holds for them is read by a refresh, on a thread.
         events.snapshot(include_totals=True)
+        assert db.queries[0] == 0
+
+    async def test_a_refresh_is_what_reads_them(self, db: _CountingDB) -> None:
+        """The comparison that gives the two assertions above meaning."""
+        await cost.refresh_totals()
         assert db.queries[0] > 0
 
     def test_cost_is_not_recomputed_per_agent(self, db: _CountingDB) -> None:

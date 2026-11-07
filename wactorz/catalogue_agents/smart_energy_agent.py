@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CATALOG AGENT — smart-energy
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 LLM-powered energy brain for smart plugs exposed through Home Assistant.

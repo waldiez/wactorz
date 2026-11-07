@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """CSP header + per-request nonce plumbing (wactorz.web.static_site)."""
 
 # pylint: disable=missing-function-docstring

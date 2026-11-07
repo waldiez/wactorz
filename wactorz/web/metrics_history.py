@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sampling every agent and node into the metrics history, about once a minute.
 
 The samples are what the dashboard knows already -- each agent's latest

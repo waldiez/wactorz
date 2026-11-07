@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A function becomes an agent with one decorator, and stays a function.
 
 `wactorz.agent` records a specification on the function and leaves it

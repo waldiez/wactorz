@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What is said at startup about a broker that is not on this machine.
 
 The risk is not "unencrypted telemetry". The remote runner **executes code

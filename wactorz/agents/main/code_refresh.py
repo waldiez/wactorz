@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Keeping the spawn registry in step with a program a node repaired.
 
 An agent whose code fails can be repaired by the LLM while it runs. On a node
@@ -148,8 +149,7 @@ class CodeRefresh:
         host = self.host
         if host is None:
             return False
-        entry = host._get_spawn_registry().get(agent_name)
-        return bool(entry) and (entry.get("node") or "") == node
+        return host._get_spawn_registry().at(agent_name, node) is not None
 
     # ── Answering ─────────────────────────────────────────────────────────
 
@@ -213,7 +213,7 @@ class CodeRefresh:
         if not isinstance(code, str) or not code.strip():
             return
 
-        entry = dict(host._get_spawn_registry().get(asked["agent"]) or {})
+        entry = host._get_spawn_registry().at(asked["agent"], asked["node"]) or {}
         if not entry or entry.get("code") == code:
             return
         entry["code"] = code

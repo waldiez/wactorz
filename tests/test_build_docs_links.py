@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Links between docs pages point at what the site serves.
 
 The sources link to each other as `name.md`, which is right on GitHub, where

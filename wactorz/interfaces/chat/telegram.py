@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Telegram bot interface."""
 
 import asyncio
@@ -144,9 +145,9 @@ class TelegramInterface:
 
     async def run(self) -> None:
         try:
-            from telegram import Update
-            from telegram.constants import ChatAction
-            from telegram.ext import (
+            from telegram import Update  # optional dependency: the `telegram` extra
+            from telegram.constants import ChatAction  # optional dependency: the `telegram` extra
+            from telegram.ext import (  # optional dependency: the `telegram` extra
                 Application,
                 CallbackQueryHandler,
                 CommandHandler,

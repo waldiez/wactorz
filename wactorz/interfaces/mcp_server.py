@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """MCP Server - Exposes wactorz capabilities as Model Context Protocol tools.
 
 Any MCP-compatible client (Claude Desktop, Cursor, Zed, etc.) can connect

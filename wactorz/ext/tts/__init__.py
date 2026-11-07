@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """TTS extension — server-side text-to-speech via edge-tts.
 
 Optional dependency: ``pip install wactorz[tts]`` (installs edge-tts).
@@ -6,6 +7,7 @@ and ``public_config()`` reports ``available: false`` so the frontend falls
 back to browser Web Speech API.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -14,6 +16,11 @@ from typing import Any
 from aiohttp import web
 
 logger = logging.getLogger(__name__)
+
+#: Seconds the voice list may take. It is read while the server starts, so a
+#: service that never answers would hold the dashboard back with it; generous,
+#: because a slow answer is still a good one.
+VOICE_LIST_TIMEOUT_S = 30.0
 
 
 class TTSState:  # pylint: disable=too-few-public-methods
@@ -76,7 +83,7 @@ async def _warm_tts_voices(_app: web.Application | None = None) -> None:
     if not _tts_state.available:
         return
     try:
-        voices = await edge_tts.list_voices()
+        voices = await asyncio.wait_for(edge_tts.list_voices(), VOICE_LIST_TIMEOUT_S)
         _tts_state.voices = [
             {"name": v["ShortName"], "locale": v["Locale"], "gender": v["Gender"]}
             for v in sorted(voices, key=lambda v: v["ShortName"])

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """API-key enforcement for the monitor, and the rule that refuses to start.
 
 The monitor serves the dashboard, the whole API and the log endpoint, and until
@@ -20,6 +21,7 @@ dashboard use.
 
 import hmac
 import logging
+import math
 from typing import Any, NoReturn
 from urllib.parse import quote
 
@@ -27,7 +29,7 @@ from aiohttp import web
 
 from ..config import _env_truthy
 from ..core.net import is_loopback
-from . import origins, probes, sessions
+from . import origins, probes, sessions, throttle
 
 logger = logging.getLogger(__name__)
 
@@ -68,27 +70,46 @@ def _presented_key(request: web.Request) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
-def is_authorized(request: web.Request, api_key: str) -> bool:
-    """Whether `request` may proceed.
+def key_matches(presented: str, api_key: str) -> bool:
+    """Whether `presented` is the key, compared in constant time.
+
+    On bytes, because `compare_digest` raises on a string that is not ASCII, and
+    a header or a form field holds whatever the caller put there.
+    """
+    return hmac.compare_digest(
+        presented.encode("utf-8", "surrogateescape"),
+        api_key.encode("utf-8", "surrogateescape"),
+    )
+
+
+def needs_no_key(request: web.Request, api_key: str) -> bool:
+    """Whether `request` is let in without presenting the key.
 
     Open when no key is configured — that is the default install, protected by
-    the loopback bind rather than by a credential. `Authorization: Bearer` is
-    accepted alongside `X-API-Key` so scrapers that only speak standard auth
-    headers, Prometheus among them, can reach a guarded endpoint.
+    the loopback bind rather than by a credential.
     """
-    if not api_key:
-        return True
-    if origins.from_supervisor(request):
-        # Home Assistant authenticated the user before proxying, and the panel
-        # has no way to attach a header. Peer-verified (C-10), so this is not a
-        # header anyone on the network can claim.
-        return True
-    if sessions.store.is_valid(request.cookies.get(SESSION_COOKIE, "")):
-        # A browser that logged in. The cookie holds a session id, never the
-        # key, so this path can be revoked without touching the credential
-        # every script and probe uses.
-        return True
-    return hmac.compare_digest(_presented_key(request), api_key)
+    # Home Assistant authenticated the user before proxying, and the panel has no
+    # way to attach a header. Peer-verified (C-10), so this is not a header anyone
+    # on the network can claim. A browser that logged in holds a session id, never
+    # the key, so that path can be revoked without touching the credential every
+    # script and probe uses.
+    return (
+        not api_key
+        or origins.from_supervisor(request)
+        or sessions.store.is_valid(request.cookies.get(SESSION_COOKIE, ""))
+    )
+
+
+def is_authorized(request: web.Request, api_key: str) -> bool:
+    """Whether `request` may proceed, with no attempt counted.
+
+    `Authorization: Bearer` is accepted alongside `X-API-Key` so scrapers that
+    only speak standard auth headers, Prometheus among them, can reach a guarded
+    endpoint. Anything reachable without a key must not call this with a caller's
+    header in hand: it would answer a guess uncounted. `auth_middleware` is the
+    throttled path.
+    """
+    return needs_no_key(request, api_key) or key_matches(_presented_key(request), api_key)
 
 
 def wants_html(request: web.Request) -> bool:
@@ -139,13 +160,44 @@ def login_redirect(request: web.Request) -> NoReturn:
     raise web.HTTPFound(f"/login?next={quote(target, safe='')}")
 
 
+def _too_many_attempts(waiting: float) -> web.Response:
+    """The answer to a caller that must wait, saying for how long."""
+    return web.json_response(
+        {"error": "Too many failed attempts"},
+        status=429,
+        headers={"Retry-After": str(math.ceil(waiting))},
+    )
+
+
 @web.middleware
 async def auth_middleware(request: web.Request, handler: Any) -> web.StreamResponse:
-    """Refuse anything unauthenticated once a key is set."""
+    """Refuse anything unauthenticated once a key is set.
+
+    A key in a header spends the same allowance per address as the sign-in form,
+    since either answers whether a guess was right. Only a request that presents
+    a key is counted: a browser whose session ended arrives with none, and has to
+    reach the form. A session or Home Assistant's ingress passes before this, so a
+    script with a stale key beside a signed-in browser does not lock the browser out.
+    """
     from ..config import CONFIG  # read per request so a test can swap it
 
-    if request.path in UNGUARDED_PATHS or is_authorized(request, CONFIG.api_key):
+    if request.path in UNGUARDED_PATHS or needs_no_key(request, CONFIG.api_key):
         return await handler(request)
+    presented = _presented_key(request)
+    if presented:
+        caller = origins.client_address(request) or throttle.UNKNOWN_ADDRESS
+        waiting = throttle.throttle.retry_after(caller)
+        if waiting > 0:
+            # Refused before the comparison, as on the form, so a locked-out
+            # caller learns nothing about the key, whether it is right or wrong.
+            logger.debug("[auth] request refused, %s must wait %.0fs", caller, waiting)
+            return _too_many_attempts(waiting)
+        if key_matches(presented, CONFIG.api_key):
+            throttle.throttle.record_success(caller)
+            return await handler(request)
+        throttle.throttle.prune()
+        throttle.throttle.record_failure(caller)
+        logger.warning("[auth] wrong key from %s", caller)
     if wants_html(request):
         login_redirect(request)
     return web.json_response({"error": "Unauthorized"}, status=401)
@@ -163,16 +215,16 @@ def weak_key_warning(api_key: str) -> str | None:
     """What to say at startup about a key short enough to guess, or None.
 
     Says what protects them in the meantime rather than only what is wrong:
-    sign-in attempts back off and then lock out, so a short key is slow to
-    attack rather than open. The header path has no such limit, which is the
-    reason to fix it rather than rely on the throttle.
+    wrong keys back off and then lock out, so a short key is slow to attack
+    rather than open. The limit is per address, so many addresses get as many
+    tries, which is the reason to fix it rather than rely on the throttle.
     """
     if not api_key or len(api_key) >= MIN_KEY_LENGTH:
         return None
     return (
         f"API_KEY is {len(api_key)} characters, under the {MIN_KEY_LENGTH} this expects. "
-        "Sign-in attempts are throttled, so guessing it through the form is slow — but "
-        "requests carrying the key as a header are not, so a short one is worth replacing. "
+        "Wrong keys are throttled, so guessing it from one address is slow — but the "
+        "limit is per address, so a short one is worth replacing. "
         "Something like `openssl rand -hex 32` gives a key nobody has to remember."
     )
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning up one logger's level from the dashboard, and what that must refuse.
 
 Three rules, each because the obvious version is worse: never the root logger

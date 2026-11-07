@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The caller must not outwait the planner it is waiting on.
 
 A planner self-terminates at its lifetime cap and does not answer on the way

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a node is: the machine it runs on, described once and published retained.
 
 The heartbeat says how the machine is doing; this says what it is -- the

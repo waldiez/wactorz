@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Subscriptions, rolling windows, and the contracts an agent declares."""
 
 import asyncio
@@ -7,7 +8,9 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...core import topic_bus
 from ...core.mqtt import mqtt_client
+from ...core.topic_bus import StreamWindow, TopicContract
 
 if TYPE_CHECKING:
     pass
@@ -80,12 +83,10 @@ def _register_with_topic_bus(api: Any, actor: Any, topic: str) -> None:
     delivery.
     """
     try:
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return
-        existing = bus.registry.get(api.name)
+        existing = bus.registry.get(api.name, api.actor_id, getattr(actor, "_node", None))
         if existing is None:
             bus.register_contract(
                 TopicContract(
@@ -239,7 +240,9 @@ class StreamsMixin(_Host):
             logger.debug("[%s] mqtt_get(%s) timed out after %ss", self.name, topic, timeout)
         return result[0] if result else None
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> Any:
+    def window(
+        self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
+    ) -> Any:
         """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
@@ -263,8 +266,6 @@ class StreamsMixin(_Host):
                 if w.absent_for(60):
                     await agent.alert('Sensor stopped publishing!')
         """
-        from ...core.topic_bus import StreamWindow, get_topic_bus
-
         # One window per topic per agent. Generated code calls this from a
         # process loop as readily as from setup, and a fresh window each tick
         # opens a broker connection each tick and reads an empty buffer every
@@ -275,11 +276,13 @@ class StreamsMixin(_Host):
 
         w = None
         try:
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
-                w = bus.make_window(topic, seconds=seconds, max_size=max_size)
+                w = bus.make_window(
+                    topic, seconds=seconds, max_size=max_size, event_time=event_time
+                )
             else:
-                w = StreamWindow(topic, seconds=seconds, max_size=max_size)
+                w = StreamWindow(topic, seconds=seconds, max_size=max_size, event_time=event_time)
                 w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
         except Exception:
             logger.exception("[%s] agent.window() failed - using a local window", self.name)
@@ -363,8 +366,6 @@ class StreamsMixin(_Host):
         if isinstance(subscribes, str):
             subscribes = [subscribes]
 
-        from ...core.topic_bus import TopicContract, get_topic_bus
-
         # Each call adds to what is already known rather than replacing it, from
         # two sources: what the spawn config declared before any code ran, and
         # what an earlier call declared. Replacing lost both — an agent spawned
@@ -389,7 +390,7 @@ class StreamsMixin(_Host):
             actor_id=self.actor_id,
             node=getattr(self._actor, "_node", None),
         )
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if bus:
             bus.register_contract(contract)
         # Also include in manifest so remote agents and planner can see it
@@ -406,9 +407,7 @@ class StreamsMixin(_Host):
             for o in opps:
                 print(f"Can receive data from {o['producer']} via {o['topic']}")
         """
-        from ...core.topic_bus import get_topic_bus
-
-        bus = get_topic_bus()
+        bus = topic_bus.get_topic_bus()
         if not bus:
             return []
         pairs = bus.registry.find_wiring_opportunities()

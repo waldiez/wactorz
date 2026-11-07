@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What each planner mixin requires of the actor that mixes it in.
 
 Typing-only, in the spirit of `mixins/host.py`: nothing here runs and nothing is

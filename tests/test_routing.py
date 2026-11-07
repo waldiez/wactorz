@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ``wactorz.agents.main.routing.RoutingMixin``.
 
 Exercises intent classification and the one-off actuation path against a fake

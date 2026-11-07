@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Waiting on conditions, which is the only kind of waiting this suite has.
 
 Three shapes, and the difference between them is the assertion they support:
@@ -16,8 +17,6 @@ crashing agent forever satisfies only the first.
 Every wait carries `what` - a phrase completing "timed out waiting for ...". A
 timeout with no subject is a failure that costs someone half an hour to place.
 """
-
-from __future__ import annotations
 
 import time
 from collections.abc import Callable

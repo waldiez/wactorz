@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared mutable state for the monitor server.
 
 Single home for the state every monitor module needs: the actor registry and

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """DEMO AGENT — doc-to-pptx-agent  (v2 — PDF image extraction + NIM fallback)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Converts a PDF or TXT document into a polished PowerPoint presentation.
@@ -511,7 +512,7 @@ def _text(
     ``font``, ``align`` (``"left"`` or ``"center"``), ``tight`` (no inner
     margin) and ``space_after`` (points after each paragraph).
     """
-    from pptx.enum.text import (
+    from pptx.enum.text import (  # optional dependency: installed with the recipe
         MSO_ANCHOR,
         PP_ALIGN,
     )  # optional dependency: installed with the recipe

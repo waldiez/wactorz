@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Stopping a task that may not notice it was asked to."""
 
 import asyncio

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One way to ask an agent and wait: ``Actor.ask`` from an agent, ``wactorz.ask``
 from host code.
 
@@ -6,8 +7,6 @@ on the RESULT that echoes the id. What a caller sees is the answer: the
 plumbing is stripped, an error reply is raised, an unknown agent and a silent
 one are errors too, and nothing is left waiting afterwards whatever happened.
 """
-
-from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Which callers a browser may act on this server's behalf for.
 
 Two separate questions, both answered here because they fail together:

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Noticing when the event loop stops running, and saying where it is.
 
 Every actor in a process shares one event loop. Code that blocks it -- a

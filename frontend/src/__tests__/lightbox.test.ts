@@ -1,9 +1,8 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
- * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { openLightbox } from "../ui/dashboard/lightbox";
+import { openLightbox } from "../ui/shell/lightbox";
 
 describe("openLightbox", () => {
     beforeEach(() => {

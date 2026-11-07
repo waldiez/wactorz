@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Dependabot proposes updates to `dev`, never to `main`.
 
 `main` takes only releases, and every change reaches it through `dev`. An entry

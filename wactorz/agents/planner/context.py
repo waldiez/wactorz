@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Turning a vague request into concrete topics and entities.
 
 A task names things the way a person would - "the door", "temperature". The
@@ -12,6 +13,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from ...config import CONFIG
+from ...core import topic_bus
 from ...core.actor import ask_through
 from ...core.mqtt import mqtt_client
 from ..lookup import find_main_actor
@@ -100,9 +102,7 @@ class ContextMixin(_Host):
 
         # ── Search TopicRegistry first ─────────────────────────────────────
         try:
-            from ...core.topic_bus import get_topic_bus
-
-            bus = get_topic_bus()
+            bus = topic_bus.get_topic_bus()
             if bus:
                 resolved = describe_topic_source(task, topic_candidates(bus, matched_concepts))
                 if resolved:

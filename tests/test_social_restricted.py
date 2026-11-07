@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Security tests for ``MainActor.process_user_input_restricted`` — the entry
 point social channels (Discord/Telegram) use.
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """One value that no longer unpickles costs its own key, not the state beside it.
 
 A model object pickled under one version of a library may not load under the

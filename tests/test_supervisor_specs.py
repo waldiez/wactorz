@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Supervisor entries follow the actors they describe: re-armed, freed, read safely.
 
 An entry retired by ``release()`` -- an agent stopped, replaced with new code,

@@ -40,16 +40,25 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.artifacts import ArtifactStore
+from wactorz.core.registry import ActorRegistry, Supervisor
 
 #: The id an agent on main and its registry entry share.
 ACTOR_ID = "9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
 
 
 class _Supervisor:
-    """Records the entries it is told to forget."""
+    """Records the entries it is told to release, link again and forget."""
 
     def __init__(self) -> None:
+        self.released: list[str] = []
+        self.resupervised: list[str] = []
         self.dropped: list[str] = []
+
+    def release(self, name: str) -> None:
+        self.released.append(name)
+
+    def resupervise(self, name: str, _actor: Any) -> None:
+        self.resupervised.append(name)
 
     def drop_supervised(self, name: str) -> None:
         self.dropped.append(name)
@@ -69,6 +78,9 @@ class _Registry:
         for name, agent in list(self._by.items()):
             if agent.actor_id == actor_id:
                 del self._by[name]
+
+    async def register(self, agent: "_LocalAgent") -> None:
+        self._by[agent.name] = agent
 
 
 class _Persistence:
@@ -860,21 +872,87 @@ class TestTheCornersOfAMoveOut:
         sent, _node, _save = main.spawned_remote[0]
         assert "publishes" not in sent
 
-    async def test_a_stop_that_fails_is_logged_and_the_move_records_no_stopped_agent(
+    async def test_a_stop_that_fails_stops_the_move_and_puts_the_agent_back(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         main = self._main()
+        supervisor = _Supervisor()
+        main.registry._supervisor_ref = supervisor
+        agent = main.local()
 
         async def _refuse() -> None:
             raise RuntimeError("will not stop")
 
-        monkeypatch.setattr(main.local(), "stop", _refuse)
+        monkeypatch.setattr(agent, "stop", _refuse)
+
+        result = await main.migrate("collector", "rpi")
+
+        assert result == {
+            "success": False,
+            "message": "Cannot migrate 'collector': it could not be stopped here "
+            "(will not stop). It stays on 'local'.",
+        }
+        assert "Could not stop local 'collector': will not stop" in caplog.text
+        # Sent on, it would leave a copy here that nothing knows of.
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns
+        # Back as it was: registered, and supervised again.
+        assert main.registry.find_by_name("collector") is agent
+        assert supervisor.released == ["collector"]
+        assert supervisor.resupervised == ["collector"]
+        assert supervisor.dropped == []
+
+    async def test_after_a_failed_stop_the_agent_can_be_moved_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = self._main()
+        agent = main.local()
+
+        async def _refuse() -> None:
+            raise RuntimeError("will not stop")
+
+        monkeypatch.setattr(agent, "stop", _refuse)
+        await main.migrate("collector", "rpi")
+        monkeypatch.undo()
+
+        result = await main.migrate("collector", "rpi")
+
+        assert result["success"] is True
+        assert agent.stopped
+
+    async def test_a_real_supervisor_takes_the_agent_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The fakes record calls; this is the real spec going from released for
+        # the stop to supervised again once it failed.
+        main = self._main()
+        agent = main.local()
+        supervisor = Supervisor(ActorRegistry(), inject_fn=lambda _actor: None)
+        supervisor.supervise("collector", lambda: agent)  # pyright: ignore[reportArgumentType]
+        spec = supervisor._specs["collector"]
+        spec.actor = agent  # pyright: ignore[reportAttributeAccessIssue]
+        main.registry._supervisor_ref = supervisor  # pyright: ignore[reportAttributeAccessIssue]
+
+        async def _refuse() -> None:
+            raise RuntimeError("will not stop")
+
+        monkeypatch.setattr(agent, "stop", _refuse)
 
         await main.migrate("collector", "rpi")
 
-        assert "Could not stop local 'collector': will not stop" in caplog.text
-        (pending,) = main.actor.migration.pending_spawns.values()
-        assert pending["local_actor"] is None
+        assert spec.retired is False
+        assert spec.actor is agent
+
+    async def test_a_stop_that_succeeds_forgets_the_supervision_entry(self) -> None:
+        main = self._main()
+        supervisor = _Supervisor()
+        main.registry._supervisor_ref = supervisor
+
+        await main.migrate("collector", "rpi")
+
+        assert supervisor.released == ["collector"]
+        assert supervisor.dropped == ["collector"]
+        assert supervisor.resupervised == []
 
 
 class TestTheStateThatGoesOut:

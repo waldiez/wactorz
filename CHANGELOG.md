@@ -471,6 +471,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A migration whose local stop fails stops there.** Moving an agent from main to a node went ahead when the agent
+  could not be stopped, leaving it running on main, unregistered, beside the copy started on the node. Now the move is
+  refused with the reason, and the agent is registered and supervised again on main.
 - **A slash command the server answers itself ends its turn.** An unknown command, and `/agents`, `/nodes` and
   `/clear-plans` where this server answers them, replied without closing the turn's stream, so a note about attachments
   not sent stayed open in the chat.

@@ -1407,7 +1407,15 @@ class Migration:
             return _refused(f"Cannot migrate '{agent_name}': {refusal} It stays on 'local'.")
 
         live_contract = _live_contract(host, agent_name)
-        stopped = await _stop_local(host, agent_name, local)
+        stopped = None
+        if host._registry and local:
+            failed = await _stop_local(host, agent_name, local)
+            if failed:
+                return _refused(
+                    f"Cannot migrate '{agent_name}': it could not be stopped here ({failed}). "
+                    "It stays on 'local'."
+                )
+            stopped = local
 
         # Taken after the stop: `on_stop` and the save that follows it are the
         # agent's last writes, and a snapshot taken before them would leave
@@ -1782,34 +1790,54 @@ def _live_contract(host: MigrationHost, agent_name: str) -> dict[str, Any]:
     return live_contract
 
 
-async def _stop_local(host: MigrationHost, agent_name: str, local: Any) -> Any | None:
-    """Stop the agent running here and keep everything it persisted; the stopped agent, or None.
+async def _stop_local(host: MigrationHost, agent_name: str, local: Any) -> str | None:
+    """Stop the agent running here and keep everything it persisted; why it could not be, or None.
 
     The snapshot taken after this is the copy being shipped out; what the
     agent persisted is what the migration comes back to if the target never
     confirms. Purging it here would put the agent nowhere the moment a spawn
     failed on the node -- the same window the other legs close by deleting
     only on the ack -- so it is purged there instead, in `_purge_local_source`.
+
+    A stop that fails puts the agent back as it was, registered and
+    supervised, so the move can stop there: sent on, it would leave a copy
+    running here that nothing knows of beside the one started on the target.
     """
-    stopped: Any | None = None
-    if not (host._registry and local):
-        return stopped
+    registry = host._registry
+    # Released while it stops, so the watchdog does not read the stop as a
+    # crash; the spec is kept until the stop has succeeded, which is what lets
+    # a failed one be undone.
+    supervisor = getattr(registry, "_supervisor_ref", None)
+    if supervisor is not None:
+        supervisor.release(agent_name)
     try:
-        # Forgotten by the supervisor first, as main's delete does: an entry
-        # left holding the stopped instance would stop it again at shutdown,
-        # running its on_stop and saves twice. A rollback spawns it afresh,
-        # which gives it a new entry.
-        supervisor = getattr(host._registry, "_supervisor_ref", None)
-        if supervisor is not None:
-            supervisor.drop_supervised(agent_name)
-        await host._registry.unregister(local.actor_id)
+        await registry.unregister(local.actor_id)
         await local.stop()
-        host._agent_manifests.pop(agent_name, None)
-        stopped = local
-        await asyncio.sleep(0.3)
-    except Exception as e:
-        logger.warning("[%s] Could not stop local %r: %s", host.name, agent_name, e)
-    return stopped
+    except Exception as exc:
+        logger.warning("[%s] Could not stop local %r: %s", host.name, agent_name, exc)
+        await _put_back(registry, supervisor, agent_name, local)
+        return str(exc) or type(exc).__name__
+    if supervisor is not None:
+        # Forgotten now, as main's delete does: a rollback spawns the agent
+        # afresh, which gives it a new entry.
+        supervisor.drop_supervised(agent_name)
+    host._agent_manifests.pop(agent_name, None)
+    await asyncio.sleep(0.3)
+    return None
+
+
+async def _put_back(registry: Any, supervisor: Any, agent_name: str, local: Any) -> None:
+    """Register ``local`` again and link it back to its supervisor, after a stop that failed.
+
+    Supervised again, a half-stopped agent is one the supervisor restarts from
+    its factory, and one the stop never reached goes on as it was.
+    """
+    try:
+        await registry.register(local)
+        if supervisor is not None:
+            supervisor.resupervise(agent_name, local)
+    except Exception:
+        logger.exception("[migration] Could not put %r back after its stop failed", agent_name)
 
 
 def _outgoing_config(

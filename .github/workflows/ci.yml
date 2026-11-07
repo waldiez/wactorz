@@ -162,6 +162,12 @@ jobs:
       - name: Lint
         run: make lint-py
 
+      # How complete the package's public types are, scored on an install of it
+      # rather than the checkout: readiness until it ships py.typed. The floor
+      # only rises.
+      - name: Public type completeness
+        run: make verifytypes
+
       # Every source file and the committed static/app open with the license
       # line. Reads files only: no frontend toolchain needed.
       - name: License lines

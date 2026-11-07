@@ -1,5 +1,5 @@
 .PHONY: help lint-licenses fmt-licenses dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		typecheck typecheck-py typecheck-frontend fmt fmt-py fmt-frontend lint lint-py lint-frontend lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
+		typecheck typecheck-py typecheck-frontend verifytypes fmt fmt-py fmt-frontend lint lint-py lint-frontend lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
         up down logs shell mqtt-certs \
         run test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
         e2e e2e-setup e2e-clean \
@@ -137,6 +137,14 @@ typecheck: typecheck-py typecheck-frontend ## Type-check everything (Python + fr
 
 typecheck-py: ## Type-check Python (basedpyright)
 	$(PYTHON) -m basedpyright
+
+# The least type completeness the package may have, as `make verifytypes` scores it: of
+# readiness until the package ships py.typed, of what users receive once it does.
+# A ratchet: raised as the score rises, never lowered to pass a branch.
+VERIFYTYPES_FLOOR := 86.36
+
+verifytypes: ## Score the package's public types from an install of it; readiness until py.typed ships (fails below the floor)
+	$(PYTHON) scripts/verify_types.py --floor $(VERIFYTYPES_FLOOR)
 
 typecheck-frontend: ## Type-check the frontend (fast)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run typecheck

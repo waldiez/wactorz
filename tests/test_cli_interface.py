@@ -41,9 +41,12 @@ class _Registry:
 
 
 class _StreamingAgent:
-    """An agent with `chat_stream`, which the CLI streams rather than awaits."""
+    """An agent with `chat_stream`, which the CLI streams rather than awaits.
 
-    def __init__(self, chunks: list[str]) -> None:
+    Its chunks are words, and may be dicts, which a stream carries beside them.
+    """
+
+    def __init__(self, chunks: list[Any]) -> None:
         self.chunks = chunks
 
     async def chat_stream(self, _message: str) -> Any:
@@ -561,6 +564,89 @@ class TestPlainText:
         assert "done" in out
         assert "spawned @weather" in out
         assert "system_msg" not in out
+
+
+class _MainWithoutExtras(_MainActor):
+    """A main with no node tracking, no moves and no installer: what `hasattr` finds missing."""
+
+    @property
+    def list_nodes(self) -> Any:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise AttributeError
+
+    @property
+    def migrate_agent(self) -> Any:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise AttributeError
+
+    @property
+    def delegate_to_installer(self) -> Any:  # pyright: ignore[reportIncompatibleMethodOverride]
+        raise AttributeError
+
+
+class TestAMainWithoutExtras:
+    async def test_nodes_lists_only_this_process(
+        self, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        actor = _MainWithoutExtras()
+        actor.agents = [{"state": "running", "name": "main", "actor_id": "abcdef12"}]
+
+        out = await drive(_cli(actor), ["/nodes"], capsys)
+
+        assert "@main" in out
+        assert "no remote nodes" in out
+
+    async def test_migrate_says_it_cannot(
+        self, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = await drive(_cli(_MainWithoutExtras()), ["/migrate counter rpi"], capsys)
+
+        assert "[error] migrate_agent not available" in out
+
+    async def test_deploy_pkg_says_there_is_no_installer(
+        self, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = await drive(_cli(_MainWithoutExtras()), ["/deploy-pkg rpi numpy"], capsys)
+
+        assert "[error] installer not available" in out
+
+
+class TestWhatAnAgentSaysBesideItsAnswer:
+    async def test_a_failed_install_says_why(
+        self,
+        actor: _MainActor,
+        drive: Any,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            cli_module, "deploy_target", lambda _n: SimpleNamespace(name="rpi", host="10.0.0.5")
+        )
+        actor.installer_result = {"success": False, "error": "no route to host"}
+
+        out = await drive(_cli(actor), ["/deploy-pkg rpi numpy"], capsys)
+
+        assert "[FAIL] no route to host" in out
+
+    async def test_main_addressed_by_name_says_its_note_after_the_answer(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        actor._registry = _Registry({"main": actor})
+        actor.stream_chunks = ["hel", {"system_msg": "noted"}, "lo"]
+
+        out = await drive(_cli(actor), ["@main hi"], capsys)
+
+        assert "@main: hello\n[System: noted]" in out
+
+    async def test_a_streaming_agent_s_progress_is_not_printed(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        actor._registry = _Registry(
+            {"chatty": _StreamingAgent(["one ", {"type": "progress"}, "two"])}
+        )
+
+        out = await drive(_cli(actor), ["@chatty hi"], capsys)
+
+        assert "@chatty: one two" in out
+        assert "progress" not in out
 
 
 class TestReadingAPrompt:

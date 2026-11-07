@@ -112,7 +112,7 @@ class GeminiProvider(LLMProvider):
         from google.genai import types as genai_types  # optional dependency: the `google` extra
 
         self.model_name = model
-        self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
+        self.client: genai.Client = genai.Client(api_key=api_key) if api_key else genai.Client()
         self._types = genai_types
 
     @classmethod

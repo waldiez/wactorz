@@ -49,6 +49,12 @@ This agent never sends email; it only drafts.
 class GmailAgent(LLMAgent):
     """Gmail agent for searching, reading, labeling, and drafting mail."""
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     DESCRIPTION = (
         "Accesses Gmail: search/read mail, list labels and drafts, create drafts (never sends)"
     )

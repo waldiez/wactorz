@@ -31,6 +31,9 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 
+#: The extras installed with the package: every integration whose library's types the package exposes.
+EXTRAS = ("all", "langgraph")
+
 #: What the description of the command line is: the module docstring's first line.
 SUMMARY = "How complete the types are that wactorz offers its users, as a type checker sees them."
 
@@ -78,8 +81,12 @@ def _install(scratch: Path, uv: str) -> tuple[Path, bool]:
     _run(uv, "venv", "--quiet", "--python", sys.executable, str(venv))
     python = venv / ("Scripts" if sys.platform == "win32" else "bin") / "python"
     requirements = scratch / "requirements.txt"
+    # With the extras a user installs for the integrations: without them, the
+    # types the package takes from those libraries read as unknown here though
+    # a user who has them installed sees them.
     _run(
         uv, "export", "--frozen", "--no-dev", "--no-emit-project", "--no-hashes",
+        *(f"--extra={extra}" for extra in EXTRAS),
         "--output-file", str(requirements), cwd=REPO,
     )  # fmt: skip
     _run(uv, "pip", "install", "--quiet", "--python", str(python), "-r", str(requirements))

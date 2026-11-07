@@ -36,6 +36,12 @@ else:
 class MemoryMixin(_Host):
     """User facts + live system-prompt assembly. Mix into an LLMAgent host."""
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     #: The integrations the system prompt and fact extraction speak of. Every
     #: one unless the host says otherwise.
     _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS

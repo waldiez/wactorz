@@ -120,6 +120,12 @@ class NotAnObjectError(TypeError):
 class HomeAssistantAgent(LLMAgent):
     """Unified Home Assistant agent: hardware recommendations, automation CRUD, and entity history."""
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     DESCRIPTION = (
         "Controls Home Assistant: automations, devices, areas, entities, and entity history. "
         "Supports natural language queries (current state, camera snapshots, historical data) "

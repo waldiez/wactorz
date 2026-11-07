@@ -44,6 +44,12 @@ Use the live date/time context from the system prompt to resolve relative dates.
 class GoogleCalendarAgent(LLMAgent):
     """Google Calendar agent for listing, creating, and deleting events."""
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     DESCRIPTION = (
         "Accesses Google Calendar events: list today/upcoming events, create events, delete events"
     )

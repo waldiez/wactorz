@@ -41,6 +41,12 @@ class RoutingMixin(_Host):
     checked that the list was true.
     """
 
+    #: What this agent's model requests have taken, kept by the base class's
+    #: accounting and added to here.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
+
     #: The integrations whose intents this router offers and accepts. Every one
     #: unless the host says otherwise, so a host built without a say in the
     #: matter routes as a fully configured installation does.

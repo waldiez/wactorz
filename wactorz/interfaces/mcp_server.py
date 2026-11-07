@@ -77,7 +77,7 @@ CALENDAR_MCP_TOKEN_FILE = os.getenv("CALENDAR_MCP_TOKEN_FILE") or str(
     Path.home() / ".wactorz" / "calendar_mcp_token.json"
 )
 
-mcp = FastMCP("wactorz")
+mcp: "FastMCP[Any]" = FastMCP("wactorz")
 
 
 def _wactorz_headers() -> dict[str, str]:

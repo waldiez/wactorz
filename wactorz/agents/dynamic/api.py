@@ -146,8 +146,8 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
     def __init__(self, actor: DynamicAgent) -> None:
         self._actor = actor
-        self.name = actor.name
-        self.actor_id = actor.actor_id
+        self.name: str = actor.name
+        self.actor_id: str = actor.actor_id
         # Shared mutable namespace — generated code can store anything here
         self.state: dict[str, Any] = {}
         # LLM interface — available if llm_provider was passed at spawn time

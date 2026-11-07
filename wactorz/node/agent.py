@@ -71,7 +71,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
         )
         #: What the spawn said this agent does, so the planner sees it before
         #: the agent's own code has declared or published anything.
-        self.capabilities = list(config.get("capabilities") or [])
+        self.capabilities: list[str] = list(config.get("capabilities") or [])
         self._spawn_contract = TopicContract.from_spawn_config({**config, "node": runner.node_name})
         #: What this agent's model requests took, there through main and back,
         #: and how many main never answered in time. Reported in the metrics

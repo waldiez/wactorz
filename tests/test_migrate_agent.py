@@ -23,6 +23,7 @@ import json
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -30,6 +31,7 @@ import pytest
 from wactorz import plugins
 from wactorz.agents.function_agent import agent as declare_agent
 from wactorz.agents.main import artifact_service as service_module
+from wactorz.agents.main import migration as migration_module
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.artifact_service import ArtifactService
 from wactorz.agents.main.manifests import ManifestRegistry
@@ -774,6 +776,105 @@ class TestGoingOut:
         assert "_initial_state" not in restored
         assert "node" not in restored
         assert restored["replace"] is True
+
+
+class TestTheCornersOfAMoveOut:
+    """What a move from main does when what it reads is missing, empty or fails."""
+
+    @staticmethod
+    def _main(**nodes: dict[str, Any]) -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code()},
+            nodes=nodes or {"rpi": online()},
+            local=("collector",),
+        )
+
+    async def test_without_a_host_nothing_is_answered(self) -> None:
+        assert await Migration(None, None).migrate_agent("collector", "rpi") == {}
+
+    async def test_a_target_already_running_one_of_the_name_is_refused(self) -> None:
+        main = self._main(rpi=online(("collector",)))
+
+        result = await main.migrate("collector", "rpi")
+
+        assert result["success"] is False
+        assert "collector@rpi already runs." in result["message"]
+        assert not main.local().stopped
+
+    async def test_an_agent_neither_running_here_nor_with_code_is_refused(self) -> None:
+        main = _Main(manifests={"collector": {"node": ""}}, nodes={"rpi": online()})
+
+        result = await main.migrate("collector", "rpi")
+
+        assert result == {
+            "success": False,
+            "message": "Agent 'collector' not running locally and no config in registry "
+            "— cannot migrate.",
+        }
+
+    async def test_one_with_code_that_is_not_running_is_sent_with_nothing_to_stop(self) -> None:
+        main = _Main(spawn_registry={"collector": with_code()}, nodes={"rpi": online()})
+
+        result = await main.migrate("collector", "rpi")
+
+        assert result["success"] is True
+        (pending,) = main.actor.migration.pending_spawns.values()
+        assert pending["local_actor"] is None
+
+    async def test_the_live_topic_contract_goes_with_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        contract = SimpleNamespace(
+            publishes=["sensors/collector/out"],
+            subscribes=["sensors/in"],
+            triggers_when={},
+            produces_schema={"v": "int"},
+            consumes_schema=None,
+            observed_samples={"sensors/collector/out": {"v": 1}},
+        )
+        bus = SimpleNamespace(registry=SimpleNamespace(at=lambda _name, _node: contract))
+        monkeypatch.setattr(migration_module.topic_bus, "get_topic_bus", lambda: bus)
+        main = self._main()
+
+        await main.migrate("collector", "rpi")
+
+        sent, _node, _save = main.spawned_remote[0]
+        assert sent["publishes"] == ["sensors/collector/out"]
+        assert sent["observed_samples"] == {"sensors/collector/out": {"v": 1}}
+        # An empty field overwrites nothing.
+        assert "triggers_when" not in sent
+        assert "consumes_schema" not in sent
+
+    async def test_a_bus_that_cannot_be_read_sends_the_registered_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _unreadable() -> Any:
+            raise RuntimeError("no bus")
+
+        monkeypatch.setattr(migration_module.topic_bus, "get_topic_bus", _unreadable)
+        main = self._main()
+
+        result = await main.migrate("collector", "rpi")
+
+        assert result["success"] is True
+        sent, _node, _save = main.spawned_remote[0]
+        assert "publishes" not in sent
+
+    async def test_a_stop_that_fails_is_logged_and_the_move_records_no_stopped_agent(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        main = self._main()
+
+        async def _refuse() -> None:
+            raise RuntimeError("will not stop")
+
+        monkeypatch.setattr(main.local(), "stop", _refuse)
+
+        await main.migrate("collector", "rpi")
+
+        assert "Could not stop local 'collector': will not stop" in caplog.text
+        (pending,) = main.actor.migration.pending_spawns.values()
+        assert pending["local_actor"] is None
 
 
 class TestTheStateThatGoesOut:

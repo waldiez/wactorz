@@ -26,7 +26,7 @@ import pytest
 
 from wactorz import app as app_mod
 from wactorz.agents.dynamic.agent import DynamicAgent
-from wactorz.core import cancellation, mqtt_publisher, persistence, registry
+from wactorz.core import cancellation, mqtt_publisher, persistence
 from wactorz.core.actor import Actor, ActorState, Message
 from wactorz.core.cancellation import cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
@@ -444,7 +444,7 @@ async def test_build_system_hands_the_system_over_before_starting_it(
         raise RuntimeError("the broker is not there")
 
     monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(registry, "ActorSystem", _HalfBuilt)
+    monkeypatch.setattr(app_mod, "ActorSystem", _HalfBuilt)
     monkeypatch.setattr(MQTTPublisher, "create", refuse)
     seen: list[object] = []
     args = argparse.Namespace(

@@ -17,19 +17,20 @@ Covers:
 
 import json
 import logging
-import re
 import tempfile
 import threading
 import types
 import unittest
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from wactorz import app as app_module
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence import WactorzDB
+from wactorz.core.registry import ActorSystem
 from wactorz.reset import reset_chat
 from wactorz.web import api_reset, cost, runtime
 
@@ -848,15 +849,21 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         self.assertFalse(api_reset.survives_factory_reset("weather-agent", False))
         self.assertFalse(api_reset.survives_factory_reset("my-catalog-spawn", False))
 
-    def test_keep_set_covers_every_app_py_supervised_agent(self):
-        """Drift guard: every fresh-boot agent (app.py .supervise chain) must be
-        kept. If a new .supervise("x") is added, either mark it protected or add
-        it to HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
+    def test_keep_set_covers_every_built_in_agent(self):
+        """Drift guard: every agent a fresh boot supervises must be kept. If a new
+        built-in is added, either mark it protected or add it to
+        HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
 
-        app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
-        src_txt = app_src.read_text(encoding="utf-8", errors="ignore")
-        supervised = re.findall(r'supervise\(\s*"([^"]+)"', src_txt)
-        self.assertGreaterEqual(len(supervised), 7, "app.py supervise chain not found")
+        supervised: list[str] = []
+        system = types.SimpleNamespace(
+            supervisor=types.SimpleNamespace(
+                supervise=lambda name, *_args, **_kwargs: supervised.append(name)
+            )
+        )
+        # Every built-in on: the full profile, with Home Assistant configured.
+        with patch.object(app_module, "home_assistant_agents_enabled", return_value=True):
+            app_module._supervise_built_ins(cast(ActorSystem, system), MagicMock(), minimal=False)
+        self.assertGreaterEqual(len(supervised), 7, "the built-ins were not all supervised")
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.
         protected = {"main", "monitor", "installer", "catalog"}

@@ -166,7 +166,7 @@ lint-frontend: ## Lint the frontend (typecheck + prettier + eslint + markdownlin
 lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff families (report only)
 	$(PYTHON) -m ruff check wactorz tests scripts e2e examples
 	$(PYTHON) -m ruff format --check wactorz tests scripts e2e examples
-	@echo "── advisory (non-blocking): not-yet-gated families ──"
+	@echo "── advisory (non-blocking): complexity, C90 ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select C90 --statistics
 	@echo "── gated: basedpyright (basic) ──"
 	$(PYTHON) -m basedpyright

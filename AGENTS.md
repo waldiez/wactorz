@@ -95,7 +95,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
   - **Superlatives.** "the largest", "the only", "the last remaining" — all of them decay
     silently.
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
-  plus an advisory pass that reports but never blocks. The commit hook (prek) and CI both enforce
+  plus an advisory pass that reports but never blocks. Every function is annotated (ruff `ANN`,
+  gated): fully outside `tests/`, its return type inside it. `Any` is allowed where a value really is dynamic. The commit hook (prek) and CI both enforce
   the gated rules, so a push that skips them fails rather than merging.
 - **An exception says its own message.** Give the class a classmethod per reason
   (`ArtifactError.missing(path)`), or a class of its own with the message in `__init__`, and

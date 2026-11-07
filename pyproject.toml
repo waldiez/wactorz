@@ -335,9 +335,11 @@ select = [
     "TRY",     # tryceratops — exception style; see the note below the ignores
     "T20",     # flake8-print — output goes through logging, except where it is the product
     "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
+    "ANN",     # flake8-annotations — every function says what it takes and returns
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
+    "ANN401",  # `Any` is allowed: where a value is dynamic it is the honest annotation until it is narrowed
     "B008",    # function call in arg defaults: intentional in async handler signatures
     "B027",    # empty base-class methods are optional lifecycle hooks (on_start/on_stop)
     # docstring presence is not yet required on every public symbol
@@ -357,7 +359,8 @@ ignore = [
 # once and every place that gives it can be found by name (TRY003). A try guards
 # only the call that can fail (TRY300), never raises to its own handler (TRY301),
 # and an error logged in an except keeps its traceback (TRY400).
-# Complexity stays advisory via `make lint-py` until it is triaged and gated. Pathlib moved out once the tree
+# Complexity stays advisory via `make lint-py` until it is triaged and gated. Annotations
+# (ANN) moved in once the package reached zero; tests are exempt, below. Pathlib moved out once the tree
 # reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
@@ -376,8 +379,10 @@ ignore = [
 # a path a test asserts about rather than writes to, and `exec` is how the
 # catalogue programs get parsed. None of it reaches an installed wheel. A test
 # raises inside a `try` to produce the exception, or the rollback, it examines,
-# and a fake fails with whatever message the test then looks for.
-"tests/*" = ["B", "E402", "D", "S", "TRY003", "TRY301"]
+# and a fake fails with whatever message the test then looks for. A test says
+# what each function returns, but its parameters need no annotation: most are
+# fixtures, typed where pytest declares them, and the rest fakes taking anything.
+"tests/*" = ["B", "E402", "D", "S", "TRY003", "TRY301", "ANN001", "ANN002", "ANN003"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag, and what each

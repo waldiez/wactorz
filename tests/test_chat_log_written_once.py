@@ -105,7 +105,7 @@ class TestATurnFromAnywhereElse:
         assert all("hunter2" not in row["content"] for row in rows)
 
 
-class _Streams(LLMProvider):  # pylint: disable=abstract-method
+class _Streams(LLMProvider):
     """A provider that really streams."""
 
     async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
@@ -113,14 +113,14 @@ class _Streams(LLMProvider):  # pylint: disable=abstract-method
         yield "b"
 
 
-class _AnswersWhole(LLMProvider):  # pylint: disable=abstract-method
+class _AnswersWhole(LLMProvider):
     """A provider that only answers in one piece, so chat_stream falls back to chat()."""
 
     async def _complete(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
         return "whole", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 
-class _BreaksMidStream(LLMProvider):  # pylint: disable=abstract-method
+class _BreaksMidStream(LLMProvider):
     """Streams one chunk, then fails — an answer interrupted part-way."""
 
     async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:

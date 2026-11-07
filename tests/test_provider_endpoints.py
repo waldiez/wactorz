@@ -10,8 +10,6 @@ The SDK class is replaced with a recorder, so these run without the optional
 extras installed.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import sys
 import types
 
@@ -99,14 +97,14 @@ def test_ollama_keeps_the_base_url_it_was_given() -> None:
 # ── streaming capability detection ──────────────────────────────────────────
 
 
-class _CompleteOnly(LLMProvider):  # pylint: disable=abstract-method
+class _CompleteOnly(LLMProvider):
     """A custom provider that implements only the non-streaming path."""
 
     async def _complete(self, messages, system="", **kwargs) -> tuple[str, dict[str, Any]]:
         return "whole answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 
-class _Streaming(LLMProvider):  # pylint: disable=abstract-method
+class _Streaming(LLMProvider):
     """A custom provider that really streams."""
 
     async def _stream(self, messages, system="", **kwargs) -> "AsyncIterator[str]":

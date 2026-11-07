@@ -6,8 +6,6 @@ fake extension modules — nothing touches the real extensions, and the fakes'
 ``setup`` takes a plain recorder object, so no aiohttp is needed.
 """
 
-# pylint: disable=missing-function-docstring
-
 import sys
 from collections.abc import Callable, Generator
 from pathlib import Path

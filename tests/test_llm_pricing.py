@@ -11,8 +11,6 @@ check and the spend cap, so a shadowed model silently overstates cost by the
 ratio between the two rates.
 """
 
-# pylint: disable=missing-function-docstring
-
 import pytest
 
 from wactorz.agents.llm import pricing

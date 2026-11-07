@@ -8,9 +8,6 @@ from typing import Any
 
 from wactorz.monitoring.prometheus import PrometheusMonitor
 
-# pylint: disable=too-few-public-methods,too-many-instance-attributes
-# pylint: disable=missing-function-docstring,missing-class-docstring
-
 
 class _FakeMetrics:
     def __init__(self) -> None:

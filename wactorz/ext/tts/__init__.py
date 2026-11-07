@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 VOICE_LIST_TIMEOUT_S = 30.0
 
 
-class TTSState:  # pylint: disable=too-few-public-methods
+class TTSState:
     """TTS capability and voice cache, mutated once at startup, read-only after."""
 
     def __init__(self) -> None:
@@ -45,7 +45,7 @@ try:
     _tts_state.available = True
     try:
         _tts_state.default_voice = constants.DEFAULT_VOICE
-    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # an optional attribute of an optional dependency
+    except Exception:  # noqa: S110  # an optional attribute of an optional dependency
         pass
 except ImportError:
     pass
@@ -88,7 +88,7 @@ async def _warm_tts_voices(_app: web.Application | None = None) -> None:
             {"name": v["ShortName"], "locale": v["Locale"], "gender": v["Gender"]}
             for v in sorted(voices, key=lambda v: v["ShortName"])
         ]
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         logger.warning("[tts] Failed to load voice list")
         _tts_state.voices = []
 
@@ -152,7 +152,7 @@ async def tts_handler(request: web.Request) -> web.Response:
             content_type="audio/mpeg",
             headers={"Cache-Control": "no-store"},
         )
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         # Logged in full, answered in summary: the exception comes from a
         # third-party service and can carry a URL or a request detail.
         logger.warning("[tts] Synthesis failed: %s", exc)

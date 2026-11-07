@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """CSP header + per-request nonce plumbing (wactorz.web.static_site)."""
 
-# pylint: disable=missing-function-docstring
-
 import re
 
 from wactorz.web import static_site
@@ -19,7 +17,7 @@ def test_csp_includes_nonce_and_key_directives() -> None:
     assert "frame-ancestors 'self'" in policy
 
 
-class _Req:  # pylint: disable=too-few-public-methods
+class _Req:
     """Minimal stand-in for the aiohttp request index_handler reads."""
 
     def __init__(self, ingress: str = "") -> None:

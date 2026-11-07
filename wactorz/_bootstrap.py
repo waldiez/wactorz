@@ -10,7 +10,7 @@ WACTORZ_BOOTSTRAP = False
 
 def _bootstrap() -> None:
     """Set the Windows event-loop policy and console encoding. No-op elsewhere."""
-    global WACTORZ_BOOTSTRAP  # pylint: disable=global-statement
+    global WACTORZ_BOOTSTRAP
     if not WACTORZ_BOOTSTRAP:
         WACTORZ_BOOTSTRAP = True
         # Windows: MUST run before any async library is imported or started.

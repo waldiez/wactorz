@@ -16,8 +16,6 @@ No google-genai needed: the provider is built with ``__new__`` and handed the
 attributes its methods use, so this runs on a machine without the extra.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import asyncio
 import inspect
 import time
@@ -43,15 +41,15 @@ class _Types:
     """Stand-in for google.genai.types — every factory just echoes kwargs."""
 
     @staticmethod
-    def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
     @staticmethod
-    def Tool(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def Tool(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
     @staticmethod
-    def FunctionDeclaration(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def FunctionDeclaration(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
 

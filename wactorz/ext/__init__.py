@@ -84,7 +84,7 @@ _entry_point_names: dict[str, str] = {}
 _external: list[Extension] | None = None
 
 
-class Extension(Protocol):  # pylint: disable=too-few-public-methods
+class Extension(Protocol):
     """Extension typing-only contract.
 
     Plain modules satisfy it structurally.
@@ -129,7 +129,7 @@ def discover(*, refresh: bool = False) -> list[Extension]:
             continue
         try:
             mod = importlib.import_module(f"{__name__}.{m.name}")
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             log.warning("[ext] %s failed to import: %s", m.name, exc)
             continue
         if hasattr(mod, "setup"):
@@ -163,7 +163,7 @@ def _from_entry_points(taken: set[str], *, refresh: bool = False) -> list[Extens
             continue
         try:
             loaded = entry_point.load()
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             log.warning("[ext] Skipping entry point %s = %s: %s", name, entry_point.value, exc)
             continue
         if not callable(getattr(loaded, "setup", None)):
@@ -212,7 +212,7 @@ def setup_all(app: Application) -> None:
             mod.setup(app)
             log.info("[ext] %s loaded", getattr(mod, "__name__", mod))
             _add_panel(panels, icons, mod, app)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             log.warning("[ext] %s setup failed: %s", getattr(mod, "__name__", mod), exc)
 
     app[PANELS] = panels
@@ -236,7 +236,7 @@ def _add_panel(
     name = _short_name(mod)
     try:
         panel = provider(app)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         log.warning("[ext] %s has no dashboard tab: panel() failed: %s", name, exc)
         return
     problem = panel_problem(name, panel)
@@ -270,7 +270,7 @@ def collect_public_config(app: Application) -> dict[str, Any]:
         name = _short_name(mod)
         try:
             out[name] = provider(app)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             log.warning("[ext] %s public_config() failed: %s", name, exc)
     return out
 
@@ -293,7 +293,7 @@ def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict], Non
         name = _short_name(mod)
         try:
             dec = factory(app)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             log.warning("[ext] %s actor_decorator() failed: %s", name, exc)
             continue
         if dec is not None:

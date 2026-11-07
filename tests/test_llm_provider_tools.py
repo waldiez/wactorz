@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Test LLM provider tools."""
 
-# pylint: disable=missing-function-docstring,missing-class-docstring
-
 import types
 import unittest
 from typing import Any
@@ -53,7 +51,7 @@ def _raises(exc: Exception) -> types.SimpleNamespace:
     )
 
 
-class _FakeOpenAICompletions:  # pylint: disable=too-few-public-methods
+class _FakeOpenAICompletions:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
@@ -74,7 +72,7 @@ class _FakeOpenAICompletions:  # pylint: disable=too-few-public-methods
         )
 
 
-class _FakeAnthropicMessages:  # pylint: disable=too-few-public-methods
+class _FakeAnthropicMessages:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
@@ -151,7 +149,7 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
         provider.client = _raises(busy)  # pyright: ignore[reportAttributeAccessIssue]
 
         with self.assertRaises(_Busy) as caught:
-            await provider._complete_with_tools(  # pylint: disable=protected-access
+            await provider._complete_with_tools(
                 messages=[{"role": "user", "content": "check HA"}], tools=[TOOL]
             )
 
@@ -165,7 +163,7 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
         provider.client = _raises(_Rejected())  # pyright: ignore[reportAttributeAccessIssue]
 
         with self.assertRaises(RuntimeError) as caught:
-            await provider._complete_with_tools(  # pylint: disable=protected-access
+            await provider._complete_with_tools(
                 messages=[{"role": "user", "content": "check HA"}], tools=[TOOL]
             )
 

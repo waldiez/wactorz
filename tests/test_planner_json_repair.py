@@ -9,8 +9,6 @@ The reader repairs those backslashes without changing the Python the model
 wrote, accepts raw newlines inside strings, and still raises on real garbage.
 """
 
-# pylint: disable=missing-function-docstring,missing-class-docstring
-
 import json
 import unittest
 

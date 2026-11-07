@@ -5,8 +5,6 @@ Proves the seam is wired through the real handler — the monitor applies whatev
 decorators extensions register, without knowing what they add.
 """
 
-# pylint: disable=missing-function-docstring
-
 import json
 import sys
 from collections.abc import Generator

@@ -12,8 +12,6 @@ The reply-callback tests assert the *contract* rather than a delivered message:
 pass must be awaitable and take one argument. A lambda satisfies neither.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import inspect
 from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace

@@ -12,8 +12,6 @@ event, by contrast, is exactly what a subscription is for — putting a deadline
 there would break it, so `receive_event` stays unbounded on purpose.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import asyncio
 import json
 

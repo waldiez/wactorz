@@ -10,7 +10,6 @@ import asyncio
 import logging
 import sys
 
-# pylint: disable=unused-import
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding  # pyright: ignore[reportUnusedImport]
 from wactorz.config import CONFIG
 

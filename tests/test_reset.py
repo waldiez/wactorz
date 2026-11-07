@@ -9,9 +9,6 @@ Covers:
   4. reset_handler per-agent filter is forwarded
 """
 
-# pylint: disable=too-few-public-methods,too-many-instance-attributes
-# pylint: disable=missing-function-docstring,missing-class-docstring
-# pylint: disable=protected-access,import-outside-toplevel
 
 # pyright: reportAttributeAccessIssue=false
 

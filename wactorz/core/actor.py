@@ -1905,7 +1905,7 @@ class Actor(ABC):
             contract = bus.registry.get(self.name, self.actor_id, self._node or None)
             if contract is not None:
                 contract.update_observed(topic, payload)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             logger.debug("[%s] Recording what it published on %r failed: %s", self.name, topic, exc)
 
     async def _mqtt_publish(

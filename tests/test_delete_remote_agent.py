@@ -9,8 +9,6 @@ The node is now resolved from live heartbeat telemetry as a fallback, mirroring
 ``migrate_agent``.
 """
 
-# pylint: disable=missing-function-docstring
-
 import time
 import types
 from unittest.mock import AsyncMock, Mock

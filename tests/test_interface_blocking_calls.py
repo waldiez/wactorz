@@ -11,8 +11,6 @@ Each test runs an unrelated ticker alongside the call and counts how often it
 gets scheduled: a blocked loop starves it, an offloaded call does not.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import asyncio
 import socket
 import time

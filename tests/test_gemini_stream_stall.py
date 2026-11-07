@@ -15,8 +15,6 @@ No google-genai needed: the provider is built with ``__new__`` and handed only
 the attributes its methods touch.
 """
 
-# pylint: disable=missing-function-docstring,too-few-public-methods
-
 import threading
 import types
 from collections.abc import Iterator
@@ -31,7 +29,7 @@ from wactorz.agents.llm_agent import GeminiProvider
 
 class _Types:
     @staticmethod
-    def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:  # pylint: disable=invalid-name
+    def GenerateContentConfig(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
 
@@ -130,7 +128,7 @@ async def _drain_raw(provider: GeminiProvider) -> tuple[list[str], dict]:
     """Read `_stream` itself, with no retry wrapper in the way."""
     text: list[str] = []
     final: dict = {}
-    async for chunk in provider._stream(messages=[{"role": "user", "content": "hi"}]):  # pylint: disable=protected-access
+    async for chunk in provider._stream(messages=[{"role": "user", "content": "hi"}]):
         if isinstance(chunk, dict):
             final = chunk
         else:

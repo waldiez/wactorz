@@ -628,7 +628,6 @@ class DynamicAgent(Actor):
 
         try:
             # Running model-written agent code is what a DynamicAgent is for.
-            # pylint: disable=exec-used
             exec(compile(clean, f"<{self.name}>", "exec"), self._ns)  # noqa: S102
             self._fn_setup = self._ns.get("setup")
             self._fn_process = self._ns.get("process")

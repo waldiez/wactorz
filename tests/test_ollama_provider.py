@@ -45,7 +45,7 @@ class _FakeContent:
         self._chunks = list(chunks)
 
     def __aiter__(self) -> "_FakeContent":
-        self._iter = iter(self._chunks)  # pylint: disable=attribute-defined-outside-init
+        self._iter = iter(self._chunks)
         return self
 
     async def __anext__(self) -> Any:

@@ -188,7 +188,7 @@ def ids_not_honoured(node: str) -> str:
     )
 
 
-def _parse_spawn_config(raw: str) -> dict:
+def _parse_spawn_config(raw: str) -> dict[str, Any]:
     """Robustly parse a spawn config that may contain raw multiline code strings.
     Uses character scanning to correctly handle } and " inside the code value.
     """

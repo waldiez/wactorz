@@ -48,7 +48,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
     """A dynamic agent whose host is a node rather than main."""
 
     def __init__(
-        self, config: dict, runner: "NodeRunner", state_dir: str | Path | None = None
+        self, config: dict[str, Any], runner: "NodeRunner", state_dir: str | Path | None = None
     ) -> None:
         name = config.get("name") or f"remote-agent-{uuid.uuid4().hex[:6]}"
         directory = Path(state_dir) if state_dir else Path(runner.state_dir)
@@ -91,7 +91,7 @@ class NodeAgent(NodeHosted, DynamicAgent):
         """Record one model request that could not be sent to main at all."""
         self._llm_unsent += 1
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         """The generated agent's frame, plus its model requests' round trips through main.
 
         The model call itself is timed on main, where it is made; this is the

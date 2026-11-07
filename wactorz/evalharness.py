@@ -286,7 +286,7 @@ def score_ha(output: str, expected: str) -> bool:
     return token == str(expected).lower()
 
 
-def score_actuator(output: str, expected: list[dict]) -> bool:
+def score_actuator(output: str, expected: list[dict[str, Any]]) -> bool:
     """Exact action-set match. Every expected action must appear in the
     returned array (matched on domain/service/entity_id; extra keys inside an
     action, like service_data, are fine) AND the array must contain no extra
@@ -301,7 +301,7 @@ def score_actuator(output: str, expected: list[dict]) -> bool:
     if len(actions) != len(expected):
         return False
 
-    def matches(exp: dict, got: Any) -> bool:
+    def matches(exp: dict[str, Any], got: Any) -> bool:
         return isinstance(got, dict) and all(got.get(k) == v for k, v in exp.items())
 
     return all(any(matches(exp, got) for got in actions) for exp in expected)
@@ -325,7 +325,7 @@ def score_planner(output: str, expected: list[str]) -> bool:
     return True
 
 
-def _step_type(item: dict) -> Any:
+def _step_type(item: dict[str, Any]) -> Any:
     """A plan step's agent type: at the top level, or inside the spawn_config
     the production output format puts it in.
     """
@@ -435,11 +435,11 @@ def _for_profile(case: dict[str, Any], profile: str) -> dict[str, Any]:
 async def run_case(
     provider: "LLMProvider",
     system: str,
-    case: dict,
+    case: dict[str, Any],
     rep: int,
     model_spec: str,
     temperature: float | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """One (model, case, repetition) call → a flat result record."""
     record = {
         "model": model_spec,
@@ -479,9 +479,9 @@ async def run_case(
     return record
 
 
-def summarize(records: list[dict]) -> list[dict]:
+def summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Per (model, category): n, error count, accuracy, mean latency, cost."""
-    buckets: dict[tuple[str, str], list[dict]] = {}
+    buckets: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for r in records:
         buckets.setdefault((r["model"], r["category"]), []).append(r)
     rows = []
@@ -504,18 +504,18 @@ def summarize(records: list[dict]) -> list[dict]:
 
 async def run_eval(
     model_specs: list[str],
-    cases: list[dict],
+    cases: list[dict[str, Any]],
     repeat: int,
     out_dir: Path,
     temperature: float | None = None,
     profile: str = "ha",
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     from .llm_factory import create_provider
 
     systems = _system_prompts(profile)
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.jsonl"
-    records: list[dict] = []
+    records: list[dict[str, Any]] = []
 
     with results_path.open("a") as sink:
         for spec in model_specs:
@@ -567,7 +567,7 @@ async def run_eval(
     return rows
 
 
-def _print_summary(rows: list[dict]) -> None:
+def _print_summary(rows: list[dict[str, Any]]) -> None:
     header = f"{'model':<38} {'category':<10} {'n':>3} {'err':>3} {'acc':>6} {'lat(s)':>7} {'cost($)':>8}"
     print(header)
     print("-" * len(header))

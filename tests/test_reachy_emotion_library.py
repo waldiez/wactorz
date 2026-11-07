@@ -19,7 +19,7 @@ import pytest
 
 import wactorz.catalogue_agents.reachy_mini_agent as recipe
 
-NS: dict = {}
+NS: dict[str, Any] = {}
 exec(compile(recipe.AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
 
 CLIPS = ["amazed1", "curious1", "dance1", "happy1"]

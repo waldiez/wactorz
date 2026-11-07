@@ -8,6 +8,7 @@ its library is installed, and it has a sender allow-list.
 import importlib.util
 import logging
 import time
+from typing import Any
 
 from ...config import CONFIG
 
@@ -72,7 +73,7 @@ class SocialRateLimiter:
         self._in_flight.discard(sender)
 
 
-def social_channel_blocked(channel: str, token: str, allowed: frozenset) -> str | None:
+def social_channel_blocked(channel: str, token: str, allowed: frozenset[Any]) -> str | None:
     """Why ``channel`` must not start, or None when it's safe to.
 
     A bot with a token but no sender allow-list answers anyone who finds it, and

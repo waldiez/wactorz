@@ -98,7 +98,7 @@ class _ReplyTopic:
         return self
 
     async def __aenter__(self) -> tuple[str, Any]:
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         if not self._times_out:
             future.set_result(self._answer)
         return "main/reply/main-id/abcd", future

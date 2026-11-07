@@ -50,7 +50,7 @@ class _FakeConnection:
     def __init__(self, client: _FakeClient) -> None:
         self._client = client
         self.connects = 0
-        self.kwargs: dict = {}
+        self.kwargs: dict[str, Any] = {}
 
     def __call__(
         self,

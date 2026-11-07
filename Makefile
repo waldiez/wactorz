@@ -141,7 +141,7 @@ typecheck-py: ## Type-check Python (basedpyright)
 # The least type completeness the package may have, as `make verifytypes` scores it: of
 # readiness until the package ships py.typed, of what users receive once it does.
 # A ratchet: raised as the score rises, never lowered to pass a branch.
-VERIFYTYPES_FLOOR := 86.36
+VERIFYTYPES_FLOOR := 89.67
 
 verifytypes: ## Score the package's public types from an install of it; readiness until py.typed ships (fails below the floor)
 	$(PYTHON) scripts/verify_types.py --floor $(VERIFYTYPES_FLOOR)

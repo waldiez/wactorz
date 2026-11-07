@@ -62,7 +62,7 @@ def registry_and_ext_fixture(
 
 
 async def test_actors_handler_applies_registered_decorator(
-    registry_and_ext: pytest.FixtureDef,
+    registry_and_ext: pytest.FixtureDef[Any],
 ) -> None:
     req = SimpleNamespace(app=SimpleNamespace())
     resp = await api_actors.actors_handler(req)  # type: ignore[arg-type]

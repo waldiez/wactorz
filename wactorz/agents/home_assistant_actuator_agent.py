@@ -55,13 +55,13 @@ class ActuatorAction:
     domain: str  # e.g. "light", "climate", "cover"
     service: str  # e.g. "turn_on", "set_temperature", "open_cover"
     entity_id: str  # e.g. "light.living_room_lamp"
-    service_data: dict = field(default_factory=dict)  # e.g. {"color_name": "red"}
+    service_data: dict[str, Any] = field(default_factory=dict)  # e.g. {"color_name": "red"}
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> ActuatorAction:
+    def from_dict(cls, d: dict[str, Any]) -> ActuatorAction:
         return cls(
             domain=d["domain"],
             service=d["service"],
@@ -73,7 +73,7 @@ class ActuatorAction:
 _PAYLOAD_REF_PREFIX = "$payload"
 
 
-def _lookup_payload_path(payload: dict, path: str) -> Any:
+def _lookup_payload_path(payload: dict[str, Any], path: str) -> Any:
     """Resolve "$payload.a.b" against the trigger payload. Returns None if missing."""
     value: Any = payload
     for part in path.split(".")[1:]:  # skip the leading "$payload"
@@ -89,7 +89,7 @@ def _lookup_payload_path(payload: dict, path: str) -> Any:
     return value
 
 
-def resolve_payload_refs(data: Any, payload: dict) -> Any:
+def resolve_payload_refs(data: Any, payload: dict[str, Any]) -> Any:
     """Recursively replace "$payload.x.y" strings in service_data with values
     from the trigger payload. Non-reference values are returned unchanged.
     """
@@ -115,11 +115,11 @@ class ActuatorCondition:
     operator: str  # one of: eq, ne, gt, lt, gte, lte
     value: Any  # e.g. "above_horizon" or 0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> ActuatorCondition:
+    def from_dict(cls, d: dict[str, Any]) -> ActuatorCondition:
         return cls(
             entity_id=d["entity_id"],
             attribute=d["attribute"],
@@ -127,7 +127,7 @@ class ActuatorCondition:
             value=d["value"],
         )
 
-    def evaluate(self, entity_state: dict) -> bool:
+    def evaluate(self, entity_state: dict[str, Any]) -> bool:
         """Return True if the condition holds for the given HA state object."""
         cmp = _OPERATORS.get(self.operator)
         if cmp is None:
@@ -161,10 +161,10 @@ class ActuatorConfig:
     mqtt_topics: list[str]
     actions: list[ActuatorAction]
     conditions: list[ActuatorCondition] = field(default_factory=list)
-    detection_filter: dict | None = None  # key-value match on incoming payload
+    detection_filter: dict[str, Any] | None = None  # key-value match on incoming payload
     cooldown_seconds: float = 10.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "automation_id": self.automation_id,
             "description": self.description,
@@ -176,7 +176,7 @@ class ActuatorConfig:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> ActuatorConfig:
+    def from_dict(cls, d: dict[str, Any]) -> ActuatorConfig:
         return cls(
             automation_id=d["automation_id"],
             description=d.get("description", ""),
@@ -320,7 +320,7 @@ class HomeAssistantActuatorAgent(Actor):
 
     # ── Detection processing ───────────────────────────────────────────────────
 
-    async def _on_detection(self, payload: dict) -> None:
+    async def _on_detection(self, payload: dict[str, Any]) -> None:
         """Process one incoming MQTT message through filter → cooldown → conditions → actions."""
         if not self._matches_filter(payload):
             return
@@ -369,7 +369,7 @@ class HomeAssistantActuatorAgent(Actor):
             },
         )
 
-    def _matches_filter(self, payload: dict) -> bool:
+    def _matches_filter(self, payload: dict[str, Any]) -> bool:
         """Return True if all detection_filter entries match the payload.
 
         Values can be literals (equality) or operator dicts e.g. {"gt": 0.8}.

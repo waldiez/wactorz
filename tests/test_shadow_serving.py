@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 import wactorz
@@ -878,7 +879,7 @@ class TestTheComparison:
 @pytest.fixture(name="client")
 async def client_fixture(
     db: WactorzDB, store: ArtifactStore, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[TestClient]:
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(runtime, "db", db)
     client = TestClient(TestServer(build_app()))
     await client.start_server()
@@ -888,7 +889,11 @@ async def client_fixture(
 
 class TestTheTrialRoutes:
     async def test_the_trial_so_far_is_compared_from_when_the_shadow_was_set(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -901,7 +906,12 @@ class TestTheTrialRoutes:
         assert "labels" not in body
 
     async def test_a_declared_judgement_judges_the_trial_without_being_asked(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        db: WactorzDB,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -923,7 +933,7 @@ class TestTheTrialRoutes:
 
     async def test_a_past_window_is_judged_as_the_versions_that_ran_then(
         self,
-        client: TestClient,
+        client: TestClient[web.Request, web.Application],
         later: float,
         store: ArtifactStore,
         state: Path,
@@ -951,7 +961,12 @@ class TestTheTrialRoutes:
         assert (body["labels"]["from"], body["labels"]["positive"]) == ("imu:2", ["old-fault"])
 
     async def test_the_active_versions_judgement_serves_when_the_shadow_has_none(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        db: WactorzDB,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -964,7 +979,12 @@ class TestTheTrialRoutes:
         assert body["labels"]["unlabelled"] == 2
 
     async def test_a_named_source_replaces_the_declared_one(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        db: WactorzDB,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -978,7 +998,7 @@ class TestTheTrialRoutes:
         assert body["labels"]["judged_on"]["positive"] == ["fault"]
 
     async def test_positive_values_that_are_not_labels_are_refused(
-        self, client: TestClient, later: float, store: ArtifactStore
+        self, client: TestClient[web.Request, web.Application], later: float, store: ArtifactStore
     ) -> None:
         answer = await client.get("/api/models/imu/trial", params={"positive": "x" * 65})
 
@@ -1011,7 +1031,12 @@ class TestTheTrialRoutes:
         assert asked.status == 503
 
     async def test_labels_are_joined_when_a_source_and_its_positive_values_are_named(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        db: WactorzDB,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -1028,7 +1053,11 @@ class TestTheTrialRoutes:
         assert body["labels"]["active"]["recall"] == 1.0
 
     async def test_pairs_count_by_when_they_arrived_not_by_their_event_time(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -1043,7 +1072,12 @@ class TestTheTrialRoutes:
         assert body["agreement"] == pytest.approx(2 / 3)
 
     async def test_labels_are_matched_on_the_event_time_of_late_pairs(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path, db: WactorzDB
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
+        db: WactorzDB,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -1063,7 +1097,11 @@ class TestTheTrialRoutes:
         assert (body["labels"]["labelled"], body["labels"]["positives"]) == (2, 2)
 
     async def test_the_series_of_late_pairs_is_drawn_at_their_event_times(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -1123,7 +1161,11 @@ class TestTheTrialRoutes:
         assert answer.status == 400
 
     async def test_without_a_shadow_there_is_no_trial_unless_a_window_is_given(
-        self, client: TestClient, later: float, store: ArtifactStore, state: Path
+        self,
+        client: TestClient[web.Request, web.Application],
+        later: float,
+        store: ArtifactStore,
+        state: Path,
     ) -> None:
         shadow = store.pointer("imu", "shadow")
         assert shadow is not None
@@ -1139,7 +1181,7 @@ class TestTheTrialRoutes:
         assert (await client.get("/api/models/imu/trial", params={"since": "soon"})).status == 400
 
     async def test_the_outcomes_of_ended_trials_are_listed(
-        self, client: TestClient, graph: Provenance
+        self, client: TestClient[web.Request, web.Application], graph: Provenance
     ) -> None:
         record_outcome(
             graph,

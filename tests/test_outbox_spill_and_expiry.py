@@ -179,7 +179,7 @@ class TestRefilling:
         real = pub._read_rows
         calls: list[int] = []
 
-        def flaky(ids: list[int]) -> list[tuple] | None:
+        def flaky(ids: list[int]) -> list[tuple[Any, ...]] | None:
             calls.append(len(ids))
             return None if len(calls) == 1 else real(ids)
 
@@ -220,7 +220,7 @@ class TestAPublishDuringARefill:
         release = threading.Event()
         real = pub._read_rows
 
-        def slow(ids: list[int]) -> list[tuple] | None:
+        def slow(ids: list[int]) -> list[tuple[Any, ...]] | None:
             reading.set()
             release.wait(5)
             return real(ids)

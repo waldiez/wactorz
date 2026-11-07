@@ -75,14 +75,14 @@ def _search_params(query: str, limit: int) -> dict[str, str]:
     return {"q": query, "maxResults": str(limit)}
 
 
-def _header(headers: list[dict], name: str) -> str:
+def _header(headers: list[dict[str, Any]], name: str) -> str:
     for h in headers or []:
         if h.get("name", "").lower() == name.lower():
             return h.get("value", "")
     return ""
 
 
-def _format_message_line(msg: dict) -> str:
+def _format_message_line(msg: dict[str, Any]) -> str:
     headers = (msg.get("payload") or {}).get("headers", [])
     sender = _header(headers, "From") or "(unknown sender)"
     subject = html.unescape(_header(headers, "Subject") or "(no subject)")
@@ -145,10 +145,10 @@ def _clean_text(text: str) -> str:
     return "\n".join(out).strip()
 
 
-def _extract_body(payload: dict) -> str:
+def _extract_body(payload: dict[str, Any]) -> str:
     """Pull readable, de-noised text from a Gmail message payload."""
 
-    def find(part: dict, mime: str) -> str:
+    def find(part: dict[str, Any], mime: str) -> str:
         if part.get("mimeType") == mime:
             data = (part.get("body") or {}).get("data")
             if data:
@@ -186,7 +186,7 @@ class GmailMcpClient(GoogleMcpClient):
             "create_draft": self._rest_create_draft,
         }
 
-    async def _rest_search(self, arguments: dict) -> str:
+    async def _rest_search(self, arguments: dict[str, Any]) -> str:
         query = arguments.get("query") or arguments.get("q") or "in:inbox"
         limit = int(arguments.get("pageSize") or arguments.get("maxResults") or 10)
         status, data = await self._rest_request(
@@ -206,7 +206,7 @@ class GmailMcpClient(GoogleMcpClient):
         metas = await asyncio.gather(*(self._get_message_meta(i) for i in ids))
         return "\n".join(_format_message_line(m) for m in metas if m)
 
-    async def _get_message_meta(self, message_id: str) -> dict | None:
+    async def _get_message_meta(self, message_id: str) -> dict[str, Any] | None:
         status, data = await self._rest_request(
             "GET",
             f"/users/me/messages/{quote(message_id, safe='')}",
@@ -219,7 +219,7 @@ class GmailMcpClient(GoogleMcpClient):
         )
         return data if status == 200 else None
 
-    async def _rest_read_email(self, arguments: dict) -> str:
+    async def _rest_read_email(self, arguments: dict[str, Any]) -> str:
         """Return the full readable body of a single email.
 
         Accepts an explicit message id, or a ``query`` whose top match is opened.
@@ -258,7 +258,7 @@ class GmailMcpClient(GoogleMcpClient):
             head += f"\nDate: {date}"
         return f"{head}\n\n{body}" if body else f"{head}\n\n(no readable text content)"
 
-    async def _rest_get_thread(self, arguments: dict) -> str:
+    async def _rest_get_thread(self, arguments: dict[str, Any]) -> str:
         thread_id = arguments.get("threadId") or arguments.get("id") or arguments.get("thread_id")
         if not thread_id:
             raise GoogleRestError.missing_id("thread")
@@ -279,7 +279,7 @@ class GmailMcpClient(GoogleMcpClient):
             return "Thread has no messages."
         return "\n".join(_format_message_line(m) for m in msgs)
 
-    async def _rest_list_labels(self, arguments: dict) -> str:
+    async def _rest_list_labels(self, arguments: dict[str, Any]) -> str:
         status, data = await self._rest_request("GET", "/users/me/labels")
         if status != 200:
             raise GoogleRestError(rest_error_message(data))
@@ -288,7 +288,7 @@ class GmailMcpClient(GoogleMcpClient):
             return "No labels found."
         return "Your labels:\n" + "\n".join(f"• {n}" for n in names)
 
-    async def _rest_list_drafts(self, arguments: dict) -> str:
+    async def _rest_list_drafts(self, arguments: dict[str, Any]) -> str:
         status, data = await self._rest_request(
             "GET", "/users/me/drafts", params={"maxResults": "20"}
         )
@@ -297,7 +297,7 @@ class GmailMcpClient(GoogleMcpClient):
         drafts = data.get("drafts", [])
         return f"You have {len(drafts)} draft(s)." if drafts else "No drafts."
 
-    async def _rest_create_draft(self, arguments: dict) -> str:
+    async def _rest_create_draft(self, arguments: dict[str, Any]) -> str:
         to = arguments.get("to") or arguments.get("recipient") or ""
         subject = arguments.get("subject") or arguments.get("summary") or ""
         body = arguments.get("body") or arguments.get("text") or arguments.get("message") or ""

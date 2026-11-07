@@ -56,7 +56,7 @@ class MonitorActor(Actor):
         self._alert_state: dict[str, bool] = {}
 
         # Error event registry: actor_id -> latest error event dict
-        self._error_registry: dict[str, dict] = {}
+        self._error_registry: dict[str, dict[str, Any]] = {}
         # Cooldown: actor_id -> last time we notified main
         self._last_notified: dict[str, float] = {}
 
@@ -170,7 +170,7 @@ class MonitorActor(Actor):
 
     # ── Error event handling ───────────────────────────────────────────────
 
-    async def _handle_error_event(self, event: dict) -> None:
+    async def _handle_error_event(self, event: dict[str, Any]) -> None:
         """Observer-only: classify severity, fire MQTT alert, notify user.
         The Supervisor is the single restart authority — never call
         actor.stop() / actor.start() here.
@@ -330,7 +330,7 @@ class MonitorActor(Actor):
                 severity="warning",
             )
 
-    async def _fire_error_alert(self, event: dict) -> None:
+    async def _fire_error_alert(self, event: dict[str, Any]) -> None:
         await self._mqtt_publish(
             f"agents/{event.get('actor_id', 'unknown')}/alert",
             {

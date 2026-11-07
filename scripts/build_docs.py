@@ -536,7 +536,7 @@ def _start_watcher() -> None:
 
 
 def _poll_and_rebuild(interval: float = 1.0) -> None:
-    def _snapshot() -> dict:
+    def _snapshot() -> dict[str, Any]:
         result = {}
         for d in WATCH_DIRS:
             if d.exists():

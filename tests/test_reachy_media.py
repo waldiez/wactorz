@@ -38,7 +38,7 @@ from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
 
 
 def _load_recipe_namespace() -> dict[Any, Any]:
-    ns: dict = {}
+    ns: dict[str, Any] = {}
     exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), ns)
     return ns
 
@@ -276,7 +276,7 @@ class FakeLLM:
 
     def __init__(self, reply="A desk with a laptop and a blue mug.") -> None:
         self.reply = reply
-        self.calls: list[dict] = []
+        self.calls: list[dict[str, Any]] = []
 
     async def complete(self, messages, system="") -> str:
         self.calls.append({"messages": messages, "system": system})

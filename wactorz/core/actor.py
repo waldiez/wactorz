@@ -221,7 +221,7 @@ class Message:
             and bool(self.payload.get("_monitor_notification"))
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """A JSON-serialisable form, for MQTT and the dashboard."""
         return {
             "type": self.type.value,
@@ -501,7 +501,7 @@ class Actor(ABC):
         self.metrics = ActorMetrics()
 
         # Async mailbox (inbox)
-        self._mailbox: asyncio.Queue = asyncio.Queue(maxsize=mailbox_size)
+        self._mailbox: asyncio.Queue[Any] = asyncio.Queue(maxsize=mailbox_size)
         #: When the message being handled was taken up, on the monotonic clock;
         #: None between messages.
         self._handling_since: float | None = None
@@ -509,7 +509,7 @@ class Actor(ABC):
         #: metrics frame. See `wactorz.monitoring.actor_metrics`.
         self._queue_waits = RecentDurations()
         self._message_durations = RecentDurations()
-        self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
+        self._outbox: dict[str, asyncio.Queue[Any]] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
         self._registry: ActorRegistry | None = None
@@ -547,7 +547,7 @@ class Actor(ABC):
         # `state_dir` is first asked for, so an actor can be built without
         # touching the disk.
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
-        self._persistent_state: dict = {}
+        self._persistent_state: dict[str, Any] = {}
         #: Without a persistence API: the pickled bytes of each value in the
         #: state file that would not unpickle, written back until set again.
         self._unreadable_state: dict[str, bytes] = {}
@@ -570,12 +570,12 @@ class Actor(ABC):
         self.supervisor_id: str | None = None
 
         # Handlers
-        self._handlers: dict[MessageType, Callable] = {}
+        self._handlers: dict[MessageType, Callable[..., Any]] = {}
         #: Correlation id → the future waiting on that request's RESULT.
         #: Populated by whoever sends a TASK carrying `_task_id`; settled by
         #: `_resolve_pending_result` as the RESULT is received, ahead of the
         #: mailbox, so a handler waiting on it is not in its own way.
-        self._result_futures: dict[str, asyncio.Future] = {}
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
         #: The manifest this actor last published, as it published it (see
         #: `_send_manifest`). Main reads its own agents' manifests from here
         #: rather than from the broker, where any node may publish one under
@@ -589,7 +589,7 @@ class Actor(ABC):
         self._setup_default_handlers()
 
         # Background tasks
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task[Any]] = []
         #: Resolved once this run's stop has finished; see stop(). Created by the
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
@@ -1014,7 +1014,7 @@ class Actor(ABC):
         total += self._mailbox.qsize() * 512
         return total / (1024 * 1024)
 
-    def _build_heartbeat(self) -> dict:
+    def _build_heartbeat(self) -> dict[str, Any]:
         """What this actor reports every heartbeat.
 
         No CPU figure: actors share one process, and so one CPU reading, which
@@ -1033,7 +1033,7 @@ class Actor(ABC):
             "node": self._node,
         }
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         metrics = {
             "actor_id": self.actor_id,
             "messages_processed": self.metrics.messages_processed,
@@ -2277,7 +2277,7 @@ class Actor(ABC):
 
     # ─── Status ───────────────────────────────────────────────────────────────
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         """This actor's identity, state and counters, as the dashboard shows them."""
         return {
             "actor_id": self.actor_id,

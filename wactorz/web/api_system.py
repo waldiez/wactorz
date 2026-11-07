@@ -210,7 +210,7 @@ async def config_handler(request: web.Request) -> Response:
 
     ws_url = f"{protocol}://{ws_host}/ws"
 
-    payload: dict = {
+    payload: dict[str, Any] = {
         # Which Wactorz this is. The dashboard is served from the same wheel, but
         # a browser can hold an old page for a long time, so the version it shows
         # is the running one rather than the one it was built from.

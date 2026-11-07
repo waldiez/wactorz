@@ -16,6 +16,7 @@ import socket
 import time
 import types
 from collections.abc import Awaitable
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,7 @@ from wactorz.interfaces.chat_interfaces import WhatsAppInterface
 _BLOCK = 0.2
 
 
-async def _loop_ticks_during(coro: Awaitable) -> int:
+async def _loop_ticks_during(coro: Awaitable[Any]) -> int:
     """Run `coro`, counting how many times an unrelated task got scheduled."""
     ticks = 0
     stop = False
@@ -51,7 +52,7 @@ class _BlockingTwilio:
 
     def __init__(self) -> None:
         self.messages = types.SimpleNamespace(create=self._create)
-        self.calls: list[dict] = []
+        self.calls: list[dict[str, Any]] = []
 
     def _create(self, **kwargs) -> None:
         self.calls.append(kwargs)

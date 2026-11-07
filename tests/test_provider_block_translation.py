@@ -7,6 +7,8 @@ These pin the shapes, so a provider edit that drops or mangles an image fails
 loudly rather than as a model that quietly cannot see.
 """
 
+from typing import Any
+
 from wactorz.agents.llm.attachments import NO_DOCUMENTS, UNREADABLE
 from wactorz.agents.llm.openai_shape import openai_messages
 from wactorz.agents.llm.providers.anthropic import AnthropicProvider
@@ -65,7 +67,7 @@ class TestOpenAIShape:
         assert openai_messages(msgs) == msgs
 
 
-def parts_text(parts: list[dict]) -> list[str]:
+def parts_text(parts: list[dict[str, Any]]) -> list[str]:
     return [p["text"] for p in parts if p.get("type") == "text"]
 
 

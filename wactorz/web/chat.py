@@ -48,7 +48,7 @@ Choices = Callable[[str, tuple[str, ...]], Awaitable[object]]
 
 # In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
 # cancel a turn mid-stream.
-inflight_chat_tasks: set = set()
+inflight_chat_tasks: set[Any] = set()
 
 
 def track_chat_task(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
@@ -265,7 +265,7 @@ def format_catalog_agents_response(payload: dict[str, Any]) -> str:
 
 # Agents already warned in this process — so the beta banner shows on the first
 # user message to an experimental agent, not on every turn.
-beta_warned_agents: set = set()
+beta_warned_agents: set[Any] = set()
 
 
 def experimental_first_use_banner(agent_name: str) -> str | None:

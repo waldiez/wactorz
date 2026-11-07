@@ -326,7 +326,7 @@ def _pending_state_versions(db: "WactorzDB") -> list[int]:
     return sorted(v for v in _STATE_MIGRATIONS if v <= FRAMEWORK_VERSION and v not in done)
 
 
-def run_migrations(db: "WactorzDB", pickle_store: "PickleStore | None" = None) -> dict:
+def run_migrations(db: "WactorzDB", pickle_store: "PickleStore | None" = None) -> dict[str, Any]:
     """Run all pending migrations from current version to FRAMEWORK_VERSION.
 
     Called automatically by init_persistence(). Safe to call multiple times.

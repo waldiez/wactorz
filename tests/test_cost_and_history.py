@@ -58,7 +58,7 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
     that heartbeats carry accurate lifetime totals after a restart.
     """
 
-    def _make_agent(self, saved_cost: dict) -> Any:
+    def _make_agent(self, saved_cost: dict[str, Any]) -> Any:
         from wactorz.agents.llm_agent import LLMAgent
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -183,7 +183,7 @@ class PersistCostTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_kv_db(entries: list[dict]) -> WactorzDB:
+def _make_kv_db(entries: list[dict[str, Any]]) -> WactorzDB:
     """A real database in memory, holding these kv_store rows."""
     db = WactorzDB(":memory:")
     for e in entries:

@@ -14,6 +14,7 @@ install before its owner could see the setting, let alone change it.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -36,7 +37,7 @@ def _read(relative: str) -> str:
     return _repo_path(relative).read_text(encoding="utf-8")
 
 
-def _config(addon: str) -> dict:
+def _config(addon: str) -> dict[str, Any]:
     return yaml.safe_load(_read(f"ha-addon/{addon}/config.yaml"))
 
 

@@ -14,7 +14,7 @@ import logging
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from wactorz.llm_factory import provider_for
 
@@ -64,7 +64,7 @@ def _strip_dryrun_bypass(text: str) -> str:
     return text
 
 
-def _parse_plan_envelope(planner_result: str) -> dict | None:
+def _parse_plan_envelope(planner_result: str) -> dict[str, Any] | None:
     """Try to parse a planner result string as a plan envelope (the JSON dict
     returned by plan_only mode). Returns the envelope dict if it's a valid
     proposal, or None if the result is a regular answer (e.g. error message,
@@ -125,7 +125,7 @@ def _describe_ha_actions(actions: object) -> list[str]:
     return out
 
 
-def _describe_ha_guards(spawn_cfg: dict) -> str:
+def _describe_ha_guards(spawn_cfg: dict[str, Any]) -> str:
     """One line for the filters that gate an ha_actuator, or "" if it has none.
 
     Covers the payload ``detection_filter`` and the live-entity ``conditions``;
@@ -165,10 +165,10 @@ class PlanningMixin(_Host):
     #: the host says otherwise.
     _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
 
-    def get_pipeline_rules(self) -> dict:
+    def get_pipeline_rules(self) -> dict[str, Any]:
         return self.recall(PIPELINE_RULES_KEY) or {}
 
-    def save_pipeline_rule(self, rule: dict) -> None:
+    def save_pipeline_rule(self, rule: dict[str, Any]) -> None:
         rules = self.get_pipeline_rules()
         rules[rule["rule_id"]] = rule
         self.persist(PIPELINE_RULES_KEY, rules)
@@ -194,7 +194,7 @@ class PlanningMixin(_Host):
     # } }
     PLAN_TTL_S = 24 * 3600  # auto-expire pending plans after 24h
 
-    def get_pending_plans(self) -> dict:
+    def get_pending_plans(self) -> dict[str, Any]:
         plans = self.recall(PENDING_PLANS_KEY) or {}
         # Expire stale entries on every read so we don't have to gc separately
         now = time.time()
@@ -209,7 +209,7 @@ class PlanningMixin(_Host):
             self.persist(PENDING_PLANS_KEY, plans)
         return plans
 
-    def save_pending_plan(self, plan: dict) -> None:
+    def save_pending_plan(self, plan: dict[str, Any]) -> None:
         plans = self.recall(PENDING_PLANS_KEY) or {}
         plans[plan["plan_id"]] = plan
         self.persist(PENDING_PLANS_KEY, plans)
@@ -220,7 +220,7 @@ class PlanningMixin(_Host):
             plans[plan_id]["status"] = status
             self.persist(PENDING_PLANS_KEY, plans)
 
-    def _most_recent_pending_plan(self) -> dict | None:
+    def _most_recent_pending_plan(self) -> dict[str, Any] | None:
         """Returns the most-recently-created plan still in 'pending' status, or None."""
         plans = self.get_pending_plans()
         pending = [p for p in plans.values() if p.get("status") == "pending"]
@@ -228,7 +228,7 @@ class PlanningMixin(_Host):
             return None
         return max(pending, key=lambda p: p.get("created_at", 0))
 
-    def _format_plan_proposal(self, plan: dict) -> str:
+    def _format_plan_proposal(self, plan: dict[str, Any]) -> str:
         """Render a pending plan as a human-readable summary for the user.
 
         Goals (in priority order):
@@ -460,7 +460,7 @@ class PlanningMixin(_Host):
         task: str,
         is_pipeline_intent: bool = False,
         plan_only: bool = False,
-        approved_plan: dict | None = None,
+        approved_plan: dict[str, Any] | None = None,
     ) -> str | None:
         """Spawn a PlannerAgent, hand it the task, wait for the result.
 
@@ -532,7 +532,7 @@ class PlanningMixin(_Host):
         )
 
         task_id = f"plan_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
 
         try:
@@ -825,7 +825,7 @@ class PlanningMixin(_Host):
         # resolve the pending plan first.
         return None
 
-    async def _revise_pending_plan(self, proposal: dict, correction: str) -> str:
+    async def _revise_pending_plan(self, proposal: dict[str, Any], correction: str) -> str:
         """The user typed something that looks like an adjustment to a pending
         plan ("let's use 55 instead", "change the interval to 30 seconds").
         Mark the old plan superseded, re-run the planner with the original
@@ -868,7 +868,7 @@ class PlanningMixin(_Host):
             f"{formatted}"
         )
 
-    async def _execute_pending_plan(self, proposal: dict) -> str:
+    async def _execute_pending_plan(self, proposal: dict[str, Any]) -> str:
         """Execute an approved plan by calling the planner with approved_plan set."""
         plan_id = proposal["plan_id"]
         envelope = proposal["envelope"]
@@ -883,7 +883,7 @@ class PlanningMixin(_Host):
         )
         return f"✅ Approved plan `{plan_id}`. {result or 'Spawn complete.'}"
 
-    def _reject_pending_plan(self, proposal: dict) -> str:
+    def _reject_pending_plan(self, proposal: dict[str, Any]) -> str:
         plan_id = proposal["plan_id"]
         self.update_plan_status(plan_id, "rejected")
         logger.info("[%s] Rejected plan %s", self.name, plan_id)

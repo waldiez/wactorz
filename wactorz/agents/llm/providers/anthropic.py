@@ -276,7 +276,9 @@ class AnthropicProvider(LLMProvider):
             self._temp_ok = cached
         return cached
 
-    def _request_params(self, messages: list[dict], system: str, kwargs: dict) -> dict[str, Any]:
+    def _request_params(
+        self, messages: list[dict[str, Any]], system: str, kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
         """The common request body, with each optional knob only where it is legal."""
         params: dict[str, Any] = {
             "model": self.model,
@@ -437,8 +439,8 @@ class AnthropicProvider(LLMProvider):
         return text
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         response = await self._create(self._request_params(messages, system, kwargs))
         text = self._extract_text(response)
         usage = {
@@ -452,7 +454,7 @@ class AnthropicProvider(LLMProvider):
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -512,7 +514,7 @@ class AnthropicProvider(LLMProvider):
         ]
 
     @staticmethod
-    def _anthropic_messages(messages: list[dict]) -> list[dict]:
+    def _anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         converted: list[dict[str, Any]] = []
         for message in messages:
             role = message.get("role")
@@ -545,7 +547,7 @@ class AnthropicProvider(LLMProvider):
         return converted
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         params = self._request_params(messages, system, kwargs)

@@ -137,7 +137,7 @@ def _restore_runtime() -> "Iterator[None]":
     runtime.registry, runtime.mqtt_client_ref = registry, client
 
 
-def _payload(response) -> dict:
+def _payload(response) -> dict[str, Any]:
     return json.loads(response.body.decode())
 
 

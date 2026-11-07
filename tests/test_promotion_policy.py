@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz import artifacts_cli
@@ -734,7 +735,7 @@ class TestMainHoldsATrialToItsPolicy:
 @pytest.fixture(name="client")
 async def client_fixture(
     db: WactorzDB, store: ArtifactStore, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[TestClient]:
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(runtime, "db", db)
     client = TestClient(TestServer(build_app()))
     await client.start_server()
@@ -744,7 +745,7 @@ async def client_fixture(
 
 class TestTheRoutes:
     async def test_a_policy_is_set_over_the_defaults_then_over_itself_and_shown(
-        self, client: TestClient, store: ArtifactStore
+        self, client: TestClient[web.Request, web.Application], store: ArtifactStore
     ) -> None:
         first = await client.put("/api/models/imu/policy", json={"margin": 0.02})
         second = await client.put("/api/models/imu/policy", json={"automatic": True})
@@ -762,7 +763,7 @@ class TestTheRoutes:
         assert listed["models"][0]["policy"]["automatic"] is True
 
     async def test_what_cannot_be_a_policy_is_a_400_and_an_unknown_model_a_404(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         bad = await client.put("/api/models/imu/policy", json={"metric": "auc"})
         missing = await client.put("/api/models/none/policy", json={})
@@ -771,7 +772,7 @@ class TestTheRoutes:
         assert missing.status == 404
 
     async def test_a_policy_is_cleared_with_what_it_was(
-        self, client: TestClient, store: ArtifactStore
+        self, client: TestClient[web.Request, web.Application], store: ArtifactStore
     ) -> None:
         store.set_policy("imu", declared({"margin": 0.1}, by="cli"))
 
@@ -783,7 +784,7 @@ class TestTheRoutes:
         assert (await (await client.get("/api/models/imu")).json())["policy"] is None
 
     async def test_the_trial_says_where_it_stands_against_the_policy(
-        self, client: TestClient, store: ArtifactStore
+        self, client: TestClient[web.Request, web.Application], store: ArtifactStore
     ) -> None:
         without = await (await client.get("/api/models/imu/trial")).json()
         store.set_policy("imu", declared({"min_days": 0, "min_labelled": 0}, by="cli"))

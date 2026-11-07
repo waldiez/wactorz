@@ -24,28 +24,28 @@ from wactorz.core.registry import ActorRegistry
 
 
 @agent(name="doubler", input_schema={"n": "int"}, output_schema={"doubled": "int"})
-def doubler(payload: dict) -> dict:
+def doubler(payload: dict[str, Any]) -> dict[str, Any]:
     return {"doubled": payload["n"] * 2}
 
 
 @agent(name="greeter")
-def greeter(payload: dict) -> str:
+def greeter(payload: dict[str, Any]) -> str:
     return f"hello {payload.get('text') or payload.get('name')}"
 
 
 @agent(name="relay")
-async def relay(payload: dict, me: FunctionAgent) -> dict:
+async def relay(payload: dict[str, Any], me: FunctionAgent) -> dict[str, Any]:
     """Asks the doubler on the caller's behalf: an agent asking an agent."""
     return {"via": await me.ask("doubler", {"n": payload["n"]})}
 
 
 @agent(name="breaker")
-def breaker(payload: dict) -> dict:
+def breaker(payload: dict[str, Any]) -> dict[str, Any]:
     raise ValueError("the widget is jammed")
 
 
 @agent(name="sleeper")
-async def sleeper(payload: dict) -> dict:
+async def sleeper(payload: dict[str, Any]) -> dict[str, Any]:
     await asyncio.sleep(payload.get("seconds", 30))
     return {"woke": True}
 

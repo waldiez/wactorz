@@ -20,6 +20,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from ..deferred_write import LARGE_STATE_BYTES
 from .stores import get_db
@@ -47,7 +48,7 @@ REPORTED_AGENTS = 3
 #: is not changing is not news -- but one that shrank and grew back is.
 _warned_kv: set[str] = set()
 
-_task: asyncio.Task | None = None
+_task: asyncio.Task[Any] | None = None
 _stopping: asyncio.Event | None = None
 
 

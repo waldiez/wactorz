@@ -19,6 +19,8 @@ RequestValidator = pytest.importorskip(
     "twilio.request_validator", reason="the whatsapp extra is not installed"
 ).RequestValidator
 
+from aiohttp import web
+
 from wactorz.interfaces.chat.whatsapp import WhatsAppInterface
 
 AUTH_TOKEN = "twilio-auth-token"
@@ -78,7 +80,9 @@ def interface_fixture(monkeypatch: pytest.MonkeyPatch) -> WhatsAppInterface:
 
 
 @pytest.fixture(name="client")
-async def client_fixture(interface: WhatsAppInterface) -> AsyncGenerator[TestClient, None]:
+async def client_fixture(
+    interface: WhatsAppInterface,
+) -> AsyncGenerator[TestClient[web.Request, web.Application], None]:
     client = TestClient(TestServer(interface.build_app()))
     await client.start_server()
     yield client
@@ -90,25 +94,31 @@ def _signature(url: str, params: dict[str, str]) -> str:
 
 
 class TestUnsignedRequestsAreRefused:
-    async def test_no_signature_header(self, client: TestClient) -> None:
+    async def test_no_signature_header(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/webhook/whatsapp", data=FORM)
         assert resp.status == 403
 
-    async def test_a_wrong_signature(self, client: TestClient) -> None:
+    async def test_a_wrong_signature(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post(
             "/webhook/whatsapp", data=FORM, headers={"X-Twilio-Signature": "nope"}
         )
         assert resp.status == 403
 
     async def test_an_allow_listed_sender_is_not_enough(
-        self, client: TestClient, interface: WhatsAppInterface
+        self, client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
     ) -> None:
         # The forged POST names a permitted number; without a signature it is
         # still refused, and the agent is never reached.
         await client.post("/webhook/whatsapp", data=FORM)
         assert interface.orchestrator.seen == []  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def test_a_signature_for_a_different_body_is_refused(self, client: TestClient) -> None:
+    async def test_a_signature_for_a_different_body_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         url = str(client.make_url("/webhook/whatsapp"))
         stale = _signature(url, {"Body": "something else", "From": FORM["From"]})
         resp = await client.post(
@@ -119,7 +129,7 @@ class TestUnsignedRequestsAreRefused:
 
 class TestASignedRequestIsAccepted:
     async def test_it_reaches_the_agent(
-        self, client: TestClient, interface: WhatsAppInterface
+        self, client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
     ) -> None:
         url = str(client.make_url("/webhook/whatsapp"))
         resp = await client.post(
@@ -136,7 +146,7 @@ async def _replies(interface: WhatsAppInterface) -> None:
     await asyncio.gather(*list(interface._replies))
 
 
-def _signed_post(client: TestClient, form: dict[str, str]) -> Any:
+def _signed_post(client: TestClient[web.Request, web.Application], form: dict[str, str]) -> Any:
     url = str(client.make_url("/webhook/whatsapp"))
     return client.post(
         "/webhook/whatsapp", data=form, headers={"X-Twilio-Signature": _signature(url, form)}
@@ -147,7 +157,7 @@ class TestAFormThatIsNotAllText:
     """Twilio posts only text, so a form with anything else in it is not Twilio's."""
 
     async def test_an_upload_is_refused_and_nothing_fails(
-        self, client: TestClient, interface: WhatsAppInterface
+        self, client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
     ) -> None:
         form = aiohttp.FormData()
         form.add_field("From", FORM["From"])
@@ -162,7 +172,7 @@ class TestAFormThatIsNotAllText:
         assert interface.orchestrator.seen == []  # pyright: ignore[reportAttributeAccessIssue]
 
     async def test_a_field_given_twice_is_read_at_its_first_value(
-        self, client: TestClient, interface: WhatsAppInterface
+        self, client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
     ) -> None:
         url = str(client.make_url("/webhook/whatsapp"))
         signed = _signature(url, FORM)
@@ -182,7 +192,7 @@ class TestTwilioIsAnsweredBeforeTheModel:
     """A turn outlasts Twilio's wait, and a webhook that has not answered is sent again."""
 
     async def test_the_webhook_answers_while_the_model_is_still_thinking(
-        self, client: TestClient, interface: WhatsAppInterface
+        self, client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
     ) -> None:
         agent: Any = interface.orchestrator
         agent.release.clear()
@@ -196,7 +206,7 @@ class TestTwilioIsAnsweredBeforeTheModel:
         assert interface.sent == ["reply"]  # pyright: ignore[reportAttributeAccessIssue]
 
     async def test_a_message_delivered_again_is_answered_once(
-        self, client: TestClient, interface: WhatsAppInterface
+        self, client: TestClient[web.Request, web.Application], interface: WhatsAppInterface
     ) -> None:
         form = {**FORM, "MessageSid": "SM" + "1" * 32}
 
@@ -210,7 +220,10 @@ class TestTwilioIsAnsweredBeforeTheModel:
         assert interface.sent == ["reply"]  # pyright: ignore[reportAttributeAccessIssue]
 
     async def test_a_failing_turn_is_logged_and_frees_the_sender(
-        self, client: TestClient, interface: WhatsAppInterface, caplog: pytest.LogCaptureFixture
+        self,
+        client: TestClient[web.Request, web.Application],
+        interface: WhatsAppInterface,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         async def fail(_text: str, *, channel: str, user: str | None = None) -> str:
             raise RuntimeError("model unavailable")

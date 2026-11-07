@@ -468,7 +468,7 @@ async def _until_subscribed(subscribed: asyncio.Event, name: str, agent_name: st
 
 
 async def await_remote_reply(
-    future: asyncio.Future,
+    future: asyncio.Future[Any],
     reply_topic: str,
     actor: Any,
     agent_name: str,

@@ -67,7 +67,7 @@ class LLMAgent(Actor):
         self.system_prompt = system_prompt
         self.max_history = max_history
         self.summarize_threshold = summarize_threshold  # compress when history exceeds this
-        self._conversation_history: list[dict] = []
+        self._conversation_history: list[dict[str, Any]] = []
         self._history_summary: str = ""  # rolling summary of compressed messages
         self._current_task = "idle"
         # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
@@ -112,7 +112,7 @@ class LLMAgent(Actor):
             if not isinstance(content, str):
                 content = str(content)
             if content.strip():
-                entry: dict = {"role": role, "content": content}
+                entry: dict[str, Any] = {"role": role, "content": content}
                 if "ts" in m and isinstance(m["ts"], (int, float)):
                     entry["ts"] = m["ts"]
                 clean.append(entry)
@@ -222,7 +222,7 @@ class LLMAgent(Actor):
             logger.warning("[%s] Summarization failed: %s — truncating instead", self.name, e)
             self._conversation_history = self._conversation_history[-self.max_history :]
 
-    def _build_messages_with_summary(self, n: int) -> list[dict]:
+    def _build_messages_with_summary(self, n: int) -> list[dict[str, Any]]:
         """Build the message list to send to the LLM, prepending the rolling summary
         as context if one exists.
         """
@@ -243,7 +243,9 @@ class LLMAgent(Actor):
         """The conversational form of a reply stored before summarizing or persisting."""
         return response
 
-    def _record_user_turn(self, user_message: str, blocks: list[dict] | None, ts: float) -> None:
+    def _record_user_turn(
+        self, user_message: str, blocks: list[dict[str, Any]] | None, ts: float
+    ) -> None:
         """Append the user's turn, keeping a text stand-in for any attachments.
 
         The blocks themselves are never stored: a base64 payload in history is
@@ -257,14 +259,14 @@ class LLMAgent(Actor):
             turn["attachments_text"] = flatten(blocks, limit=HISTORY_TEXT_LIMIT)
         self._conversation_history.append(turn)
 
-    def _history_for_request(self, blocks: list[dict] | None) -> list[dict]:
+    def _history_for_request(self, blocks: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
         """The messages to send, with this turn's attachments spliced in.
 
         Older turns carry their stand-in; the current one carries the real
         thing — blocks where the provider takes them, and the full flattened
         text where it does not, so a file is never silently dropped.
         """
-        history: list[dict] = []
+        history: list[dict[str, Any]] = []
         for m in self._build_messages_with_summary(self.max_history):
             if not isinstance(m, dict):
                 continue
@@ -290,7 +292,7 @@ class LLMAgent(Actor):
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
 
-    async def _reply_to_task(self, msg: Message, result: dict) -> None:
+    async def _reply_to_task(self, msg: Message, result: dict[str, Any]) -> None:
         """Answer a task's sender, echoing `_task_id` so their future resolves.
 
         Every exit from `_handle_task` goes through here, including the failures.
@@ -392,7 +394,7 @@ class LLMAgent(Actor):
         finally:
             self._current_task = "idle"
 
-    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+    async def chat(self, user_message: str, attachments: list[dict[str, Any]] | None = None) -> str:
         """Direct async call - useful for the main conversation actor.
 
         `attachments` are content blocks from `llm.attachments.to_blocks`, sent
@@ -439,7 +441,7 @@ class LLMAgent(Actor):
         return response
 
     async def chat_stream(
-        self, user_message: str, attachments: list[dict] | None = None
+        self, user_message: str, attachments: list[dict[str, Any]] | None = None
     ) -> AsyncGenerator[str | dict[str, Any], None]:
         """Streaming version of chat(). Yields text chunks, then a final usage dict.
         The caller is responsible for printing chunks as they arrive.
@@ -595,7 +597,7 @@ class LLMAgent(Actor):
             },
         )
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         m = super()._build_metrics()
         m["input_tokens"] = self.total_input_tokens
         m["output_tokens"] = self.total_output_tokens

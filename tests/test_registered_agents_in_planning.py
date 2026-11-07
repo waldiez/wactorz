@@ -98,7 +98,7 @@ class _Registry:
     input_schema={"value": "float"},
     output_schema={"value": "float"},
 )
-def probe(reading: dict) -> dict:
+def probe(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 

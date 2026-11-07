@@ -91,7 +91,7 @@ def _ha_headers() -> dict[str, str]:
     }
 
 
-async def _wactorz_post(path: str, payload: dict) -> dict:
+async def _wactorz_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -123,7 +123,7 @@ async def _wactorz_get(path: str) -> Any:
         return {"error": str(exc)}
 
 
-async def _wactorz_delete(path: str) -> dict:
+async def _wactorz_delete(path: str) -> dict[str, Any]:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.delete(f"{WACTORZ_URL}{path}", headers=_wactorz_headers()) as resp:
@@ -220,7 +220,7 @@ def _calendar_mcp_status_from_constants() -> dict[str, Any]:
     }
 
 
-async def _calendar_mcp_call(tool_name: str, arguments: dict | None = None) -> str:
+async def _calendar_mcp_call(tool_name: str, arguments: dict[str, Any] | None = None) -> str:
     """Call a tool on the configured Google Calendar MCP server."""
     return await GoogleCalendarMcpClient().call_tool(tool_name, arguments)
 

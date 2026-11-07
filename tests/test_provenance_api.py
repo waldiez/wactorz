@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.persistence import WactorzDB
@@ -41,7 +42,7 @@ def db_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wact
 
 
 @pytest.fixture(name="client")
-async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient]:
+async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -95,7 +96,7 @@ def a_retrain(db: WactorzDB) -> dict[str, str]:
 
 class TestListing:
     async def test_every_node_oldest_recorded_first(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         ids = a_retrain(db)
 
@@ -112,7 +113,7 @@ class TestListing:
         assert "edges" not in body
 
     async def test_by_kind_source_actor_status_and_window(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         ids = a_retrain(db)
 
@@ -135,7 +136,7 @@ class TestListing:
         assert await listed(limit="2") == [ids["alarm"], ids["run"]]
 
     async def test_the_edges_among_the_listed_come_when_asked(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         ids = a_retrain(db)
 
@@ -157,7 +158,11 @@ class TestListing:
         ],
     )
     async def test_a_bad_query_is_a_400_saying_what(
-        self, client: TestClient, db: WactorzDB, params: dict[str, str], why: str
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        params: dict[str, str],
+        why: str,
     ) -> None:
         response = await client.get("/api/provenance", params=params)
 
@@ -165,7 +170,7 @@ class TestListing:
         assert why in (await response.json())["error"]
 
     async def test_without_persistence_it_is_a_503(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "db", None)
         monkeypatch.setattr("wactorz.web.api_provenance.get_db", lambda: None)
@@ -177,7 +182,9 @@ class TestListing:
 
 
 class TestOneNode:
-    async def test_the_node_and_its_edges(self, client: TestClient, db: WactorzDB) -> None:
+    async def test_the_node_and_its_edges(
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
+    ) -> None:
         ids = a_retrain(db)
 
         response = await client.get(f"/api/provenance/{ids['run']}")
@@ -192,7 +199,7 @@ class TestOneNode:
         assert "walk" not in body
 
     async def test_a_walk_down_is_what_followed_and_up_is_what_led(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         ids = a_retrain(db)
 
@@ -218,7 +225,7 @@ class TestOneNode:
         assert [n["id"] for n in near["nodes"]] == [ids["run"]]
 
     async def test_a_node_that_is_not_there_is_a_404_and_a_bad_walk_a_400(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         ids = a_retrain(db)
 

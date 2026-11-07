@@ -36,8 +36,8 @@ class OllamaProvider(LLMProvider):
         return True
 
     @staticmethod
-    def _chat_messages(messages: list[dict], system: str = "") -> list[dict]:
-        out: list[dict] = []
+    def _chat_messages(messages: list[dict[str, Any]], system: str = "") -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
         for m in messages:
             content = m.get("content") if isinstance(m, dict) else m
             if isinstance(content, list):
@@ -76,8 +76,8 @@ class OllamaProvider(LLMProvider):
         return [{"role": "system", "content": system}, *out]
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -98,7 +98,7 @@ class OllamaProvider(LLMProvider):
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -162,7 +162,7 @@ class OllamaProvider(LLMProvider):
         )
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         payload = {

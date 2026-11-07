@@ -418,7 +418,9 @@ class TestPayloadShapes:
             ("migrate_result", MIGRATE_RESULT_FIELDS),
         ],
     )
-    def test_the_runner_publishes_the_contract_fields(self, topic: str, fields: frozenset) -> None:
+    def test_the_runner_publishes_the_contract_fields(
+        self, topic: str, fields: frozenset[Any]
+    ) -> None:
         # Every literal payload published on the topic names at least these
         # keys. Read from source: the paths that publish them need a broker
         # and a running agent, and the shape is what is being pinned.

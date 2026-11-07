@@ -166,7 +166,7 @@ class DynamicAgent(Actor):
         self._fn_handle_task = None
 
         # Namespace shared across all calls (agent can store state here)
-        self._ns: dict = {}
+        self._ns: dict[str, Any] = {}
 
         # Cost tracking (populated by LLMInterface if LLM is used)
         self.total_input_tokens = 0
@@ -197,7 +197,7 @@ class DynamicAgent(Actor):
         # loop, subscription listeners), as opposed to the actor's own loops in
         # ``_tasks``. An in-place code repair tears these down and starts the
         # program again; the actor's message loop and heartbeat keep running.
-        self._program_tasks: list[asyncio.Task] = []
+        self._program_tasks: list[asyncio.Task[Any]] = []
         #: Set once the program has asked to end, so a second ask — or a
         #: process loop still finishing its tick — does not repeat the work.
         self._ending = False
@@ -309,7 +309,7 @@ class DynamicAgent(Actor):
             return False
         return True
 
-    def _track_program_task(self, task: asyncio.Task) -> None:
+    def _track_program_task(self, task: asyncio.Task[Any]) -> None:
         """Track a task the generated program owns, for stop and for repair."""
         self._tasks.append(task)
         self._program_tasks.append(task)
@@ -1270,7 +1270,7 @@ class DynamicAgent(Actor):
         self._process_seconds.add(seconds)
         agent_metrics.PROCESS_DURATION.labels(agent=self.name).observe(seconds)
 
-    def _build_metrics(self) -> dict:
+    def _build_metrics(self) -> dict[str, Any]:
         """The actor's counters, plus the p50 and p95 of recent tasks and cycles.
 
         Here as well as in Prometheus because a node serves no `/metrics`: this

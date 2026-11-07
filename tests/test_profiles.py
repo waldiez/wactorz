@@ -110,7 +110,7 @@ class TestServe:
         monkeypatch.setattr(app_module, "app", fake_app)
 
         @agent
-        def probe(payload: dict) -> None:
+        def probe(payload: dict[str, Any]) -> None:
             return None
 
         await app_module.serve([probe], minimal=True, web=False)
@@ -303,11 +303,11 @@ class TestServeRegistersForTheRunOnly:
         from wactorz.agents.function_agent import agent
 
         @agent
-        def first(payload: dict) -> None:
+        def first(payload: dict[str, Any]) -> None:
             return None
 
         @agent
-        def second(payload: dict) -> None:
+        def second(payload: dict[str, Any]) -> None:
             return None
 
         await app_module.serve([first])
@@ -323,11 +323,11 @@ class TestServeRegistersForTheRunOnly:
         from wactorz.agents.function_agent import agent
 
         @agent(name="shared")
-        def before(payload: dict) -> None:
+        def before(payload: dict[str, Any]) -> None:
             return None
 
         @agent(name="shared")
-        def during(payload: dict) -> None:
+        def during(payload: dict[str, Any]) -> None:
             return None
 
         kept = plugins.register(before)
@@ -342,7 +342,7 @@ class TestServeRegistersForTheRunOnly:
         from wactorz.agents.function_agent import agent
 
         @agent(subscribes="in/x")
-        def step(payload: dict) -> None:
+        def step(payload: dict[str, Any]) -> None:
             return None
 
         pipe = pipelines.pipeline("watch", steps=[step])
@@ -375,11 +375,11 @@ class TestBuiltInNames:
         from wactorz.agents.function_agent import agent
 
         @agent(name=name)
-        def impostor(payload: dict) -> None:
+        def impostor(payload: dict[str, Any]) -> None:
             return None
 
         @agent
-        def honest(payload: dict) -> None:
+        def honest(payload: dict[str, Any]) -> None:
             return None
 
         found = [plugins.plugin_from(impostor), plugins.plugin_from(honest)]
@@ -394,7 +394,7 @@ class TestBuiltInNames:
         from wactorz.agents.function_agent import agent
 
         @agent(autostart=False)
-        def later(payload: dict) -> None:
+        def later(payload: dict[str, Any]) -> None:
             return None
 
         assert app_module.startable_plugins([plugins.plugin_from(later)]) == []
@@ -406,11 +406,11 @@ class TestBuiltInNames:
         from wactorz.agents.function_agent import agent
 
         @agent(name="monitor", subscribes="in/x")
-        def clashing(payload: dict) -> None:
+        def clashing(payload: dict[str, Any]) -> None:
             return None
 
         @agent(subscribes="in/y")
-        def fine(payload: dict) -> None:
+        def fine(payload: dict[str, Any]) -> None:
             return None
 
         bad = pipelines.pipeline("bad", steps=[clashing])

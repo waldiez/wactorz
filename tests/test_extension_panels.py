@@ -199,7 +199,7 @@ class TestTopics:
 @pytest.fixture(name="client")
 async def client_fixture(
     monkeypatch: pytest.MonkeyPatch, script: Path
-) -> AsyncIterator[TestClient]:
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(config, "CONFIG", dataclasses.replace(config.CONFIG, api_key=KEY))
     monkeypatch.setattr(runtime, "registry", None)
     panel = Panel(title="MLOps", script=script, icon="models", topics=("mlops/#",))
@@ -223,7 +223,9 @@ def _keyed() -> dict[str, str]:
 
 
 class TestTheServer:
-    async def test_lists_each_panel_for_the_page(self, client: TestClient) -> None:
+    async def test_lists_each_panel_for_the_page(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         response = await client.get("/api/config", headers=_keyed())
         listed = (await response.json())["extensions"]["panels"]
 
@@ -234,7 +236,7 @@ class TestTheServer:
         ]
 
     async def test_serves_the_script_as_a_module_that_is_checked_each_time(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         response = await client.get("/api/ext/mlops/panel.js", headers=_keyed())
 
@@ -246,20 +248,22 @@ class TestTheServer:
 
     @pytest.mark.parametrize("name", ["plain", "nobody", "..%2F..%2Fetc"])
     async def test_serves_nothing_for_an_extension_without_a_panel(
-        self, client: TestClient, name: str
+        self, client: TestClient[web.Request, web.Application], name: str
     ) -> None:
         response = await client.get(f"/api/ext/{name}/panel.js", headers=_keyed())
 
         assert response.status == 404
 
-    async def test_asks_for_the_key(self, client: TestClient) -> None:
+    async def test_asks_for_the_key(self, client: TestClient[web.Request, web.Application]) -> None:
         assert (await client.get("/api/ext/mlops/panel.js")).status == 401
 
-    async def test_relays_the_topics_a_panel_declared(self, client: TestClient) -> None:
+    async def test_relays_the_topics_a_panel_declared(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert relay.followed() == ("mlops/#",)
 
     async def test_a_script_removed_since_start_is_not_found(
-        self, client: TestClient, script: Path
+        self, client: TestClient[web.Request, web.Application], script: Path
     ) -> None:
         script.unlink()
 

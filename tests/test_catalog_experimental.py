@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+from typing import Any
+
 from wactorz.agents.catalog_agent import (
     BETA_WARNING,
     CatalogAgent,
@@ -87,7 +89,7 @@ def test_catalog_beta_info_hides_code_and_mentions_beta() -> None:
     assert "code" not in info["recipe"]
 
 
-def _grouping_payload(show_experimental: bool) -> dict:
+def _grouping_payload(show_experimental: bool) -> dict[str, Any]:
     return {
         "show_experimental": show_experimental,
         "agents": [

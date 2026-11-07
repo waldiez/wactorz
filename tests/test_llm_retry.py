@@ -37,7 +37,7 @@ from wactorz.agents.llm.retry import (
 from wactorz.config import CONFIG
 
 
-def _with_policy(retries: int = 2, timeout: float = 300.0) -> _patch:
+def _with_policy(retries: int = 2, timeout: float = 300.0) -> "_patch[Any]":
     """CONFIG patched to a given retry/timeout policy."""
     return patch(
         "wactorz.config.CONFIG",
@@ -610,14 +610,14 @@ class FlakyProvider(LLMProvider):
             raise Boom(status_code=429)
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         self._tick()
         return "ok", {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -626,7 +626,7 @@ class FlakyProvider(LLMProvider):
         return ToolCompletion(content="ok", usage={"cost_usd": 0.0})
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> "AsyncIterator[str]":
         self._tick()
         yield "ok"
@@ -662,7 +662,7 @@ async def test_stream_does_not_replay_what_the_reader_already_saw(no_sleep: None
 
     class MidStreamFailure(LLMProvider):
         async def _stream(
-            self, messages: list[dict], system: str = "", **kwargs: Any
+            self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
         ) -> "AsyncIterator[str]":
             nonlocal attempts
             attempts += 1

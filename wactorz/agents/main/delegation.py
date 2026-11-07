@@ -130,7 +130,7 @@ class DelegationManager:
         self.host = host
 
     @contextlib.asynccontextmanager
-    async def _reply_topic(self, node: str) -> AsyncGenerator[tuple[str, asyncio.Future]]:
+    async def _reply_topic(self, node: str) -> AsyncGenerator[tuple[str, asyncio.Future[Any]]]:
         """A reply topic that is already subscribed, and the future its answer lands in.
 
         The answer is the first message there signed by ``node``, the node the
@@ -153,7 +153,7 @@ class DelegationManager:
         a timeout that follows is explained rather than mysterious.
         """
         topic = f"main/reply/{self.host.actor_id}/{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self.host._result_futures[topic] = future
         subscribed = asyncio.Event()
 
@@ -206,7 +206,7 @@ class DelegationManager:
 
     async def delegate_task(
         self, target_name: str, task: Any, timeout: float = 60.0
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Send text or a structured task through the same validated delegation routes."""
         if isinstance(task, dict):
             payload = dict(task)
@@ -219,7 +219,7 @@ class DelegationManager:
 
     async def delegate_payload(
         self, target_name: str, payload: dict[str, Any], timeout: float = 60.0
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """`delegate_task` for a structured task: ``payload`` reaches the agent as it is.
 
         The planner's route to an agent it did not find in its own process,
@@ -233,7 +233,7 @@ class DelegationManager:
         local: dict[str, Any],
         remote: dict[str, Any],
         timeout: float,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """``local`` to the agent here, or ``remote`` to it on its node; None if neither has it."""
         if not self.host._registry:
             return None

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -37,7 +38,7 @@ needs_sh = pytest.mark.skipif(
 )
 
 
-def _compose(name: str) -> dict:
+def _compose(name: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / name).read_text(encoding="utf-8"))
 
 

@@ -14,6 +14,7 @@ there would break it, so `receive_event` stays unbounded on purpose.
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 
@@ -24,9 +25,9 @@ from wactorz.core.integrations.home_assistant.ha_web_socket_client import HAWebS
 class _FakeWS:
     """Replays queued frames, then goes silent without closing."""
 
-    def __init__(self, frames: list[dict] | None = None) -> None:
+    def __init__(self, frames: list[dict[str, Any]] | None = None) -> None:
         self._frames = [json.dumps(f) for f in (frames or [])]
-        self.sent: list[dict] = []
+        self.sent: list[dict[str, Any]] = []
 
     async def send(self, raw: str) -> None:
         self.sent.append(json.loads(raw))

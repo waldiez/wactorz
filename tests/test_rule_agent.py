@@ -71,7 +71,7 @@ class TestConditions:
             ("gte", 1, {"score": "high"}, False),
         ],
     )
-    def test_operators(self, op: str, value: Any, payload: dict, expected: bool) -> None:
+    def test_operators(self, op: str, value: Any, payload: dict[str, Any], expected: bool) -> None:
         field = next(iter(payload))
         condition = RuleCondition.from_dict({"field": field, "op": op, "value": value})
 
@@ -110,7 +110,7 @@ class TestConfig:
             ({"type": "publish", "agent": "notify"}, "topic"),
         ],
     )
-    def test_an_incomplete_action_is_refused(self, raw: dict, why: str) -> None:
+    def test_an_incomplete_action_is_refused(self, raw: dict[str, Any], why: str) -> None:
         with pytest.raises(ValueError, match=why):
             RuleAction.from_dict(raw)
 
@@ -374,7 +374,7 @@ class TestAskingTheOperator:
             ({"type": "ask_operator", "text": "x", "options": ["a", "a"], "timeout": -1}, "twice"),
         ],
     )
-    def test_an_incomplete_question_is_refused(self, raw: dict, why: str) -> None:
+    def test_an_incomplete_question_is_refused(self, raw: dict[str, Any], why: str) -> None:
         with pytest.raises(ValueError, match=why):
             RuleAction.from_dict(raw)
 

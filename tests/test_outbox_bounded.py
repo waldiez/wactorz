@@ -14,6 +14,7 @@ the oldest is the right one to lose.
 
 import asyncio
 from collections import deque
+from typing import Any
 
 import pytest
 
@@ -33,7 +34,7 @@ def publisher_fixture(tmp_path) -> MQTTPublisher:  # type: ignore[no-untyped-def
     return publisher
 
 
-def _queued(publisher: MQTTPublisher) -> list[tuple]:
+def _queued(publisher: MQTTPublisher) -> list[tuple[Any, ...]]:
     return list(publisher._queue._queue)  # type: ignore[attr-defined]
 
 

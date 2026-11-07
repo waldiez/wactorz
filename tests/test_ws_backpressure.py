@@ -15,6 +15,7 @@ knowing it.
 import asyncio
 import json
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from aiohttp import ClientSession, ClientWSTimeout, web
@@ -151,7 +152,7 @@ class TestTheWriterFailsSafely:
     ) -> None:
         """Building a resync reads the database, so it can fail."""
 
-        def boom(*_a: object, **_k: object) -> dict:
+        def boom(*_a: object, **_k: object) -> dict[str, Any]:
             raise RuntimeError("database gone")
 
         monkeypatch.setattr(ws.events, "snapshot", boom)

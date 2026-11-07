@@ -18,7 +18,7 @@ class _FakeLLM:
         return self.response, {}
 
 
-def _agent(request: str, *, history: list[dict] | None = None) -> OneOffActuatorAgent:
+def _agent(request: str, *, history: list[dict[str, Any]] | None = None) -> OneOffActuatorAgent:
     return OneOffActuatorAgent(
         request=request,
         conversation_context=history,
@@ -29,7 +29,7 @@ def _agent(request: str, *, history: list[dict] | None = None) -> OneOffActuator
     )
 
 
-def _two_color_lights() -> list[dict]:
+def _two_color_lights() -> list[dict[str, Any]]:
     return [
         {
             "entity_id": "light.led_strip",

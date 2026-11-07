@@ -33,7 +33,7 @@ from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
 
 
 def _load_recipe_namespace() -> dict[Any, Any]:
-    ns: dict = {}
+    ns: dict[str, Any] = {}
     exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), ns)
     return ns
 
@@ -85,8 +85,8 @@ class FakeAgent:
         self.published: list[tuple[str, Any]] = []
         self.logs: list[str] = []
         self.alerts: list[str] = []
-        self.persisted: dict = {}
-        self.background: list[asyncio.Task] = []
+        self.persisted: dict[str, Any] = {}
+        self.background: list[asyncio.Task[Any]] = []
 
     async def publish(self, topic, payload) -> None:
         self.published.append((topic, payload))

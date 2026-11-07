@@ -54,7 +54,7 @@ def _build(fn: Any, tmp_path: Path, **kwargs: Any) -> FunctionAgent:
 class TestTheDecorator:
     def test_bare_use_names_the_agent_after_the_function(self) -> None:
         @agent
-        def imu_anomaly(reading: dict) -> dict:
+        def imu_anomaly(reading: dict[str, Any]) -> dict[str, Any]:
             """Flags odd readings."""
             return reading
 
@@ -75,7 +75,7 @@ class TestTheDecorator:
             requires={"ram_mb": 256},
             autostart=False,
         )
-        async def detect(reading: dict) -> dict | None:
+        async def detect(reading: dict[str, Any]) -> dict[str, Any] | None:
             return None
 
         spec = spec_of(detect)
@@ -102,11 +102,11 @@ class TestTheDecorator:
 
     def test_a_function_may_take_the_actor_too(self) -> None:
         @agent
-        def with_actor(reading: dict, me: Any) -> None:
+        def with_actor(reading: dict[str, Any], me: Any) -> None:
             return None
 
         @agent
-        def without(reading: dict) -> None:
+        def without(reading: dict[str, Any]) -> None:
             return None
 
         taking = spec_of(with_actor)
@@ -117,19 +117,19 @@ class TestTheDecorator:
 
     def test_a_second_parameter_with_a_default_is_the_functions_own(self) -> None:
         @agent
-        def detect(reading: dict, threshold: float = 4.0) -> None:
+        def detect(reading: dict[str, Any], threshold: float = 4.0) -> None:
             return None
 
         @agent
-        def annotated(reading: dict, me: "FunctionAgent | None" = None) -> None:
+        def annotated(reading: dict[str, Any], me: "FunctionAgent | None" = None) -> None:
             return None
 
         @agent
-        def by_class(reading: dict, me: FunctionAgent = None) -> None:  # pyright: ignore[reportArgumentType]
+        def by_class(reading: dict[str, Any], me: FunctionAgent = None) -> None:  # pyright: ignore[reportArgumentType]
             return None
 
         @agent
-        def dotted(reading: dict, me: "wactorz.FunctionAgent" = None) -> None:  # pyright: ignore[reportArgumentType]
+        def dotted(reading: dict[str, Any], me: "wactorz.FunctionAgent" = None) -> None:  # pyright: ignore[reportArgumentType]
             return None
 
         assert not _spec(detect).wants_actor
@@ -147,7 +147,7 @@ class TestOnStart:
         self, tmp_path: Path, published: list[tuple[str, Any]], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         @agent(subscribes=["a/one", "b/#"], publishes="out/x", description="d")
-        def fn(reading: dict) -> dict:
+        def fn(reading: dict[str, Any]) -> dict[str, Any]:
             return reading
 
         actor = _build(fn, tmp_path)
@@ -172,7 +172,7 @@ class TestMessages:
         self, tmp_path: Path, published: list[tuple[str, Any]]
     ) -> None:
         @agent(subscribes="sensors/imu", publishes="anomalies/imu")
-        def detect(reading: dict) -> dict | None:
+        def detect(reading: dict[str, Any]) -> dict[str, Any] | None:
             return reading if reading["ax"] > 1 else None
 
         actor = _build(detect, tmp_path)
@@ -191,7 +191,7 @@ class TestMessages:
         threads: list[str] = []
 
         @agent
-        def slow(reading: dict) -> None:
+        def slow(reading: dict[str, Any]) -> None:
             threads.append(threading.current_thread().name)
 
         actor = _build(slow, tmp_path)
@@ -201,7 +201,7 @@ class TestMessages:
 
     async def test_a_coroutine_function_runs_on_the_loop(self, tmp_path: Path) -> None:
         @agent
-        async def quick(reading: dict) -> dict:
+        async def quick(reading: dict[str, Any]) -> dict[str, Any]:
             await asyncio.sleep(0)
             return {"ok": True}
 
@@ -210,7 +210,7 @@ class TestMessages:
 
     async def test_the_actor_is_passed_when_asked_for(self, tmp_path: Path) -> None:
         @agent
-        def remember(reading: dict, me: FunctionAgent) -> dict:
+        def remember(reading: dict[str, Any], me: FunctionAgent) -> dict[str, Any]:
             me.persist("last", reading)
             return {"threshold": me.options.get("threshold")}
 
@@ -222,7 +222,7 @@ class TestMessages:
         self, tmp_path: Path, published: list[tuple[str, Any]]
     ) -> None:
         @agent(subscribes="sensors/imu", publishes="anomalies/imu")
-        def detect(reading: dict, threshold: float = 4.0) -> dict | None:
+        def detect(reading: dict[str, Any], threshold: float = 4.0) -> dict[str, Any] | None:
             return reading if reading["score"] > threshold else None
 
         actor = _build(detect, tmp_path)
@@ -234,12 +234,12 @@ class TestMessages:
         self, tmp_path: Path, published: list[tuple[str, Any]]
     ) -> None:
         def plain(fn: Any) -> Any:
-            def wrapper(reading: dict) -> Any:
+            def wrapper(reading: dict[str, Any]) -> Any:
                 return fn(reading)
 
             return wrapper
 
-        async def score(reading: dict) -> dict:
+        async def score(reading: dict[str, Any]) -> dict[str, Any]:
             await asyncio.sleep(0)
             return {"score": reading["ax"] * 2}
 
@@ -254,7 +254,7 @@ class TestMessages:
 class TestTasks:
     async def test_a_task_is_answered_with_the_result_and_its_id(self, tmp_path: Path) -> None:
         @agent
-        def classify(payload: dict) -> dict:
+        def classify(payload: dict[str, Any]) -> dict[str, Any]:
             return {"label": "walking", "input": payload}
 
         actor = _build(classify, tmp_path)
@@ -277,7 +277,7 @@ class TestTasks:
 
     async def test_a_non_dict_result_is_wrapped(self, tmp_path: Path) -> None:
         @agent
-        def score(payload: dict) -> float:
+        def score(payload: dict[str, Any]) -> float:
             return 0.9
 
         actor = _build(score, tmp_path)
@@ -290,7 +290,7 @@ class TestTasks:
 
     async def test_a_failing_function_answers_with_the_error(self, tmp_path: Path) -> None:
         @agent
-        def broken(payload: dict) -> None:
+        def broken(payload: dict[str, Any]) -> None:
             raise ValueError("bad input")
 
         actor = _build(broken, tmp_path)
@@ -306,7 +306,7 @@ class TestTasks:
 
     async def test_other_message_types_are_ignored(self, tmp_path: Path) -> None:
         @agent
-        def fn(payload: dict) -> dict:
+        def fn(payload: dict[str, Any]) -> dict[str, Any]:
             return payload
 
         actor = _build(fn, tmp_path)

@@ -9,6 +9,8 @@ the counter, and an agent that never appeared (just spawned) or migrated away is
 never pruned.
 """
 
+from typing import Any
+
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
@@ -18,7 +20,7 @@ from wactorz.agents.main.spawn_registry import NAME_KEYED_REGISTRY_KEY
 from wactorz.agents.main.spawns import SpawnService
 
 
-def _bare_main(registry: dict) -> MainActor:
+def _bare_main(registry: dict[str, Any]) -> MainActor:
     """A MainActor with only what _agents_to_prune touches, stubbed."""
     m = MainActor.__new__(MainActor)
     m.manifests = ManifestRegistry(m)

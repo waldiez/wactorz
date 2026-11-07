@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, TypeVar
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents.main.actor import MainActor
@@ -51,7 +52,7 @@ async def handle_task(agent, payload):
 @pytest.fixture(name="server")
 async def server_fixture(
     broker: tuple[str, int], main: MainActor, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[TestClient]:
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     """The dashboard's API, with the server's own listener on the broker filling its ledger."""
     host, port = broker
     monkeypatch.setattr(runtime, "MQTT_BROKER", host)
@@ -70,12 +71,16 @@ async def server_fixture(
         await asyncio.gather(listening, return_exceptions=True)
 
 
-async def _open_question(client: TestClient, agent: str) -> dict[str, Any] | None:
+async def _open_question(
+    client: TestClient[web.Request, web.Application], agent: str
+) -> dict[str, Any] | None:
     listed = await (await client.get("/api/questions")).json()
     return next((q for q in listed["open"] if q["agent"] == agent), None)
 
 
-async def _labels(client: TestClient, source: str) -> list[dict[str, Any]] | None:
+async def _labels(
+    client: TestClient[web.Request, web.Application], source: str
+) -> list[dict[str, Any]] | None:
     found = (await (await client.get("/api/labels", params={"source": source})).json())["labels"]
     return found or None
 
@@ -91,7 +96,7 @@ async def _eventually(fetch: Callable[[], Awaitable[T | None]], what: str) -> T:
 
 
 async def test_a_node_agents_question_answered_from_the_api_becomes_a_label(
-    main: MainActor, node: FastNode, server: TestClient
+    main: MainActor, node: FastNode, server: TestClient[web.Request, web.Application]
 ) -> None:
     source = f"sensors/imu/{uuid.uuid4().hex[:8]}"
     await main._spawn_remote(

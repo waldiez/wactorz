@@ -43,14 +43,14 @@ def _itself(value: Any) -> Any:
     yield  # makes this a generator, so awaiting it completes without suspending
 
 
-class AwaitableList(list):
+class AwaitableList(list[Any]):
     """A list that awaits to itself."""
 
     def __await__(self) -> Any:
         return _itself(self)
 
 
-class AwaitableDict(dict):
+class AwaitableDict(dict[str, Any]):
     """A dict that awaits to itself."""
 
     def __await__(self) -> Any:

@@ -13,6 +13,7 @@ would widen what browsers receive — the projection-not-enrichment rule.
 """
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -27,7 +28,7 @@ def _isolate_feed() -> "Iterator[None]":
     runtime.state["log_feed"] = original
 
 
-def feed() -> list[dict]:
+def feed() -> list[dict[str, Any]]:
     return runtime.state["log_feed"]
 
 

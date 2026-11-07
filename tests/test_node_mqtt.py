@@ -78,7 +78,7 @@ class _FakeBroker:
         self.drained = asyncio.Event()
         self.client = _FakeClient(messages, self.drained)
         self.connects = 0
-        self.kwargs: dict = {}
+        self.kwargs: dict[str, Any] = {}
 
     def __call__(self, host: str, port: int, **kwargs: Any) -> "_FakeBroker":
         self.host, self.port, self.kwargs = host, port, kwargs
@@ -115,7 +115,7 @@ def broker_fixture(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _FakeBroker
     return _build
 
 
-async def _until(event: asyncio.Event, task: asyncio.Task, timeout: float = 2.0) -> None:
+async def _until(event: asyncio.Event, task: asyncio.Task[Any], timeout: float = 2.0) -> None:
     """Wait for the broker to be drained, then stop the task under test."""
     try:
         await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -218,9 +218,9 @@ class TestSubscribeDeliversToAgentCode:
 
     async def test_a_json_payload_reaches_the_callback(self, broker: Any, api: AgentAPI) -> None:
         fake = broker(_Message(json.dumps({"temp": 21})))
-        seen: list[dict] = []
+        seen: list[dict[str, Any]] = []
 
-        async def _on_msg(payload: dict) -> None:
+        async def _on_msg(payload: dict[str, Any]) -> None:
             seen.append(payload)
 
         api.subscribe("sensors/x", _on_msg)
@@ -231,9 +231,9 @@ class TestSubscribeDeliversToAgentCode:
 
     async def test_a_non_json_payload_arrives_under_raw(self, broker: Any, api: AgentAPI) -> None:
         fake = broker(_Message("plain text"))
-        seen: list[dict] = []
+        seen: list[dict[str, Any]] = []
 
-        async def _on_msg(payload: dict) -> None:
+        async def _on_msg(payload: dict[str, Any]) -> None:
             seen.append(payload)
 
         api.subscribe("sensors/x", _on_msg)
@@ -248,7 +248,7 @@ class TestSubscribeDeliversToAgentCode:
         fake = broker(_Message(json.dumps({"n": 1})), _Message(json.dumps({"n": 2})))
         seen: list[int] = []
 
-        async def _on_msg(payload: dict) -> None:
+        async def _on_msg(payload: dict[str, Any]) -> None:
             if payload["n"] == 1:
                 raise ValueError("generated code is like this")
             seen.append(payload["n"])
@@ -263,7 +263,7 @@ class TestSubscribeDeliversToAgentCode:
         fake = broker(_Message(json.dumps({"n": 1})), _Message(json.dumps({"n": 2})))
         seen: list[int] = []
 
-        async def _on_msg(payload: dict) -> None:
+        async def _on_msg(payload: dict[str, Any]) -> None:
             seen.append(payload["n"])
             await None  # type: ignore[misc]  # a shape LLMs emit regularly
 
@@ -280,7 +280,7 @@ class TestSubscribeDeliversToAgentCode:
         fake = broker(_Message(json.dumps({"n": 1})), _Message(json.dumps({"n": 2})))
         seen: list[int] = []
 
-        async def _on_msg(payload: dict) -> None:
+        async def _on_msg(payload: dict[str, Any]) -> None:
             seen.append(payload["n"])
             raise TypeError("a genuine bug in the agent")
 

@@ -13,6 +13,7 @@ key, not the one being written.
 
 import pickle
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -54,7 +55,7 @@ class TestWritePickle:
         assert pickle.loads(target.read_bytes()) == {"generation": 1}
 
 
-def _on_disk(tmp_path: Path, agent: str) -> dict:
+def _on_disk(tmp_path: Path, agent: str) -> dict[str, Any]:
     """What a restart would read for ``agent``."""
     return read_state_file(tmp_path / agent / "state.pkl").values
 

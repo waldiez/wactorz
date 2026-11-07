@@ -238,7 +238,7 @@ class GeminiProvider(LLMProvider):
         )
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         contents = self._to_gemini_contents(messages)

@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents.main import data_retention as main_side
@@ -231,7 +232,7 @@ class TestASeries:
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncIterator[TestClient]:
+async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -239,7 +240,9 @@ async def client_fixture() -> AsyncIterator[TestClient]:
 
 
 class TestTheRoutes:
-    async def test_the_series_route_draws_a_column(self, client: TestClient) -> None:
+    async def test_the_series_route_draws_a_column(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         root = data_root(resolve_state_dir())
         writer = Writer(root, "sensors/imu")
         for i in range(4):
@@ -266,7 +269,7 @@ class TestTheRoutes:
         assert bad.status == 400
 
     async def test_the_retention_in_force_is_said(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import wactorz.web.api_data as module
 

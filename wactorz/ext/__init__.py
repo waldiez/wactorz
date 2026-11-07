@@ -275,7 +275,7 @@ def collect_public_config(app: Application) -> dict[str, Any]:
     return out
 
 
-def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict], None]]:
+def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict[str, Any]], None]]:
     """Gather each extension's per-actor payload decorator.
 
     An extension may expose ``actor_decorator(app) -> Callable[[actor, payload], None]``
@@ -285,7 +285,7 @@ def collect_actor_decorators(app: Application) -> list[Callable[[Any, dict], Non
     without the monitor knowing about them. Best-effort: a failing or absent hook,
     or a factory that returns None, is skipped.
     """
-    decorators: list[Callable[[Any, dict], None]] = []
+    decorators: list[Callable[[Any, dict[str, Any]], None]] = []
     for mod in discover():
         factory = getattr(mod, "actor_decorator", None)
         if factory is None:

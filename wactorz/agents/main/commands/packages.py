@@ -7,6 +7,8 @@ installer keeps it and asks on the dashboard about anything not on it; see
 `wactorz.core.packages`.
 """
 
+from typing import Any
+
 from ....core.packages import normalized
 from .dispatch import CommandContext, command
 from .groups import AGENTS
@@ -17,7 +19,7 @@ USAGE = "Usage: /packages · /packages allow <name> … · /packages forget <nam
 _ACTIONS = {"allow": "packages_allow", "forget": "packages_forget"}
 
 
-def _listed(result: dict) -> str:
+def _listed(result: dict[str, Any]) -> str:
     """The list as the operator reads it, in the order it is consulted."""
 
     def names(key: str) -> str:
@@ -35,7 +37,7 @@ def _listed(result: dict) -> str:
     )
 
 
-def _forgetting(names: list[str], result: dict) -> list[str]:
+def _forgetting(names: list[str], result: dict[str, Any]) -> list[str]:
     """What became of each name ``/packages forget`` was given.
 
     Said from what the installer took off, not from what was typed: a misspelt

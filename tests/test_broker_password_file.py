@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -54,7 +55,7 @@ def _created(path: str) -> list[tuple[str, str]]:
     return found
 
 
-def _addon(addon: str) -> dict:
+def _addon(addon: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / "ha-addon" / addon / "config.yaml").read_text(encoding="utf-8"))
 
 

@@ -430,7 +430,9 @@ def _extract(tar: tarfile.TarFile, listed: dict[str, Any], staging: Path) -> int
     return len(seen)
 
 
-def _write_checked(stream: IO[bytes], path: Path, member: tarfile.TarInfo, entry: dict) -> None:
+def _write_checked(
+    stream: IO[bytes], path: Path, member: tarfile.TarInfo, entry: dict[str, Any]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     size = 0

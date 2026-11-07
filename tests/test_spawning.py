@@ -63,7 +63,7 @@ class FakeSupervisor:
     """Records the entries it is told to forget, and when, against the actors' stops."""
 
     def __init__(self, log: list[str]) -> None:
-        self._specs: dict = {}
+        self._specs: dict[str, Any] = {}
         self._log = log
 
     def drop_supervised(self, name: str) -> None:
@@ -103,8 +103,10 @@ class _BaseHost(SpawnMixin):
         self.sent = []  # installer payloads
         self.published = []  # mqtt dashboard echoes
         self.state = ActorState.RUNNING
-        self.detached: list[asyncio.Task] = []  # background work the host was handed
-        self.install_result: dict = {"message": "installed ok"}  # what the installer answers
+        self.detached: list[asyncio.Task[Any]] = []  # background work the host was handed
+        self.install_result: dict[str, Any] = {
+            "message": "installed ok"
+        }  # what the installer answers
         self.told: list[str] = []  # chat notices
 
     async def spawn(self, actor_class, **kwargs) -> "FakeActor":
@@ -174,16 +176,16 @@ class FakeMain(MainActor):
 
     def __init__(self, persistence_dir: str) -> None:
         super().__init__(llm_provider=None, name="main", persistence_dir=persistence_dir)
-        self.registered: list[dict] = []
+        self.registered: list[dict[str, Any]] = []
         self.stopped = False
 
     async def stop(self) -> None:
         self.stopped = True
 
-    def _save_to_spawn_registry(self, config: dict) -> None:
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.registered.append(config)
 
-    def get_user_facts(self) -> dict:
+    def get_user_facts(self) -> dict[str, Any]:
         return {"pref_timezone": "Europe/Athens"}
 
 
@@ -769,7 +771,7 @@ def test_native_recipes_are_json_safe_without_factory() -> None:
 # ── The `trusted` flag is earned, not declared ───────────────────────────────
 
 
-def _dynamic(**extra: object) -> dict:
+def _dynamic(**extra: object) -> dict[str, Any]:
     """A minimal dynamic-agent spawn config, plus whatever the test is about."""
     return {"name": "probe", "type": "dynamic", "code": "async def setup(a): pass", **extra}
 
@@ -837,7 +839,7 @@ def test_a_migrating_catalog_agent_gets_its_trust_back(tmp_path: Path) -> None:
     # that used to migrate fine stops migrating.
     main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
     main._save_to_spawn_registry({"name": "doc-to-pptx", "trusted": True})
-    local_cfg: dict = {"name": "doc-to-pptx"}
+    local_cfg: dict[str, Any] = {"name": "doc-to-pptx"}
 
     earned = main._restore_earned_trust("doc-to-pptx", local_cfg)
 
@@ -850,7 +852,7 @@ def test_a_node_cannot_claim_trust_the_registry_never_granted(tmp_path: Path) ->
     # record is the evidence; the wire is not.
     main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
     main._save_to_spawn_registry({"name": "scraper"})
-    local_cfg: dict = {"name": "scraper", "trusted": True}
+    local_cfg: dict[str, Any] = {"name": "scraper", "trusted": True}
 
     earned = main._restore_earned_trust("scraper", local_cfg)
 

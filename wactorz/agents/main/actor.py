@@ -204,11 +204,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         kwargs.setdefault("system_prompt", orchestrator_prompt(fragments))
         super().__init__(llm_provider=llm_provider, **kwargs)
         self._prompt_fragments = fragments
-        self._result_futures: dict[str, asyncio.Future] = {}
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
         # Queued monitor notifications — prepended to next user response, and
         # capped at MAX_PENDING_NOTIFICATIONS: they drain only when someone
         # chats, so on an idle system with a failing agent nothing empties them.
-        self._pending_notifications: list[dict] = []
+        self._pending_notifications: list[dict[str, Any]] = []
         self.protected = True
         # Stopping main leaves chat unanswered, which is the surface a user
         # would reach for to start it again.
@@ -243,7 +243,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Return the task-local interface excluded from delegation this turn."""
         return _INTERFACE_SOURCE.get()
 
-    def _current_interface_history(self) -> tuple[dict, ...]:
+    def _current_interface_history(self) -> tuple[dict[str, Any], ...]:
         """Return recent structured turns supplied by the active interface."""
         return _INTERFACE_HISTORY.get()
 
@@ -251,7 +251,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Return whether the active interface used speech recognition."""
         return bool(_INTERFACE_VOICE.get())
 
-    def _current_interface_context(self) -> dict:
+    def _current_interface_context(self) -> dict[str, Any]:
         """Return the sanitized capabilities of the active interface."""
         return dict(_INTERFACE_CONTEXT.get() or {})
 
@@ -586,7 +586,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── User input ─────────────────────────────────────────────────────────
 
-    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+    async def chat(self, user_message: str, attachments: list[dict[str, Any]] | None = None) -> str:
         response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
@@ -1590,7 +1590,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     ) -> dict[str, Any] | None:
         return await self.delegation.delegate_task(target_name, task, timeout)
 
-    async def list_agents(self) -> list[dict]:
+    async def list_agents(self) -> list[dict[str, Any]]:
         if not self._registry:
             return []
         return [a.get_status() for a in self._registry.all_actors()]

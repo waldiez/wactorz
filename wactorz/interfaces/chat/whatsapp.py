@@ -114,7 +114,9 @@ class WhatsAppInterface:
             return f"{proto}://{host}{request.rel_url}"
         return str(request.url)
 
-    def _signature_valid(self, validator: Any, request: web.Request, params: dict) -> bool:
+    def _signature_valid(
+        self, validator: Any, request: web.Request, params: dict[str, Any]
+    ) -> bool:
         """Whether this request carries a signature only Twilio could produce.
 
         `From` is checked against the allow-list, but a forged POST can name

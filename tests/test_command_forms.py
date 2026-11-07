@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents.main.commands import groups, registry
@@ -127,7 +128,7 @@ class TestTheSeam:
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncIterator[TestClient]:
+async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -135,7 +136,7 @@ async def client_fixture() -> AsyncIterator[TestClient]:
 
 
 async def test_the_route_lists_what_the_orchestrator_answers(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(runtime, "orchestrator", DirectOrchestrator(registry=None))  # pyright: ignore[reportArgumentType]
 

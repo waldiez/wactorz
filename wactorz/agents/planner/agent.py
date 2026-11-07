@@ -94,7 +94,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # and logs it so the behaviour is never silent.
         self._plan_only = plan_only
         self._approved_plan = approved_plan
-        self._result_futures: dict[str, asyncio.Future] = {}
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
         self._spawned_by_planner: list[str] = []  # agents we created this run
         # Per-agent spawn outcome: name → {"ok": bool, "error": str|None}
         # Sent back to main in the RESULT payload so it knows what actually happened.
@@ -107,7 +107,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # holds the watchdog so normal completion can cancel it.
         self._max_lifetime_s: float = max_lifetime_s
         self._terminated: bool = False
-        self._lifetime_task: asyncio.Task | None = None
+        self._lifetime_task: asyncio.Task[Any] | None = None
 
         # Cost tracking — accumulated across all llm.complete() calls this session
         self.total_input_tokens: int = 0

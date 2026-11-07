@@ -19,17 +19,17 @@ from wactorz.pipelines import Pipeline, pipeline, wiring_errors
 
 
 @agent(subscribes="sensors/imu/#", publishes="anomalies/imu")
-def detect(reading: dict) -> dict:
+def detect(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 
 @agent(subscribes="anomalies/imu")
-def notify(anomaly: dict) -> None:
+def notify(anomaly: dict[str, Any]) -> None:
     return None
 
 
 @agent(subscribes="pipelines/imu-watch/tick", publishes="reports/imu")
-def report(tick: dict) -> dict:
+def report(tick: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True}
 
 
@@ -140,7 +140,7 @@ class TestWiring:
 
     def test_a_wildcard_subscription_matches_a_published_topic(self) -> None:
         @agent(subscribes="anomalies/#")
-        def wide(x: dict) -> None:
+        def wide(x: dict[str, Any]) -> None:
             return None
 
         assert wiring_errors(pipeline("ok", steps=[detect, wide])) == []

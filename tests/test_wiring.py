@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 import wactorz
@@ -420,7 +421,7 @@ class TestAnAgentsManifest:
         store.add(blob, "ahu-scorer", format_name="raw")
 
         @wactorz.agent(name="scorer", subscribes="sensors/ahu-1/#", models={"model": "ahu-scorer"})
-        async def score(reading: dict) -> None:
+        async def score(reading: dict[str, Any]) -> None:
             return None
 
         spec = spec_of(score)
@@ -440,7 +441,7 @@ class TestAnAgentsManifest:
 
     async def test_an_agent_with_no_models_names_none(self, tmp_path: Path) -> None:
         @wactorz.agent(name="plain", subscribes="sensors/x")
-        async def plain(reading: dict) -> None:
+        async def plain(reading: dict[str, Any]) -> None:
             return None
 
         spec = spec_of(plain)
@@ -462,7 +463,7 @@ class TestWhatAnAgentPublishes:
         self, tmp_path: Path, bus: TopicBus
     ) -> None:
         @wactorz.agent(name="scorer", subscribes="sensors/ahu-1/#", publishes="anomalies/ahu-1")
-        async def score(reading: dict) -> None:
+        async def score(reading: dict[str, Any]) -> None:
             return None
 
         spec = spec_of(score)
@@ -491,7 +492,7 @@ class TestWhatAnAgentPublishes:
         monkeypatch.setattr(topic_bus, "_topic_bus", None)
 
         @wactorz.agent(name="lonely", subscribes="sensors/x")
-        async def lonely(reading: dict) -> None:
+        async def lonely(reading: dict[str, Any]) -> None:
             return None
 
         spec = spec_of(lonely)
@@ -644,7 +645,9 @@ def bus_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[TopicBus]:
 
 
 @pytest.fixture(name="client")
-async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TestClient]:
+async def client_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(config, "CONFIG", dataclasses.replace(config.CONFIG, api_key=KEY))
     monkeypatch.setattr(runtime, "registry", None)
     client = TestClient(TestServer(build_app()))
@@ -655,7 +658,10 @@ async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TestC
 
 class TestTheRoute:
     async def test_it_answers_with_the_graph_where_the_registry_lives(
-        self, client: TestClient, bus: TopicBus, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        bus: TopicBus,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(runtime, "system", object())
         bus.register_contract(scorer(models={"model": "ahu-scorer"}))
@@ -671,7 +677,10 @@ class TestTheRoute:
         ]
 
     async def test_a_payload_json_cannot_say_is_said_as_text(
-        self, client: TestClient, bus: TopicBus, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        bus: TopicBus,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(runtime, "system", object())
         odd = scorer()
@@ -687,7 +696,10 @@ class TestTheRoute:
         assert response.status == 200
 
     async def test_without_an_actor_system_it_says_where_the_registry_lives(
-        self, client: TestClient, bus: TopicBus, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        bus: TopicBus,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(runtime, "system", None)
 
@@ -696,7 +708,7 @@ class TestTheRoute:
         assert response.status == 503
         assert (await response.json()) == {"error": NO_REGISTRY}
 
-    async def test_it_needs_the_key(self, client: TestClient) -> None:
+    async def test_it_needs_the_key(self, client: TestClient[web.Request, web.Application]) -> None:
         response = await client.get("/api/wiring")
 
         assert response.status == 401

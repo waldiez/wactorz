@@ -367,7 +367,7 @@ class InstallerAgent(Actor):
         kwargs.setdefault("name", "installer")
         super().__init__(**kwargs)
         self.protected = True
-        self._install_log: list[dict] = []
+        self._install_log: list[dict[str, Any]] = []
         # Serialises the read-then-append on the known-hosts file: two deploys
         # to new hosts at once would otherwise both read "unknown" and race.
         self._known_hosts_lock = asyncio.Lock()
@@ -412,7 +412,7 @@ class InstallerAgent(Actor):
             if target:
                 await self.send(target, MessageType.RESULT, result)
 
-    async def _handle_install(self, msg: Message) -> dict:
+    async def _handle_install(self, msg: Message) -> dict[str, Any]:
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         action = payload.get("action", "install")
 
@@ -527,7 +527,7 @@ class InstallerAgent(Actor):
         names = {normalized(p) for p in packages} | set(self._remembered())
         self.persist(ALLOWED_KEY, sorted(filter(None, names)))
 
-    def _wanted_by(self, msg: Message, payload: dict) -> str:
+    def _wanted_by(self, msg: Message, payload: dict[str, Any]) -> str:
         """Who an install is for, as the operator is told: the agent, or who asked."""
         agent = str(payload.get("agent") or payload.get("agent_name") or "").strip()
         if agent:
@@ -603,7 +603,7 @@ class InstallerAgent(Actor):
                 await self.close_permission(question_id, ALLOWED)
 
     @staticmethod
-    def _not_allowed(refused: list[str]) -> dict:
+    def _not_allowed(refused: list[str]) -> dict[str, Any]:
         names = ", ".join(refused)
         return {
             "success": False,
@@ -641,7 +641,7 @@ class InstallerAgent(Actor):
             # Another spawn waiting for the same packages goes through too.
             await self._settle_allowed()
 
-    async def _change_the_list(self, action: str, payload: dict) -> dict:
+    async def _change_the_list(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         """``/packages``: show, add to or take from the operator's list."""
         packages = payload.get("packages", [])
         if isinstance(packages, str):
@@ -678,7 +678,7 @@ class InstallerAgent(Actor):
         for_agent: str = "",
         notify: bool = False,
         require_install_success: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Install `packages` one at a time, reporting each and the outcome.
 
         With `notify`, each package actually being installed is announced in
@@ -868,7 +868,7 @@ class InstallerAgent(Actor):
 
     # ── Helper actions ──────────────────────────────────────────────────────
 
-    def _check_packages(self, packages: list[str]) -> dict:
+    def _check_packages(self, packages: list[str]) -> dict[str, Any]:
         status = {}
         for pkg in packages:
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
@@ -876,12 +876,12 @@ class InstallerAgent(Actor):
             status[pkg] = "installed" if self._is_installed(import_name) else "missing"
         return {"status": status}
 
-    def _resolve_imports(self, imports: list[str]) -> dict:
+    def _resolve_imports(self, imports: list[str]) -> dict[str, Any]:
         return {"resolved": {imp: IMPORT_TO_PACKAGE.get(imp, imp) for imp in imports}}
 
     # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
 
-    def _resolve_ssh_target(self, payload: dict) -> DeployTarget | None:
+    def _resolve_ssh_target(self, payload: dict[str, Any]) -> DeployTarget | None:
         """The configured deploy target a payload refers to, by node name or host.
 
         The node actions may be handed a host rather than a node name, so a host
@@ -1172,7 +1172,7 @@ class InstallerAgent(Actor):
             f"own account of why."
         )
 
-    async def _ssh_kwargs(self, payload: dict) -> dict:
+    async def _ssh_kwargs(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Build asyncssh connection kwargs for a task payload.
 
         Credentials come from the configured deploy target and from nowhere
@@ -1189,7 +1189,7 @@ class InstallerAgent(Actor):
         if not target.key_path and not target.password:
             raise DeployRefusedError.no_credentials(target)
 
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "host": host,
             "port": target.ssh_port,
             "username": target.user,
@@ -1442,8 +1442,8 @@ class InstallerAgent(Actor):
         )
 
     async def _node_install(
-        self, payload: dict, wanted_by: str = "an agent", *, ask: bool = True
-    ) -> dict:
+        self, payload: dict[str, Any], wanted_by: str = "an agent", *, ask: bool = True
+    ) -> dict[str, Any]:
         """Install pip packages on a remote node via SSH.
 
         payload keys:
@@ -1526,7 +1526,7 @@ class InstallerAgent(Actor):
         except Exception as e:
             return {"success": False, "host": host, "error": str(e)}
 
-    async def _node_deploy(self, payload: dict) -> dict:
+    async def _node_deploy(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Full bootstrap of a new Wactorz edge node via SSH.
 
         Steps:
@@ -1880,7 +1880,7 @@ class InstallerAgent(Actor):
         main = find_main_actor(self._registry)
         return main is not None and msg.sender_id == main.actor_id
 
-    async def _node_run(self, payload: dict) -> dict:
+    async def _node_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Run a command the operator typed, as `/nodes run`, on a node.
 
         payload keys:
@@ -1905,7 +1905,7 @@ class InstallerAgent(Actor):
         result = await self._run_on_node(payload, command, COMMAND_TIMEOUT_S)
         return {"host": payload.get("host") or where, "command": command, **result}
 
-    async def _node_op(self, payload: dict) -> dict:
+    async def _node_op(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Run a named operation from `core.node_operations` on a node.
 
         payload keys:
@@ -1932,7 +1932,9 @@ class InstallerAgent(Actor):
             return result
         return {"node": target.name, "operation": name, **result}
 
-    async def _run_on_node(self, payload: dict, command: str, timeout: float) -> dict:
+    async def _run_on_node(
+        self, payload: dict[str, Any], command: str, timeout: float
+    ) -> dict[str, Any]:
         """Run ``command`` on the node ``payload`` names, over SSH, within ``timeout``.
 
         Every command a node is sent outside a deploy goes through here, so how

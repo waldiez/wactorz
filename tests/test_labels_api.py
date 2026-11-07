@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core import labels as core_labels
@@ -36,7 +37,7 @@ def db_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Wact
 
 
 @pytest.fixture(name="client")
-async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient]:
+async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -54,7 +55,9 @@ def corrected(db: WactorzDB) -> None:
 
 
 class TestListing:
-    async def test_labels_are_listed_by_source(self, client: TestClient, db: WactorzDB) -> None:
+    async def test_labels_are_listed_by_source(
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
+    ) -> None:
         corrected(db)
 
         response = await client.get("/api/labels", params={"source": SOURCE})
@@ -67,7 +70,7 @@ class TestListing:
         ]
 
     async def test_a_window_keeps_the_labels_that_touch_it(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         corrected(db)
 
@@ -79,7 +82,7 @@ class TestListing:
         assert [lab["value"] for lab in body["labels"]] == ["maintenance", "fault"]
 
     async def test_superseded_labels_are_listed_only_when_asked(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         labels = Labels(db)
         labels.write(source=SOURCE, start=T0, value="maintenance", actor=OPERATOR, recorded=T0)
@@ -103,7 +106,7 @@ class TestListing:
         ],
     )
     async def test_a_query_that_is_not_one_is_refused(
-        self, client: TestClient, params: dict[str, str]
+        self, client: TestClient[web.Request, web.Application], params: dict[str, str]
     ) -> None:
         response = await client.get("/api/labels", params=params)
 
@@ -112,7 +115,7 @@ class TestListing:
 
 class TestWhatHeld:
     async def test_one_source_resolves_into_what_held_when(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         corrected(db)
 
@@ -125,7 +128,9 @@ class TestWhatHeld:
             (T0 + HOUR, None, "fault"),
         ]
 
-    async def test_the_source_is_required(self, client: TestClient) -> None:
+    async def test_the_source_is_required(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         response = await client.get("/api/labels/effective")
 
         assert response.status == 400
@@ -157,7 +162,7 @@ class _Refusing:
 
 
 async def test_an_answer_that_could_not_be_sent_is_not_vouched_for(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(core_labels, "_vouched", {})
     monkeypatch.setattr(questions, "_books", {})
@@ -181,7 +186,7 @@ async def test_an_answer_that_could_not_be_sent_is_not_vouched_for(
 
 
 async def test_an_answer_the_dashboard_sends_is_vouched_for(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(core_labels, "_vouched", {})
     monkeypatch.setattr(questions, "_books", {})

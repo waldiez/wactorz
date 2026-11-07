@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.agents.main import artifact_service as service_module
@@ -493,7 +494,7 @@ class TestTheStoreJournalsEachChange:
 @pytest.fixture(name="client")
 async def client_fixture(
     db: WactorzDB, store: ArtifactStore, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[TestClient]:
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(runtime, "db", db)
     client = TestClient(TestServer(build_app()))
     await client.start_server()
@@ -503,7 +504,7 @@ async def client_fixture(
 
 class TestTheHistoryRoute:
     async def test_it_lists_the_moves_newest_first(
-        self, client: TestClient, graph: Provenance
+        self, client: TestClient[web.Request, web.Application], graph: Provenance
     ) -> None:
         record_move(graph, _pointer(2, previous=1))
         record_move(graph, _pointer(3, previous=2))
@@ -519,7 +520,7 @@ class TestTheHistoryRoute:
         ]
 
     async def test_a_limit_caps_it_and_a_bad_one_is_refused(
-        self, client: TestClient, graph: Provenance
+        self, client: TestClient[web.Request, web.Application], graph: Provenance
     ) -> None:
         record_move(graph, _pointer(2, previous=1))
         record_move(graph, _pointer(3, previous=2))
@@ -529,16 +530,20 @@ class TestTheHistoryRoute:
         for bad in ("0", "lots", str(api_models.MAX_MOVES + 1)):
             assert (await client.get("/api/models/imu/moves", params={"limit": bad})).status == 400
 
-    async def test_a_name_with_no_moves_has_an_empty_history(self, client: TestClient) -> None:
+    async def test_a_name_with_no_moves_has_an_empty_history(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         body = await (await client.get("/api/models/imu/moves")).json()
 
         assert body == {"name": "imu", "moves": []}
 
-    async def test_a_name_that_cannot_be_one_is_refused(self, client: TestClient) -> None:
+    async def test_a_name_that_cannot_be_one_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.get("/api/models/-bad/moves")).status == 400
 
     async def test_without_persistence_it_says_so(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "db", None)
         monkeypatch.setattr(api_models, "get_db", lambda: None)

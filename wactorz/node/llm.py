@@ -38,8 +38,8 @@ class BridgeProvider(LLMProvider):
         self._agent = agent
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         """Ask main to make this call, and wait for the answer it publishes back.
 
         The usage it reports is whatever main sent. The bridge has historically
@@ -85,7 +85,7 @@ async def request_over_mqtt(
     nothing waiting and is logged rather than resolving a call that gave up.
     """
     reply_topic = f"nodes/{agent.node}/reply/{uuid.uuid4().hex[:8]}"
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    future: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
     agent._result_futures[reply_topic] = future
     try:
         # Signed last, so the signature covers the reply topic and who is asking:

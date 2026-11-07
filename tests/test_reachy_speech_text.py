@@ -7,11 +7,13 @@ Stripping happens at synthesis because that is the one point every spoken word
 crosses, whatever produced it.
 """
 
+from typing import Any
+
 import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
 
-NS: dict = {}
+NS: dict[str, Any] = {}
 exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
 
 

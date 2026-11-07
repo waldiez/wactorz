@@ -276,7 +276,7 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
             def recall(self, key, default=None) -> Any:
                 return self.memory.get(key, default)
 
-            async def _current(self, location: str, units: str = "celsius") -> dict:
+            async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 return {
                     "kind": "current",
@@ -290,7 +290,9 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
                     "condition": "clear",
                 }
 
-            async def _forecast(self, location: str, units: str = "celsius", **kwargs) -> dict:
+            async def _forecast(
+                self, location: str, units: str = "celsius", **kwargs
+            ) -> dict[str, Any]:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 # Use tomorrow relative to today so the agent labels it "tomorrow"
                 # (the agent anchors to the real current date; a fixed date rots).
@@ -350,7 +352,7 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
             def recall(self, key, default=None) -> Any:
                 return self.memory.get(key, default)
 
-            async def _current(self, location: str, units: str = "celsius") -> dict:
+            async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
                 labels = {
                     "athens": "Athens, Attica, Greece",
                     "paris": "Paris, Ile-de-France, France",
@@ -397,7 +399,7 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
             def recall(self, key, default=None) -> Any:
                 return self.memory.get(key, default)
 
-            async def _current(self, location: str, units: str = "celsius") -> dict:
+            async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 return {
                     "kind": "current",

@@ -140,7 +140,7 @@ class PersistenceAPI:
 
         # Pickle keys are anything not in the SQLite or ephemeral sets — we group
         # them so one disk write covers all of them instead of N writes.
-        pickle_blob: dict = {}
+        pickle_blob: dict[str, Any] = {}
         # Keys whose old values stay: the ones just written, and any whose write
         # failed -- a failed write keeps what was there rather than deleting it.
         keep: set[str] = set()

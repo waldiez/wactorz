@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -40,7 +41,7 @@ def _addon(addon: str, name: str) -> str:
     return (ROOT / "ha-addon" / addon / name).read_text(encoding="utf-8")
 
 
-def _maps(addon: str) -> dict[str, dict]:
+def _maps(addon: str) -> dict[str, dict[str, Any]]:
     """The add-on's mapped folders, by type."""
     entries = yaml.safe_load(_addon(addon, "config.yaml"))["map"]
     assert all(isinstance(entry, dict) for entry in entries), (

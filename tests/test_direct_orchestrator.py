@@ -249,7 +249,7 @@ class TestStreaming:
 
 
 @agent(name="imu-anomaly", description="scores a reading")
-def score(reading: dict) -> dict:
+def score(reading: dict[str, Any]) -> dict[str, Any]:
     return {"score": abs(reading["ax"]) + abs(reading["ay"]), "reading": reading}
 
 

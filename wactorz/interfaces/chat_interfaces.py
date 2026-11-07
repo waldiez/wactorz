@@ -7,7 +7,7 @@ Telegram, WhatsApp (via Twilio) and REST.
 """
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..config import CONFIG
 from .chat.cli import CLIInterface, resolve_host
@@ -31,7 +31,7 @@ SOCIAL_INTERFACES = frozenset({"discord", "telegram", "whatsapp"})
 
 def build_social_companions(
     orchestrator: "Orchestrator", primary: str, *, outbox: Outbox | None = None
-) -> list:
+) -> list[Any]:
     """Discord/Telegram interfaces to run alongside the primary interface.
 
     These talk to the orchestrator as a social channel (no spawn/delete/code), so
@@ -42,7 +42,7 @@ def build_social_companions(
     selection is easy to unit-test. ``outbox`` is what carries agents' messages
     to them; each channel registers with it as it comes up.
     """
-    companions: list = []
+    companions: list[Any] = []
     if CONFIG.discord_token and primary != "discord":
         blocked = social_channel_blocked(
             "discord", CONFIG.discord_token, CONFIG.discord_allowed_user_ids
@@ -78,7 +78,7 @@ def build_social_companions(
     return companions
 
 
-def run_all_interfaces(interfaces: list) -> list:
+def run_all_interfaces(interfaces: list[Any]) -> list[Any]:
     """Turn companion interface objects into their ``.run()`` coroutines for gather.
 
     The outbox goes in the same list: it has a ``run`` of the same shape, and

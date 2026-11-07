@@ -277,7 +277,7 @@ class _Scheduled(Actor):
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "scheduled")
         super().__init__(**kwargs)
-        self._loop_task: asyncio.Task | None = None
+        self._loop_task: asyncio.Task[Any] | None = None
         self.cancelling = asyncio.Event()
         self.release = asyncio.Event()
         self.entered = asyncio.Event()

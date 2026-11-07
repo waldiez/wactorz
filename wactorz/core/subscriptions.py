@@ -102,17 +102,17 @@ class Binding:
         self.topic = topic
         self.callback = callback
         self.concurrency = concurrency
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-        self.workers: list[asyncio.Task] = []
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
+        self.workers: list[asyncio.Task[Any]] = []
         #: Messages discarded because the callback fell behind, for the log.
         self.dropped = 0
 
     @property
-    def worker(self) -> asyncio.Task | None:
+    def worker(self) -> asyncio.Task[Any] | None:
         """The first worker, for callers that know of one."""
         return self.workers[0] if self.workers else None
 
-    def live_workers(self) -> list[asyncio.Task]:
+    def live_workers(self) -> list[asyncio.Task[Any]]:
         return [w for w in self.workers if not w.done()]
 
     def offer(self, payload: Any) -> bool:
@@ -163,15 +163,15 @@ class SubscriptionHub:
         #: filter, and keying by topic would silently drop the first.
         self._bindings: list[Binding] = []
         self._client: Any = None
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
         #: Subscriptions sent on the live connection and not yet acknowledged,
         #: held so none is collected part-way through.
-        self._subscribing: set[asyncio.Task] = set()
+        self._subscribing: set[asyncio.Task[Any]] = set()
         self._warned = [False]
         #: Consecutive failures per topic, for the budget `_record_failure` keeps.
         self._failures: dict[str, int] = {}
 
-    def bind(self, topic: str, callback: Any, *, concurrency: int = 1) -> asyncio.Task | None:
+    def bind(self, topic: str, callback: Any, *, concurrency: int = 1) -> asyncio.Task[Any] | None:
         """Register a subscription, returning the hub task if this call started it.
 
         The caller tracks that task on the actor so stopping the actor stops the

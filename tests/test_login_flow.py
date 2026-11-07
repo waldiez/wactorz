@@ -23,7 +23,7 @@ from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from aiohttp import WSServerHandshakeError
+from aiohttp import WSServerHandshakeError, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.config import CONFIG
@@ -34,7 +34,9 @@ KEY = "the-configured-key"
 
 
 @pytest.fixture(name="client")
-async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[TestClient, Any]:
+async def client_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncGenerator[TestClient[web.Request, web.Application], Any]:
     """The real app with a key set — the configuration sign-in exists for."""
     monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=KEY))
     sessions.store.revoke_all()
@@ -46,25 +48,31 @@ async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Test
         yield c
 
 
-def _cookie(client: TestClient) -> str:
+def _cookie(client: TestClient[web.Request, web.Application]) -> str:
     jar = {c.key: c.value for c in client.session.cookie_jar}
     return jar.get(auth.SESSION_COOKIE, "")
 
 
 class TestWhatAnUnauthenticatedCallerIsTold:
-    async def test_a_browser_is_sent_to_the_login_form(self, client: TestClient) -> None:
+    async def test_a_browser_is_sent_to_the_login_form(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.get("/", headers={"Accept": "text/html"}, allow_redirects=False)
 
         assert resp.status == 302
         assert resp.headers["Location"].startswith("/login")
 
-    async def test_a_script_still_gets_401(self, client: TestClient) -> None:
+    async def test_a_script_still_gets_401(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # A redirect would hand curl an HTML page and a 200 it did not earn.
         resp = await client.get("/api/actors", headers={"Accept": "application/json"})
 
         assert resp.status == 401
 
-    async def test_where_it_was_going_is_remembered(self, client: TestClient) -> None:
+    async def test_where_it_was_going_is_remembered(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Asserted as a round trip rather than on the escaping: yarl normalises
         # the redirect URL, so how the value is encoded is its business — that
         # the value survives is ours.
@@ -75,62 +83,82 @@ class TestWhatAnUnauthenticatedCallerIsTold:
         carried = parse_qs(urlparse(resp.headers["Location"]).query)["next"][0]
         assert carried == "/api/logs?level=ERROR"
 
-    async def test_the_form_itself_is_reachable(self, client: TestClient) -> None:
+    async def test_the_form_itself_is_reachable(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Or the redirect loops: the page a stranger must reach cannot be gated.
         resp = await client.get("/login")
 
         assert resp.status == 200
         assert "text/html" in resp.headers["Content-Type"]
 
-    async def test_health_stays_open(self, client: TestClient) -> None:
+    async def test_health_stays_open(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.get("/health")).status == 200
 
 
 class TestSigningIn:
-    async def test_the_right_key_starts_a_session(self, client: TestClient) -> None:
+    async def test_the_right_key_starts_a_session(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/login", data={"key": KEY}, allow_redirects=False)
 
         assert resp.status == 302
         assert sessions.store.is_valid(_cookie(client))
 
-    async def test_the_cookie_never_carries_the_key(self, client: TestClient) -> None:
+    async def test_the_cookie_never_carries_the_key(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The point of the whole design: a stolen cookie is one revocable
         # session, not the credential every script and probe also uses.
         resp = await client.post("/login", data={"key": KEY}, allow_redirects=False)
 
         assert KEY not in resp.headers.get("Set-Cookie", "")
 
-    async def test_the_cookie_is_not_readable_from_script(self, client: TestClient) -> None:
+    async def test_the_cookie_is_not_readable_from_script(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/login", data={"key": KEY}, allow_redirects=False)
 
         assert "HttpOnly" in resp.headers["Set-Cookie"]
 
-    async def test_the_session_then_opens_the_dashboard(self, client: TestClient) -> None:
+    async def test_the_session_then_opens_the_dashboard(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         await client.post("/login", data={"key": KEY})
 
         assert (await client.get("/api/actors")).status == 200
 
-    async def test_a_wrong_key_is_refused_without_a_session(self, client: TestClient) -> None:
+    async def test_a_wrong_key_is_refused_without_a_session(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/login", data={"key": "not-it"})
 
         assert resp.status == 401
         assert not _cookie(client)
 
-    async def test_a_wrong_key_says_nothing_about_why(self, client: TestClient) -> None:
+    async def test_a_wrong_key_says_nothing_about_why(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post("/login", data={"key": "not-it"})
 
         body = await resp.text()
         assert "not accepted" in body
         assert KEY not in body
 
-    async def test_it_returns_to_where_the_user_was_going(self, client: TestClient) -> None:
+    async def test_it_returns_to_where_the_user_was_going(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post(
             "/login", data={"key": KEY, "next": "/api/logs"}, allow_redirects=False
         )
 
         assert resp.headers["Location"] == "/api/logs"
 
-    async def test_it_returns_to_the_view_the_address_named(self, client: TestClient) -> None:
+    async def test_it_returns_to_the_view_the_address_named(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The page's script puts the address's #... on `next`, the one part a
         # browser never sends: the redirect must keep it.
         resp = await client.post(
@@ -139,21 +167,25 @@ class TestSigningIn:
 
         assert resp.headers["Location"] == "/#/models/imu"
 
-    async def test_a_refused_key_keeps_the_view_for_the_next_try(self, client: TestClient) -> None:
+    async def test_a_refused_key_keeps_the_view_for_the_next_try(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The page the refusal answers with is at /login with no #..., so the
         # view rides in its form or is lost.
         resp = await client.post("/login", data={"key": "wrong", "next": "/#/models/imu"})
 
         assert 'name="next" value="/#/models/imu"' in await resp.text()
 
-    async def test_the_page_adds_the_address_view_to_the_form(self, client: TestClient) -> None:
+    async def test_the_page_adds_the_address_view_to_the_form(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.get("/login")
         body = await resp.text()
 
         assert "location.hash" in body
 
     async def test_its_script_runs_by_a_nonce_and_nothing_else_may(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         first = await client.get("/login")
         second = await client.get("/login")
@@ -165,7 +197,9 @@ class TestSigningIn:
         assert f'<script nonce="{nonce[1]}">' in await first.text()
         assert second.headers["Content-Security-Policy"] != policy
 
-    async def test_it_will_not_be_redirected_off_this_server(self, client: TestClient) -> None:
+    async def test_it_will_not_be_redirected_off_this_server(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The login page is the one page a stranger can always reach, so an
         # unchecked `next` would make it an open redirect.
         resp = await client.post(
@@ -176,7 +210,7 @@ class TestSigningIn:
 
     @pytest.mark.parametrize("hidden", ["\t", "\n", "\r", "\x00", "\x7f"])
     async def test_a_host_hidden_behind_a_control_character_is_refused(
-        self, client: TestClient, hidden: str
+        self, client: TestClient[web.Request, web.Application], hidden: str
     ) -> None:
         # A browser drops tabs and newlines before reading a URL, and aiohttp
         # drops them from a Location, so `/<tab>/host` would arrive as `//host`.
@@ -189,7 +223,9 @@ class TestSigningIn:
         assert resp.status == 302
         assert resp.headers["Location"] == "/"
 
-    async def test_a_scheme_relative_target_is_refused_too(self, client: TestClient) -> None:
+    async def test_a_scheme_relative_target_is_refused_too(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # `//host` starts with a slash, so a "must be absolute" check alone
         # waves it through while a browser reads it as another host.
         resp = await client.post(
@@ -200,7 +236,9 @@ class TestSigningIn:
 
 
 class TestSigningOut:
-    async def test_the_session_stops_working(self, client: TestClient) -> None:
+    async def test_the_session_stops_working(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         await client.post("/login", data={"key": KEY})
         assert (await client.get("/api/actors")).status == 200
 
@@ -208,7 +246,9 @@ class TestSigningOut:
 
         assert (await client.get("/api/actors")).status == 401
 
-    async def test_the_cookie_is_cleared_from_the_browser(self, client: TestClient) -> None:
+    async def test_the_cookie_is_cleared_from_the_browser(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         await client.post("/login", data={"key": KEY})
 
         await client.post("/logout")
@@ -235,7 +275,9 @@ class TestAnInstallWithNoKey:
 
 
 class TestTheStartupSignInLink:
-    async def test_following_it_signs_the_browser_in(self, client: TestClient) -> None:
+    async def test_following_it_signs_the_browser_in(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         code = sessions.codes.issue()
 
         resp = await client.get(f"/login?code={code}", allow_redirects=False)
@@ -243,7 +285,9 @@ class TestTheStartupSignInLink:
         assert resp.status == 302
         assert sessions.store.is_valid(_cookie(client))
 
-    async def test_following_it_twice_does_not(self, client: TestClient) -> None:
+    async def test_following_it_twice_does_not(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Whoever reads the terminal afterwards finds a spent code.
         code = sessions.codes.issue()
         await client.get(f"/login?code={code}", allow_redirects=False)
@@ -254,20 +298,26 @@ class TestTheStartupSignInLink:
         assert resp.status == 200
         assert not _cookie(client)
 
-    async def test_a_spent_code_says_so(self, client: TestClient) -> None:
+    async def test_a_spent_code_says_so(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Rather than the generic prompt, which reads as "the link did nothing".
         resp = await client.get("/login?code=never-issued")
 
         assert "used or has expired" in await resp.text()
 
-    async def test_it_honours_where_the_user_was_going(self, client: TestClient) -> None:
+    async def test_it_honours_where_the_user_was_going(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         code = sessions.codes.issue()
 
         resp = await client.get(f"/login?code={code}&next=/api/logs", allow_redirects=False)
 
         assert resp.headers["Location"] == "/api/logs"
 
-    async def test_it_will_not_be_redirected_off_this_server(self, client: TestClient) -> None:
+    async def test_it_will_not_be_redirected_off_this_server(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         code = sessions.codes.issue()
 
         resp = await client.get(
@@ -317,7 +367,9 @@ class TestTheLinkOnTheBanner:
 
 
 class TestSigningOutEverywhere:
-    async def test_every_session_ends(self, client: TestClient) -> None:
+    async def test_every_session_ends(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         await client.post("/login", data={"key": KEY})
         elsewhere = sessions.store.create()  # another browser
 
@@ -326,7 +378,9 @@ class TestSigningOutEverywhere:
         assert not sessions.store.is_valid(elsewhere)
         assert (await client.get("/api/actors")).status == 401
 
-    async def test_the_key_still_works_afterwards(self, client: TestClient) -> None:
+    async def test_the_key_still_works_afterwards(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The point of holding a session id rather than the key: signing
         # everyone out must not break the scripts and probes using the key.
         await client.post("/login", data={"key": KEY})
@@ -348,7 +402,7 @@ class TestGuessingGetsExpensive:
     """
 
     async def test_a_second_guess_is_refused_without_being_checked(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         await client.post("/login", data={"key": "guess"})
 
@@ -357,7 +411,9 @@ class TestGuessingGetsExpensive:
         assert resp.status == 429
         assert "Too many attempts" in await resp.text()
 
-    async def test_the_wait_applies_to_the_right_key_too(self, client: TestClient) -> None:
+    async def test_the_wait_applies_to_the_right_key_too(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Counting rather than delaying: the door is shut for the address, and
         # knowing the key does not reopen it early.
         await client.post("/login", data={"key": "guess"})
@@ -367,14 +423,18 @@ class TestGuessingGetsExpensive:
         assert resp.status == 429
         assert not _cookie(client)
 
-    async def test_it_says_how_long_to_wait(self, client: TestClient) -> None:
+    async def test_it_says_how_long_to_wait(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         await client.post("/login", data={"key": "guess"})
 
         body = await (await client.post("/login", data={"key": "guess"})).text()
 
         assert "1 seconds" in body
 
-    async def test_a_locked_out_address_is_told_in_minutes(self, client: TestClient) -> None:
+    async def test_a_locked_out_address_is_told_in_minutes(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Driven through the store, because reaching five failures over HTTP
         # means waiting out four backoffs first — which is the point of them.
         for _ in range(5):
@@ -384,7 +444,9 @@ class TestGuessingGetsExpensive:
 
         assert "15 minutes" in body
 
-    async def test_signing_in_clears_the_count(self, client: TestClient) -> None:
+    async def test_signing_in_clears_the_count(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Seeded in the past so the wait has elapsed but the failure is still
         # counted: a typo followed later by the right key must leave nothing
         # behind, or the next typo costs more than a first one.
@@ -405,7 +467,7 @@ class TestBehindAProxy:
     TLS: ClassVar[dict[str, str]] = {"X-Forwarded-Proto": "https"}
 
     async def test_the_cookie_is_secure_when_the_proxy_speaks_https(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # TLS ends at the proxy, so the connection reaching the server is
         # always plain http and cannot decide this by itself.
@@ -417,7 +479,9 @@ class TestBehindAProxy:
 
         assert "Secure" in resp.headers["Set-Cookie"]
 
-    async def test_an_unlisted_peer_cannot_claim_https(self, client: TestClient) -> None:
+    async def test_an_unlisted_peer_cannot_claim_https(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         resp = await client.post(
             "/login", data={"key": KEY}, headers=self.TLS, allow_redirects=False
         )
@@ -425,7 +489,7 @@ class TestBehindAProxy:
         assert "Secure" not in resp.headers["Set-Cookie"]
 
     async def test_one_guesser_does_not_lock_everyone_out(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("wactorz.config.TRUSTED_PROXIES", "127.0.0.1")
         await client.post(
@@ -441,7 +505,9 @@ class TestBehindAProxy:
 
         assert resp.status == 302
 
-    async def test_an_unlisted_peer_cannot_rotate_its_way_past(self, client: TestClient) -> None:
+    async def test_an_unlisted_peer_cannot_rotate_its_way_past(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # Otherwise a fresh X-Forwarded-For per attempt is a fresh allowance.
         await client.post("/login", data={"key": "guess"}, headers={"X-Forwarded-For": "1.1.1.1"})
 
@@ -460,7 +526,9 @@ class TestWhatTheBrowserIsToldAboutSigningOut:
     would end nothing while implying it had.
     """
 
-    async def test_a_signed_in_browser_is_offered_it(self, client: TestClient) -> None:
+    async def test_a_signed_in_browser_is_offered_it(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         await client.post("/login", data={"key": KEY})
 
         payload = await (await client.get("/api/config")).json()
@@ -475,7 +543,7 @@ class TestWhatTheBrowserIsToldAboutSigningOut:
             assert payload["auth"]["canSignOut"] is False
 
     async def test_an_ingress_visitor_is_not(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Home Assistant authenticated them; there is no session here to end.
         monkeypatch.setattr(origins, "from_supervisor", lambda _request: True)
@@ -498,14 +566,18 @@ class TestTheWebsocketHandshake:
     request that "surely it needs its own check" is an easy conclusion to draw.
     """
 
-    async def test_an_anonymous_socket_is_refused(self, client: TestClient) -> None:
+    async def test_an_anonymous_socket_is_refused(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         with pytest.raises(WSServerHandshakeError) as refused:
             async with client.ws_connect("/ws"):
                 pass
 
         assert refused.value.status == 401
 
-    async def test_a_signed_in_browser_may_open_it(self, client: TestClient) -> None:
+    async def test_a_signed_in_browser_may_open_it(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # The browser attaches the cookie to the upgrade itself; it cannot set
         # a header there, which is why the cookie is what makes this work.
         await client.post("/login", data={"key": KEY})
@@ -513,13 +585,17 @@ class TestTheWebsocketHandshake:
         async with client.ws_connect("/ws") as socket:
             assert not socket.closed
 
-    async def test_a_script_may_open_it_with_the_key(self, client: TestClient) -> None:
+    async def test_a_script_may_open_it_with_the_key(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # No cookie and no browser: the header path has to work at the handshake
         # too, or every non-browser client is locked out of the live feed.
         async with client.ws_connect("/ws", headers={"X-API-Key": KEY}) as socket:
             assert not socket.closed
 
-    async def test_a_revoked_session_cannot_reopen_it(self, client: TestClient) -> None:
+    async def test_a_revoked_session_cannot_reopen_it(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         # What "sign out everywhere" has to mean for a socket: the open one is
         # unaffected, but it cannot be re-established.
         await client.post("/login", data={"key": KEY})

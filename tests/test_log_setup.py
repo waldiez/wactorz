@@ -17,6 +17,7 @@ import logging.handlers
 import sys
 from collections.abc import Iterator
 from datetime import datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -290,7 +291,7 @@ class TestTheFormat:
         # handlers of its own on the root logger, and `basicConfig` leaves a
         # root logger that has any alone.
         monkeypatch.setenv("WACTORZ_LOG_FORMAT", "json")
-        asked: dict = {}
+        asked: dict[str, Any] = {}
         monkeypatch.setattr(logging, "basicConfig", lambda **kwargs: asked.update(kwargs))
 
         node_cli.configure_logging(argparse.Namespace(loglevel="warning"))

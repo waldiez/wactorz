@@ -7,6 +7,8 @@ there, so one goes only to a node that says it has the target. Every other kind
 is a class built into the server, whose config carries no program.
 """
 
+from typing import Any
+
 import pytest
 
 from wactorz.agents.main.spawns import why_a_node_cannot_run
@@ -26,7 +28,7 @@ TARGET = "imu_anomaly.agent:detect"
         {"name": "helper", "type": "dynamic", "system_prompt": "Be brief."},
     ],
 )
-def test_code_or_an_llm_agent_can_run(config: dict) -> None:
+def test_code_or_an_llm_agent_can_run(config: dict[str, Any]) -> None:
     assert why_a_node_cannot_run(config) is None
 
 

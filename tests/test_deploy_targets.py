@@ -140,11 +140,11 @@ class _Replies:
 class _Installer:
     """Stands in for main's installer: records each payload and answers ``result``."""
 
-    def __init__(self, result: dict | None = None) -> None:
-        self.payloads: list[dict] = []
+    def __init__(self, result: dict[str, Any] | None = None) -> None:
+        self.payloads: list[dict[str, Any]] = []
         self._result = result or {"success": True}
 
-    async def __call__(self, payload: dict, timeout: float = 0.0) -> dict:
+    async def __call__(self, payload: dict[str, Any], timeout: float = 0.0) -> dict[str, Any]:
         self.payloads.append(payload)
         return self._result
 
@@ -158,7 +158,7 @@ def main_actor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MainActor:
     return main
 
 
-def _payloads(main: MainActor) -> list[dict]:
+def _payloads(main: MainActor) -> list[dict[str, Any]]:
     return cast(_Installer, main.delegate_to_installer).payloads
 
 
@@ -263,7 +263,7 @@ async def test_on_a_stream_the_deploy_is_one_message(targets, main_actor) -> Non
 async def test_a_failed_install_is_reported_not_raised(targets, main_actor) -> None:
     targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5"))
 
-    async def _unreachable(payload: dict, timeout: float = 0.0) -> dict:
+    async def _unreachable(payload: dict[str, Any], timeout: float = 0.0) -> dict[str, Any]:
         raise OSError("no route to host")
 
     main_actor.delegate_to_installer = _unreachable
@@ -335,7 +335,7 @@ def test_deploy_never_opens_a_connection_to_a_host_it_was_not_configured_for(
 @pytest.fixture
 def installer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> InstallerAgent:
     agent = InstallerAgent()
-    store: dict = {}
+    store: dict[str, Any] = {}
     monkeypatch.setattr(agent, "recall", lambda key, default=None: store.get(key, default))
     monkeypatch.setattr(agent, "persist", lambda key, value: store.__setitem__(key, value))
     monkeypatch.setattr(agent, "_log_remote", lambda _message: None)

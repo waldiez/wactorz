@@ -139,7 +139,7 @@ def get_global_alltime_cost() -> float:
         return 0.0
 
 
-def get_global_cost_info() -> dict:
+def get_global_cost_info() -> dict[str, Any]:
     """Return current period spend and limit. Used by GET /api/cost."""
     from ...config import CONFIG
 
@@ -208,7 +208,7 @@ def set_cost_limit(limit_usd: float, period: str) -> None:
     db.kv_set("_system", "_cost_limit_override", {"limit_usd": limit_usd, "period": period})
 
 
-def reset_global_cost() -> dict:
+def reset_global_cost() -> dict[str, Any]:
     """Clear accumulated spend for all periods. Returns new spend info."""
     db = get_db()
     if db is None:

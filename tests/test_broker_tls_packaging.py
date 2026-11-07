@@ -13,6 +13,7 @@ Supervisor, and the thing that drifts is the text itself.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -33,11 +34,11 @@ TLS_PORT = {
 }
 
 
-def _compose(name: str = "compose.yaml") -> dict:
+def _compose(name: str = "compose.yaml") -> dict[str, Any]:
     return yaml.safe_load((ROOT / name).read_text(encoding="utf-8"))
 
 
-def _addon_config(addon: str) -> dict:
+def _addon_config(addon: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / "ha-addon" / addon / "config.yaml").read_text(encoding="utf-8"))
 
 

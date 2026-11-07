@@ -55,8 +55,8 @@ class OpenAIProvider(LLMProvider):
         return True
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         full_messages = (
             [{"role": "system", "content": system}] if system else []
         ) + openai_messages(messages)
@@ -95,7 +95,7 @@ class OpenAIProvider(LLMProvider):
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -149,7 +149,7 @@ class OpenAIProvider(LLMProvider):
         )
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = (

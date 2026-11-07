@@ -153,7 +153,7 @@ class MQTTPublisher:
         db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db",
         dead_letter_days: float = DEAD_LETTER_DAYS,
     ) -> None:
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
+        self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=self.MAX_QUEUED)
         #: How many messages the cap has discarded, for the log and for tests.
         self._dropped = 0
         #: How many messages were given up on: unsendable, expired, or failing
@@ -166,7 +166,7 @@ class MQTTPublisher:
         #: How many publishes failed on a live connection and were held to retry.
         self._publish_failures = 0
         #: A message whose publish failed, retried before the queue is read again.
-        self._retry: tuple | None = None
+        self._retry: tuple[Any, ...] | None = None
         #: How many times in a row `_retry` has failed. It counts that one
         #: message: a fresh one starts again, so failures never add up across
         #: messages and turn a flaky link into a false verdict.
@@ -174,7 +174,7 @@ class MQTTPublisher:
         #: Topics already warned about as unsendable, so a caller in a loop
         #: warns once rather than on every call.
         self._refused_topics: set[str] = set()
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
         self._available = False
         self._db_path = db_path
         self._dead_letter_days = dead_letter_days
@@ -187,7 +187,7 @@ class MQTTPublisher:
         #: the same reason: a failed statement drops the handle from inside the
         #: `except` of a method already holding this.
         self._db_lock = threading.RLock()
-        self._checkpoint_task: asyncio.Task | None = None
+        self._checkpoint_task: asyncio.Task[Any] | None = None
         #: Set when the outbox could not be opened: QoS 1 then skips SQLite and
         #: is delivered from memory, like QoS 0.
         self._memory_only = False
@@ -517,7 +517,7 @@ class MQTTPublisher:
             logger.debug("[MQTT] Outbox delete failed: %s", e)
             self._close_db()
 
-    def _enqueue(self, item: tuple) -> None:
+    def _enqueue(self, item: tuple[Any, ...]) -> None:
         """Queue `item`, making room by discarding telemetry if the cap is reached.
 
         Never blocks the caller. `publish()` promises to return immediately, so
@@ -537,7 +537,7 @@ class MQTTPublisher:
         else:
             self._note_drop(item)
 
-    def _put_or_make_room(self, item: tuple) -> bool:
+    def _put_or_make_room(self, item: tuple[Any, ...]) -> bool:
         """Queue `item`, discarding the oldest telemetry if that makes room. False if full."""
         while True:
             try:
@@ -565,7 +565,7 @@ class MQTTPublisher:
         room = self.MAX_QUEUED - self._queue.qsize()
         return room >= min(len(self._spilled), self.REFILL_BATCH, max(1, self.MAX_QUEUED // 2))
 
-    def _read_rows(self, row_ids: list[int]) -> list[tuple] | None:
+    def _read_rows(self, row_ids: list[int]) -> list[tuple[Any, ...]] | None:
         """Stored messages by row id, in order; None if the outbox could not be read."""
         marks = ",".join("?" * len(row_ids))
         # Only the placeholders are interpolated; the ids themselves are bound.
@@ -635,7 +635,7 @@ class MQTTPublisher:
             self._queue.put_nowait(entry)
         return dropped
 
-    def _note_drop(self, item: tuple) -> None:
+    def _note_drop(self, item: tuple[Any, ...]) -> None:
         """Count a discarded message, and say so at a rate a log can carry."""
         self._dropped += 1
         if self._dropped == 1 or self._dropped % 1000 == 0:
@@ -647,7 +647,7 @@ class MQTTPublisher:
                 self._dropped,
             )
 
-    def _discard(self, item: tuple, from_queue: bool, reason: str) -> None:
+    def _discard(self, item: tuple[Any, ...], from_queue: bool, reason: str) -> None:
         """Give up on a message that can never be sent, so the ones behind it can be.
 
         Its stored row goes too; left in the outbox it would be replayed after a
@@ -661,7 +661,7 @@ class MQTTPublisher:
         self._discarded += 1
         logger.warning("[MQTT] outbox: dropped a message for %r — %s", topic, reason)
 
-    def _hold_for_retry(self, item: tuple, from_queue: bool, error: Exception) -> None:
+    def _hold_for_retry(self, item: tuple[Any, ...], from_queue: bool, error: Exception) -> None:
         """Keep a failed message to send first after reconnecting, unless it keeps failing.
 
         A publish that fails on a live connection is usually the link, and the

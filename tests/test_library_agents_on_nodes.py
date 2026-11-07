@@ -27,7 +27,7 @@ from wactorz.node.hosted import NodeHosted
 
 
 @agent(subscribes="imu/in", publishes="imu/out", models={"model": "imu-detector"})
-async def scorer(reading: dict, me: FunctionAgent) -> dict:
+async def scorer(reading: dict[str, Any], me: FunctionAgent) -> dict[str, Any]:
     """Reads the model the spawn brought, by the key the decorator gives it."""
     model = await me.load_model("model")
     return {"distance": float(abs(reading["az"] - model["mean"][2]))}
@@ -191,5 +191,5 @@ class TestTheNodeRunningOne:
 
 
 @agent(description="Doubles what it is sent.")
-def plain(payload: dict) -> int:
+def plain(payload: dict[str, Any]) -> int:
     return payload["x"] * 2

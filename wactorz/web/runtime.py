@@ -13,7 +13,7 @@ are the only names safe to alias-import.
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import aiomqtt
@@ -74,7 +74,7 @@ state = {
     "log_feed": [],
 }
 
-ws_clients: set = set()
+ws_clients: set[Any] = set()
 
 # ── Deleted-agent tombstones ─────────────────────────────────────────────────
 # IDs that have been explicitly deleted — block re-admission from stale heartbeats.
@@ -82,7 +82,7 @@ ws_clients: set = set()
 # Stored as a list of (agent_id, deleted_at_ts) tuples so we can re-admit on
 # a NEWER status event (which is what a deliberate respawn produces) while
 # still ignoring stale retained messages from the deleted instance.
-deleted_agent_ids: list = []
+deleted_agent_ids: list[Any] = []
 DELETED_IDS_MAX = 1024
 hard_resetting: bool = False
 

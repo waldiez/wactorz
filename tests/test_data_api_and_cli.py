@@ -10,9 +10,11 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.paths import resolve_state_dir
@@ -38,7 +40,7 @@ def recorded_fixture() -> Path:
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncIterator[TestClient]:
+async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -46,7 +48,9 @@ async def client_fixture() -> AsyncIterator[TestClient]:
 
 
 class TestTheRoutes:
-    async def test_the_sources_are_listed(self, client: TestClient, recorded: Path) -> None:
+    async def test_the_sources_are_listed(
+        self, client: TestClient[web.Request, web.Application], recorded: Path
+    ) -> None:
         body = await (await client.get("/api/data")).json()
 
         (found,) = body["sources"]
@@ -55,7 +59,9 @@ class TestTheRoutes:
         assert (found["from"], found["to"]) == (T0 - T0 % 3600, T0 - T0 % 3600 + 3600)
         assert body["retention_days"] is None
 
-    async def test_a_window_is_profiled(self, client: TestClient, recorded: Path) -> None:
+    async def test_a_window_is_profiled(
+        self, client: TestClient[web.Request, web.Application], recorded: Path
+    ) -> None:
         body = await (
             await client.get(
                 "/api/data/sensors/imu/left/profile", params={"since": T0, "until": T0 + 31}
@@ -71,7 +77,10 @@ class TestTheRoutes:
         assert body["columns"]["ax"]["max"] == 3.0
 
     async def test_the_last_day_is_the_window_when_unsaid(
-        self, client: TestClient, recorded: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        recorded: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import wactorz.web.api_data as module
 
@@ -94,7 +103,12 @@ class TestTheRoutes:
         ],
     )
     async def test_a_bad_ask_is_refused(
-        self, client: TestClient, recorded: Path, path: str, params: dict, words: str
+        self,
+        client: TestClient[web.Request, web.Application],
+        recorded: Path,
+        path: str,
+        params: dict[str, Any],
+        words: str,
     ) -> None:
         response = await client.get(path, params=params)
 
@@ -111,14 +125,22 @@ class TestTheRoutes:
         ],
     )
     async def test_a_window_ending_in_the_first_day_is_one(
-        self, client: TestClient, recorded: Path, path: str, params: dict[str, str], status: int
+        self,
+        client: TestClient[web.Request, web.Application],
+        recorded: Path,
+        path: str,
+        params: dict[str, str],
+        status: int,
     ) -> None:
         response = await client.get(path, params=params)
 
         assert response.status == status, await response.text()
 
     async def test_a_window_reading_refuses_is_a_400(
-        self, client: TestClient, recorded: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        recorded: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         def _refuse(*_args: object, **_kwargs: object) -> object:
             raise DataError.out_of_range(-1.0, 1.0)
@@ -133,7 +155,7 @@ class TestTheRoutes:
             assert response.status == 400, path
 
     async def test_a_source_with_nothing_is_an_empty_card(
-        self, client: TestClient, recorded: Path
+        self, client: TestClient[web.Request, web.Application], recorded: Path
     ) -> None:
         body = await (await client.get("/api/data/sensors/none/profile")).json()
 

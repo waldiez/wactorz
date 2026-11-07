@@ -7,6 +7,7 @@ cut by a split. ``docs/design/data-storage.md`` is the decision these pin.
 """
 
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -31,7 +32,7 @@ from wactorz.data.parquet import Writer
 T0 = 1_760_000_000.0
 
 
-def _frame(ts: list[float], **columns: list) -> pa.Table:
+def _frame(ts: list[float], **columns: list[Any]) -> pa.Table:
     return pa.table({"ts": pa.array(ts, pa.float64()), **columns})
 
 

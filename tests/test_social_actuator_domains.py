@@ -28,7 +28,7 @@ def run(coro) -> Any:
 class _RecordingHA:
     """Stands in for HAWebSocketClient — records what would have been called."""
 
-    calls: ClassVar[list] = []
+    calls: ClassVar[list[Any]] = []
 
     def __init__(self, *_a, **_kw) -> None:
         pass

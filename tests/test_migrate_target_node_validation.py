@@ -18,7 +18,7 @@ from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 
 
-def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
+def _bare_main(registry: dict[str, Any], known_nodes: dict[str, Any]) -> MainActor:
     """A MainActor with only what migrate_agent touches, stubbed.
 
     Records every MQTT publish in ``m.published`` so tests can assert that a
@@ -48,7 +48,7 @@ def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
     return m
 
 
-def _registry_with_agent_on(node: str) -> dict:
+def _registry_with_agent_on(node: str) -> dict[str, Any]:
     from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY  # noqa: F401
 
     return {"temp-sensor": {"name": "temp-sensor", "node": node, "type": "dynamic", "code": "x"}}

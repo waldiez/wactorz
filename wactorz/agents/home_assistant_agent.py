@@ -167,7 +167,7 @@ class HomeAssistantAgent(LLMAgent):
 
     # ── Cost tracking helper ─────────────────────────────────────────────────
 
-    def _accumulate_usage(self, usage: dict) -> None:
+    def _accumulate_usage(self, usage: dict[str, Any]) -> None:
         """Add token counts and cost from one llm.complete() call to running totals."""
         if not isinstance(usage, dict):
             return

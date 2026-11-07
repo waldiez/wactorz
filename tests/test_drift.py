@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from prometheus_client import generate_latest
 
@@ -698,7 +699,7 @@ class TestTheAgentsTasks:
 @pytest.fixture(name="client")
 async def client_fixture(
     db: WactorzDB, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[TestClient]:
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(runtime, "db", db)
     client = TestClient(TestServer(build_app()))
     await client.start_server()
@@ -708,7 +709,7 @@ async def client_fixture(
 
 class TestTheRoute:
     async def test_the_alarms_are_listed_newest_first(
-        self, client: TestClient, graph: Provenance
+        self, client: TestClient[web.Request, web.Application], graph: Provenance
     ) -> None:
         window = Window(SOURCE, T0, T0 + DAY)
         reference = Window(SOURCE, T0 - 7 * DAY, T0)
@@ -742,7 +743,7 @@ class TestTheRoute:
         assert body["alarms"][1]["statistic"] == 0.4
 
     async def test_without_persistence_it_is_a_503(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "db", None)
         monkeypatch.setattr(api_models, "get_db", lambda: None)

@@ -44,7 +44,7 @@ def _task(**extra) -> Message:
     return Message(type=MessageType.TASK, sender_id="caller-1", payload=payload)
 
 
-def _sent_results(agent) -> list[dict]:
+def _sent_results(agent) -> list[dict[str, Any]]:
     # Compared by value, not identity: another test in the suite causes
     # `wactorz.core.actor` to be loaded twice, so this module's MessageType can
     # be a different class object than the agent's. `MessageType` subclasses

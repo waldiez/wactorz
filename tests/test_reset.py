@@ -190,7 +190,7 @@ class ResetLogsTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_request(body: dict) -> "MagicMock":
+def _make_request(body: dict[str, Any]) -> "MagicMock":
     req = MagicMock()
     req.json = AsyncMock(return_value=body)
     return req
@@ -240,7 +240,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
     async def _call(self, scope: str, agent: str | None = None) -> object:
 
-        body: dict = {"scope": scope}
+        body: dict[str, Any] = {"scope": scope}
         if agent is not None:
             body["agent"] = agent
         req = _make_request(body)
@@ -621,7 +621,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
     wholesale — a full wipe has to delete the rows itself.
     """
 
-    MEMORY: ClassVar[dict[str, dict]] = {
+    MEMORY: ClassVar[dict[str, dict[str, Any]]] = {
         "_pipeline_rules": {"r1": {"rule_id": "r1", "task": "door counter", "agents": ["a"]}},
         "_user_facts": {"pref_user_name": "Yannis"},
         "_notification_urls": {"discord": "https://discord.com/api/webhooks/1/x"},

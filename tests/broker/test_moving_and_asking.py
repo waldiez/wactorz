@@ -185,8 +185,8 @@ class _Scripted(LLMProvider):
         self.asked: list[str] = []
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         prompt = str(messages[-1]["content"])
         self.asked.append(prompt)
         return f"heard {prompt}", {"input_tokens": 3, "output_tokens": 2}

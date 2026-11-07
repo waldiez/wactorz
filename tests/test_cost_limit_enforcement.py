@@ -41,18 +41,22 @@ class _Provider(LLMProvider):
         self.calls = 0
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         self.calls += 1
         return "answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
     async def _complete_with_tools(
-        self, messages: list[dict], tools: list[dict], system: str = "", **kwargs: Any
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        system: str = "",
+        **kwargs: Any,
     ) -> Any:
         self.calls += 1
         return "tool answer"
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+    async def _stream(self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any) -> Any:
         self.calls += 1
         yield "chunk"
 
@@ -61,8 +65,8 @@ class _CompleteOnly(LLMProvider):
     """Implements only the non-streaming path."""
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         return "answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 

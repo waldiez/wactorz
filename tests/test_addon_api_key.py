@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -62,7 +63,7 @@ def _key_block(addon: str = "wactorz") -> str:
     return match.group(0)
 
 
-def _config(addon: str) -> dict:
+def _config(addon: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / "ha-addon" / addon / "config.yaml").read_text(encoding="utf-8"))
 
 

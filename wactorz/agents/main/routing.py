@@ -11,7 +11,7 @@ self._result_futures, self.actor_id).
 import asyncio
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from wactorz.config import CONFIG
 from wactorz.llm_factory import provider_for
@@ -164,7 +164,7 @@ class RoutingMixin(_Host):
             logger.warning("[%s] Could not fetch HA entities for actuate: %s", self.name, e)
 
         task_id = f"actuate_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._result_futures[task_id] = future
 
         try:

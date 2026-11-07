@@ -24,8 +24,8 @@ class _Boxes:
         self.cls = _Tensor([r[2] for r in rows])
 
 
-class _Tensor(list):
-    def tolist(self) -> list:
+class _Tensor(list[Any]):
+    def tolist(self) -> list[Any]:
         return list(self)
 
 

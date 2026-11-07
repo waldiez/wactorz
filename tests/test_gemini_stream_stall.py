@@ -64,9 +64,9 @@ def _provider(models: _StreamModels) -> GeminiProvider:
     return provider
 
 
-async def _drain(provider: GeminiProvider) -> tuple[list[str], dict]:
+async def _drain(provider: GeminiProvider) -> tuple[list[str], dict[str, Any]]:
     text: list[str] = []
-    final: dict = {}
+    final: dict[str, Any] = {}
     async for chunk in provider.stream(messages=[{"role": "user", "content": "hi"}]):
         if isinstance(chunk, dict):
             final = chunk
@@ -124,10 +124,10 @@ class _Busy(Exception):
     status_code = 429
 
 
-async def _drain_raw(provider: GeminiProvider) -> tuple[list[str], dict]:
+async def _drain_raw(provider: GeminiProvider) -> tuple[list[str], dict[str, Any]]:
     """Read `_stream` itself, with no retry wrapper in the way."""
     text: list[str] = []
-    final: dict = {}
+    final: dict[str, Any] = {}
     async for chunk in provider._stream(messages=[{"role": "user", "content": "hi"}]):
         if isinstance(chunk, dict):
             final = chunk

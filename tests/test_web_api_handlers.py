@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.core.identity import derive_actor_id
@@ -67,7 +68,7 @@ def _isolated_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(name="client")
-async def client_fixture() -> AsyncIterator[TestClient]:
+async def client_fixture() -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -107,7 +108,7 @@ def _book(*records: dict[str, Any]) -> dict[str, Any]:
 
 class TestCost:
     async def test_a_limit_is_validated_then_stored(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         bad_period = await client.post("/api/cost/limit", json={"limit_usd": 5, "period": "hourly"})
         bad_body = await client.post("/api/cost/limit", data="not json")
@@ -119,7 +120,10 @@ class TestCost:
         assert await ok.json() == {"ok": True, "limit_usd": 5.0, "period": "daily"}
 
     async def test_a_reset_clears_the_ledger(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         cost.lifetime_cost["x"] = 3.0
         db.kv_set("_system", cost.LIFETIME_LEDGER_KEY, {"x": 3.0})
@@ -131,7 +135,10 @@ class TestCost:
         assert db.kv_get("_system", cost.LIFETIME_LEDGER_KEY) is None
 
     async def test_a_ledger_that_cannot_be_cleared_does_not_fail_the_reset(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         def _refuse(*_args: Any) -> None:
             raise OSError("locked")
@@ -141,7 +148,7 @@ class TestCost:
         assert (await client.post("/api/cost/reset")).status == 200
 
     async def test_a_reset_without_a_database_is_a_500_without_details(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         resp = await client.post("/api/cost/reset")
 
@@ -150,11 +157,15 @@ class TestCost:
 
 
 class TestChatLogAndFeed:
-    async def test_without_a_database_both_are_empty(self, client: TestClient) -> None:
+    async def test_without_a_database_both_are_empty(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert await (await client.get("/api/chats")).json() == []
         assert await (await client.get("/api/feed")).json() == []
 
-    async def test_the_chat_log_is_filtered(self, client: TestClient, db: WactorzDB) -> None:
+    async def test_the_chat_log_is_filtered(
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
+    ) -> None:
         db.write_chat_log(time.time() - 10, "main", "user", "old", agent_id=derive_actor_id("main"))
         db.write_chat_log(time.time(), "main", "assistant", "new", agent_id=derive_actor_id("main"))
 
@@ -178,7 +189,11 @@ class TestChatLogAndFeed:
         ],
     )
     async def test_a_bad_ask_is_refused(
-        self, client: TestClient, db: WactorzDB, params: dict[str, str], words: str
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        params: dict[str, str],
+        words: str,
     ) -> None:
         response = await client.get("/api/chats", params=params)
 
@@ -186,7 +201,7 @@ class TestChatLogAndFeed:
         assert words in (await response.json())["error"]
 
     async def test_at_most_a_thousand_rows_are_sent(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         for n in range(1005):
             db.write_chat_log(float(n), "main", "user", str(n), agent_id=derive_actor_id("main"))
@@ -196,7 +211,7 @@ class TestChatLogAndFeed:
         assert len(rows) == 1000
 
     async def test_one_agents_history_is_asked_for_by_its_id(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         # Two agents that went by one name: the id says whose turns are whose.
         here, there = str(uuid.uuid4()), str(uuid.uuid4())
@@ -208,7 +223,10 @@ class TestChatLogAndFeed:
         assert [(r["content"], r["agent_id"]) for r in rows] == [("on the pi", there)]
 
     async def test_a_question_the_ledger_knows_comes_back_with_its_buttons(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(questions, "_books", {})
         questions.record("agent-1", _book(_asked("q-1", at=100.0)))
@@ -231,7 +249,10 @@ class TestChatLogAndFeed:
         }
 
     async def test_an_answered_question_carries_its_pick(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(questions, "_books", {})
         questions.record("agent-1", _book(_asked("q-1", at=100.0, answer="Maintenance")))
@@ -248,7 +269,10 @@ class TestChatLogAndFeed:
         assert row["question"]["answer"] == "Maintenance"
 
     async def test_a_row_stored_with_the_old_hint_is_still_found(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(questions, "_books", {})
         questions.record("agent-1", _book(_asked("q-1", at=100.0)))
@@ -261,7 +285,10 @@ class TestChatLogAndFeed:
         assert row["question"]["id"] == "q-1"
 
     async def test_the_same_words_asked_twice_are_told_apart_by_time(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(questions, "_books", {})
         questions.record(
@@ -285,7 +312,10 @@ class TestChatLogAndFeed:
         ]
 
     async def test_a_row_the_ledger_does_not_know_stays_as_it_was(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(questions, "_books", {})
         questions.record("agent-1", _book(_asked("q-1", at=100.0)))
@@ -312,7 +342,10 @@ class TestChatLogAndFeed:
         assert [r for r in rows if "question" in r] == []
 
     async def test_a_failed_read_is_a_500_without_details(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         def _broken(**_filters: object) -> list[dict[str, object]]:
             raise RuntimeError("disk I/O error at /secret/state/wactorz.db")
@@ -325,7 +358,7 @@ class TestChatLogAndFeed:
         assert await resp.json() == {"error": "Could not read the chat log"}
 
     async def test_the_feed_is_the_chat_log_oldest_first(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         db.write_chat_log(100.0, "main", "user", "first", agent_id=derive_actor_id("main"))
         db.write_chat_log(200.0, "main", "assistant", "second", agent_id=derive_actor_id("main"))
@@ -338,7 +371,10 @@ class TestChatLogAndFeed:
         ]
 
     async def test_an_old_database_feeds_from_conversation_history(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         db.kv_set(
             "main",
@@ -365,7 +401,10 @@ class TestChatLogAndFeed:
         assert items[0]["timestamp"] < items[1]["timestamp"]
 
     async def test_a_feed_that_fails_entirely_is_empty(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(db, "query_chat_log", lambda **_kw: [])
         monkeypatch.setattr(db, "_conn", None)
@@ -375,7 +414,7 @@ class TestChatLogAndFeed:
 
 class TestSendMessage:
     async def test_every_refusal_has_its_status(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         assert (await client.post("/api/actors/a1/message", json={"content": "x"})).status == 503
 
@@ -385,7 +424,7 @@ class TestSendMessage:
         assert (await client.post("/api/actors/zz/message", json={"content": "x"})).status == 404
 
     async def test_a_message_is_routed_to_the_named_actor(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "weather")))
         routed: list[str] = []
@@ -419,7 +458,7 @@ class TestDelete:
         return deleted
 
     async def test_a_protected_record_or_actor_is_refused(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         runtime.state["agents"]["r1"] = {"name": "remote", "protected": True}
         monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "main", protected=True)))
@@ -429,11 +468,13 @@ class TestDelete:
         assert (await client.delete("/api/actors/ghost")).status == 404
         assert self.deleted == []
 
-    async def test_without_a_registry_an_unknown_id_is_not_found(self, client: TestClient) -> None:
+    async def test_without_a_registry_an_unknown_id_is_not_found(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.delete("/api/actors/ghost")).status == 404
 
     async def test_an_actor_named_is_deleted_by_its_id(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "weather")))
 
@@ -445,7 +486,7 @@ class TestDelete:
 
 class TestLifecycle:
     async def test_a_remote_agent_is_reached_by_id_even_when_named(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "registry", _Registry())
         runtime.state["agents"]["r1"] = {"name": "cam"}
@@ -465,7 +506,7 @@ class TestLifecycle:
         assert commands == [("r1", "start"), ("r1", "stop")]
 
     async def test_unknown_unavailable_and_refused(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         assert (await client.post("/api/actors/a1/start")).status == 503
 
@@ -482,7 +523,7 @@ class TestLifecycle:
 
 class TestReads:
     async def test_metrics_come_from_the_actor_or_its_record(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "weather")))
         runtime.state["agents"]["r1"] = {"messages_processed": 3, "mem": 12.5, "cost_usd": 0.2}
@@ -497,7 +538,7 @@ class TestReads:
         assert (await client.get("/api/actors/zz/metrics")).status == 404
 
     async def test_without_a_registry_the_list_comes_from_reported_state(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         runtime.state["agents"]["r1"] = {
             "agent_id": "r1",
@@ -514,7 +555,7 @@ class TestReads:
         assert (await client.get("/api/actors/zz")).status == 404
 
     async def test_a_deleted_actor_is_left_out_of_the_list(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
             runtime, "registry", _Registry(_Actor("a1", "weather"), _Actor("a2", "gone"))
@@ -527,7 +568,10 @@ class TestReads:
         assert listed[0]["messagesProcessed"] == 5
 
     async def test_history_from_the_actor_the_database_or_nowhere(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         actor = _Actor("a1", "weather")
         actor.history = [{"role": "user", "content": "hi"}, {"role": "tool", "content": "x"}]
@@ -545,7 +589,10 @@ class TestReads:
         assert missing == []
 
     async def test_history_survives_a_broken_database_and_no_database(
-        self, client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         db.conn.execute(
             "INSERT INTO kv_store (agent, key, value, updated) VALUES ('x', 'conversation_history', 'not json', 0)"

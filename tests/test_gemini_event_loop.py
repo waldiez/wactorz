@@ -104,7 +104,7 @@ def _provider() -> tuple[GeminiProvider, _SyncModels, _AsyncModels]:
     return provider, sync_models, async_models
 
 
-async def _loop_ticks_during(coro: Awaitable) -> int:
+async def _loop_ticks_during(coro: Awaitable[Any]) -> int:
     """Run `coro`, counting how many times an unrelated task got scheduled.
 
     A responsive loop lets the ticker run many times; a blocked one starves it.

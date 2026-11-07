@@ -32,7 +32,7 @@ class _Streamer(Actor):
         self.got: list[Any] = []
 
     async def chat_stream(
-        self, user_message: str, attachments: list[dict] | None = None
+        self, user_message: str, attachments: list[dict[str, Any]] | None = None
     ) -> "AsyncIterator[str]":
         self.got.append(attachments)
         yield "described"

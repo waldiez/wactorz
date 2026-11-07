@@ -134,7 +134,7 @@ def test_collect_actor_decorators_gathers_and_applies(sandbox: Callable[..., Non
     )
     decorators = ext.collect_actor_decorators(SimpleNamespace())  # pyright: ignore[reportArgumentType]
     assert len(decorators) == 1
-    payload: dict = {}
+    payload: dict[str, Any] = {}
     decorators[0](SimpleNamespace(name="io"), payload)
     assert payload == {"tag": "IO"}
 

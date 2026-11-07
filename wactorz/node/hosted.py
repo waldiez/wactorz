@@ -69,7 +69,7 @@ class NodeHosted(_Base):
 
     # ── State ─────────────────────────────────────────────────────────────────
 
-    def _apply_initial_state(self, config: dict) -> None:
+    def _apply_initial_state(self, config: dict[str, Any]) -> None:
         """Take the state this agent starts with, from a migration or from disk.
 
         Two cases have to be told apart. A plain start or restart has no

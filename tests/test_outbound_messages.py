@@ -416,7 +416,7 @@ class TestTheOutbox:
 
 
 @agent(name="hvac-watch")
-def hvac_watch(payload: dict) -> dict:
+def hvac_watch(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
@@ -424,7 +424,7 @@ class TestNotifyUser:
     @pytest.fixture(name="published")
     def published_fixture(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[Any, list]:
+    ) -> tuple[Any, list[Any]]:
         spec = spec_of(hvac_watch)
         assert spec is not None
         actor = spec.build(persistence_dir=str(tmp_path))
@@ -437,7 +437,7 @@ class TestNotifyUser:
         return actor, published
 
     async def test_a_question_carries_its_options_and_where_to_send_it(
-        self, published: tuple[Any, list]
+        self, published: tuple[Any, list[Any]]
     ) -> None:
         actor, frames = published
         message_id = await actor.notify_user(
@@ -455,7 +455,9 @@ class TestNotifyUser:
         assert payload["channel"] == "telegram"
         assert payload["user"] == "42"
 
-    async def test_a_plain_notification_reads_as_before(self, published: tuple[Any, list]) -> None:
+    async def test_a_plain_notification_reads_as_before(
+        self, published: tuple[Any, list[Any]]
+    ) -> None:
         actor, frames = published
         await actor.notify_user("done", extra_field=1)
         ((_topic, payload, _qos),) = frames
@@ -466,7 +468,7 @@ class TestNotifyUser:
         assert payload["id"]
 
     async def test_a_bad_choice_is_refused_before_anything_goes_out(
-        self, published: tuple[Any, list]
+        self, published: tuple[Any, list[Any]]
     ) -> None:
         actor, frames = published
         with pytest.raises(ValueError):
@@ -507,7 +509,9 @@ def quiet_monitor_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any
 
 
 class TestTheDashboardShowsTheQuestion:
-    def test_the_options_and_the_other_channel_reach_the_browser(self, quiet_monitor: list) -> None:
+    def test_the_options_and_the_other_channel_reach_the_browser(
+        self, quiet_monitor: list[Any]
+    ) -> None:
         event = events.parse_topic("agents/agent-1/chat", _telegram_frame())
         assert event is not None
         push = event["_push_chat"]
@@ -517,7 +521,7 @@ class TestTheDashboardShowsTheQuestion:
         entry = runtime.state["log_feed"][-1]
         assert entry["options"] == ["yes", "no"]
 
-    def test_a_plain_frame_carries_none_of_it(self, quiet_monitor: list) -> None:
+    def test_a_plain_frame_carries_none_of_it(self, quiet_monitor: list[Any]) -> None:
         event = events.parse_topic(
             "agents/agent-1/chat", json.dumps({"from": "hvac", "content": "hi"})
         )
@@ -529,7 +533,7 @@ class TestTheDashboardShowsTheQuestion:
         assert event is not None
         assert "channel" not in event["_push_chat"]
 
-    def test_an_answer_goes_on_the_feed_and_to_the_browsers(self, quiet_monitor: list) -> None:
+    def test_an_answer_goes_on_the_feed_and_to_the_browsers(self, quiet_monitor: list[Any]) -> None:
         answer = Answer(
             id="m1", agent_id="agent-1", option="no", index=1, channel="telegram", user="42"
         )
@@ -544,12 +548,14 @@ class TestTheDashboardShowsTheQuestion:
         )
         assert relay.is_relayed(answer.topic)
 
-    def test_a_frame_that_is_no_answer_leaves_the_feed_alone(self, quiet_monitor: list) -> None:
+    def test_a_frame_that_is_no_answer_leaves_the_feed_alone(
+        self, quiet_monitor: list[Any]
+    ) -> None:
         events.parse_topic("agents/agent-1/answer", json.dumps({"index": 0}))
         assert runtime.state["log_feed"] == []
 
     async def test_a_question_is_stored_with_its_options_and_no_reply_hint(
-        self, quiet_monitor: list, monkeypatch: pytest.MonkeyPatch
+        self, quiet_monitor: list[Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         rows: list[dict[str, Any]] = []
 

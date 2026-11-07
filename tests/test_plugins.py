@@ -50,7 +50,7 @@ class WithProvider(Actor):
 
 
 @agent(subscribes="in/x", publishes="out/x")
-def decorated(reading: dict) -> dict:
+def decorated(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 
@@ -324,7 +324,7 @@ class TestBuildingUnderAMixin:
             pass
 
         @agent(subscribes="in/x")
-        def hosted_fn(reading: dict) -> dict:
+        def hosted_fn(reading: dict[str, Any]) -> dict[str, Any]:
             return reading
 
         actor = plugins.plugin_from(hosted_fn).build(persistence_dir=str(tmp_path), mixin=Hosted)
@@ -347,7 +347,7 @@ class TestBuildingUnderAMixin:
 
     def test_without_one_the_class_is_the_agents_own(self, tmp_path: Path) -> None:
         @agent(subscribes="in/x")
-        def plain(reading: dict) -> dict:
+        def plain(reading: dict[str, Any]) -> dict[str, Any]:
             return reading
 
         assert (

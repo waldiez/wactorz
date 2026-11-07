@@ -8,6 +8,7 @@ message to it.
 
 import asyncio
 import logging
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
@@ -18,7 +19,7 @@ from . import chat, cost, events, lifecycle, runtime, ws
 logger = logging.getLogger(__name__)
 
 
-def _actor_payload(ag: dict) -> dict:
+def _actor_payload(ag: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": ag.get("agent_id", ""),
         "name": ag.get("name", ""),
@@ -84,7 +85,7 @@ async def delete_actor_handler(request: web.Request) -> Response:
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
-def _remote_entry(actor_id: str) -> tuple[str, dict] | tuple[None, None]:
+def _remote_entry(actor_id: str) -> tuple[str, dict[str, Any]] | tuple[None, None]:
     """The MQTT-reported record for an agent that is not in the local registry.
 
     Agents living on a runner node never appear in the local registry — the read
@@ -248,7 +249,7 @@ async def actor_handler(request: web.Request) -> Response:
     return web.json_response(_actor_payload(ag))
 
 
-def _stored_history(actor_id: str) -> list:
+def _stored_history(actor_id: str) -> list[Any]:
     """The conversation SQLite kept for ``actor_id``, which may be a name such as "main". Run on a thread."""
     if runtime.db is None:
         return []

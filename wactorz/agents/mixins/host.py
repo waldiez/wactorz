@@ -70,7 +70,7 @@ class SpawnHost(ActorHost, Protocol):
     """
 
     llm: LLMProvider | None
-    _result_futures: dict[str, asyncio.Future]
+    _result_futures: dict[str, asyncio.Future[Any]]
     state: ActorState
 
     def run_detached(

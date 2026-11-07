@@ -462,7 +462,7 @@ class RoutingHost(LLMHost, Protocol):
     which integrations' intents to offer and accept.
     """
 
-    _result_futures: dict[str, asyncio.Future]
+    _result_futures: dict[str, asyncio.Future[Any]]
     _prompt_fragments: tuple[PromptFragment, ...]
 
 
@@ -488,12 +488,12 @@ class PlanningHost(ActorHost, Protocol):
     """
 
     llm: LLMProvider | None
-    _result_futures: dict[str, asyncio.Future]
-    _conversation_history: list[dict]
+    _result_futures: dict[str, asyncio.Future[Any]]
+    _conversation_history: list[dict[str, Any]]
     #: Handed to every planner main spawns, so it plans for the same integrations.
     _prompt_fragments: tuple[PromptFragment, ...]
 
-    def get_user_facts(self) -> dict: ...
+    def get_user_facts(self) -> dict[str, Any]: ...
 
     async def _mqtt_publish(
         self, topic: str, payload: Any, retain: bool = False, qos: int = 0

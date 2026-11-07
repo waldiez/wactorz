@@ -69,7 +69,7 @@ class FakeBroker:
 
     def __init__(self) -> None:
         self.connections: list[FakeClient] = []
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self.queue: asyncio.Queue[Any] = asyncio.Queue()
         self.identifiers: list[str] = []
         self.kwargs: list[dict[str, Any]] = []
 
@@ -96,7 +96,7 @@ class FakeActor:
         self._cb_error_count: dict[str, int] = {}
         self._cb_error_last: dict[str, float] = {}
         self.state = "RUNNING"
-        self.published_errors: list[dict] = []
+        self.published_errors: list[dict[str, Any]] = []
 
     async def _publish_error(self, **kwargs: Any) -> None:
         self.published_errors.append(kwargs)

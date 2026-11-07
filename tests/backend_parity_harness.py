@@ -6,6 +6,7 @@ import pathlib
 import tempfile
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
@@ -113,7 +114,7 @@ async def _wait_until_settled(
     """
     expected = set(trackers)
     deadline = time.monotonic() + timeout
-    previous: tuple | None = None
+    previous: tuple[Any, ...] | None = None
     unchanged_since = time.monotonic()
 
     while time.monotonic() < deadline:
@@ -127,7 +128,7 @@ async def _wait_until_settled(
         await asyncio.sleep(0.02)
 
 
-async def _run_scenario(scenario: dict) -> dict:
+async def _run_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     system = _make_system()
     strategy = SupervisorStrategy(scenario["strategy"])
     trackers: dict[str, ActorTracker] = {}
@@ -172,7 +173,7 @@ async def _run_scenario(scenario: dict) -> dict:
     return result
 
 
-async def run_fixtures(path: pathlib.Path = FIXTURE_PATH) -> dict:
+async def run_fixtures(path: pathlib.Path = FIXTURE_PATH) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     results = []
     for scenario in payload["scenarios"]:
@@ -180,7 +181,7 @@ async def run_fixtures(path: pathlib.Path = FIXTURE_PATH) -> dict:
     return {"contract": payload["contract"], "results": results}
 
 
-def _expected_payload(path: pathlib.Path = FIXTURE_PATH) -> dict:
+def _expected_payload(path: pathlib.Path = FIXTURE_PATH) -> dict[str, Any]:
     payload = json.loads(path.read_text())
     results = []
     for scenario in payload["scenarios"]:

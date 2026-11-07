@@ -64,7 +64,7 @@ def _make_agent(testcase: unittest.TestCase, llm_provider=None) -> HomeAssistant
     return agent
 
 
-def _valid_automation(name: str = "Porch lights") -> dict:
+def _valid_automation(name: str = "Porch lights") -> dict[str, Any]:
     return {
         "name": name,
         "trigger": [{"platform": "state", "entity_id": "binary_sensor.porch_motion", "to": "on"}],
@@ -74,7 +74,7 @@ def _valid_automation(name: str = "Porch lights") -> dict:
     }
 
 
-def _devices() -> dict:
+def _devices() -> dict[str, Any]:
     return {
         "connected": True,
         "reason": "",
@@ -105,7 +105,7 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
         agent.ha_token = "token"
         return agent
 
-    def _valid_automation(self) -> dict:
+    def _valid_automation(self) -> dict[str, Any]:
         return {
             "name": "Porch lights",
             "trigger": [

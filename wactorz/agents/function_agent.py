@@ -246,14 +246,18 @@ class MeteredLLM:
         self._actor = actor
 
     async def complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         text, usage = await self._provider.complete(messages, system, **kwargs)
         self._record(usage)
         return text, usage
 
     async def complete_with_tools(
-        self, messages: list[dict], tools: list[dict[str, Any]], system: str = "", **kwargs: Any
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        system: str = "",
+        **kwargs: Any,
     ) -> Any:
         result = await self._provider.complete_with_tools(messages, tools, system, **kwargs)
         self._record(getattr(result, "usage", None))

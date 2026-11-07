@@ -1359,7 +1359,7 @@ class TestAnAgentWhosePackagesAreNotCleared:
 
 
 @declare_agent(subscribes="probe/in")
-def probe(reading: dict) -> dict:
+def probe(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 
@@ -1419,7 +1419,7 @@ class TestALibraryAgent:
 
 
 @declare_agent(subscribes="imu/in", models={"model": "imu-detector"})
-def scorer(reading: dict) -> dict:
+def scorer(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 

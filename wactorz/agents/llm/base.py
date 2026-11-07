@@ -23,7 +23,7 @@ T = TypeVar("T")
 logger = logging.getLogger(__name__)
 
 
-def _resolve_temperature(kwargs: dict) -> float | None:
+def _resolve_temperature(kwargs: dict[str, Any]) -> float | None:
     """Explicit call-site ``temperature`` kwarg, else the global
     ``LLM_TEMPERATURE`` env setting, else None (keep the provider's default).
     """
@@ -35,13 +35,13 @@ def _resolve_temperature(kwargs: dict) -> float | None:
     return CONFIG.llm_temperature
 
 
-def _temp_params(kwargs: dict) -> dict:
+def _temp_params(kwargs: dict[str, Any]) -> dict[str, Any]:
     """``{"temperature": t}`` when a temperature is configured, else ``{}``."""
     temperature = _resolve_temperature(kwargs)
     return {} if temperature is None else {"temperature": temperature}
 
 
-def _ollama_options(kwargs: dict) -> dict:
+def _ollama_options(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Ollama takes sampling settings under ``options``, not at the top level."""
     temperature = _resolve_temperature(kwargs)
     return {} if temperature is None else {"options": {"temperature": temperature}}
@@ -90,8 +90,8 @@ class LLMProvider:
         return result
 
     async def complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         check_cost_limit()
         return await self._measured(
@@ -102,7 +102,7 @@ class LLMProvider:
 
     async def complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -116,7 +116,7 @@ class LLMProvider:
         )
 
     async def stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncGenerator[str, None]:
         """Yield response chunks as they arrive.
 
@@ -165,13 +165,13 @@ class LLMProvider:
     # ── Provider implementations ────────────────────────────────────────────
 
     async def _complete(
-        self, messages: list[dict], system: str = "", **kwargs: Any
-    ) -> tuple[str, dict]:
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict[str, Any]]:
         raise NotImplementedError
 
     async def _complete_with_tools(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system: str = "",
         **kwargs: Any,
@@ -179,7 +179,7 @@ class LLMProvider:
         raise NotImplementedError(f"{self.__class__.__name__} does not support tool calls")
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncIterator[str | dict[str, Any]]:
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
         yield ""  # pragma: no cover - unreachable, makes this an async generator

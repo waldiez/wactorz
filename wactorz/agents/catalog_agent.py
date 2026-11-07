@@ -63,7 +63,7 @@ _REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _list_message(agents: list[dict], include_experimental: bool) -> str:
+def _list_message(agents: list[dict[str, Any]], include_experimental: bool) -> str:
     """The catalog listing as text, for a chat that shows only a reply's text.
 
     The dashboard renders the `agents` field itself; every other chat reaches
@@ -202,7 +202,7 @@ def _load_embedded_recipe(relative: str) -> str | None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _build_native_catalog() -> dict:
+def _build_native_catalog() -> dict[str, Any]:
     """Native Actor subclasses spawned directly by the catalog."""
     native = {}
 
@@ -378,7 +378,7 @@ class RecipeRestoreError(ValueError):
         )
 
 
-def current_recipe_config(saved: dict) -> dict:
+def current_recipe_config(saved: dict[str, Any]) -> dict[str, Any]:
     """Refresh code only for recipes explicitly supporting saved configuration.
 
     Dependency changes need a fresh catalogue spawn so the installer asks for
@@ -401,7 +401,7 @@ def current_recipe_config(saved: dict) -> dict:
     }
 
 
-def _build_catalog() -> dict:
+def _build_catalog() -> dict[str, Any]:
     catalog = _build_native_catalog()
 
     # ── doc-to-pptx-agent ─────────────────────────────────────────────────────
@@ -858,7 +858,7 @@ class CatalogAgent(Actor):
         if target:
             await self.send(target, MessageType.RESULT, result)
 
-    async def _handle(self, payload: Any) -> dict:
+    async def _handle(self, payload: Any) -> dict[str, Any]:
         if isinstance(payload, dict) and payload.get("action"):
             action = payload["action"].lower().strip()
             if action == "list":
@@ -942,7 +942,7 @@ class CatalogAgent(Actor):
 
     # ── Actions ────────────────────────────────────────────────────────────────
 
-    def _action_list(self, include_experimental: bool = False) -> dict:
+    def _action_list(self, include_experimental: bool = False) -> dict[str, Any]:
         """List catalog agents. The full set (including beta) is always returned
         in ``agents`` so other consumers get complete data; ``show_experimental``
         tells the chat formatter whether to display the beta agents or hide them
@@ -968,7 +968,7 @@ class CatalogAgent(Actor):
             "show_experimental": include_experimental,
         }
 
-    def _action_info(self, name: str) -> dict:
+    def _action_info(self, name: str) -> dict[str, Any]:
         if not name:
             return {"ok": False, "message": "Provide 'agent' name for info action"}
         resolved = self._resolve_name(name)
@@ -991,8 +991,8 @@ class CatalogAgent(Actor):
         return {"ok": True, "message": message, "recipe": safe}
 
     async def _action_spawn(
-        self, name: str, payload: dict, *, background_install: bool = False
-    ) -> dict:
+        self, name: str, payload: dict[str, Any], *, background_install: bool = False
+    ) -> dict[str, Any]:
         """Spawn the recipe `name`, installing its packages first when needed.
 
         A first install can take minutes, so it is announced in chat before it
@@ -1046,7 +1046,7 @@ class CatalogAgent(Actor):
             await self._put_back(placing)
         return result
 
-    async def _settle(self, name: str, payload: dict) -> dict | _Placing:
+    async def _settle(self, name: str, payload: dict[str, Any]) -> dict[str, Any] | _Placing:
         """Decide a spawn of ``name`` on main against where it already runs, as main's own are.
 
         The result to answer with when nothing is to be spawned; else how to
@@ -1079,11 +1079,11 @@ class CatalogAgent(Actor):
     async def _start_recipe(
         self,
         resolved: str,
-        recipe: dict,
+        recipe: dict[str, Any],
         placing: _Placing,
         background_install: bool,
         options: dict[str, Any] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Start the recipe ``resolved``, settled against where its name runs.
 
         ``options`` are a library agent's keyword arguments, from the JSON after
@@ -1232,8 +1232,8 @@ class CatalogAgent(Actor):
         return f"{notice} {hint}" if hint else notice
 
     def _install_failed(
-        self, name: str, recipe: dict, outcome: InstallOutcome, placing: _Placing = _HERE
-    ) -> dict:
+        self, name: str, recipe: dict[str, Any], outcome: InstallOutcome, placing: _Placing = _HERE
+    ) -> dict[str, Any]:
         """The result for a recipe whose packages did not leave it ready to run.
 
         When only a restart stands in the way, the recipe is recorded now, so the
@@ -1257,7 +1257,7 @@ class CatalogAgent(Actor):
     async def _install_then_spawn(
         self,
         name: str,
-        recipe: dict,
+        recipe: dict[str, Any],
         needed: list[str],
         beta_warning: str,
         placing: _Placing = _HERE,
@@ -1282,8 +1282,8 @@ class CatalogAgent(Actor):
         await self.notify_user(result["message"])
 
     async def _spawn_dynamic(
-        self, name: str, recipe: dict, beta_warning: str, placing: _Placing = _HERE
-    ) -> dict:
+        self, name: str, recipe: dict[str, Any], beta_warning: str, placing: _Placing = _HERE
+    ) -> dict[str, Any]:
         """Start a dynamic recipe whose packages are in place, and record it."""
         if recipe.get("require_install_success") is True and (replaced := pending_restart()):
             return self._install_failed(
@@ -1322,5 +1322,5 @@ class CatalogAgent(Actor):
     def list_recipes(self) -> list[str]:
         return list(self._catalog.keys())
 
-    def get_recipe(self, name: str) -> dict | None:
+    def get_recipe(self, name: str) -> dict[str, Any] | None:
         return self._catalog.get(name)

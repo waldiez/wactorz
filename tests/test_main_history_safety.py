@@ -17,7 +17,7 @@ from wactorz.core.actor import Message, MessageType
 RAW = 'Working. <delegate>{"agent":"home-assistant-agent"}</delegate>'
 
 
-def _capture_history(saved: list[list[dict]], key: str, value: Any) -> None:
+def _capture_history(saved: list[list[dict[str, Any]]], key: str, value: Any) -> None:
     if key == "conversation_history":
         saved.append([dict(item) for item in value])
 
@@ -26,13 +26,13 @@ class _Provider:
     def __init__(self, interrupted: bool = False) -> None:
         self.interrupted = interrupted
 
-    async def complete(self, **_kwargs: Any) -> tuple[str, dict]:
+    async def complete(self, **_kwargs: Any) -> tuple[str, dict[str, Any]]:
         return RAW, {}
 
     def supports_streaming(self) -> bool:
         return True
 
-    async def stream(self, **_kwargs: Any) -> AsyncIterator[str | dict]:
+    async def stream(self, **_kwargs: Any) -> AsyncIterator[str | dict[str, Any]]:
         yield RAW if not self.interrupted else 'Working. <delegate>{"agent":"ha"'
         if self.interrupted:
             raise asyncio.CancelledError
@@ -47,7 +47,7 @@ async def test_all_reply_paths_strip_transport_before_persisting(
         llm_provider=cast(LLMProvider, _Provider(interrupted=path == "interrupted")),
         persistence_dir=str(tmp_path),
     )
-    saved: list[list[dict]] = []
+    saved: list[list[dict[str, Any]]] = []
 
     monkeypatch.setattr(main, "persist", partial(_capture_history, saved))
     monkeypatch.setattr(main, "_mqtt_publish", AsyncMock())

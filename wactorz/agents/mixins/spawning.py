@@ -70,7 +70,7 @@ def _store_here() -> ArtifactStore:
     return ArtifactStore.in_state_dir(resolve_state_dir())
 
 
-def _pinned_here(wanted: object) -> tuple[dict[str, dict], str | None]:
+def _pinned_here(wanted: object) -> tuple[dict[str, dict[str, Any]], str | None]:
     """``wanted`` -- a config's ``artifacts`` -- pinned in main's store; or why it cannot be."""
     try:
         return _store_here().pin_all(wanted), None
@@ -78,7 +78,7 @@ def _pinned_here(wanted: object) -> tuple[dict[str, dict], str | None]:
         return {}, str(exc)
 
 
-def _readable_here(config: dict) -> tuple[dict[str, dict], str | None]:
+def _readable_here(config: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], str | None]:
     """Each artifact ``config`` names, with the path an agent here reads it at; or why not.
 
     Unpacks a directory artifact the first time; call it off the event loop.
@@ -93,7 +93,7 @@ def _readable_here(config: dict) -> tuple[dict[str, dict], str | None]:
         return {}, str(exc)
 
 
-def agent_type(config: dict) -> str:
+def agent_type(config: dict[str, Any]) -> str:
     """The kind of agent ``config`` describes, read the same way wherever it is spawned.
 
     Its ``type``, lowercased, or ``dynamic`` when it names none -- except that a
@@ -191,7 +191,7 @@ else:
     _Host = object
 
 
-def _name_problem(name: str, config: dict, existing: bool) -> str | None:
+def _name_problem(name: str, config: dict[str, Any], existing: bool) -> str | None:
     """Why an agent cannot be spawned under ``name``, or None if it can.
 
     A new agent's name is checked in full (`agent_name_error`). One that
@@ -211,7 +211,7 @@ class SpawnMixin(_Host):
 
     async def _spawn_local_from_config(
         self,
-        config: dict,
+        config: dict[str, Any],
         *,
         register: bool = True,
         blocking_install: bool = False,
@@ -266,7 +266,7 @@ class SpawnMixin(_Host):
 
     async def _spawn_local_named(
         self,
-        config: dict,
+        config: dict[str, Any],
         name: str,
         *,
         register: bool,
@@ -353,7 +353,9 @@ class SpawnMixin(_Host):
 
         return actor
 
-    def _without_unearned_trust(self, config: dict, name: str, from_registry: bool) -> dict:
+    def _without_unearned_trust(
+        self, config: dict[str, Any], name: str, from_registry: bool
+    ) -> dict[str, Any]:
         """Return the config without a ``trusted`` flag its source cannot claim.
 
         ``trusted`` skips both the sanitizer and the code validator
@@ -383,7 +385,7 @@ class SpawnMixin(_Host):
 
     # ── Per-type spawn helpers ─────────────────────────────────────────────
 
-    async def _spawn_native_agent(self, config: dict, name: str) -> Actor | None:
+    async def _spawn_native_agent(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn a native catalog agent (type: native) from its saved config.
 
         Native agents are first-class Actor/LLMAgent subclasses, so their spawn
@@ -416,7 +418,7 @@ class SpawnMixin(_Host):
         logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
         return await self.spawn(factory, actor_id=config.get("actor_id"), **kwargs)
 
-    async def _spawn_ha_actuator(self, config: dict, name: str) -> Actor | None:
+    async def _spawn_ha_actuator(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn a HomeAssistantActuatorAgent (type: ha_actuator).
 
         Collision handling is standardized on the agent NAME (matching every
@@ -454,7 +456,7 @@ class SpawnMixin(_Host):
             persistence_dir=str(self._persistence_dir.parent),
         )
 
-    async def _spawn_scheduled_agent(self, config: dict, name: str) -> Actor | None:
+    async def _spawn_scheduled_agent(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn a ScheduledAgent. The schedule spec is validated in __init__,
         so a malformed config raises ValueError here, before registration runs.
         The user's preferred timezone is injected so "5pm" means 5pm where the
@@ -498,7 +500,7 @@ class SpawnMixin(_Host):
         else:
             return actor
 
-    async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
+    async def _spawn_rule_agent(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""
         try:
             rule = RuleConfig.from_dict(config)
@@ -515,7 +517,7 @@ class SpawnMixin(_Host):
             persistence_dir=str(self._persistence_dir.parent),
         )
 
-    async def _spawn_module_agent(self, config: dict, name: str) -> Actor | None:
+    async def _spawn_module_agent(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn an agent this deployment brings, named by its ``target`` import path.
 
         Only a target registered as a plugin -- a ``wactorz.agents`` entry
@@ -552,7 +554,7 @@ class SpawnMixin(_Host):
             options=dict(options) if isinstance(options, dict) else {},
         )
 
-    async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
+    async def _spawn_llm_agent(self, config: dict[str, Any], name: str) -> Actor | None:
         """Spawn an LLMAgent — chat, Q&A, reasoning. Applies any migrated state
         before spawn so on_start()'s recall() finds conversation_history etc.
         """
@@ -572,7 +574,7 @@ class SpawnMixin(_Host):
 
     async def _spawn_dynamic_agent(
         self,
-        config: dict,
+        config: dict[str, Any],
         name: str,
         code: str,
         *,
@@ -631,10 +633,10 @@ class SpawnMixin(_Host):
 
     async def _install_then_spawn(
         self,
-        config: dict,
+        config: dict[str, Any],
         name: str,
         code: str,
-        packages: list,
+        packages: list[Any],
         *,
         registered: bool = True,
         restoring: bool = False,
@@ -706,7 +708,7 @@ class SpawnMixin(_Host):
         except Exception:
             logger.exception("[%s] Background install+spawn failed for '%s'", self.name, name)
 
-    async def _do_spawn_dynamic(self, config: dict, name: str, code: str) -> Actor | None:
+    async def _do_spawn_dynamic(self, config: dict[str, Any], name: str, code: str) -> Actor | None:
         """Construct and start the DynamicAgent. Applies migrated state first,
         passes the ``trusted`` flag (catalog agents skip the safety validator),
         and registers a TopicContract when the config declares pub/sub topics so
@@ -824,7 +826,7 @@ class SpawnMixin(_Host):
         return outcome
 
     async def _report_install_problem(
-        self, config: dict, name: str, outcome: InstallOutcome
+        self, config: dict[str, Any], name: str, outcome: InstallOutcome
     ) -> None:
         """Report a strict spawn's failure, saving a restart only after a successful install."""
         problem = outcome.problem(name)
@@ -837,7 +839,7 @@ class SpawnMixin(_Host):
 
     # ── Migrated state ─────────────────────────────────────────────────────
 
-    async def _apply_initial_state(self, name: str, config: dict) -> None:
+    async def _apply_initial_state(self, name: str, config: dict[str, Any]) -> None:
         """Write a migrated state snapshot into the per-agent persistence layer
         BEFORE the agent spawns, so its on_start()/recall() sees the shipped
         conversation_history / counters. Pops ``_initial_state`` from the config
@@ -953,7 +955,7 @@ class SpawnMixin(_Host):
         if main is not None:
             main._remove_from_spawn_registry(name, actor_id=actor_id)  # pyright: ignore[reportAttributeAccessIssue]
 
-    def _register_spawn(self, config: dict) -> None:
+    def _register_spawn(self, config: dict[str, Any]) -> None:
         """Record a spawn in main's spawn registry so it survives restarts.
 
         The registry is main-owned: ``MainActor`` defines

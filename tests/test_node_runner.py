@@ -1145,7 +1145,7 @@ async def _settle() -> None:
 
 
 @agent(subscribes="probe/in", publishes="probe/out", description="Echoes what it is sent.")
-def probe(reading: dict, me: FunctionAgent) -> dict:
+def probe(reading: dict[str, Any], me: FunctionAgent) -> dict[str, Any]:
     """A library agent: counts what it has seen, and answers with it."""
     me.persist("seen", int(me.recall("seen", 0)) + 1)
     return {"echo": reading, "seen": me.recall("seen")}

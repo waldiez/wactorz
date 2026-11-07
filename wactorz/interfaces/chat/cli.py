@@ -297,7 +297,7 @@ class CLIInterface:
         Owning a daemon thread means a parked read never delays exit.
         """
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
+        future: asyncio.Future[Any] = loop.create_future()
 
         def _read() -> None:
             try:

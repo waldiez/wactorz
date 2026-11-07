@@ -434,6 +434,9 @@ exclude = ["**/node_modules", "static", "frontend", "build", "dist", ".local", "
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
+# A generic says what it holds: a bare `dict` reads as `dict[Unknown, Unknown]`, which
+# spreads to every signature that passes it along.
+reportMissingTypeArgument = "error"
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 [tool.coverage.run]

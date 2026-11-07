@@ -447,7 +447,7 @@ class WactorzDB:
                 ),
             )
 
-    def write_sensor_batch(self, rows: list[tuple]) -> None:
+    def write_sensor_batch(self, rows: list[tuple[Any, ...]]) -> None:
         """Batch insert sensor readings. Each tuple matches write_sensor args.
 
         A tuple of nine, as rows were before readings kept their arrival apart
@@ -628,7 +628,7 @@ class WactorzDB:
             "FROM chat_log"
         )
         clauses: list[str] = []
-        params: list = []
+        params: list[Any] = []
         if agent_id:
             clauses.append("agent_id = ?")
             params.append(agent_id)
@@ -675,7 +675,7 @@ class WactorzDB:
         if since is None:
             since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
-        params: list = [since]
+        params: list[Any] = [since]
 
         if topic:
             conditions.append("topic = ?")
@@ -712,7 +712,7 @@ class WactorzDB:
         if since is None:
             since = time.time() - (hours * 3600)
         conditions = ["ts >= ?", "confidence >= ?"]
-        params: list = [since, min_confidence]
+        params: list[Any] = [since, min_confidence]
 
         if agent:
             conditions.append("agent = ?")
@@ -745,7 +745,7 @@ class WactorzDB:
         if since is None:
             since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
-        params: list = [since]
+        params: list[Any] = [since]
 
         if entity_id:
             conditions.append("entity_id = ?")
@@ -773,7 +773,7 @@ class WactorzDB:
     ) -> list[dict[str, Any]]:
         since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
-        params: list = [since]
+        params: list[Any] = [since]
 
         if entity_id:
             conditions.append("entity_id = ?")

@@ -211,18 +211,24 @@ class _Scripted(LLMProvider):
     def __init__(self, failure: BaseException | None = None) -> None:
         self.failure = failure
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+    async def _complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> Any:
         if self.failure is not None:
             raise self.failure
         return "answer", {}
 
     async def _complete_with_tools(
-        self, messages: list[dict], tools: list[dict[str, Any]], system: str = "", **kwargs: Any
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        system: str = "",
+        **kwargs: Any,
     ) -> Any:
         return await self._complete(messages, system, **kwargs)
 
     async def _stream(
-        self, messages: list[dict], system: str = "", **kwargs: Any
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> AsyncGenerator[str, None]:
         yield "ans"
         if self.failure is not None:

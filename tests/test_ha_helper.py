@@ -11,7 +11,7 @@ from wactorz.core.integrations.home_assistant import ha_helper
 
 
 class _FakeHAWebSocketClient:
-    instances: ClassVar[list] = []
+    instances: ClassVar[list[Any]] = []
     # What each client made from now on answers; a test sets them before the
     # code under test connects, and every client works on its own copy.
     responses: ClassVar[dict[str, Any]] = {}
@@ -73,10 +73,10 @@ class _FakeResponse:
 
 
 class _FakeClientSession:
-    instances: ClassVar[list] = []
-    get_results: ClassVar[list] = []
-    post_results: ClassVar[list] = []
-    delete_results: ClassVar[list] = []
+    instances: ClassVar[list[Any]] = []
+    get_results: ClassVar[list[Any]] = []
+    post_results: ClassVar[list[Any]] = []
+    delete_results: ClassVar[list[Any]] = []
 
     def __init__(self) -> None:
         self.get_calls = []
@@ -1271,7 +1271,7 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
 
     # -- helpers -----------------------------------------------------------
 
-    def _state(self, entity_id: str, state: str = "on") -> dict:
+    def _state(self, entity_id: str, state: str = "on") -> dict[str, Any]:
         return {"entity_id": entity_id, "state": state, "last_changed": "2024-01-01T00:00:00+00:00"}
 
     # -- single entity -----------------------------------------------------

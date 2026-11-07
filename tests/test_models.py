@@ -235,7 +235,7 @@ class TestAnActorsModels:
 
 
 @wactorz.agent(name="scorer", models={"model": "imu-detector:1"})
-async def score(reading: dict, me: FunctionAgent) -> dict:
+async def score(reading: dict[str, Any], me: FunctionAgent) -> dict[str, Any]:
     model = await me.load_model("model")
     return {"distance": float(abs(reading["az"] - model["mean"][2]))}
 

@@ -329,7 +329,7 @@ class ScheduledAgent(Actor):
 
     def __init__(
         self,
-        schedule: dict | None = None,
+        schedule: dict[str, Any] | None = None,
         timezone: str | None = None,
         publish_topic: str | None = None,
         description: str = "",
@@ -339,7 +339,7 @@ class ScheduledAgent(Actor):
         super().__init__(**kwargs)
         if not isinstance(schedule, dict):
             raise ScheduleError.not_a_dict(schedule)
-        self._schedule: dict = dict(schedule)  # defensive copy
+        self._schedule: dict[str, Any] = dict(schedule)  # defensive copy
         self._user_tz: str | None = timezone
         self._tz = _resolve_timezone(self._schedule.get("tz"), timezone)
         self._publish_topic: str = publish_topic or f"schedule/{self.name}/fired"
@@ -357,7 +357,7 @@ class ScheduledAgent(Actor):
             raise ScheduleError.invalid(self.name, e) from e
 
         # Background loop handle
-        self._loop_task: asyncio.Task | None = None
+        self._loop_task: asyncio.Task[Any] | None = None
         # Used by handle_message for manual trigger/inspect commands
         self._manual_trigger_event: asyncio.Event = asyncio.Event()
 
@@ -613,7 +613,7 @@ class ScheduledAgent(Actor):
         reply_to = msg.reply_to or msg.sender_id
         task_id = payload.get("_task_id")
 
-        async def _reply(body: dict) -> None:
+        async def _reply(body: dict[str, Any]) -> None:
             if not reply_to:
                 return
             r = dict(body)
@@ -681,7 +681,7 @@ def _parse_duration(s: str) -> int | None:
         return None
 
 
-def describe_schedule(schedule: dict, tz_name: str | None = None) -> str:
+def describe_schedule(schedule: dict[str, Any], tz_name: str | None = None) -> str:
     """Render a schedule dict as a short human-readable string for /rules
     and the /plans dry-run preview. Pure function — no I/O.
     """

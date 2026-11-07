@@ -125,7 +125,7 @@ class _FakeSession:
 
 @pytest.mark.asyncio
 async def test_ollama_complete_sends_temperature() -> None:
-    sent: list[dict] = []
+    sent: list[dict[str, Any]] = []
     with _with_temp(0.0), patch("aiohttp.ClientSession", lambda *a, **k: _FakeSession(sent)):
         await OllamaProvider(model="qwen3:4b").complete(messages=[{"role": "user", "content": "x"}])
     assert sent[0]["options"] == {"temperature": 0.0}
@@ -133,7 +133,7 @@ async def test_ollama_complete_sends_temperature() -> None:
 
 @pytest.mark.asyncio
 async def test_ollama_complete_omits_temperature_when_unset() -> None:
-    sent: list[dict] = []
+    sent: list[dict[str, Any]] = []
     with _with_temp(None), patch("aiohttp.ClientSession", lambda *a, **k: _FakeSession(sent)):
         await OllamaProvider(model="qwen3:4b").complete(messages=[{"role": "user", "content": "x"}])
     assert "options" not in sent[0]

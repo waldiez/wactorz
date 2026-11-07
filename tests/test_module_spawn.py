@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 
 @agent(subscribes="in/x")
-def detector(reading: dict) -> dict:
+def detector(reading: dict[str, Any]) -> dict[str, Any]:
     return reading
 
 
@@ -45,7 +45,7 @@ class _Host(SpawnMixin):
         self.actor_id = "id-main"
         self.llm = cast(LLMProvider, object())
         self._registry = cast("ActorRegistry", _Registry())
-        self._result_futures: dict[str, asyncio.Future] = {}
+        self._result_futures: dict[str, asyncio.Future[Any]] = {}
         self._persistence_dir = Path(tempfile.mkdtemp()) / "main"
         self.spawn_calls: list[tuple[Any, dict[str, Any]]] = []
         self.registered: list[dict[str, Any]] = []

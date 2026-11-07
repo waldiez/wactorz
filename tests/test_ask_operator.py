@@ -41,7 +41,7 @@ from wactorz.core.questions import (
 
 
 @agent(name="hvac-watch")
-def hvac_watch(payload: dict) -> dict:
+def hvac_watch(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 

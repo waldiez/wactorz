@@ -397,7 +397,7 @@ async def get_simplified_ha_data(ws_url: str, token: str) -> dict[str, list[dict
 
         _SKIP_KEYS = {"icon", "entity_picture"}
 
-        def drop_nulls(d: dict) -> dict:
+        def drop_nulls(d: dict[str, Any]) -> dict[str, Any]:
             return {k: v for k, v in d.items() if v is not None and v != [] and k not in _SKIP_KEYS}
 
         return {

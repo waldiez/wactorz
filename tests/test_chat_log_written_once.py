@@ -108,7 +108,7 @@ class TestATurnFromAnywhereElse:
 class _Streams(LLMProvider):
     """A provider that really streams."""
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+    async def _stream(self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any) -> Any:
         yield "a"
         yield "b"
 
@@ -116,14 +116,16 @@ class _Streams(LLMProvider):
 class _AnswersWhole(LLMProvider):
     """A provider that only answers in one piece, so chat_stream falls back to chat()."""
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+    async def _complete(
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> Any:
         return "whole", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 
 class _BreaksMidStream(LLMProvider):
     """Streams one chunk, then fails — an answer interrupted part-way."""
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+    async def _stream(self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any) -> Any:
         yield "half"
         raise ValueError("connection dropped")
 

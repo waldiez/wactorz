@@ -12,6 +12,8 @@ Counting queries rather than timing: a timing assertion passes on a fast machine
 whatever the code does.
 """
 
+from typing import Any
+
 import pytest
 
 from wactorz.web import cost, events, runtime
@@ -25,7 +27,7 @@ class _CountingCursor:
         self._counter[0] += 1
         return self
 
-    def fetchall(self) -> list:
+    def fetchall(self) -> list[Any]:
         return []
 
     def fetchone(self) -> None:
@@ -134,12 +136,12 @@ class TestTheDispatchPathAsksForNoTotals:
     """
 
     @pytest.fixture(autouse=True)
-    def _quiet_broadcast(self, monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    def _quiet_broadcast(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         from wactorz.web import ws
 
-        sent: list[dict] = []
+        sent: list[dict[str, Any]] = []
 
-        async def capture(frame: dict) -> None:
+        async def capture(frame: dict[str, Any]) -> None:
             sent.append(frame)
 
         monkeypatch.setattr(ws, "broadcast", capture)

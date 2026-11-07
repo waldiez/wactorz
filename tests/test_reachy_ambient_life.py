@@ -22,7 +22,7 @@ import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
 
-NS: dict = {}
+NS: dict[str, Any] = {}
 exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
 
 HEAD_FIELDS = ("z", "pitch", "yaw", "roll", "body_yaw")
@@ -46,7 +46,7 @@ class FakeAgent:
     """Records what reached the robot instead of moving one."""
 
     def __init__(self, **state) -> None:
-        self.targets: list[dict] = []
+        self.targets: list[dict[str, Any]] = []
         self.logs: list[tuple[str, str]] = []
         mini = types.SimpleNamespace(set_target=self._set_target)
         self.state = {
@@ -971,7 +971,7 @@ class TestSwitchingMotionOn:
     in place would report motion as on and leave the robot perfectly still.
     """
 
-    def _switch(self, agent: FakeAgent, payload: dict) -> dict:
+    def _switch(self, agent: FakeAgent, payload: dict[str, Any]) -> dict[str, Any]:
         started = []
         saved = NS["_start_life_loop"]
         NS["_start_life_loop"] = started.append

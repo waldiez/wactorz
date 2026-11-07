@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
@@ -126,12 +127,12 @@ def _record_fingerprint(frontend: Path) -> None:
         pass  # a cache we cannot write is a slower build, not a failure
 
 
-class CustomBuildHook(BuildHookInterface):
+class CustomBuildHook(BuildHookInterface[Any]):
     """Ensure the Vite frontend is built before the wheel is assembled."""
 
     PLUGIN_NAME = "custom"
 
-    def initialize(self, version: str, build_data: dict) -> None:
+    def initialize(self, version: str, build_data: dict[str, Any]) -> None:
         self._build_frontend(Path(self.root))
 
     def _build_frontend(self, root: Path) -> None:

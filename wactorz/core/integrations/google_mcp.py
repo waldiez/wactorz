@@ -192,7 +192,7 @@ class _GoogleTokenStorage(TokenStorage):
         self.config = config
         self.path = Path(config.token_file()).expanduser()
 
-    def _read(self) -> dict:
+    def _read(self) -> dict[str, Any]:
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -201,7 +201,7 @@ class _GoogleTokenStorage(TokenStorage):
             logger.warning("Could not read %s MCP token file %s", self.config.label, self.path)
             return {}
 
-    def _write(self, data: dict) -> None:
+    def _write(self, data: dict[str, Any]) -> None:
         write_private_json(self.path, data)
 
     async def get_tokens(self) -> OAuthToken | None:
@@ -351,7 +351,7 @@ def mcp_timeout() -> float:
         return 20.0
 
 
-RestHandler = Callable[[dict], Awaitable[str]]
+RestHandler = Callable[[dict[str, Any]], Awaitable[str]]
 
 
 class GoogleMcpClient:
@@ -366,7 +366,7 @@ class GoogleMcpClient:
         return {}
 
     # ── Public API ─────────────────────────────────────────────────────────
-    async def call_tool(self, tool_name: str, arguments: dict | None = None) -> str:
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> str:
         arguments = arguments or {}
         try:
             result = await asyncio.wait_for(
@@ -385,7 +385,9 @@ class GoogleMcpClient:
                 return fallback
         return result
 
-    async def _call_mcp(self, tool_name: str, arguments: dict, interactive: bool = False) -> str:
+    async def _call_mcp(
+        self, tool_name: str, arguments: dict[str, Any], interactive: bool = False
+    ) -> str:
         if ClientSession is None or streamablehttp_client is None:
             return "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
         try:
@@ -421,7 +423,7 @@ class GoogleMcpClient:
         except Exception as exc:
             return f"{self.config.label} MCP error: {exc}"
 
-    def _store_token_response(self, td: dict) -> None:
+    def _store_token_response(self, td: dict[str, Any]) -> None:
         path = Path(self.config.token_file()).expanduser()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -532,7 +534,7 @@ class GoogleMcpClient:
         return f"{self.config.label} login did not complete: {result}"
 
     # ── REST fallback plumbing ─────────────────────────────────────────────
-    async def _call_rest(self, tool_name: str, arguments: dict) -> str | None:
+    async def _call_rest(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
         handler = self._rest_handlers().get(tool_name)
         if handler is None:
             return None
@@ -544,7 +546,7 @@ class GoogleMcpClient:
             logger.warning("%s REST fallback failed: %s", self.config.label, exc)
             return None
 
-    def _stored_tokens(self) -> dict:
+    def _stored_tokens(self) -> dict[str, Any]:
         path = Path(self.config.token_file()).expanduser()
         try:
             return json.loads(path.read_text(encoding="utf-8")).get("tokens", {}) or {}

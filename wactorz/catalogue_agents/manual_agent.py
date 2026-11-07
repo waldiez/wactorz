@@ -946,11 +946,11 @@ def _ddg_html_scrape(agent: AgentAPI, device: str, headers: dict[str, Any]) -> l
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
     ]
 
-    out: list = []
+    out: list[Any] = []
 
     def _harvest(html: str, source: str) -> list[str]:
         """Pull manual-shaped URLs out of an HTML response."""
-        page_urls: list = []
+        page_urls: list[Any] = []
 
         # Direct anchor URLs
         for u in re.findall(r'href="(https?://[^"]+)"', html):
@@ -968,7 +968,7 @@ def _ddg_html_scrape(agent: AgentAPI, device: str, headers: dict[str, Any]) -> l
             except Exception:  # noqa: S112  # one malformed result link is skipped
                 continue
 
-        cleaned: list = []
+        cleaned: list[Any] = []
         for u in page_urls:
             # Rewrite ManualsLib viewer pages → direct PDF download
             if _manualslib_viewer(u):

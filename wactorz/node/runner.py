@@ -133,9 +133,9 @@ class NodeRunner:
         self._start_time: float = time.time()
         #: Control commands running off the subscriber loop, held so none is
         #: collected mid-flight.
-        self._commands: set[asyncio.Task] = set()
+        self._commands: set[asyncio.Task[Any]] = set()
         #: The long-running loops `run` owns, so a shutdown can end them.
-        self._loops: list[asyncio.Task] = []
+        self._loops: list[asyncio.Task[Any]] = []
         self._loop_lag = LoopLagMonitor()
         self.registry = ActorRegistry()
         #: Where the other agents are, from their retained manifests, so an agent
@@ -149,7 +149,7 @@ class NodeRunner:
         # deliberate stop never releases supervision.
         self.registry._supervisor_ref = self.supervisor
         #: name → the config it was spawned from, so a restart can use it again.
-        self._configs: dict[str, dict] = {}
+        self._configs: dict[str, dict[str, Any]] = {}
         #: The agents being started now: installing, fetching, not yet running.
         self._starting: set[str] = set()
         state_path = self._resolve_state_dir(state_dir)

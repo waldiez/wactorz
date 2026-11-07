@@ -594,10 +594,10 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
             actors_by_id[a.actor_id] = a
             actors_by_name[a.name] = a
 
-    live_names: set = set()
+    live_names: set[Any] = set()
     live_cost = 0.0
     live_msgs = 0
-    seen_ids: set = set()
+    seen_ids: set[Any] = set()
     for aid, ag in runtime.state["agents"].items():
         seen_ids.add(aid)
         name = ag.get("name", "")

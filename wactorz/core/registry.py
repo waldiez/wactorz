@@ -327,7 +327,7 @@ class Supervisor:
         self._poll_interval = poll_interval  # seconds between liveness checks
         self._specs: dict[str, SupervisedSpec] = {}  # name → spec (ordered)
         self._order: list[str] = []  # insertion order for REST_FOR_ONE
-        self._watch_task: asyncio.Task | None = None
+        self._watch_task: asyncio.Task[Any] | None = None
         self._lock = asyncio.Lock()
         #: Reports main's mailbox had no room for, oldest first, handed over
         #: again at each check. Bounded: a main that never reads must not be a
@@ -1034,7 +1034,7 @@ class Supervisor:
         """
         return self._watch_task is not None and not self._watch_task.done()
 
-    def status(self) -> list[dict]:
+    def status(self) -> list[dict[str, Any]]:
         """Return a snapshot of all supervised actors for dashboard/CLI."""
         result = []
         for name, spec in self._entries():
@@ -1129,7 +1129,7 @@ class ActorSystem:
             self.registry._supervisor_ref = self._supervisor
         return self._supervisor
 
-    def mqtt_status(self) -> dict:
+    def mqtt_status(self) -> dict[str, Any]:
         """Return current MQTT publisher health — useful for dashboard and /nodes."""
         if self._mqtt_client is None:
             return {"connected": False, "queue_depth": 0, "available": False}

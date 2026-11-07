@@ -149,11 +149,11 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         self.name = actor.name
         self.actor_id = actor.actor_id
         # Shared mutable namespace — generated code can store anything here
-        self.state: dict = {}
+        self.state: dict[str, Any] = {}
         # LLM interface — available if llm_provider was passed at spawn time
         self.llm = LLMInterface(actor, self.state) if actor._llm_provider else None
         # Auto-discovered topics this agent publishes to
-        self._published_topics: set = set()
+        self._published_topics: set[Any] = set()
         #: One window per topic, so repeated `agent.window(...)` calls -- which
         #: generated code makes from a process loop -- return the one that has
         #: been filling rather than a fresh empty one on a new connection.

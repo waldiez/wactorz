@@ -34,9 +34,9 @@ _CUSTOM = "https://llm.internal.example/v1"
 
 
 @pytest.fixture(name="openai_calls")
-def openai_calls_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+def openai_calls_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Record the kwargs the provider hands to openai.AsyncOpenAI."""
-    calls: list[dict] = []
+    calls: list[dict[str, Any]] = []
 
     def _fake_async_openai(**kwargs) -> types.SimpleNamespace:
         calls.append(kwargs)
@@ -50,31 +50,31 @@ def openai_calls_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 # ── OpenAI ──────────────────────────────────────────────────────────────────
 
 
-def test_a_custom_base_url_reaches_the_openai_client(openai_calls: list[dict]) -> None:
+def test_a_custom_base_url_reaches_the_openai_client(openai_calls: list[dict[str, Any]]) -> None:
     OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)
     assert openai_calls[0].get("base_url") == _CUSTOM, (
         "the configured endpoint was dropped — traffic would go to api.openai.com"
     )
 
 
-def test_no_base_url_leaves_the_client_on_its_default(openai_calls: list[dict]) -> None:
+def test_no_base_url_leaves_the_client_on_its_default(openai_calls: list[dict[str, Any]]) -> None:
     OpenAIProvider(model="gpt-4o", api_key="k")
     assert openai_calls[0].get("base_url") is None
 
 
-def test_the_api_key_is_always_passed(openai_calls: list[dict]) -> None:
+def test_the_api_key_is_always_passed(openai_calls: list[dict[str, Any]]) -> None:
     OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)
     assert openai_calls[0]["api_key"] == "k"
 
 
-def test_the_provider_records_the_endpoint_it_uses(openai_calls: list[dict]) -> None:
+def test_the_provider_records_the_endpoint_it_uses(openai_calls: list[dict[str, Any]]) -> None:
     # `base_url` is read back for reporting; it must agree with the client.
     provider = OpenAIProvider(model="gpt-4o", api_key="k", base_url=_CUSTOM)
     assert provider.base_url == _CUSTOM
     assert openai_calls[0].get("base_url") == provider.base_url
 
 
-def test_an_empty_base_url_is_normalised_to_none(openai_calls: list[dict]) -> None:
+def test_an_empty_base_url_is_normalised_to_none(openai_calls: list[dict[str, Any]]) -> None:
     provider = OpenAIProvider(model="gpt-4o", api_key="k", base_url="")
     assert provider.base_url is None
     assert openai_calls[0].get("base_url") is None
@@ -83,7 +83,7 @@ def test_an_empty_base_url_is_normalised_to_none(openai_calls: list[dict]) -> No
 # ── the sibling providers, same class of bug ────────────────────────────────
 
 
-def test_nim_passes_its_base_url_through(openai_calls: list[dict]) -> None:
+def test_nim_passes_its_base_url_through(openai_calls: list[dict[str, Any]]) -> None:
     NIMProvider(model="m", api_key="k", base_url=_CUSTOM)
     assert openai_calls[0].get("base_url") == _CUSTOM
 

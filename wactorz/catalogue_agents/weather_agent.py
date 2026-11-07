@@ -642,7 +642,7 @@ def parse_query(raw: str, today: date | None = None) -> dict[str, Any]:
     when = _resolve_when(low, today)
     location = self_location or _extract_location(text)
 
-    payload: dict = {"action": when["action"]}
+    payload: dict[str, Any] = {"action": when["action"]}
     if location:
         payload["location"] = location
     if self_location:
@@ -1165,7 +1165,7 @@ class WeatherAgent(Actor):
     # ── Verdict helpers (answer "will it rain?" style questions) ────────────
 
     @staticmethod
-    def _precip_str(r: dict) -> str:
+    def _precip_str(r: dict[str, Any]) -> str:
         prob = r.get("precip_prob")
         mm = r.get("precip_mm")
         bits = []
@@ -1176,7 +1176,7 @@ class WeatherAgent(Actor):
         return f", precip {' / '.join(bits)}" if bits else ""
 
     @staticmethod
-    def _verdict_now(result: dict, concern: str | None) -> str:
+    def _verdict_now(result: dict[str, Any], concern: str | None) -> str:
         if concern == "rain":
             if result.get("code") in _RAINY or (result.get("precip") or 0) > 0:
                 return "Yes — it's raining."

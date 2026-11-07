@@ -78,7 +78,7 @@ class FakeClient:
 class FakeBroker:
     def __init__(self) -> None:
         self.connections: list[FakeClient] = []
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self.queue: asyncio.Queue[Any] = asyncio.Queue()
 
     def __call__(self, _host: str, _port: int, **_kwargs: Any) -> FakeClient:
         client = FakeClient(self)

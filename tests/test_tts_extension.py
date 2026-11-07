@@ -48,7 +48,9 @@ class _EdgeTts:
 
 
 @pytest.fixture(name="client")
-async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TestClient]:
+async def client_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     monkeypatch.setattr(tts, "edge_tts", _EdgeTts, raising=False)
     monkeypatch.setattr(tts._tts_state, "available", True)
     monkeypatch.setattr(tts._tts_state, "voices", None)
@@ -65,14 +67,16 @@ async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[TestC
 
 
 class TestVoices:
-    async def test_voices_are_listed_sorted_and_cached(self, client: TestClient) -> None:
+    async def test_voices_are_listed_sorted_and_cached(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         voices = await (await client.get("/api/tts/voices")).json()
 
         assert [v["name"] for v in voices] == ["el-GR-A", "en-US-B"]
         assert tts._tts_state.voices == voices
 
     async def test_an_unreachable_service_lists_none(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         tts._tts_state.voices = None
 
@@ -84,7 +88,7 @@ class TestVoices:
         assert await (await client.get("/api/tts/voices")).json() == []
 
     async def test_a_service_that_never_answers_lists_none_rather_than_waiting(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The list is read while the server starts: an answer that never comes
         # must not hold the start back with it.
@@ -114,7 +118,7 @@ class TestVoices:
 
 class TestSpeech:
     async def test_speech_is_audio_with_code_blocks_named_and_text_capped(
-        self, client: TestClient
+        self, client: TestClient[web.Request, web.Application]
     ) -> None:
         text = "Here:\n```python\nprint(1)\n```\n" + "a" * 400
 
@@ -127,7 +131,7 @@ class TestSpeech:
         assert voice == "en-US-Default"
 
     async def test_the_voice_comes_from_the_request_or_the_environment(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("TTS_VOICE", "  el-GR-A  ")
 
@@ -146,7 +150,7 @@ class TestSpeech:
         ],
     )
     async def test_a_bad_request_is_refused_before_calling_out(
-        self, client: TestClient, body: str, message: str
+        self, client: TestClient[web.Request, web.Application], body: str, message: str
     ) -> None:
         resp = await client.post(
             "/api/tts", data=body, headers={"Content-Type": "application/json"}
@@ -155,7 +159,9 @@ class TestSpeech:
         assert (resp.status, await resp.text()) == (400, message)
         assert _Communicate.spoken == []
 
-    async def test_a_failing_service_is_a_500_without_its_details(self, client: TestClient) -> None:
+    async def test_a_failing_service_is_a_500_without_its_details(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         _Communicate.fail = True
 
         resp = await client.post("/api/tts", json={"text": "hi"})
@@ -163,7 +169,7 @@ class TestSpeech:
         assert (resp.status, await resp.text()) == (500, "Speech synthesis failed")
 
     async def test_without_edge_tts_the_route_says_so(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(tts._tts_state, "available", False)
 

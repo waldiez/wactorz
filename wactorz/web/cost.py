@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # kills cannot erase what was already banked; keying by actor_id stops a
 # respawned agent from double-counting.
 LIFETIME_LEDGER_KEY = "_lifetime_cost_ledger"
-lifetime_cost: dict = {}
+lifetime_cost: dict[str, Any] = {}
 lifetime_loaded: bool = False
 
 
@@ -219,12 +219,12 @@ async def settled_totals() -> None:
     await refresh_totals()
 
 
-def historical_cost_usd(live_names: set) -> float:
+def historical_cost_usd(live_names: set[Any]) -> float:
     """Sum _final_cost for agents not in live_names, from the stored totals."""
     return sum(spent for name, spent in _stored.final_by_name if name not in live_names)
 
 
-def historical_messages(live_names: set) -> int:
+def historical_messages(live_names: set[Any]) -> int:
     """Sum _messages_processed for agents not in live_names, from the stored totals."""
     return sum(count for agent, count in _stored.messages if agent not in live_names)
 
@@ -260,7 +260,7 @@ def _final_cost_from_db(name: str) -> Any:
     return None
 
 
-def actor_cost(actor: Any, ag: dict, stored: Mapping[str, float] | None = None) -> Any:
+def actor_cost(actor: Any, ag: dict[str, Any], stored: Mapping[str, float] | None = None) -> Any:
     """Return the most accurate cost available.
 
     MQTT-derived first, then live object, then SQLite: from ``stored`` when the

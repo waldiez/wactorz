@@ -114,9 +114,9 @@ class TopicContract:
     name: str
     publishes: list[str] = field(default_factory=list)
     subscribes: list[str] = field(default_factory=list)
-    triggers_when: dict = field(default_factory=dict)
-    produces_schema: dict = field(default_factory=dict)
-    consumes_schema: dict = field(default_factory=dict)
+    triggers_when: dict[str, Any] = field(default_factory=dict)
+    produces_schema: dict[str, Any] = field(default_factory=dict)
+    consumes_schema: dict[str, Any] = field(default_factory=dict)
     node: str | None = None
     actor_id: str | None = None
     timestamp: float = field(default_factory=time.time)
@@ -131,7 +131,7 @@ class TopicContract:
     #       "fields":  {"temp": "float", "humidity": "float"},
     #       "example": {"temp": 30.5, "humidity": 47.7}
     #   }}
-    observed_samples: dict = field(default_factory=dict)
+    observed_samples: dict[str, Any] = field(default_factory=dict)
     #: What the agent says about itself in its manifest. Topics alone can be
     #: indistinguishable — two buttons publish the same gestures under
     #: different serials — and the description is where an agent says which
@@ -141,7 +141,7 @@ class TopicContract:
     #: The models the agent serves, by the key it loads each under: ``{"model":
     #: "imu-detector"}``. From its manifest, so an agent on a node says it too;
     #: where each model's pointers stand is the store's to say, not this.
-    models: dict = field(default_factory=dict)
+    models: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Guard against LLM mistakes:
@@ -188,7 +188,7 @@ class TopicContract:
                 return True
         return False
 
-    def update_observed(self, topic: str, payload: dict) -> None:
+    def update_observed(self, topic: str, payload: dict[str, Any]) -> None:
         """Record the actual field names and types from a real published message.
         Called automatically by AgentAPI.publish() — agents don't need to
         call this themselves.
@@ -200,7 +200,7 @@ class TopicContract:
             return
         self.observed_samples[topic] = sample_of(payload)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "publishes": self.publishes,
@@ -217,7 +217,7 @@ class TopicContract:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> TopicContract:
+    def from_dict(cls, d: dict[str, Any]) -> TopicContract:
         return cls(
             name=d.get("name", ""),
             publishes=d.get("publishes", []),
@@ -234,7 +234,7 @@ class TopicContract:
         )
 
     @classmethod
-    def from_spawn_config(cls, config: dict) -> TopicContract:
+    def from_spawn_config(cls, config: dict[str, Any]) -> TopicContract:
         """Extract a TopicContract from a spawn config dict."""
         return cls(
             name=config.get("name", ""),
@@ -262,7 +262,7 @@ def is_machinery(topic: str) -> bool:
     return topic.startswith("agents/") and "/data" not in topic
 
 
-def sample_of(payload: dict) -> dict:
+def sample_of(payload: dict[str, Any]) -> dict[str, Any]:
     """What is kept of one real payload: its field names and types, the payload, and when it came.
 
     Keys starting with ``_`` are the sender's own bookkeeping and are left out.
@@ -334,9 +334,9 @@ class TopicRegistry:
         #: The last payload seen on each topic no agent publishes but some agent
         #: reads, by topic: what a sensor, a bridge or a script outside the
         #: system sends, which no contract would otherwise hold.
-        self._outside: dict[str, dict] = {}
+        self._outside: dict[str, dict[str, Any]] = {}
 
-    def record_outside(self, topic: str, payload: dict) -> bool:
+    def record_outside(self, topic: str, payload: dict[str, Any]) -> bool:
         """Keep ``payload`` as the last seen on ``topic``, when no agent publishes it and one reads it.
 
         Returns whether it was kept. The table holds `OUTSIDE_TOPICS_KEPT`
@@ -354,7 +354,7 @@ class TopicRegistry:
             del self._outside[next(iter(self._outside))]
         return True
 
-    def outside_samples(self) -> dict[str, dict]:
+    def outside_samples(self) -> dict[str, dict[str, Any]]:
         """The last payload seen on each topic from outside, by topic, oldest first."""
         return {topic: dict(sample) for topic, sample in self._outside.items()}
 
@@ -492,7 +492,7 @@ class TopicRegistry:
                         opportunities.append((producer, consumer, pub_topic))
         return opportunities
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
         """Return a human-readable summary of the registry."""
         return {
             "total_agents": len(self._contracts),
@@ -663,8 +663,8 @@ class StreamWindow:
         #: or a source whose clock is not this machine's. Off, as every agent
         #: written before it expects (docs/design/event-time.md).
         self.event_time = event_time
-        self._buffer: deque = deque(maxlen=max_size)
-        self._task: asyncio.Task | None = None
+        self._buffer: deque[Any] = deque(maxlen=max_size)
+        self._task: asyncio.Task[Any] | None = None
 
     def _now(self) -> float:
         """Where the window ends: now, or the newest entry's time in event time."""
@@ -688,7 +688,7 @@ class StreamWindow:
             entry["value"] = payload
         self._buffer.append(entry)
 
-    def values(self, key: str = "value") -> list:
+    def values(self, key: str = "value") -> list[Any]:
         """Return all values for a key in the current window."""
         self._trim()
         return [e[key] for e in self._buffer if key in e]
@@ -887,7 +887,7 @@ class TopicBus:
                         sub_topic,
                     )
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, Any]:
         return {
             "registry": self.registry.summary(),
             "mqtt_broker": self._mqtt_broker,

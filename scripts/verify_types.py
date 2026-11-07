@@ -170,6 +170,9 @@ def main() -> None:
         "--floor", type=float, default=0.0, help="the least score, in percent, that passes"
     )
     parser.add_argument("--top", type=int, default=10, help="how many packages and reasons to list")
+    parser.add_argument(
+        "--json", type=Path, help="also write the whole report here, every symbol in it"
+    )
     args = parser.parse_args()
     uv = shutil.which("uv")
     if uv is None:
@@ -181,6 +184,8 @@ def main() -> None:
     if not shipped:
         print("py.typed is not shipped yet: added to the scratch install, so this is readiness.")
     print(_summary(completeness, args.top))
+    if args.json is not None:
+        args.json.write_text(json.dumps(completeness, indent=1))
     score = completeness["completenessScore"] * 100
     if score < args.floor:
         raise BelowFloorError(score, args.floor)

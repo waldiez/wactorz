@@ -10,6 +10,7 @@ other, since they name the flavours separately and would drift apart by hand.
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -64,7 +65,7 @@ def _python(flavour: str) -> tuple[int, int]:
     return int(found.group(1)), int(found.group(2))
 
 
-def _workflow(name: str) -> dict:
+def _workflow(name: str) -> dict[str, Any]:
     return yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))
 
 

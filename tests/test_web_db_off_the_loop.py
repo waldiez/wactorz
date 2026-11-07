@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from tests.loop_watch import LoopWatch
@@ -39,7 +40,7 @@ def db_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> WactorzDB:
 
 
 @pytest.fixture(name="client")
-async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient]:
+async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -80,7 +81,7 @@ async def _while_watching(watch: LoopWatch, call: Any) -> Any:
     ],
 )
 async def test_a_route_touches_the_database_off_the_loop(
-    client: TestClient,
+    client: TestClient[web.Request, web.Application],
     db: WactorzDB,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
@@ -97,7 +98,7 @@ async def test_a_route_touches_the_database_off_the_loop(
 
 
 async def test_a_live_agents_history_is_read_off_the_loop(
-    client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], db: WactorzDB, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class _Agent:
         actor_id = "live"
@@ -124,7 +125,7 @@ async def test_a_live_agents_history_is_read_off_the_loop(
 
 
 async def test_setting_the_spend_limit_writes_off_the_loop(
-    client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], db: WactorzDB, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     watch = _watched(monkeypatch, db, "kv_set")
 
@@ -137,7 +138,7 @@ async def test_setting_the_spend_limit_writes_off_the_loop(
 
 
 async def test_a_reset_undoes_saves_before_it_and_keeps_those_after(
-    client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], db: WactorzDB, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Ledger saves and the reset's delete go through one ordered writer: a save
     # queued before the reset is deleted with it, and one queued after survives a
@@ -175,7 +176,7 @@ def test_the_spend_seed_reads_final_costs_through_the_lock(db: WactorzDB) -> Non
 
 
 async def test_the_agent_list_reads_stored_costs_once_off_the_loop(
-    client: TestClient, db: WactorzDB, monkeypatch: pytest.MonkeyPatch
+    client: TestClient[web.Request, web.Application], db: WactorzDB, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class _Registry:
         def all_actors(self) -> list[Any]:
@@ -319,7 +320,11 @@ class TestAReset:
         ],
     )
     async def test_its_wipe_runs_off_the_loop(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, scope: str, wipe: str
+        self,
+        client: TestClient[web.Request, web.Application],
+        monkeypatch: pytest.MonkeyPatch,
+        scope: str,
+        wipe: str,
     ) -> None:
         monkeypatch.setattr(runtime, "registry", None)
         watch = LoopWatch()
@@ -335,7 +340,11 @@ class TestAReset:
         ("scope", "wipe"), [("chat", "reset_chat"), ("metrics", "reset_metrics")]
     )
     async def test_the_agents_here_forget_before_the_disk_is_cleared(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, scope: str, wipe: str
+        self,
+        client: TestClient[web.Request, web.Application],
+        monkeypatch: pytest.MonkeyPatch,
+        scope: str,
+        wipe: str,
     ) -> None:
         # Cleared after, an agent writing in the meantime would put its old copy
         # back on the disk the wipe had just emptied.
@@ -361,7 +370,7 @@ class TestAReset:
     @pytest.mark.parametrize(("scope", "wipe"), [("chat", "reset_chat"), ("all", "reset_all")])
     async def test_turns_still_queued_for_the_log_land_before_the_wipe(
         self,
-        client: TestClient,
+        client: TestClient[web.Request, web.Application],
         db: WactorzDB,
         monkeypatch: pytest.MonkeyPatch,
         scope: str,

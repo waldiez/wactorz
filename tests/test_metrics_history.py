@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz import reset
@@ -158,7 +159,7 @@ class TestRecording:
 
 
 @pytest.fixture(name="client")
-async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient]:
+async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient[web.Request, web.Application]]:
     client = TestClient(TestServer(build_app()))
     await client.start_server()
     yield client
@@ -166,7 +167,9 @@ async def client_fixture(db: WactorzDB) -> AsyncIterator[TestClient]:
 
 
 class TestReadingIt:
-    async def test_an_agents_history(self, client: TestClient, db: WactorzDB) -> None:
+    async def test_an_agents_history(
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
+    ) -> None:
         now = time.time()
         db.write_metrics_history(
             [
@@ -182,7 +185,9 @@ class TestReadingIt:
         assert [s["messages_processed"] for s in body["samples"]] == [3]
         assert body["sample_every_s"] == metrics_history.SAMPLE_EVERY_S
 
-    async def test_a_nodes_history(self, client: TestClient, db: WactorzDB) -> None:
+    async def test_a_nodes_history(
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
+    ) -> None:
         db.write_metrics_history([], [{"ts": time.time(), "node": "rpi", "online": 1}])
 
         body = await (await client.get("/history/nodes/rpi")).json()
@@ -190,7 +195,7 @@ class TestReadingIt:
         assert [s["online"] for s in body["samples"]] == [1]
 
     async def test_one_field_of_every_agent_in_one_request(
-        self, client: TestClient, db: WactorzDB
+        self, client: TestClient[web.Request, web.Application], db: WactorzDB
     ) -> None:
         now = time.time()
         db.write_metrics_history(
@@ -215,20 +220,22 @@ class TestReadingIt:
 
     @pytest.mark.parametrize("field", ["agent", "state", "ts; DROP TABLE x", "nope"])
     async def test_a_field_that_is_not_a_number_series_is_refused(
-        self, client: TestClient, field: str
+        self, client: TestClient[web.Request, web.Application], field: str
     ) -> None:
         response = await client.get("/api/history/agents", params={"field": field})
 
         assert response.status == 400
 
     async def test_every_agent_without_a_database_says_so(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "db", None)
 
         assert (await client.get("/api/history/agents")).status == 503
 
-    async def test_every_agent_refuses_a_window_that_is_not_one(self, client: TestClient) -> None:
+    async def test_every_agent_refuses_a_window_that_is_not_one(
+        self, client: TestClient[web.Request, web.Application]
+    ) -> None:
         assert (await client.get("/api/history/agents?hours=soon")).status == 400
 
     @pytest.mark.parametrize(
@@ -242,7 +249,11 @@ class TestReadingIt:
         ],
     )
     async def test_a_nodes_throttling_comes_back_as_it_went_in(
-        self, client: TestClient, db: WactorzDB, stored: str | None, served: list[str] | None
+        self,
+        client: TestClient[web.Request, web.Application],
+        db: WactorzDB,
+        stored: str | None,
+        served: list[str] | None,
     ) -> None:
         db.write_metrics_history(
             [], [{"ts": time.time(), "node": "rpi", "online": 1, "throttled": stored}]
@@ -254,14 +265,14 @@ class TestReadingIt:
 
     @pytest.mark.parametrize("hours", ["soon", "0", "-1", "inf", "nan"])
     async def test_a_window_that_is_not_one_is_refused(
-        self, client: TestClient, hours: str
+        self, client: TestClient[web.Request, web.Application], hours: str
     ) -> None:
         response = await client.get(f"/api/history/agents/weather?hours={hours}")
 
         assert response.status == 400
 
     async def test_without_a_database_it_says_so(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+        self, client: TestClient[web.Request, web.Application], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(runtime, "db", None)
 

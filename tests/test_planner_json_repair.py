@@ -18,16 +18,16 @@ from wactorz.agents.planner.parsing import extract_json_array, loads_lenient
 
 
 class LoadsLenientTest(unittest.TestCase):
-    def test_valid_json_is_returned_unchanged(self):
+    def test_valid_json_is_returned_unchanged(self) -> None:
         text = '{"a": 1, "b": [true, null, "x"]}'
         self.assertEqual(loads_lenient(text), json.loads(text))
 
-    def test_valid_escapes_are_left_alone(self):
+    def test_valid_escapes_are_left_alone(self) -> None:
         # Every escape JSON defines must survive exactly as json.loads reads it.
         text = r'{"s": "tab\t nl\n quote\" slash\\ solidus\/ bs\b ff\f cr\r u\u00e9"}'
         self.assertEqual(loads_lenient(text), json.loads(text))
 
-    def test_regex_backslash_is_repaired_to_the_python_the_model_wrote(self):
+    def test_regex_backslash_is_repaired_to_the_python_the_model_wrote(self) -> None:
         # The model wrote `re.search(r'\d+', s)` and escaped the backslash for
         # Python only: `\n` is a JSON escape, `\d` is not.
         text = r'{"code": "import re\nm = re.search(r' + "'" + r"\d+" + "'" + r', s)"}'
@@ -35,25 +35,25 @@ class LoadsLenientTest(unittest.TestCase):
             json.loads(text)  # the failure being fixed
         self.assertEqual(loads_lenient(text)["code"], "import re\nm = re.search(r'\\d+', s)")
 
-    def test_python_escaped_quote_is_repaired(self):
+    def test_python_escaped_quote_is_repaired(self) -> None:
         text = '{"code": "print(' + "\\'" + "hi" + "\\'" + ')"}'
         self.assertEqual(loads_lenient(text)["code"], "print(\\'hi\\')")
 
-    def test_windows_path_is_repaired(self):
+    def test_windows_path_is_repaired(self) -> None:
         text = r'{"code": "p = \'C:\Users\pk\snap.jpg\'"}'
         self.assertEqual(loads_lenient(text)["code"], r"p = \'C:\Users\pk\snap.jpg\'")
 
-    def test_raw_newline_inside_a_string_is_accepted(self):
+    def test_raw_newline_inside_a_string_is_accepted(self) -> None:
         text = '{"code": "line one\nline two"}'
         with self.assertRaises(json.JSONDecodeError):
             json.loads(text)
         self.assertEqual(loads_lenient(text)["code"], "line one\nline two")
 
-    def test_real_garbage_still_raises_the_original_error(self):
+    def test_real_garbage_still_raises_the_original_error(self) -> None:
         with self.assertRaises(json.JSONDecodeError):
             loads_lenient('{"a": }')
 
-    def test_repair_that_does_not_help_raises_the_original_error(self):
+    def test_repair_that_does_not_help_raises_the_original_error(self) -> None:
         # An invalid escape AND a structural error: the escape is repaired,
         # the structure is not, and the caller sees the failure json.loads
         # reported on the text as the model wrote it.
@@ -62,7 +62,7 @@ class LoadsLenientTest(unittest.TestCase):
             loads_lenient(text)
         self.assertIn("Invalid", str(ctx.exception))
 
-    def test_fenced_plan_with_regex_code_round_trips(self):
+    def test_fenced_plan_with_regex_code_round_trips(self) -> None:
         response = (
             "```json\n"
             r'[{"name": "door-snapshot", "description": "x", '

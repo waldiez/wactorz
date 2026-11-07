@@ -78,7 +78,7 @@ def _known_name(agent_id: str) -> str:
     return actor.name if actor is not None else agent_id[:8]
 
 
-def update_agent(agent_id: str, key: str, data) -> None:
+def update_agent(agent_id: str, key: str, data: Any) -> None:
     """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
         return

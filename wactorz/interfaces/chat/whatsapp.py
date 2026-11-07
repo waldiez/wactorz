@@ -126,7 +126,7 @@ class WhatsAppInterface:
             return False
         return bool(validator.validate(self._signed_url(request), params, signature))
 
-    async def _send_message(self, twilio, body: str, to: str) -> None:
+    async def _send_message(self, twilio: Any, body: str, to: str) -> None:
         """Send one WhatsApp message, off the event loop.
 
         The Twilio SDK is synchronous, so calling it directly from the webhook
@@ -206,7 +206,7 @@ class WhatsAppInterface:
         validator = RequestValidator(self.auth_token)
         self._twilio = twilio
 
-        async def webhook(request):
+        async def webhook(request: web.Request) -> web.Response:
             form = _text_form(await request.post())
             if form is None:
                 logger.warning("[WhatsApp] Rejected a request whose form is not all text")

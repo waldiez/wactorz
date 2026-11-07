@@ -84,8 +84,9 @@ import time
 from datetime import datetime
 from typing import Any
 
+from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.mqtt import mqtt_client
-from wactorz.core.persistence import get_db
+from wactorz.core.persistence import WactorzDB, get_db
 
 logger = logging.getLogger("anomaly-detector")
 
@@ -403,7 +404,7 @@ def _explain_anomaly(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def setup(agent) -> None:
+async def setup(agent: AgentAPI) -> None:
     # Load config
     baseline_hours = int(agent.recall("baseline_hours") or DEFAULT_BASELINE_HOURS)
     learning_period_h = int(agent.recall("learning_period_hours") or DEFAULT_LEARNING_PERIOD_H)
@@ -460,7 +461,7 @@ async def setup(agent) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def process(agent) -> None:
+async def process(agent: AgentAPI) -> None:
     now = time.time()
     baselines = agent.state["baselines"]
 
@@ -513,7 +514,7 @@ async def process(agent) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _rebuild_baselines(agent) -> None:
+async def _rebuild_baselines(agent: AgentAPI) -> None:
     """Query historical data and rebuild all baselines."""
     await agent.log("Rebuilding baselines from historical data...")
 
@@ -627,7 +628,7 @@ async def _rebuild_baselines(agent) -> None:
     await agent.log(f"Baselines rebuilt: {built} ready / {len(baselines)} total entities")
 
 
-def _entity_ids(db) -> list[str]:
+def _entity_ids(db: WactorzDB) -> list[str]:
     """The entity ids the time-series tables hold, sorted. Run on a thread.
 
     Through `transaction()`, which holds the store's lock: the connection is shared
@@ -644,7 +645,7 @@ def _entity_ids(db) -> list[str]:
     return sorted(found)
 
 
-async def _discover_entities(agent) -> list[str]:
+async def _discover_entities(agent: AgentAPI) -> list[str]:
     """Auto-discover entities from the time-series store, read on a thread."""
     try:
         db = get_db()
@@ -659,7 +660,7 @@ async def _discover_entities(agent) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _mqtt_detector(agent) -> None:
+async def _mqtt_detector(agent: AgentAPI) -> None:
     """Subscribe to MQTT and score each reading against baselines."""
     while True:
         try:
@@ -686,7 +687,7 @@ async def _mqtt_detector(agent) -> None:
             await asyncio.sleep(5)
 
 
-async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> None:
+async def _process_live_reading(agent: AgentAPI, topic: str, payload: dict[str, Any]) -> None:
     """Process a single live MQTT reading for anomaly detection."""
     now = time.time()
     baselines = agent.state["baselines"]
@@ -773,7 +774,7 @@ async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> N
 
 
 async def _report_anomaly(
-    agent,
+    agent: AgentAPI,
     entity_id: str,
     field: str,
     value: float,
@@ -840,7 +841,7 @@ async def _report_anomaly(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_task(agent: AgentAPI, payload: dict[str, Any]) -> dict[str, Any]:
     # Parse JSON from "text" field when routed via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:

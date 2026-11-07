@@ -2,6 +2,7 @@
 """OpenAIProvider — the OpenAI SDK, and the wire format others reuse."""
 
 import logging
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class OpenAIProvider(LLMProvider):
     def __init__(
         self, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None
-    ):
+    ) -> None:
         import openai  # optional dependency: the `openai` extra
 
         # Two calls rather than a conditional `**{...}`: unpacking a dict of
@@ -53,7 +54,9 @@ class OpenAIProvider(LLMProvider):
         """
         return True
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict]:
         full_messages = (
             [{"role": "system", "content": system}] if system else []
         ) + openai_messages(messages)
@@ -145,7 +148,9 @@ class OpenAIProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = (
             [{"role": "system", "content": system}] if system else []

@@ -4,6 +4,7 @@
 import importlib.util
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -20,7 +21,7 @@ from wactorz.llm_factory import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_cache():
+def _clean_cache() -> "Iterator[None]":
     reset_provider_cache()
     yield
     reset_provider_cache()
@@ -29,16 +30,16 @@ def _clean_cache():
 # ── parse_overrides ──────────────────────────────────────────────────────────
 
 
-def test_parse_empty():
+def test_parse_empty() -> None:
     assert parse_overrides("") == {}
     assert parse_overrides(None) == {}
 
 
-def test_parse_single_entry():
+def test_parse_single_entry() -> None:
     assert parse_overrides("intent=ollama:llama3") == {"intent": "ollama:llama3"}
 
 
-def test_parse_multiple_entries_with_whitespace():
+def test_parse_multiple_entries_with_whitespace() -> None:
     raw = " intent=ollama:llama3 , planner=anthropic:claude-sonnet-4-6 "
     assert parse_overrides(raw) == {
         "intent": "ollama:llama3",
@@ -46,18 +47,18 @@ def test_parse_multiple_entries_with_whitespace():
     }
 
 
-def test_parse_ollama_tag_keeps_colons():
+def test_parse_ollama_tag_keeps_colons() -> None:
     # Only the site= split happens here; the spec keeps its colons intact.
     assert parse_overrides("intent=ollama:qwen3:4b") == {"intent": "ollama:qwen3:4b"}
 
 
-def test_parse_skips_malformed_entries():
+def test_parse_skips_malformed_entries() -> None:
     assert parse_overrides("intent=ollama:llama3,garbage,=x,planner=") == {
         "intent": "ollama:llama3"
     }
 
 
-def test_parse_strips_quotes_that_survived_the_shell():
+def test_parse_strips_quotes_that_survived_the_shell() -> None:
     """`set LLM_OVERRIDES="a,b"` keeps the quotes in the value; split on `,`
     and `=`, they land on the first site and the last model — where the site
     matches nothing and the model 404s one character away from real."""
@@ -77,24 +78,24 @@ def test_parse_strips_quotes_that_survived_the_shell():
         '"planner"="anthropic:claude-sonnet-4-6"',
     ],
 )
-def test_parse_strips_quotes_wherever_they_land(raw):
+def test_parse_strips_quotes_wherever_they_land(raw) -> None:
     assert parse_overrides(raw) == {"planner": "anthropic:claude-sonnet-4-6"}
 
 
-def test_parse_survives_a_value_that_is_only_quotes():
+def test_parse_survives_a_value_that_is_only_quotes() -> None:
     """Regression: stripping by slice looped forever once the value ran out."""
     assert parse_overrides('""') == {}
     assert parse_overrides('"') == {}
 
 
-def test_parse_skips_unknown_site_with_a_warning(caplog):
+def test_parse_skips_unknown_site_with_a_warning(caplog) -> None:
     """An override nothing reads is a typo, and silence makes it look applied."""
     with caplog.at_level("WARNING"):
         assert parse_overrides("plannr=anthropic:claude-sonnet-4-6") == {}
     assert "plannr" in caplog.text
 
 
-def test_parse_keeps_good_entries_beside_an_unknown_site():
+def test_parse_keeps_good_entries_beside_an_unknown_site() -> None:
     raw = "intent=ollama:llama3,plannr=anthropic:claude-sonnet-4-6"
     assert parse_overrides(raw) == {"intent": "ollama:llama3"}
 
@@ -102,7 +103,7 @@ def test_parse_keeps_good_entries_beside_an_unknown_site():
 # ── the same quoting hazard on LLM_PROVIDER / LLM_MODEL ─────────────────────
 
 
-def test_env_name_strips_quotes(monkeypatch):
+def test_env_name_strips_quotes(monkeypatch) -> None:
     """A quoted LLM_MODEL reaches the API verbatim and 404s, with a blast
     radius of every call rather than one site."""
     monkeypatch.setenv("LLM_MODEL", '"claude-sonnet-4-6"')
@@ -111,14 +112,14 @@ def test_env_name_strips_quotes(monkeypatch):
     assert _env_name("LLM_MODEL", "fallback") == "claude-sonnet-4-6"
 
 
-def test_env_name_falls_back_when_unset_or_empty(monkeypatch):
+def test_env_name_falls_back_when_unset_or_empty(monkeypatch) -> None:
     monkeypatch.delenv("LLM_MODEL", raising=False)
     assert _env_name("LLM_MODEL", "fallback") == "fallback"
     monkeypatch.setenv("LLM_MODEL", '  ""  ')
     assert _env_name("LLM_MODEL", "fallback") == "fallback"
 
 
-def test_known_sites_matches_the_sites_actually_read():
+def test_known_sites_matches_the_sites_actually_read() -> None:
     """The list is hand-maintained; this is what catches a site added to the
     code and forgotten here, which would reject a legitimate override."""
 
@@ -136,23 +137,23 @@ def test_known_sites_matches_the_sites_actually_read():
 # ── create_provider ──────────────────────────────────────────────────────────
 
 
-def test_create_provider_none():
+def test_create_provider_none() -> None:
     assert create_provider("none") is None
     assert create_provider("") is None
 
 
-def test_create_provider_unknown_raises():
+def test_create_provider_unknown_raises() -> None:
     with pytest.raises(ValueError):
         create_provider("magicllm")
 
 
-def test_create_provider_ollama_model_with_tag():
+def test_create_provider_ollama_model_with_tag() -> None:
     provider = create_provider("ollama", "qwen3:4b")
     assert isinstance(provider, OllamaProvider)
     assert provider.model == "qwen3:4b"
 
 
-def test_create_provider_ollama_default_model():
+def test_create_provider_ollama_default_model() -> None:
     from wactorz.config import CONFIG
 
     provider = create_provider("ollama")
@@ -163,36 +164,36 @@ def test_create_provider_ollama_default_model():
 # ── provider_for ─────────────────────────────────────────────────────────────
 
 
-def test_no_override_returns_default():
+def test_no_override_returns_default() -> None:
     default = cast(LLMProvider, object())  # only its identity matters
     assert provider_for("intent", default, overrides={}) is default
 
 
-def test_override_builds_site_provider():
+def test_override_builds_site_provider() -> None:
     provider = provider_for("intent", None, overrides={"intent": "ollama:llama3"})
     assert isinstance(provider, OllamaProvider)
     assert provider.model == "llama3"
 
 
-def test_override_spec_splits_on_first_colon_only():
+def test_override_spec_splits_on_first_colon_only() -> None:
     provider = provider_for("intent", None, overrides={"intent": "ollama:qwen3:4b"})
     assert isinstance(provider, OllamaProvider)
     assert provider.model == "qwen3:4b"
 
 
-def test_override_provider_is_cached_across_sites():
+def test_override_provider_is_cached_across_sites() -> None:
     overrides = {"intent": "ollama:llama3", "actuator": "ollama:llama3"}
     first = provider_for("intent", None, overrides=overrides)
     second = provider_for("actuator", None, overrides=overrides)
     assert first is second
 
 
-def test_bad_override_falls_back_to_default():
+def test_bad_override_falls_back_to_default() -> None:
     default = cast(LLMProvider, object())  # only its identity matters
     assert provider_for("intent", default, overrides={"intent": "magicllm:x"}) is default
 
 
-def test_override_none_disables_site_llm():
+def test_override_none_disables_site_llm() -> None:
     default = cast(LLMProvider, object())  # only its identity matters
     assert provider_for("intent", default, overrides={"intent": "none"}) is None
 

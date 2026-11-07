@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 
 class DevModeDefaultsTest(unittest.TestCase):
-    def test_dev_mode_defaults_to_rest_and_8080(self):
+    def test_dev_mode_defaults_to_rest_and_8080(self) -> None:
         original = dict(os.environ)
         try:
             os.environ.pop("INTERFACE", None)

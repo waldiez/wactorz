@@ -14,6 +14,7 @@ knowing it.
 
 import asyncio
 import json
+from collections.abc import Iterator
 
 import pytest
 from aiohttp import ClientSession, ClientWSTimeout, web
@@ -50,7 +51,7 @@ class _FastSocket:
 
 
 @pytest.fixture(autouse=True)
-def _clean_clients():
+def _clean_clients() -> "Iterator[None]":
     original = set(runtime.ws_clients)
     runtime.ws_clients.clear()
     yield

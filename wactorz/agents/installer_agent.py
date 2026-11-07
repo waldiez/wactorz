@@ -363,7 +363,7 @@ class InstallerAgent(Actor):
     Uses sys.executable so packages are installed into the active venv.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "installer")
         super().__init__(**kwargs)
         self.protected = True
@@ -383,7 +383,7 @@ class InstallerAgent(Actor):
     def _current_task_description(self) -> str:
         return "idle"
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         logger.info("[%s] Installer ready — using: %s", self.name, sys.executable)
         self._scrub_persisted_credentials()
         await self._mqtt_publish(
@@ -399,7 +399,7 @@ class InstallerAgent(Actor):
             capabilities=["pip_install", "package_management"],
         )
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type == MessageType.TASK:
             result = await self._handle_install(msg)
             # Echo task_id back so caller's future can resolve
@@ -1239,7 +1239,7 @@ class InstallerAgent(Actor):
                 len(cleaned),
             )
 
-    async def _ssh_run(self, conn, command: str) -> tuple[bool, str]:
+    async def _ssh_run(self, conn: Any, command: str) -> tuple[bool, str]:
         """Run a single command over an open SSH connection. Returns (ok, output)."""
         result = await conn.run(command, check=False)
         output = (result.stdout or "") + (result.stderr or "")
@@ -1431,7 +1431,7 @@ class InstallerAgent(Actor):
         )
         return built[-1] if built else None
 
-    def _log_remote(self, message: str):
+    def _log_remote(self, message: str) -> None:
         logger.info("[%s] %s", self.name, message)
         self.run_detached(
             self._mqtt_publish(

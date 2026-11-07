@@ -5,6 +5,7 @@ import logging
 import re
 import shutil
 import time
+from collections.abc import Iterator
 from typing import Any, ClassVar
 
 from wactorz.config import CONFIG
@@ -427,7 +428,7 @@ class OneOffActuatorAgent(Actor):
         )
         self.run_detached(self._run(), name="actuation")
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type == MessageType.TASK:
             return
 
@@ -909,7 +910,7 @@ class OneOffActuatorAgent(Actor):
                 return self._entity_supports_color(entity)
         return False
 
-    def _iter_entities(self, node: Any):
+    def _iter_entities(self, node: Any) -> Iterator[dict[str, Any]]:
         if isinstance(node, dict):
             entity_id = str(node.get("entity_id") or "")
             if entity_id.startswith("light."):

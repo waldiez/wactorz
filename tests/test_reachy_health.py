@@ -15,6 +15,7 @@ leaving an absent number to be read as a full charge.
 import asyncio
 import types
 import unittest
+from typing import Any
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
 
@@ -31,7 +32,7 @@ JOURNAL_LINE = (
 class FakeAgent:
     name = "reachy-mini"
 
-    def __init__(self, daemon_url=None):
+    def __init__(self, daemon_url=None) -> None:
         self.state = {}
         self.logs = []
         self.chat = []
@@ -40,23 +41,23 @@ class FakeAgent:
                 media=types.SimpleNamespace(audio=types.SimpleNamespace(daemon_url=daemon_url))
             )
 
-    async def log(self, text, level="info"):
+    async def log(self, text, level="info") -> None:
         self.logs.append((level, text))
 
-    async def notify_user(self, text, **extra):
+    async def notify_user(self, text, **extra) -> None:
         self.chat.append(text)
 
-    def run_in_background(self, coro):
+    def run_in_background(self, coro) -> asyncio.Task[Any]:
         return asyncio.create_task(coro)
 
 
 class ReadingFaultsFromTheLogTest(unittest.TestCase):
-    def test_a_journalctl_line_is_understood_with_its_prefix(self):
+    def test_a_journalctl_line_is_understood_with_its_prefix(self) -> None:
         self.assertEqual(
             NS["_motor_faults_in_line"](JOURNAL_LINE), [("head_yaw", "overheating error")]
         )
 
-    def test_several_faults_on_one_motor_are_all_read(self):
+    def test_several_faults_on_one_motor_are_all_read(self) -> None:
         line = "Motor 'antenna_left' hardware errors: ['Overload Error', 'Overheating Error']"
 
         self.assertEqual(
@@ -64,18 +65,18 @@ class ReadingFaultsFromTheLogTest(unittest.TestCase):
             [("antenna_left", "overload error"), ("antenna_left", "overheating error")],
         )
 
-    def test_an_ordinary_log_line_names_no_faults(self):
+    def test_an_ordinary_log_line_names_no_faults(self) -> None:
         for line in ("[Supervisor] Started.", "", None, "hardware errors: []"):
             with self.subTest(line=line):
                 self.assertEqual(NS["_motor_faults_in_line"](line), [])
 
-    def test_overheating_advice_says_what_to_do(self):
+    def test_overheating_advice_says_what_to_do(self) -> None:
         described = NS["_describe_motor_fault"]("head_yaw", "overheating error")
 
         self.assertIn("head_yaw", described)
         self.assertIn("rest", described.lower())
 
-    def test_a_fault_the_daemon_invents_is_still_reported(self):
+    def test_a_fault_the_daemon_invents_is_still_reported(self) -> None:
         described = NS["_describe_motor_fault"]("head_yaw", "some new error")
 
         self.assertIn("head_yaw", described)
@@ -83,7 +84,7 @@ class ReadingFaultsFromTheLogTest(unittest.TestCase):
 
 
 class WarningWithoutNaggingTest(unittest.IsolatedAsyncioTestCase):
-    async def test_a_fault_is_warned_about_once_then_held(self):
+    async def test_a_fault_is_warned_about_once_then_held(self) -> None:
         # The daemon re-reads the motors several times a second, so one hot
         # motor would otherwise be a warning per read.
         agent = FakeAgent()
@@ -95,7 +96,7 @@ class WarningWithoutNaggingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(immediately_again, [])
         self.assertEqual(len(agent.chat), 1)
 
-    async def test_a_fault_that_is_still_there_later_is_raised_again(self):
+    async def test_a_fault_that_is_still_there_later_is_raised_again(self) -> None:
         agent = FakeAgent()
         quiet = NS["_MOTOR_FAULT_QUIET_S"]
 
@@ -104,7 +105,7 @@ class WarningWithoutNaggingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(later), 1)
 
-    async def test_the_warning_reaches_chat_and_the_log(self):
+    async def test_the_warning_reaches_chat_and_the_log(self) -> None:
         agent = FakeAgent()
 
         await NS["_report_motor_faults"](agent, JOURNAL_LINE, now=1000.0)
@@ -112,7 +113,7 @@ class WarningWithoutNaggingTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(level == "warning" for level, _ in agent.logs))
         self.assertIn("overheating", agent.chat[0].lower())
 
-    async def test_a_different_motor_is_its_own_warning(self):
+    async def test_a_different_motor_is_its_own_warning(self) -> None:
         agent = FakeAgent()
         other = "Motor 'antenna_right' hardware errors: ['Overheating Error']"
 
@@ -133,7 +134,7 @@ class TheExpectedVoltageFaultTest(unittest.IsolatedAsyncioTestCase):
 
     LINE = "Motor 'head_yaw' hardware errors: ['Input Voltage Error']"
 
-    async def test_it_is_not_raised_at_the_user(self):
+    async def test_it_is_not_raised_at_the_user(self) -> None:
         agent = FakeAgent()
 
         reported = await NS["_report_motor_faults"](agent, self.LINE, now=1000.0)
@@ -141,7 +142,7 @@ class TheExpectedVoltageFaultTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reported, [])
         self.assertEqual(agent.chat, [])
 
-    async def test_it_is_still_written_to_the_log(self):
+    async def test_it_is_still_written_to_the_log(self) -> None:
         # Quiet is not the same as hidden.
         agent = FakeAgent()
 
@@ -150,7 +151,7 @@ class TheExpectedVoltageFaultTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("motor note" in text for _level, text in agent.logs))
         self.assertFalse(any(level == "warning" for level, _ in agent.logs))
 
-    async def test_a_real_fault_alongside_it_is_still_raised(self):
+    async def test_a_real_fault_alongside_it_is_still_raised(self) -> None:
         agent = FakeAgent()
         both = "Motor 'head_yaw' hardware errors: ['Input Voltage Error', 'Overheating Error']"
 
@@ -161,37 +162,37 @@ class TheExpectedVoltageFaultTest(unittest.IsolatedAsyncioTestCase):
 
 
 class WhereTheFaultStreamLivesTest(unittest.TestCase):
-    def test_the_stream_url_is_derived_from_the_daemon(self):
+    def test_the_stream_url_is_derived_from_the_daemon(self) -> None:
         agent = FakeAgent(daemon_url="http://192.168.1.42:8000")
 
         self.assertEqual(NS["_daemon_log_ws_url"](agent), "ws://192.168.1.42:8000/logs/ws/daemon")
 
-    def test_a_secure_daemon_gets_a_secure_stream(self):
+    def test_a_secure_daemon_gets_a_secure_stream(self) -> None:
         agent = FakeAgent(daemon_url="https://reachy.local:8000/")
 
         self.assertEqual(NS["_daemon_log_ws_url"](agent), "wss://reachy.local:8000/logs/ws/daemon")
 
-    def test_no_robot_means_no_stream(self):
+    def test_no_robot_means_no_stream(self) -> None:
         # A Lite over USB serves no log stream; the daemon mounts that route
         # behind its wireless flag. Nothing to watch, and that is not an error.
         self.assertIsNone(NS["_daemon_log_ws_url"](FakeAgent()))
 
 
 class HealthReportTest(unittest.IsolatedAsyncioTestCase):
-    async def test_it_says_there_is_no_battery_rather_than_omitting_it(self):
+    async def test_it_says_there_is_no_battery_rather_than_omitting_it(self) -> None:
         # An absent number would be read as a full charge.
         report = await NS["_health"](FakeAgent())
 
         self.assertIsNone(report["battery"])
         self.assertIn("battery", report["result"].lower())
 
-    async def test_a_disconnected_robot_is_reported_as_such(self):
+    async def test_a_disconnected_robot_is_reported_as_such(self) -> None:
         report = await NS["_health"](FakeAgent())
 
         self.assertFalse(report["connected"])
         self.assertIn("not connected", report["result"].lower())
 
-    async def test_faults_seen_this_session_are_listed(self):
+    async def test_faults_seen_this_session_are_listed(self) -> None:
         agent = FakeAgent(daemon_url="http://192.168.1.42:8000")
         await NS["_report_motor_faults"](agent, JOURNAL_LINE, now=1000.0)
 
@@ -199,7 +200,7 @@ class HealthReportTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("head_yaw/overheating error", report["motor_faults"])
 
-    async def test_a_link_that_cannot_watch_says_so(self):
+    async def test_a_link_that_cannot_watch_says_so(self) -> None:
         # Silence from an unwatched robot must not read as "nothing wrong".
         agent = FakeAgent()
         agent.state["mini"] = object()
@@ -209,7 +210,7 @@ class HealthReportTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["watching_faults"])
         self.assertIn("wireless", report["result"].lower())
 
-    async def test_a_configured_but_disconnected_fault_watch_is_not_called_live(self):
+    async def test_a_configured_but_disconnected_fault_watch_is_not_called_live(self) -> None:
         agent = FakeAgent(daemon_url="http://192.168.1.42:8000")
 
         report = await NS["_health"](agent)
@@ -218,7 +219,7 @@ class HealthReportTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report["fault_watch_configured"])
         self.assertIn("cannot currently read", report["result"].lower())
 
-    async def test_a_live_fault_watch_can_truthfully_report_no_faults_seen(self):
+    async def test_a_live_fault_watch_can_truthfully_report_no_faults_seen(self) -> None:
         agent = FakeAgent(daemon_url="http://192.168.1.42:8000")
         agent.state["motor_fault_watch_connected"] = True
 
@@ -229,19 +230,19 @@ class HealthReportTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MotionLinkStatusTest(unittest.IsolatedAsyncioTestCase):
-    def test_task_timeout_is_recognised_as_a_motor_link_problem(self):
+    def test_task_timeout_is_recognised_as_a_motor_link_problem(self) -> None:
         self.assertTrue(NS["_is_motion_link_error"]("Task did not complete in time"))
 
-    def test_audio_errors_are_not_mistaken_for_motor_link_problems(self):
+    def test_audio_errors_are_not_mistaken_for_motor_link_problems(self) -> None:
         self.assertFalse(NS["_is_motion_link_error"]("speaker volume is low"))
 
-    async def test_the_imu_temperature_is_reported_when_the_robot_has_one(self):
+    async def test_the_imu_temperature_is_reported_when_the_robot_has_one(self) -> None:
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(get_imu_data=lambda: {"temperature": 41.27})
 
         self.assertEqual(await NS["_imu_temperature"](agent), 41.3)
 
-    async def test_a_robot_without_an_imu_reports_no_temperature(self):
+    async def test_a_robot_without_an_imu_reports_no_temperature(self) -> None:
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(
             get_imu_data=lambda: (_ for _ in ()).throw(RuntimeError("no IMU"))
@@ -249,7 +250,7 @@ class MotionLinkStatusTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await NS["_imu_temperature"](agent))
 
-    async def test_health_does_not_call_a_stale_motor_link_connected(self):
+    async def test_health_does_not_call_a_stale_motor_link_connected(self) -> None:
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(connected=True)
         agent.state["motion_link_error"] = "Lost connection with the server"

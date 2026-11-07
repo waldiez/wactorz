@@ -8,42 +8,45 @@ from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissi
 
 ensure_importable("openai")
 
+from types import SimpleNamespace
+from typing import Any
+
 from wactorz.agents.llm_agent import OpenAIProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 
 
 class _FakeLLM:
-    def __init__(self, response: str):
+    def __init__(self, response: str) -> None:
         self._response = response
 
-    async def complete(self, messages, system="", **kwargs):
+    async def complete(self, messages, system="", **kwargs) -> tuple[str, dict[Any, Any]]:
         return self._response, {}
 
 
 class _FakeHAClient:
-    def __init__(self, ws_url: str, token: str):
+    def __init__(self, ws_url: str, token: str) -> None:
         self.ws_url = ws_url
         self.token = token
         self.calls = []
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeHAClient":
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    async def call_service(self, domain, service, entity_id, **service_data):
+    async def call_service(self, domain, service, entity_id, **service_data) -> dict[str, bool]:
         self.calls.append((domain, service, entity_id, service_data))
         return {"ok": True}
 
 
 class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
-    async def test_classify_intent_accepts_actuate(self):
+    async def test_classify_intent_accepts_actuate(self) -> None:
         actor = MainActor(llm_provider=_FakeLLM("ACTUATE"))  # pyright: ignore[reportArgumentType]
         self.assertEqual(await actor._classify_intent("turn on the light"), "ACTUATE")
 
-    async def test_process_user_input_routes_actuate_to_one_off_handler(self):
+    async def test_process_user_input_routes_actuate_to_one_off_handler(self) -> None:
         actor = MainActor(llm_provider=None)
         actor._classify_intent = AsyncMock(return_value="ACTUATE")
         actor._handle_actuate_intent = AsyncMock(
@@ -57,7 +60,7 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
         actor._handle_actuate_intent.assert_awaited_once_with("turn on the living room light")
         actor.delegate_task.assert_not_called()
 
-    async def test_classify_intent_requests_none_reasoning_effort(self):
+    async def test_classify_intent_requests_none_reasoning_effort(self) -> None:
         llm = types.SimpleNamespace(complete=AsyncMock(return_value=("ACTUATE", {})))
         actor = MainActor(llm_provider=llm)  # pyright: ignore[reportArgumentType]
 
@@ -68,12 +71,12 @@ class MainActorActuateRoutingTest(unittest.IsolatedAsyncioTestCase):
 
 
 class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):
-    async def test_complete_passes_reasoning_effort_when_provided(self):
+    async def test_complete_passes_reasoning_effort_when_provided(self) -> None:
         class _FakeCompletions:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.calls = []
 
-            async def create(self, **kwargs):
+            async def create(self, **kwargs) -> "SimpleNamespace":
                 self.calls.append(kwargs)
                 return types.SimpleNamespace(
                     choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="HA"))],
@@ -97,7 +100,7 @@ class OpenAIProviderReasoningTest(unittest.IsolatedAsyncioTestCase):
 
 
 class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
-    async def test_execute_request_returns_no_match_message_for_empty_resolution(self):
+    async def test_execute_request_returns_no_match_message_for_empty_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = OneOffActuatorAgent(
                 request="turn on the mystery light",
@@ -121,7 +124,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(result, "I couldn't identify a matching device for that request.")
 
-    async def test_execute_request_runs_service_calls(self):
+    async def test_execute_request_runs_service_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_client = _FakeHAClient("ws://ha.local:8123/api/websocket", "token")
             agent = OneOffActuatorAgent(
@@ -156,7 +159,7 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
                 [("light", "turn_on", "light.living_room", {"brightness_pct": 50})],
             )
 
-    async def test_resolve_actions_accumulates_usage_costs(self):
+    async def test_resolve_actions_accumulates_usage_costs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             llm = types.SimpleNamespace(
                 complete=AsyncMock(

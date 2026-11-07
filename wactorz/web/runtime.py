@@ -122,19 +122,19 @@ def undelete(agent_id: str) -> bool:
 # ── Injection points (app.py calls these at boot) ────────────────────────────
 
 
-def set_registry(value) -> None:
+def set_registry(value: "ActorRegistry | None") -> None:
     """Inject the actor registry (direct mode)."""
     global registry
     registry = value
 
 
-def set_system(value) -> None:
+def set_system(value: "ActorSystem | None") -> None:
     """Inject the actor system, whose state the readiness probe reports."""
     global system
     system = value
 
 
-def set_db(value) -> None:
+def set_db(value: "WactorzDB | None") -> None:
     """Inject the persistence DB handle."""
     global db
     db = value

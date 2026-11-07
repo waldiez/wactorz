@@ -12,6 +12,8 @@ Only the planner can emit a robot command and a Home Assistant command from one
 sentence, so a request naming both belongs to it.
 """
 
+from typing import Any
+
 import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
@@ -20,7 +22,7 @@ NS: dict = {}
 exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
 
 
-def shortcut(text: str):
+def shortcut(text: str) -> Any:
     return NS["_embodied_command_for_text"](text)
 
 

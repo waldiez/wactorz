@@ -10,6 +10,8 @@ import asyncio
 import os
 import types
 import unittest
+from collections.abc import Callable
+from typing import Any, NoReturn
 from unittest import mock
 
 import numpy as np
@@ -22,7 +24,7 @@ NS = {}
 exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
 
 
-def _installed(*names):
+def _installed(*names) -> "Callable[..., Any]":
     """A find_spec that knows only these modules."""
     return lambda name: object() if name in names else None
 
@@ -30,7 +32,7 @@ def _installed(*names):
 class FakeAgent:
     name = "reachy-mini"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.state = {
             "mini": types.SimpleNamespace(media=object()),
             "media_backend": "webrtc",
@@ -40,56 +42,56 @@ class FakeAgent:
         }
         self.published, self.chat, self.logs = [], [], []
 
-    async def publish(self, topic, payload):
+    async def publish(self, topic, payload) -> None:
         self.published.append((topic, payload))
 
-    async def notify_user(self, text, **extra):
+    async def notify_user(self, text, **extra) -> None:
         self.chat.append((text, extra))
 
-    async def log(self, text, level="info"):
+    async def log(self, text, level="info") -> None:
         self.logs.append((level, text))
 
-    def run_in_background(self, coro):
+    def run_in_background(self, coro) -> asyncio.Task[Any]:
         return asyncio.create_task(coro)
 
 
 class ConfigurationProblemTest(unittest.TestCase):
-    def test_deepgram_without_a_key_names_the_key_and_the_local_alternative(self):
+    def test_deepgram_without_a_key_names_the_key_and_the_local_alternative(self) -> None:
         problem = reachy_stt.configuration_problem({}, {}, find_spec=_installed("deepgram"))
 
         self.assertIsNotNone(problem)
         self.assertIn("DEEPGRAM_API_KEY", str(problem))
         self.assertIn("faster-whisper", str(problem))
 
-    def test_a_configured_backend_has_no_problem(self):
+    def test_a_configured_backend_has_no_problem(self) -> None:
         problem = reachy_stt.configuration_problem(
             {}, {"DEEPGRAM_API_KEY": "set"}, find_spec=_installed("deepgram")
         )
 
         self.assertIsNone(problem)
 
-    def test_a_missing_package_says_how_to_install_it(self):
+    def test_a_missing_package_says_how_to_install_it(self) -> None:
         problem = reachy_stt.configuration_problem(
             {"stt_backend": "faster-whisper"}, {}, find_spec=_installed()
         )
 
         self.assertIn("pip install faster-whisper", str(problem))
 
-    def test_a_local_backend_needs_no_key(self):
+    def test_a_local_backend_needs_no_key(self) -> None:
         problem = reachy_stt.configuration_problem(
             {"stt_backend": "faster-whisper"}, {}, find_spec=_installed("faster_whisper")
         )
 
         self.assertIsNone(problem)
 
-    def test_hosted_openai_needs_its_own_key(self):
+    def test_hosted_openai_needs_its_own_key(self) -> None:
         problem = reachy_stt.configuration_problem(
             {"stt_backend": "openai"}, {}, find_spec=_installed("openai")
         )
 
         self.assertIn("OPENAI_API_KEY", str(problem))
 
-    def test_an_unknown_backend_is_reported_rather_than_raised(self):
+    def test_an_unknown_backend_is_reported_rather_than_raised(self) -> None:
         problem = reachy_stt.configuration_problem(
             {"stt_backend": "telepathy"}, {}, find_spec=_installed()
         )
@@ -97,7 +99,7 @@ class ConfigurationProblemTest(unittest.TestCase):
         self.assertIn("telepathy", str(problem))
         self.assertIn("REACHY_STT_BACKEND", str(problem))
 
-    def test_a_conversation_also_needs_voice_detection(self):
+    def test_a_conversation_also_needs_voice_detection(self) -> None:
         environ = {"DEEPGRAM_API_KEY": "set"}
 
         without = reachy_stt.configuration_problem(
@@ -110,8 +112,8 @@ class ConfigurationProblemTest(unittest.TestCase):
         self.assertIn("webrtcvad-wheels", str(without))
         self.assertIsNone(with_vad)
 
-    def test_a_module_that_cannot_be_looked_up_counts_as_missing(self):
-        def broken(_name):
+    def test_a_module_that_cannot_be_looked_up_counts_as_missing(self) -> None:
+        def broken(_name) -> NoReturn:
             raise ValueError("deepgram.__spec__ is not set")
 
         problem = reachy_stt.configuration_problem(
@@ -120,7 +122,7 @@ class ConfigurationProblemTest(unittest.TestCase):
 
         self.assertIn("not installed", str(problem))
 
-    def test_an_already_imported_module_counts_as_installed(self):
+    def test_an_already_imported_module_counts_as_installed(self) -> None:
         with mock.patch.dict("sys.modules", {"deepgram": types.ModuleType("deepgram")}):
             problem = reachy_stt.configuration_problem(
                 {}, {"DEEPGRAM_API_KEY": "set"}, find_spec=_installed()
@@ -130,7 +132,7 @@ class ConfigurationProblemTest(unittest.TestCase):
 
 
 class RefusedBeforeListeningTest(unittest.IsolatedAsyncioTestCase):
-    async def test_a_conversation_does_not_open_without_a_recognizer(self):
+    async def test_a_conversation_does_not_open_without_a_recognizer(self) -> None:
         agent = FakeAgent()
         with mock.patch.dict(
             NS, {"_voice_input_problem": lambda _p, **_k: "voice input needs an API key"}
@@ -143,7 +145,7 @@ class RefusedBeforeListeningTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("API key", result["result"])
         self.assertIsNone(agent.state["conversation_session"])
 
-    async def test_push_to_talk_refuses_before_recording(self):
+    async def test_push_to_talk_refuses_before_recording(self) -> None:
         agent = FakeAgent()
         listen = mock.AsyncMock()
         with mock.patch.dict(
@@ -160,10 +162,10 @@ class RefusedBeforeListeningTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("can't listen yet", result["result"])
         listen.assert_not_awaited()
 
-    async def test_the_agent_checks_the_session_settings_it_will_use(self):
+    async def test_the_agent_checks_the_session_settings_it_will_use(self) -> None:
         seen = {}
 
-        def problem(payload, *, needs_vad=False, find_spec=None):
+        def problem(payload, *, needs_vad=False, find_spec=None) -> None:
             seen.update(payload=payload, needs_vad=needs_vad)
 
         with mock.patch.object(reachy_stt, "configuration_problem", problem):
@@ -175,13 +177,13 @@ class RefusedBeforeListeningTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(seen["needs_vad"])
 
 
-def _captured(reason=None):
+def _captured(reason=None) -> "VoiceCapture":
     audio = np.zeros(0, np.float32) if reason else np.full(1600, 0.2, np.float32)
     return VoiceCapture(audio, 16000, 1, 0.1 if audio.size else 0.0, reason, 4)
 
 
 class SessionEndNoticeTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self._environment = mock.patch.dict(
             os.environ,
             {
@@ -192,16 +194,16 @@ class SessionEndNoticeTest(unittest.IsolatedAsyncioTestCase):
         )
         self._environment.start()
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         self._environment.stop()
 
-    async def _session(self, payload, clips, transcribe):
+    async def _session(self, payload, clips, transcribe) -> "FakeAgent":
         agent, clips = FakeAgent(), iter(clips)
 
-        async def capture(_agent, _session, _config):
+        async def capture(_agent, _session, _config) -> Any:
             return next(clips)
 
-        async def cooldown(*_args):
+        async def cooldown(*_args) -> None:
             return None
 
         with (
@@ -220,17 +222,17 @@ class SessionEndNoticeTest(unittest.IsolatedAsyncioTestCase):
             await agent.state["conversation_session"]["task"]
         return agent
 
-    def _notices(self, agent):
+    def _notices(self, agent) -> list[Any]:
         return [text for text, extra in agent.chat if extra.get("from") == "reachy-mini"]
 
-    async def test_a_session_that_times_out_says_so_and_how_to_restart(self):
+    async def test_a_session_that_times_out_says_so_and_how_to_restart(self) -> None:
         agent = await self._session({}, [_captured("inactivity_timeout")], mock.AsyncMock())
 
         (notice,) = self._notices(agent)
         self.assertIn("nobody spoke", notice)
         self.assertIn("start conversation", notice)
 
-    async def test_repeated_failures_end_with_the_reason(self):
+    async def test_repeated_failures_end_with_the_reason(self) -> None:
         failing = mock.AsyncMock(side_effect=RuntimeError("Deepgram rejected the key"))
 
         agent = await self._session(
@@ -241,7 +243,7 @@ class SessionEndNoticeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("several voice turns in a row failed", notice)
         self.assertIn("Deepgram rejected the key", notice)
 
-    async def test_saying_goodbye_needs_no_explanation(self):
+    async def test_saying_goodbye_needs_no_explanation(self) -> None:
         transcribe = mock.AsyncMock(
             return_value=reachy_stt.Transcription("goodbye", "fake", "fake")
         )
@@ -251,11 +253,11 @@ class SessionEndNoticeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.state["conversation_state"], "stopped")
         self.assertEqual(self._notices(agent), [])
 
-    async def test_an_explicit_stop_needs_no_explanation(self):
+    async def test_an_explicit_stop_needs_no_explanation(self) -> None:
         agent = FakeAgent()
         started = asyncio.Event()
 
-        async def blocked(_agent, _session, _config):
+        async def blocked(_agent, _session, _config) -> None:
             started.set()
             await asyncio.Future()
 

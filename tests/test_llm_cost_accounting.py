@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -137,11 +137,11 @@ class TestUpgradeSeeding:
         assert cost.get_global_cost_info()["spend_usd"] == 10.0
 
     def test_unreadable_durable_totals_count_as_nothing(self) -> None:
-        assert cost._known_persisted_cost_total(_Broken()) == 0.0
+        assert cost._known_persisted_cost_total(cast(WactorzDB, _Broken())) == 0.0
 
     def test_seeding_against_a_failing_database_does_not_raise(self) -> None:
-        cost._bootstrap_active_global_cost(_Broken(), "monthly")
-        cost._seed_alltime_cost(_Broken())
+        cost._bootstrap_active_global_cost(cast(WactorzDB, _Broken()), "monthly")
+        cost._seed_alltime_cost(cast(WactorzDB, _Broken()))
 
     def test_a_failing_write_during_seeding_is_tolerated(
         self, db: WactorzDB, monkeypatch: pytest.MonkeyPatch

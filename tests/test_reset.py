@@ -22,7 +22,7 @@ import threading
 import types
 import unittest
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import Any, ClassVar, NoReturn, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz import app as app_module
@@ -35,7 +35,7 @@ from wactorz.reset import reset_chat
 from wactorz.web import api_reset, cost, runtime
 
 
-def _payload(resp):
+def _payload(resp) -> Any:
     """Decode the JSON body of a real aiohttp ``web.json_response``.
 
     the web app binds ``web`` at import (real aiohttp), so its handlers always
@@ -52,7 +52,7 @@ def _payload(resp):
 
 
 class ResetLogsTest(unittest.TestCase):
-    def test_truncates_wactorz_log(self):
+    def test_truncates_wactorz_log(self) -> None:
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -61,7 +61,7 @@ class ResetLogsTest(unittest.TestCase):
             reset_logs(log_dir=tmp)
             self.assertEqual(log.read_text(), "")
 
-    def test_truncates_monitor_log(self):
+    def test_truncates_monitor_log(self) -> None:
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,7 +70,7 @@ class ResetLogsTest(unittest.TestCase):
             reset_logs(log_dir=tmp)
             self.assertEqual(log.read_text(), "")
 
-    def test_removes_rotated_backups(self):
+    def test_removes_rotated_backups(self) -> None:
         """Truncating only the active file leaves every earlier generation in
         place — the opposite of what a reset promises, and redaction covers
         known secret shapes, so the ones it misses are what would stay behind."""
@@ -90,7 +90,7 @@ class ResetLogsTest(unittest.TestCase):
             for backup in backups:
                 self.assertFalse(backup.exists(), f"{backup.name} survived the reset")
 
-    def test_leaves_unrelated_files_alone(self):
+    def test_leaves_unrelated_files_alone(self) -> None:
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,14 +99,14 @@ class ResetLogsTest(unittest.TestCase):
             reset_logs(log_dir=tmp)
             self.assertEqual(keep.read_text(), "not a log\n")
 
-    def test_skips_missing_files_silently(self):
+    def test_skips_missing_files_silently(self) -> None:
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
             # Neither file exists — should not raise
             reset_logs(log_dir=tmp)
 
-    def test_truncates_both_logs_when_both_present(self):
+    def test_truncates_both_logs_when_both_present(self) -> None:
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,7 +116,7 @@ class ResetLogsTest(unittest.TestCase):
             for name in ("wactorz.log", "monitor.log"):
                 self.assertEqual((Path(tmp) / name).read_text(), "")
 
-    def test_truncates_open_file_handler(self):
+    def test_truncates_open_file_handler(self) -> None:
         from wactorz.reset import reset_logs
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -137,7 +137,7 @@ class ResetLogsTest(unittest.TestCase):
                 logging.root.removeHandler(handler)
                 handler.close()
 
-    def test_releases_the_handler_lock_when_truncation_fails(self):
+    def test_releases_the_handler_lock_when_truncation_fails(self) -> None:
         """A failed truncate must not strand the logger's lock.
 
         The failure this guards is silent and total: the exception is caught and
@@ -158,7 +158,7 @@ class ResetLogsTest(unittest.TestCase):
             handler.stream.write("content\n")
             handler.stream.flush()
 
-            def _explode(*_args, **_kwargs):
+            def _explode(*_args, **_kwargs) -> NoReturn:
                 raise OSError("disk gone")
 
             handler.stream.truncate = _explode  # type: ignore[method-assign]
@@ -193,33 +193,33 @@ class ResetLogsTest(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_request(body: dict):
+def _make_request(body: dict) -> "MagicMock":
     req = MagicMock()
     req.json = AsyncMock(return_value=body)
     return req
 
 
 class ResetHandlerScopeValidationTest(unittest.IsolatedAsyncioTestCase):
-    async def test_invalid_scope_returns_400(self):
+    async def test_invalid_scope_returns_400(self) -> None:
 
         req = _make_request({"scope": "invalid"})
         resp = await api_reset.reset_handler(req)
         self.assertEqual(resp.status, 400)
         self.assertIn("scope", str(_payload(resp)))
 
-    async def test_empty_scope_returns_400(self):
+    async def test_empty_scope_returns_400(self) -> None:
 
         req = _make_request({"scope": ""})
         resp = await api_reset.reset_handler(req)
         self.assertEqual(resp.status, 400)
 
-    async def test_missing_scope_returns_400(self):
+    async def test_missing_scope_returns_400(self) -> None:
 
         req = _make_request({})
         resp = await api_reset.reset_handler(req)
         self.assertEqual(resp.status, 400)
 
-    async def test_invalid_json_returns_400(self):
+    async def test_invalid_json_returns_400(self) -> None:
 
         req = MagicMock()
         req.json = AsyncMock(side_effect=Exception("bad json"))
@@ -231,13 +231,13 @@ VALID_SCOPES = ("chat", "state", "metrics", "spawns", "logs", "all")
 
 
 class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self._orig_state = {
             "alerts": list(runtime.state.get("alerts", [])),
             "log_feed": list(runtime.state.get("log_feed", [])),
         }
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         runtime.state["alerts"] = self._orig_state["alerts"]
         runtime.state["log_feed"] = self._orig_state["log_feed"]
 
@@ -261,31 +261,31 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         ):
             return await api_reset.reset_handler(req)
 
-    async def test_chat_scope_returns_200(self):
+    async def test_chat_scope_returns_200(self) -> None:
         resp = await self._call("chat")
         payload = _payload(resp)
         self.assertEqual(resp.status, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["scope"], "chat")
 
-    async def test_state_scope_returns_200(self):
+    async def test_state_scope_returns_200(self) -> None:
         resp = await self._call("state")
         self.assertEqual(resp.status, 200)
 
-    async def test_metrics_scope_returns_200(self):
+    async def test_metrics_scope_returns_200(self) -> None:
         resp = await self._call("metrics")
         self.assertEqual(resp.status, 200)
 
-    async def test_spawns_scope_returns_200(self):
+    async def test_spawns_scope_returns_200(self) -> None:
         resp = await self._call("spawns")
         self.assertEqual(resp.status, 200)
 
-    async def test_logs_scope_returns_200(self):
+    async def test_logs_scope_returns_200(self) -> None:
         resp = await self._call("logs")
         self.assertEqual(resp.status, 200)
         self.assertEqual(_payload(resp)["scope"], "logs")
 
-    async def test_chat_scope_preserves_alerts_and_feed(self):
+    async def test_chat_scope_preserves_alerts_and_feed(self) -> None:
         # Narrowed: clearing chat history must not wipe alerts or the feed.
         runtime.state["alerts"] = [{"id": "a1"}]
         runtime.state["log_feed"] = [{"type": "log", "message": "keep"}]
@@ -294,7 +294,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.state["alerts"], [{"id": "a1"}])
         self.assertEqual(runtime.state["log_feed"], [{"type": "log", "message": "keep"}])
 
-    async def test_metrics_scope_clears_alerts_and_feed(self):
+    async def test_metrics_scope_clears_alerts_and_feed(self) -> None:
         runtime.state["alerts"] = [{"id": "a1"}]
         runtime.state["log_feed"] = [{"type": "log", "message": "old"}]
         resp = await self._call("metrics")
@@ -302,7 +302,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.state["alerts"], [])
         self.assertEqual(runtime.state["log_feed"], [])
 
-    async def test_logs_scope_clears_log_feed(self):
+    async def test_logs_scope_clears_log_feed(self) -> None:
         # Truncating the log files should also drop the in-memory activity-feed
         # buffer so a refreshed client doesn't replay stale lines.
         runtime.state["log_feed"] = [{"type": "log", "message": "old"}]
@@ -310,7 +310,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp.status, 200)
         self.assertEqual(runtime.state["log_feed"], [])
 
-    async def test_metrics_scope_zeroes_live_actor_counters(self):
+    async def test_metrics_scope_zeroes_live_actor_counters(self) -> None:
         # reset_metrics only clears the persisted kv; the handler must also zero
         # the running actors' in-memory counters so the dashboard updates live
         # instead of waiting for a restart.
@@ -342,7 +342,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         finally:
             runtime.registry = orig_registry
 
-    async def test_metrics_scope_clears_in_memory_lifetime_ledger(self):
+    async def test_metrics_scope_clears_in_memory_lifetime_ledger(self) -> None:
         # The headline total is max(live+historical, lifetime ledger). The kv
         # ledger is cleared by reset_metrics, but the in-memory _lifetime_cost
         # high-water survives in-process and pins the headline — the handler must
@@ -369,7 +369,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             cost.lifetime_cost.clear()
             cost.lifetime_cost.update(orig_ledger)
 
-    async def test_chat_scope_clears_live_conversation(self):
+    async def test_chat_scope_clears_live_conversation(self) -> None:
         # reset_chat only clears persisted chat; the handler must also wipe the
         # running actor's in-memory conversation so the agent stops "remembering"
         # without a restart.
@@ -397,7 +397,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         finally:
             runtime.registry = orig_registry
 
-    async def test_chat_scope_respects_agent_filter(self):
+    async def test_chat_scope_respects_agent_filter(self) -> None:
 
         alpha = types.SimpleNamespace(name="alpha", _conversation_history=[1], _history_summary="a")
         beta = types.SimpleNamespace(name="beta", _conversation_history=[2], _history_summary="b")
@@ -419,7 +419,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         finally:
             runtime.registry = orig_registry
 
-    async def test_metrics_scope_respects_agent_filter(self):
+    async def test_metrics_scope_respects_agent_filter(self) -> None:
         # With an agent filter, only the matching actor's counters reset.
 
         alpha = types.SimpleNamespace(
@@ -446,15 +446,15 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
         finally:
             runtime.registry = orig_registry
 
-    async def test_all_scope_returns_200(self):
+    async def test_all_scope_returns_200(self) -> None:
         resp = await self._call("all")
         self.assertEqual(resp.status, 200)
 
-    async def test_response_includes_agent_when_provided(self):
+    async def test_response_includes_agent_when_provided(self) -> None:
         resp = await self._call("chat", agent="my-agent")
         self.assertEqual(_payload(resp)["agent"], "my-agent")
 
-    async def test_response_agent_is_none_when_not_provided(self):
+    async def test_response_agent_is_none_when_not_provided(self) -> None:
         resp = await self._call("chat")
         self.assertIsNone(_payload(resp)["agent"])
 
@@ -465,7 +465,9 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
-    async def _call_with_mocks(self, scope: str, agent: str | None = None):
+    async def _call_with_mocks(
+        self, scope: str, agent: str | None = None
+    ) -> "dict[str, MagicMock | AsyncMock]":
 
         req = _make_request({"scope": scope, "agent": agent})
         mocks = {}
@@ -489,27 +491,27 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
                     p.stop()
         return mocks
 
-    async def test_chat_scope_calls_reset_chat(self):
+    async def test_chat_scope_calls_reset_chat(self) -> None:
         mocks = await self._call_with_mocks("chat")
         mocks["reset_chat"].assert_called_once()
 
-    async def test_metrics_scope_calls_reset_metrics(self):
+    async def test_metrics_scope_calls_reset_metrics(self) -> None:
         mocks = await self._call_with_mocks("metrics")
         mocks["reset_metrics"].assert_called_once()
 
-    async def test_spawns_scope_calls_reset_spawns(self):
+    async def test_spawns_scope_calls_reset_spawns(self) -> None:
         mocks = await self._call_with_mocks("spawns")
         mocks["reset_spawns"].assert_called_once()
 
-    async def test_logs_scope_calls_reset_logs(self):
+    async def test_logs_scope_calls_reset_logs(self) -> None:
         mocks = await self._call_with_mocks("logs")
         mocks["reset_logs"].assert_called_once()
 
-    async def test_all_scope_calls_reset_all(self):
+    async def test_all_scope_calls_reset_all(self) -> None:
         mocks = await self._call_with_mocks("all")
         mocks["reset_all"].assert_called_once()
 
-    async def test_all_scope_wipes_everything_whatever_agent_is_named(self):
+    async def test_all_scope_wipes_everything_whatever_agent_is_named(self) -> None:
         # Every agent is stopped whatever is named, so the records go for all of
         # them too: wiping one agent's would leave a half-wiped install.
         mocks = await self._call_with_mocks("all", agent="counter")
@@ -529,12 +531,12 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
     deleted agent on restart.
     """
 
-    def _db(self, tmp: str):
+    def _db(self, tmp: str) -> "WactorzDB":
         from wactorz.core.persistence import WactorzDB
 
         return WactorzDB(str(Path(tmp) / "wactorz.db"))
 
-    def test_all_clears_kv_spawn_registry(self):
+    def test_all_clears_kv_spawn_registry(self) -> None:
         from wactorz.reset import reset_spawns
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -544,7 +546,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 reset_spawns(db_path=db_path)
                 self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
 
-    def test_single_agent_pops_only_that_entry(self):
+    def test_single_agent_pops_only_that_entry(self) -> None:
         from wactorz.reset import reset_spawns
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -555,7 +557,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 reg = db.kv_get("main", "_spawned_agents", None)
                 self.assertEqual(reg, {"b": {"node": "n1"}})
 
-    def test_all_clears_the_registry_kept_by_id_and_the_one_by_name(self):
+    def test_all_clears_the_registry_kept_by_id_and_the_one_by_name(self) -> None:
         # Main reads the old one when the new one is absent, so both go, or a
         # cleared registry would come back from the older store.
         from wactorz.reset import reset_spawns
@@ -569,7 +571,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
                 self.assertIsNone(db.kv_get("main", "_spawned_agents_by_id", None))
 
-    def test_single_agent_pops_every_entry_of_that_name_by_id(self):
+    def test_single_agent_pops_every_entry_of_that_name_by_id(self) -> None:
         from wactorz.reset import reset_spawns
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -584,7 +586,7 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
                 reg = db.kv_get("main", "_spawned_agents_by_id", None)
                 self.assertEqual(reg, {"id-b": {"name": "b", "node": "n1"}})
 
-    def test_restart_read_sees_empty_registry_after_wipe(self):
+    def test_restart_read_sees_empty_registry_after_wipe(self) -> None:
         """End-to-end of the actual symptom: after a wipe, the registry read
         that main._restore_spawned_agents() performs on the NEXT startup must
         return empty — i.e. recall("_spawned_agents") via a fresh PersistenceAPI
@@ -630,7 +632,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
         "_agent_manifests": {"a": {"name": "a"}},
     }
 
-    def _db(self, tmp: str):
+    def _db(self, tmp: str) -> "WactorzDB":
         from wactorz.core.persistence import WactorzDB
 
         return WactorzDB(str(Path(tmp) / "wactorz.db"))
@@ -639,7 +641,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
         for key, value in self.MEMORY.items():
             db.kv_set(owner, key, value)
 
-    def test_reset_memory_deletes_every_key(self):
+    def test_reset_memory_deletes_every_key(self) -> None:
         from wactorz.reset import reset_memory
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -650,7 +652,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
                 for key in self.MEMORY:
                     self.assertIsNone(db.kv_get("main", key, None), key)
 
-    def test_full_wipe_forgets_rules_and_facts(self):
+    def test_full_wipe_forgets_rules_and_facts(self) -> None:
         from wactorz.reset import reset_all
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -661,7 +663,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
                 for key in self.MEMORY:
                     self.assertIsNone(db.kv_get("main", key, None), key)
 
-    def test_restart_read_sees_no_rules_after_wipe(self):
+    def test_restart_read_sees_no_rules_after_wipe(self) -> None:
         """The symptom end-to-end: /rules after a wipe reads
         recall("_pipeline_rules") through a fresh PersistenceAPI on the same
         db file and must find nothing."""
@@ -685,7 +687,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
                 self.assertFalse(fresh.get("_pipeline_rules") or {})
                 self.assertFalse(fresh.get("_user_facts") or {})
 
-    def test_single_agent_wipe_leaves_other_owners_alone(self):
+    def test_single_agent_wipe_leaves_other_owners_alone(self) -> None:
         from wactorz.reset import reset_all
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -698,7 +700,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
                     self.assertEqual(db.kv_get("main", key, None), value, key)
                     self.assertIsNone(db.kv_get("other", key, None), key)
 
-    def test_other_scopes_do_not_touch_memory(self):
+    def test_other_scopes_do_not_touch_memory(self) -> None:
         """Chat, metrics and spawns each own their keys and nothing else — the
         memory keys are a full wipe's job, so a partial reset keeps them."""
         from wactorz.reset import reset_chat, reset_metrics, reset_spawns
@@ -721,7 +723,7 @@ class ResetAllMemoryKvTest(unittest.TestCase):
 
 
 class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
-    async def test_all_scope_clears_desired_state_for_all_nodes(self):
+    async def test_all_scope_clears_desired_state_for_all_nodes(self) -> None:
 
         # A real MainActor: the reset path resolves main with `find_main_actor`,
         # which checks isinstance, so a mock resolves to None and n1 — which is
@@ -769,7 +771,7 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
             runtime.mqtt_client_ref = orig_mqtt
             runtime.state["nodes"] = orig_nodes
 
-    async def test_all_scope_never_touches_protected_agents(self):
+    async def test_all_scope_never_touches_protected_agents(self) -> None:
         # Regression: the dashboard entry's "protected" flag is only set when a
         # heartbeat carried it, so trusting it tore down system agents (main /
         # monitor / installer / catalog). The registry's protected flag is
@@ -833,23 +835,23 @@ class FactoryResetKeepSetTest(unittest.TestCase):
     """`reset all` (factory reset) keeps the fresh-boot set — protected system
     actors plus the HA system agents — and wipes user/catalog-spawned agents."""
 
-    def test_protected_system_actors_are_kept(self):
+    def test_protected_system_actors_are_kept(self) -> None:
 
         for name in ("main", "monitor", "installer", "catalog"):
             self.assertTrue(api_reset.survives_factory_reset(name, True), name)
 
-    def test_ha_system_agents_kept_despite_being_unprotected(self):
+    def test_ha_system_agents_kept_despite_being_unprotected(self) -> None:
 
         # Unprotected → still individually deletable, but a factory reset keeps them.
         for name in api_reset.HA_SYSTEM_AGENTS:
             self.assertTrue(api_reset.survives_factory_reset(name, False), name)
 
-    def test_user_and_catalog_spawned_agents_are_wiped(self):
+    def test_user_and_catalog_spawned_agents_are_wiped(self) -> None:
 
         self.assertFalse(api_reset.survives_factory_reset("weather-agent", False))
         self.assertFalse(api_reset.survives_factory_reset("my-catalog-spawn", False))
 
-    def test_keep_set_covers_every_built_in_agent(self):
+    def test_keep_set_covers_every_built_in_agent(self) -> None:
         """Drift guard: every agent a fresh boot supervises must be kept. If a new
         built-in is added, either mark it protected or add it to
         HA_SYSTEM_AGENTS — otherwise a factory reset would wipe it."""
@@ -895,7 +897,7 @@ class ResetUploadsTest(unittest.TestCase):
         (uploads / ("a" * 32 + ".json")).write_text('{"name":"shot.png"}', encoding="utf-8")
         return uploads
 
-    def test_a_full_chat_reset_takes_the_files_with_it(self):
+    def test_a_full_chat_reset_takes_the_files_with_it(self) -> None:
         from wactorz.reset import reset_chat
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -905,7 +907,7 @@ class ResetUploadsTest(unittest.TestCase):
 
             self.assertEqual(list(uploads.iterdir()), [])
 
-    def test_a_full_wipe_takes_them_too(self):
+    def test_a_full_wipe_takes_them_too(self) -> None:
         from wactorz.reset import reset_all
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -920,7 +922,7 @@ class ResetUploadsTest(unittest.TestCase):
         (uploads / file_id).write_bytes(b"\x89PNG\r\n\x1a\n")
         (uploads / f"{file_id}.json").write_text('{"name":"shot.png"}', encoding="utf-8")
 
-    def test_one_agent_takes_the_files_only_its_thread_named(self):
+    def test_one_agent_takes_the_files_only_its_thread_named(self) -> None:
         # A row is filed under its thread whoever attached the file, so the rows
         # are what say whose files are whose.
         mine, shared, unsent = "a" * 32, "b" * 32, "c" * 32
@@ -963,7 +965,7 @@ class ResetUploadsTest(unittest.TestCase):
             left = sorted(p.name for p in uploads.iterdir())
             self.assertEqual(left, [shared, f"{shared}.json", unsent, f"{unsent}.json"])
 
-    def test_a_name_in_a_row_cannot_reach_outside_the_directory(self):
+    def test_a_name_in_a_row_cannot_reach_outside_the_directory(self) -> None:
         from wactorz.web import uploads as upload_store
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -974,7 +976,7 @@ class ResetUploadsTest(unittest.TestCase):
             self.assertEqual(upload_store.discard({"../keep.txt"}, state_dir=tmp), 0)
             self.assertTrue(outside.exists())
 
-    def test_a_state_dir_with_no_uploads_is_not_created(self):
+    def test_a_state_dir_with_no_uploads_is_not_created(self) -> None:
         from wactorz.reset import reset_uploads
 
         # A wipe must not bring a state directory into being on a machine that

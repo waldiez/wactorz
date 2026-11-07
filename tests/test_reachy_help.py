@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reachy help is discoverable, local, and usable without a robot connection."""
 
+from typing import Any
+
 import pytest
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
@@ -92,7 +94,7 @@ async def test_conversation_speaks_a_summary_and_shows_the_full_guide(monkeypatc
     async def before_speak(text) -> None:
         shown.append(text)
 
-    async def speak_reply(_agent, text, **_kwargs):
+    async def speak_reply(_agent, text, **_kwargs) -> dict[str, Any]:
         spoken.append(text)
         return {
             "spoke": True,

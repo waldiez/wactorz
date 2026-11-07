@@ -8,11 +8,12 @@ a leaked bus would decide the outcome of anything that later calls
 
 import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from wactorz.core import topic_bus as tb
+from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.topic_bus import (
     SharedStateHub,
     TopicBus,
@@ -39,10 +40,15 @@ def restore_singleton_fixture() -> Iterator[None]:
     tb._topic_bus = previous
 
 
+def _hub(mqtt: "FakeMQTT") -> SharedStateHub:
+    # The fake records what is published, which is all the hub uses of its client.
+    return SharedStateHub(cast(MQTTPublisher, mqtt))
+
+
 class TestSharedStateHub:
     async def test_publishing_caches_and_sends(self) -> None:
         mqtt = FakeMQTT()
-        hub = SharedStateHub(mqtt)
+        hub = _hub(mqtt)
 
         await hub.publish_state("home/state", {"a": 1})
 
@@ -56,18 +62,18 @@ class TestSharedStateHub:
         that make the topic a state topic rather than an event stream.
         """
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_state("home/state", {"a": 1})
+        await _hub(mqtt).publish_state("home/state", {"a": 1})
         assert mqtt.published[0]["retain"] is True
         assert mqtt.published[0]["qos"] == 1
 
     async def test_retain_can_be_turned_off(self) -> None:
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_state("home/x", {"a": 1}, retain=False)
+        await _hub(mqtt).publish_state("home/x", {"a": 1}, retain=False)
         assert mqtt.published[0]["retain"] is False
 
     async def test_a_string_payload_is_sent_unwrapped(self) -> None:
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_state("home/x", "already text")
+        await _hub(mqtt).publish_state("home/x", "already text")
         assert mqtt.published[0]["payload"] == "already text"
 
     async def test_without_a_client_it_still_caches(self) -> None:
@@ -81,7 +87,7 @@ class TestSharedStateHub:
 
     async def test_presence_carries_the_zone_and_people(self) -> None:
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_presence("kitchen", True, people=["sam"])
+        await _hub(mqtt).publish_presence("kitchen", True, people=["sam"])
 
         body = json.loads(mqtt.published[0]["payload"])
         assert body["zone"] == "kitchen"
@@ -91,12 +97,12 @@ class TestSharedStateHub:
 
     async def test_presence_defaults_to_nobody_named(self) -> None:
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_presence("hall", False)
+        await _hub(mqtt).publish_presence("hall", False)
         assert json.loads(mqtt.published[0]["payload"])["people"] == []
 
     async def test_energy_carries_the_reading(self) -> None:
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_energy(3.5, cost_per_hour=0.42, source="meter")
+        await _hub(mqtt).publish_energy(3.5, cost_per_hour=0.42, source="meter")
 
         body = json.loads(mqtt.published[0]["payload"])
         assert body["kwh"] == 3.5
@@ -105,7 +111,7 @@ class TestSharedStateHub:
 
     async def test_agent_data_is_namespaced_per_agent(self) -> None:
         mqtt = FakeMQTT()
-        await SharedStateHub(mqtt).publish_agent_data("weather", "forecast", {"c": 21})
+        await _hub(mqtt).publish_agent_data("weather", "forecast", {"c": 21})
         assert "weather" in mqtt.published[0]["topic"]
 
 

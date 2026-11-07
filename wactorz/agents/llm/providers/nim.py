@@ -2,6 +2,7 @@
 """NIMProvider — NVIDIA NIM, OpenAI-shaped."""
 
 import logging
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -60,7 +61,7 @@ class NIMProvider(LLMProvider):
         model: str = "meta/llama-3.3-70b-instruct",
         api_key: str | None = None,
         base_url: str = NIM_BASE_URL,
-    ):
+    ) -> None:
         import openai  # optional dependency: the `openai` extra
 
         self.model = model
@@ -83,7 +84,7 @@ class NIMProvider(LLMProvider):
         """
         return True
 
-    async def _create_completion(self, params: dict[str, Any]):
+    async def _create_completion(self, params: dict[str, Any]) -> Any:
         """Create a completion, retrying without reasoning knobs if rejected.
 
         Some NIM models don't accept the ``enable_thinking`` chat-template flag
@@ -104,7 +105,9 @@ class NIMProvider(LLMProvider):
                 return await self.client.chat.completions.create(**params)
             raise
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict]:
         full_messages = (
             [{"role": "system", "content": system}] if system else []
         ) + openai_messages(messages)
@@ -191,7 +194,9 @@ class NIMProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = (
             [{"role": "system", "content": system}] if system else []

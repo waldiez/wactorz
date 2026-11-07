@@ -118,7 +118,7 @@ class TestPickleStore:
 class TestLegacyActorPath:
     async def test_a_failed_persist_keeps_every_other_key(self, tmp_path: Path) -> None:
         class _Agent(Actor):
-            async def handle_message(self, message):  # pragma: no cover
+            async def handle_message(self, message) -> None:  # pragma: no cover
                 return None
 
         agent = _Agent(name="worker")

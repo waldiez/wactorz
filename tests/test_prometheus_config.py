@@ -36,12 +36,12 @@ class PrometheusConfigTest(unittest.TestCase):
             )
             return output_path.read_text(encoding="utf-8")
 
-    def test_mosquitto_job_enabled_by_default(self):
+    def test_mosquitto_job_enabled_by_default(self) -> None:
         rendered = self._render()
 
         self.assertIn("job_name: mosquitto-blackbox", rendered)
 
-    def test_optional_jobs_can_be_disabled(self):
+    def test_optional_jobs_can_be_disabled(self) -> None:
         rendered = self._render(
             PROMETHEUS_MONITOR_MOSQUITTO="0",
         )

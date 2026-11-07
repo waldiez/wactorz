@@ -356,7 +356,7 @@ def _build_native_catalog() -> dict:
     return native
 
 
-def get_native_factory(name: str):
+def get_native_factory(name: str) -> type[Actor] | None:
     """Return the Actor subclass that backs a native catalog agent, or None.
 
     Used by the local spawn router to restore a ``type: "native"`` agent from
@@ -765,7 +765,7 @@ class CatalogAgent(Actor):
     Spawns any catalog agent on request by delegating to main's spawn pipeline.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("name", "catalog")
         super().__init__(**kwargs)
         self.protected = True
@@ -776,7 +776,7 @@ class CatalogAgent(Actor):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         names = list(self._catalog.keys())
         logger.info("[%s] Catalog ready — %s recipe(s): %s", self.name, len(names), names)
         await self._mqtt_publish(
@@ -840,7 +840,7 @@ class CatalogAgent(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return
 
@@ -858,7 +858,7 @@ class CatalogAgent(Actor):
         if target:
             await self.send(target, MessageType.RESULT, result)
 
-    async def _handle(self, payload) -> dict:
+    async def _handle(self, payload: Any) -> dict:
         if isinstance(payload, dict) and payload.get("action"):
             action = payload["action"].lower().strip()
             if action == "list":

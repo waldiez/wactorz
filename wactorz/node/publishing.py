@@ -263,7 +263,9 @@ class NodePublisher:
         answered = threading.Event()
         outcome: dict[str, Any] = {}
 
-        def _on_connect(_client: Any, _data: Any, _flags: Any, reason: Any, _props: Any = None):
+        def _on_connect(
+            _client: Any, _data: Any, _flags: Any, reason: Any, _props: Any = None
+        ) -> None:
             outcome["reason"] = reason
             answered.set()
 

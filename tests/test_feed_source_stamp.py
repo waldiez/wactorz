@@ -12,13 +12,15 @@ wire to every connected browser, so deriving new fields from broker payloads
 would widen what browsers receive — the projection-not-enrichment rule.
 """
 
+from collections.abc import Iterator
+
 import pytest
 
 from wactorz.web import events, runtime
 
 
 @pytest.fixture(autouse=True)
-def _isolate_feed():
+def _isolate_feed() -> "Iterator[None]":
     original = list(runtime.state.get("log_feed", []))
     runtime.state["log_feed"] = []
     yield

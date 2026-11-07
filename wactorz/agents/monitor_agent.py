@@ -44,8 +44,8 @@ class MonitorActor(Actor):
         check_interval: float = 15.0,
         heartbeat_timeout: float = 60.0,
         auto_restart: bool = False,  # kept for API compat, ignored
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         kwargs.setdefault("name", "monitor")
         super().__init__(**kwargs)
         self.check_interval = check_interval
@@ -70,7 +70,7 @@ class MonitorActor(Actor):
         except Exception:  # noqa: S110  # host stats are skipped without it; see _publish_host_stats
             pass
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         if self._registry:
             now = time.time()
             for actor in self._registry.all_actors():
@@ -92,7 +92,7 @@ class MonitorActor(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         # Any message from an actor counts as a liveness signal
         if msg.sender_id and msg.sender_id != self.actor_id:
             self._last_seen[msg.sender_id] = time.time()
@@ -110,7 +110,7 @@ class MonitorActor(Actor):
 
     # ── Monitor loop ───────────────────────────────────────────────────────
 
-    async def _monitor_loop(self):
+    async def _monitor_loop(self) -> None:
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 await asyncio.sleep(self.check_interval)
@@ -125,7 +125,7 @@ class MonitorActor(Actor):
             except Exception:
                 logger.exception("[%s] Monitor loop error", self.name)
 
-    async def _ping_all_actors(self):
+    async def _ping_all_actors(self) -> None:
         if not self._registry:
             return
         for actor in self._registry.all_actors():
@@ -135,7 +135,7 @@ class MonitorActor(Actor):
                 except Exception:
                     logger.debug("[%s] Could not reach %s", self.name, actor.name)
 
-    async def _check_all_actors(self):
+    async def _check_all_actors(self) -> None:
         if not self._registry:
             return
         now = time.time()
@@ -170,7 +170,7 @@ class MonitorActor(Actor):
 
     # ── Error event handling ───────────────────────────────────────────────
 
-    async def _handle_error_event(self, event: dict):
+    async def _handle_error_event(self, event: dict) -> None:
         """Observer-only: classify severity, fire MQTT alert, notify user.
         The Supervisor is the single restart authority — never call
         actor.stop() / actor.start() here.
@@ -247,7 +247,7 @@ class MonitorActor(Actor):
             for actor_id in [k for k in tracked if k not in keep]:
                 tracked.pop(actor_id, None)
 
-    async def _check_error_registry(self):
+    async def _check_error_registry(self) -> None:
         """Notify user when a previously degraded agent has recovered."""
         for actor_id, event in list(self._error_registry.items()):
             actor = self._find_actor(actor_id)
@@ -269,7 +269,7 @@ class MonitorActor(Actor):
         agent_name: str,
         message: str,
         severity: str = "warning",
-    ):
+    ) -> None:
         now = time.time()
         cooldown = self._last_notified.get(actor_id, 0)
         if (now - cooldown) < _NOTIFY_COOLDOWN and severity != "info":
@@ -301,7 +301,7 @@ class MonitorActor(Actor):
 
     # ── Alerting ───────────────────────────────────────────────────────────
 
-    async def _fire_heartbeat_alert(self, actor: Actor, gap: float):
+    async def _fire_heartbeat_alert(self, actor: Actor, gap: float) -> None:
         alert = {
             "actor_id": actor.actor_id,
             "name": actor.name,
@@ -330,7 +330,7 @@ class MonitorActor(Actor):
                 severity="warning",
             )
 
-    async def _fire_error_alert(self, event: dict):
+    async def _fire_error_alert(self, event: dict) -> None:
         await self._mqtt_publish(
             f"agents/{event.get('actor_id', 'unknown')}/alert",
             {
@@ -352,7 +352,7 @@ class MonitorActor(Actor):
                 return a
         return None
 
-    async def _publish_system_health(self):
+    async def _publish_system_health(self) -> None:
         if not self._registry:
             return
         now = time.time()
@@ -378,7 +378,7 @@ class MonitorActor(Actor):
         }
         await self._mqtt_publish("system/health", health)
 
-    async def _publish_host_stats(self):
+    async def _publish_host_stats(self) -> None:
         proc = self._proc
         if proc is None:
             # No process handle means no host stats; the rest of the monitor's

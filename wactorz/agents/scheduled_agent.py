@@ -333,8 +333,8 @@ class ScheduledAgent(Actor):
         timezone: str | None = None,
         publish_topic: str | None = None,
         description: str = "",
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         kwargs.setdefault("name", "scheduled")
         super().__init__(**kwargs)
         if not isinstance(schedule, dict):
@@ -363,7 +363,7 @@ class ScheduledAgent(Actor):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         # Restore last-fire state if persisted
         state = self.recall("_schedule_state") or {}
         if isinstance(state, dict):
@@ -412,7 +412,7 @@ class ScheduledAgent(Actor):
         )
         self._loop_task = asyncio.create_task(self._run_loop())
 
-    async def on_stop(self):
+    async def on_stop(self) -> None:
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
             # gather rather than a bare await: the scheduling loop's own
@@ -430,7 +430,7 @@ class ScheduledAgent(Actor):
 
     # ── Scheduling loop ────────────────────────────────────────────────────
 
-    async def _run_loop(self):
+    async def _run_loop(self) -> None:
         """Sleep until the next fire time, fire, recompute, repeat.
 
         Wake bounded to _MAX_SLEEP_S so DST transitions / clock jumps /
@@ -550,7 +550,7 @@ class ScheduledAgent(Actor):
 
     # ── Firing ─────────────────────────────────────────────────────────────
 
-    async def _fire(self, now_utc: datetime, manual: bool = False):
+    async def _fire(self, now_utc: datetime, manual: bool = False) -> None:
         """Publish the fire event and update persisted state."""
         payload = {
             "fired_at": now_utc.isoformat(),
@@ -576,7 +576,7 @@ class ScheduledAgent(Actor):
         except Exception:
             logger.exception("[%s] Fire failed", self.name)
 
-    async def _self_delete(self):
+    async def _self_delete(self) -> None:
         """Remove from registry and stop. Used for completed once-schedules."""
         await asyncio.sleep(0.5)
         if self._registry:
@@ -600,7 +600,7 @@ class ScheduledAgent(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         """Supports two task types for inspection / testing:
 
         {"action": "trigger"} — fire NOW without advancing the schedule
@@ -613,7 +613,7 @@ class ScheduledAgent(Actor):
         reply_to = msg.reply_to or msg.sender_id
         task_id = payload.get("_task_id")
 
-        async def _reply(body: dict):
+        async def _reply(body: dict) -> None:
             if not reply_to:
                 return
             r = dict(body)
@@ -649,7 +649,7 @@ class ScheduledAgent(Actor):
 
     # ── Helpers ────────────────────────────────────────────────────────────
 
-    async def _log(self, msg: str):
+    async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",

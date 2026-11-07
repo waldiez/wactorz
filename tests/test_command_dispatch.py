@@ -13,6 +13,7 @@ later — the delete path reached that state by calling ``stop()`` directly.
 """
 
 import json
+from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
@@ -51,7 +52,7 @@ class _Recorder(Actor):
     async def stop(self) -> None:
         self.calls.append("stop")
 
-    async def handle_message(self, message):  # pragma: no cover - never delivered
+    async def handle_message(self, message) -> None:  # pragma: no cover - never delivered
         return None
 
 
@@ -130,7 +131,7 @@ def _request(actor_id: str) -> web.Request:
 
 
 @pytest.fixture(autouse=True)
-def _restore_runtime():
+def _restore_runtime() -> "Iterator[None]":
     registry, client = runtime.registry, runtime.mqtt_client_ref
     yield
     runtime.registry, runtime.mqtt_client_ref = registry, client

@@ -3,6 +3,7 @@
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -21,7 +22,7 @@ _OLLAMA_STREAM_TIMEOUT = aiohttp.ClientTimeout(sock_connect=10, sock_read=120)
 class OllamaProvider(LLMProvider):
     """Local LLM via Ollama."""
 
-    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434"):
+    def __init__(self, model: str = "llama3", base_url: str = "http://localhost:11434") -> None:
         self.model = model
         self.base_url = base_url
 
@@ -74,7 +75,9 @@ class OllamaProvider(LLMProvider):
             return out
         return [{"role": "system", "content": system}, *out]
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict]:
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -158,7 +161,9 @@ class OllamaProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         payload = {
             "model": self.model,

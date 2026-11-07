@@ -62,11 +62,14 @@ import logging
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .agents.prompts.assemble import PromptFragment
 from .agents.prompts.fragments import DEFAULT_FRAGMENTS
 from .agents.prompts.planner_prompts import pipeline_design_prompt
+
+if TYPE_CHECKING:
+    from wactorz.agents.llm.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -430,7 +433,7 @@ def _for_profile(case: dict[str, Any], profile: str) -> dict[str, Any]:
 
 
 async def run_case(
-    provider,
+    provider: "LLMProvider",
     system: str,
     case: dict,
     rep: int,

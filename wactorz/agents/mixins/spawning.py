@@ -138,7 +138,7 @@ class SpawnPlaceholder:
     exists. Carries only the name.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         self.name = name
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
@@ -638,7 +638,7 @@ class SpawnMixin(_Host):
         *,
         registered: bool = True,
         restoring: bool = False,
-    ):
+    ) -> None:
         """Background task: install packages, then spawn, then register.
 
         Emits the same dashboard log frames main historically published so the

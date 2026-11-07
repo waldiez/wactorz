@@ -33,10 +33,14 @@ import json
 import logging
 import sqlite3
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..identity import derive_actor_id
 from .schema import ADDED_COLUMN_INDEXES, PROVENANCE_SQL
+
+if TYPE_CHECKING:
+    from .db import WactorzDB
+    from .pickle_store import PickleStore
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +57,7 @@ FRAMEWORK_VERSION = 7
 # Only add columns/tables/indices — never drop or rename (breaks rollback).
 
 
-def migrate_sql_2(conn: sqlite3.Connection):
+def migrate_sql_2(conn: sqlite3.Connection) -> None:
     """v1 → v2: Add migration tracking table and framework_version to schema_version."""
     # Add migration history table
     conn.executescript("""
@@ -73,7 +77,7 @@ def migrate_sql_2(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE schema_version ADD COLUMN framework_version INTEGER DEFAULT 1")
 
 
-def migrate_sql_3(conn: sqlite3.Connection):
+def migrate_sql_3(conn: sqlite3.Connection) -> None:
     """v2 → v3: chat_log carries the attachments a turn was sent with.
 
     Without it the thread rebuilt after a reload shows the text of a turn and
@@ -96,7 +100,7 @@ NODE_HISTORY_READINGS = (
 )
 
 
-def migrate_sql_4(conn: sqlite3.Connection):
+def migrate_sql_4(conn: sqlite3.Connection) -> None:
     """v3 → v4: node samples keep swap, load, free disk, temperature and throttling.
 
     A database whose ``node_metrics_history`` has none of them would refuse
@@ -108,7 +112,7 @@ def migrate_sql_4(conn: sqlite3.Connection):
             conn.execute(f"ALTER TABLE node_metrics_history ADD COLUMN {column} {kind}")
 
 
-def migrate_sql_5(conn: sqlite3.Connection):
+def migrate_sql_5(conn: sqlite3.Connection) -> None:
     """v4 → v5: the provenance graph, where labels and the model loop's record live.
 
     The same tables the schema creates for a new database; see
@@ -117,7 +121,7 @@ def migrate_sql_5(conn: sqlite3.Connection):
     conn.executescript(PROVENANCE_SQL)
 
 
-def migrate_sql_6(conn: sqlite3.Connection):
+def migrate_sql_6(conn: sqlite3.Connection) -> None:
     """v5 → v6: chat history is kept by the agent's id, not its name.
 
     Two agents may share a name, so a name no longer says whose a turn was.
@@ -147,7 +151,7 @@ READING_TIME_COLUMNS = (
 )
 
 
-def migrate_sql_7(conn: sqlite3.Connection):
+def migrate_sql_7(conn: sqlite3.Connection) -> None:
     """v6 → v7: a reading keeps when it happened apart from when it arrived.
 
     ``ts`` is the event time the payload said, or the arrival when it said
@@ -182,7 +186,7 @@ _SQL_MIGRATIONS = {
 # error recovery per-agent.
 
 
-def migrate_state_2(db, pickle_store):
+def migrate_state_2(db: "WactorzDB", pickle_store: "PickleStore | None") -> None:
     """v1 → v2: Upgrade persisted state structures.
 
     - Conversation history: sanitize corrupted entries
@@ -195,7 +199,7 @@ def migrate_state_2(db, pickle_store):
     _upgrade_conversation_history(db, pickle_store)
 
 
-def _upgrade_conversation_history(db, pickle_store):
+def _upgrade_conversation_history(db: "WactorzDB", pickle_store: "PickleStore | None") -> None:
     """Sanitize corrupted conversation history entries."""
     try:
         rows = db.conn.execute(
@@ -280,7 +284,7 @@ def stamp_new_database(conn: sqlite3.Connection) -> None:
     )
 
 
-def get_current_version(db) -> int:
+def get_current_version(db: "WactorzDB") -> int:
     """Get the current framework version from the database."""
     try:
         row = db.conn.execute("SELECT framework_version FROM schema_version LIMIT 1").fetchone()
@@ -300,7 +304,7 @@ def get_current_version(db) -> int:
     return 0  # fresh database
 
 
-def _pending_state_versions(db) -> list[int]:
+def _pending_state_versions(db: "WactorzDB") -> list[int]:
     """Registered state migrations with no success recorded in the history table.
 
     State work is tracked here rather than derived from ``framework_version``
@@ -322,7 +326,7 @@ def _pending_state_versions(db) -> list[int]:
     return sorted(v for v in _STATE_MIGRATIONS if v <= FRAMEWORK_VERSION and v not in done)
 
 
-def run_migrations(db, pickle_store=None) -> dict:
+def run_migrations(db: "WactorzDB", pickle_store: "PickleStore | None" = None) -> dict:
     """Run all pending migrations from current version to FRAMEWORK_VERSION.
 
     Called automatically by init_persistence(). Safe to call multiple times.

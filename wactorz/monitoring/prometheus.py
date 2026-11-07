@@ -49,7 +49,7 @@ SpendProvider = Callable[[], dict[str, Any] | None]
 class ActorMetricsCollector:
     """Collects actor and LLM metrics from the live registry."""
 
-    def __init__(self, registry_provider: RegistryProvider):
+    def __init__(self, registry_provider: RegistryProvider) -> None:
         self._registry_provider = registry_provider
 
     def collect(self) -> Iterable[GaugeMetricFamily | CounterMetricFamily]:
@@ -239,7 +239,7 @@ class BrokerMetricsCollector:
     has looked at.
     """
 
-    def __init__(self, publisher_provider: PublisherProvider):
+    def __init__(self, publisher_provider: PublisherProvider) -> None:
         self._publisher_provider = publisher_provider
 
     def collect(self) -> Iterable[GaugeMetricFamily | CounterMetricFamily]:
@@ -302,7 +302,9 @@ class NodeMetricsCollector:
     have been heard from, as down, which is what an alert can be written on.
     """
 
-    def __init__(self, nodes_provider: NodesProvider, expected_provider: ExpectedNodesProvider):
+    def __init__(
+        self, nodes_provider: NodesProvider, expected_provider: ExpectedNodesProvider
+    ) -> None:
         self._nodes_provider = nodes_provider
         self._expected_provider = expected_provider
 
@@ -371,7 +373,9 @@ class RestartLoopMetricsCollector:
     the node's, and its heartbeat names the agents it has slowed down.
     """
 
-    def __init__(self, supervisor_provider: SupervisorProvider, nodes_provider: NodesProvider):
+    def __init__(
+        self, supervisor_provider: SupervisorProvider, nodes_provider: NodesProvider
+    ) -> None:
         self._supervisor_provider = supervisor_provider
         self._nodes_provider = nodes_provider
 
@@ -457,7 +461,7 @@ class PrometheusMonitor:
         expected_nodes_provider: ExpectedNodesProvider = _no_names,
         supervisor_provider: SupervisorProvider = _no_supervisor,
         spend_provider: SpendProvider = _no_spend,
-    ):
+    ) -> None:
         self._registry = CollectorRegistry(auto_describe=True)
         self._actor_collector = ActorMetricsCollector(registry_provider)
         self._registry.register(self._actor_collector)

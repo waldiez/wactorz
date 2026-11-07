@@ -118,6 +118,8 @@ main or on a node. Consequences:
   (`agent` is passed in; the host injects a few names), never its own package; it must work
   without being imported, so no relative imports.
 - **It may import `wactorz`** — a node is a wactorz install. Absolute imports only.
+- **`agent` is a `wactorz.agents.dynamic.api.AgentAPI`**, and a program annotates it so, imported for
+  real rather than under `TYPE_CHECKING`: the source is exec'd, so its annotations are evaluated.
 - **The linters, the type checker and coverage read it like any other module.** Tests reach a
   program through `tests/programs.py`, which execs it the way a DynamicAgent does.
 - `reachy_mini_agent.py` still holds its program in an `AGENT_CODE` string, which the linters see

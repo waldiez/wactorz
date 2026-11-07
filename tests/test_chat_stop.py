@@ -11,13 +11,14 @@ anyway, and real aiohttp keeps the test fully order-independent.
 """
 
 import json
+from typing import Any
 
 import pytest
 
 from wactorz.web import chat, runtime
 
 
-def _payload(resp):
+def _payload(resp) -> Any:
     """Decode the JSON body of a real aiohttp ``web.json_response``."""
     return json.loads(resp.body)
 
@@ -25,33 +26,33 @@ def _payload(resp):
 class _FakeTask:
     """Minimal stand-in for an asyncio.Task tracked in _inflight_chat_tasks."""
 
-    def __init__(self, done=False):
+    def __init__(self, done=False) -> None:
         self._done = done
         self.cancelled = False
 
-    def done(self):
+    def done(self) -> bool:
         return self._done
 
-    def cancel(self):
+    def cancel(self) -> None:
         self.cancelled = True
 
 
 class _FakeMqtt:
-    def __init__(self):
+    def __init__(self) -> None:
         self.published = []
 
-    async def publish(self, topic, payload, qos=0):
+    async def publish(self, topic, payload, qos=0) -> None:
         self.published.append((topic, payload, qos))
 
 
 @pytest.fixture(name="patched")
-def patched_fixture(monkeypatch):
+def patched_fixture(monkeypatch) -> None:
     """Reset the module globals the handler reads (in-flight tasks, mqtt ref)."""
     monkeypatch.setattr(chat, "inflight_chat_tasks", set())
     monkeypatch.setattr(runtime, "mqtt_client_ref", None)
 
 
-async def test_stop_cancels_inflight(patched: pytest.MonkeyPatch):
+async def test_stop_cancels_inflight(patched: pytest.MonkeyPatch) -> None:
     running = _FakeTask(done=False)
     finished = _FakeTask(done=True)
     mqtt = _FakeMqtt()
@@ -72,7 +73,7 @@ async def test_stop_cancels_inflight(patched: pytest.MonkeyPatch):
     assert payload["status"] == "stopped"
 
 
-async def test_stop_when_idle_and_no_broker_is_harmless(patched: pytest.MonkeyPatch):
+async def test_stop_when_idle_and_no_broker_is_harmless(patched: pytest.MonkeyPatch) -> None:
     resp = await chat.rest_chat_stop_handler(None)
     payload = _payload(resp)
 

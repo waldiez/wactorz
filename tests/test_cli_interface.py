@@ -16,7 +16,7 @@ own modules, so these run on a checkout installed with `[dev]` alone.
 
 import asyncio
 import builtins
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -124,7 +124,7 @@ def actor_fixture() -> _MainActor:
 
 
 @pytest.fixture(name="drive")
-def drive_fixture(monkeypatch: pytest.MonkeyPatch):
+def drive_fixture(monkeypatch: pytest.MonkeyPatch) -> "Callable[..., Any]":
     """Run the CLI over a scripted list of inputs and return what it printed."""
 
     async def _drive(interface: CLIInterface, lines: list[str], capsys: Any) -> str:

@@ -55,7 +55,7 @@ class _BlockingTwilio:
         self.messages = types.SimpleNamespace(create=self._create)
         self.calls: list[dict] = []
 
-    def _create(self, **kwargs):
+    def _create(self, **kwargs) -> None:
         self.calls.append(kwargs)
 
         time.sleep(_BLOCK)
@@ -69,7 +69,7 @@ def _whatsapp() -> WhatsAppInterface:
 
 class TestTwilioSend:
     @pytest.mark.asyncio
-    async def test_sending_does_not_block_the_loop(self):
+    async def test_sending_does_not_block_the_loop(self) -> None:
         iface, twilio = _whatsapp(), _BlockingTwilio()
 
         ticks = await _loop_ticks_during(
@@ -79,7 +79,7 @@ class TestTwilioSend:
         assert ticks > 5, f"loop starved for the whole send ({ticks} ticks)"
 
     @pytest.mark.asyncio
-    async def test_sending_passes_the_expected_fields(self):
+    async def test_sending_passes_the_expected_fields(self) -> None:
         iface, twilio = _whatsapp(), _BlockingTwilio()
 
         await iface._send_message(twilio, "hello", "whatsapp:+15550000000")
@@ -95,7 +95,7 @@ class TestTwilioSend:
 
 class TestHostLookup:
     @pytest.mark.asyncio
-    async def test_a_slow_dns_lookup_does_not_block_the_loop(self, monkeypatch):
+    async def test_a_slow_dns_lookup_does_not_block_the_loop(self, monkeypatch) -> None:
         from wactorz.interfaces import chat_interfaces
 
         def _slow(_host: str) -> str:
@@ -110,7 +110,7 @@ class TestHostLookup:
         assert ticks > 5, f"loop starved during the lookup ({ticks} ticks)"
 
     @pytest.mark.asyncio
-    async def test_resolution_failure_is_reported_as_none(self, monkeypatch):
+    async def test_resolution_failure_is_reported_as_none(self, monkeypatch) -> None:
         def _fail(_host: str) -> str:
             raise socket.gaierror("no such host")
 
@@ -121,7 +121,7 @@ class TestHostLookup:
         assert await chat_interfaces.resolve_host("nowhere.local") is None
 
     @pytest.mark.asyncio
-    async def test_a_successful_lookup_returns_the_address(self, monkeypatch):
+    async def test_a_successful_lookup_returns_the_address(self, monkeypatch) -> None:
         monkeypatch.setattr(socket, "gethostbyname", lambda _h: "192.168.1.7")
 
         from wactorz.interfaces import chat_interfaces

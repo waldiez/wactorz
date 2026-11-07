@@ -159,7 +159,9 @@ class TestWhatBelongsInExt:
 class _EntryPoint:
     """One ``wactorz.extensions`` entry point, as importlib.metadata hands them out."""
 
-    def __init__(self, name: str, value: str, loaded: Any = None, error: Exception | None = None):
+    def __init__(
+        self, name: str, value: str, loaded: Any = None, error: Exception | None = None
+    ) -> None:
         self.name = name
         self.value = value
         self._loaded = loaded

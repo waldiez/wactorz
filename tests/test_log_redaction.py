@@ -17,6 +17,7 @@ import base64
 import logging
 import sys
 import time
+from typing import Any
 
 import pytest
 
@@ -303,7 +304,7 @@ class TestInstallRedaction:
     """Wiring: the console and the log file get filtered, not just the buffer."""
 
     @pytest.fixture
-    def root_with_handler(self):
+    def root_with_handler(self) -> Any:
         root = logging.getLogger()
         handler = logging.NullHandler()
         root.addHandler(handler)

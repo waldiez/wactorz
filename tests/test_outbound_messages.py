@@ -663,7 +663,9 @@ def test_the_companions_are_given_the_outbox(monkeypatch: pytest.MonkeyPatch) ->
         async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
             return ""
 
-        def handle_turn_stream(self, text: str, *, channel: str, user=None, attachments=None):
+        def handle_turn_stream(
+            self, text: str, *, channel: str, user=None, attachments=None
+        ) -> Any:
             raise NotImplementedError
 
         def commands(self) -> frozenset[str]:

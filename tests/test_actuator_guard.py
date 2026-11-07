@@ -20,7 +20,7 @@ _DEVICES = [
 ]
 
 
-def _action(domain, service, entity_id):
+def _action(domain, service, entity_id) -> "ActuatorAction":
     return ActuatorAction(domain=domain, service=service, entity_id=entity_id)
 
 
@@ -30,19 +30,19 @@ _WIZ_ON = ("light", "turn_on", "light.wiz_rgbw_tunable_351b6e")
 # ── _request_tokens ──────────────────────────────────────────────────────────
 
 
-def test_tokens_split_specific_and_hints():
+def test_tokens_split_specific_and_hints() -> None:
     specific, hints = _request_tokens("turn off the hue lights")
     assert "hue" in specific
     assert hints == {"light"}
 
 
-def test_tokens_generic_only_request():
+def test_tokens_generic_only_request() -> None:
     specific, hints = _request_tokens("turn off the tv")
     assert specific == set()
     assert hints == {"media_player"}
 
 
-def test_tokens_ignore_colors_digits_stopwords():
+def test_tokens_ignore_colors_digits_stopwords() -> None:
     specific, hints = _request_tokens("set the light to pink at 50")
     assert specific == set()
     assert hints == {"light"}
@@ -51,7 +51,7 @@ def test_tokens_ignore_colors_digits_stopwords():
 # ── filter_unrequested_actions ───────────────────────────────────────────────
 
 
-def test_drops_bonus_action_when_specific_match_exists():
+def test_drops_bonus_action_when_specific_match_exists() -> None:
     # "turn off the hue lights" -> [hue turn_off, wiz turn_on (bonus)]
     hue = _action("light", "turn_off", "light.philips_hue_lct015")
     wiz = _action(*_WIZ_ON)
@@ -60,7 +60,7 @@ def test_drops_bonus_action_when_specific_match_exists():
     assert dropped == [wiz]
 
 
-def test_drops_bonus_action_on_generic_tv_request():
+def test_drops_bonus_action_on_generic_tv_request() -> None:
     # "turn off the tv" -> [tv turn_off, wiz turn_on (bonus)]
     tv = _action("media_player", "turn_off", "media_player.tv_samsung_7_series_55")
     wiz = _action(*_WIZ_ON)
@@ -69,7 +69,7 @@ def test_drops_bonus_action_on_generic_tv_request():
     assert dropped == [wiz]
 
 
-def test_vetoes_substitution_when_device_kind_absent():
+def test_vetoes_substitution_when_device_kind_absent() -> None:
     # "turn off the tv" but the model returned only a light: original bug.
     wiz = _action(*_WIZ_ON)
     kept, dropped = filter_unrequested_actions("turn off the tv", [wiz], _DEVICES)
@@ -77,7 +77,7 @@ def test_vetoes_substitution_when_device_kind_absent():
     assert dropped == [wiz]
 
 
-def test_vetoes_substitution_for_unknown_specific_device():
+def test_vetoes_substitution_for_unknown_specific_device() -> None:
     # "turn off the projector" (no device word in the map) with a light action.
     wiz = _action(*_WIZ_ON)
     kept, dropped = filter_unrequested_actions("turn off the projector", [wiz], _DEVICES)
@@ -85,7 +85,7 @@ def test_vetoes_substitution_for_unknown_specific_device():
     assert dropped == [wiz]
 
 
-def test_keeps_generic_domain_action():
+def test_keeps_generic_domain_action() -> None:
     # "make it warmer" -> climate action passes via the domain hint.
     clim = _action("climate", "set_temperature", "climate.living_room")
     kept, dropped = filter_unrequested_actions("make it warmer", [clim], _DEVICES)
@@ -93,7 +93,7 @@ def test_keeps_generic_domain_action():
     assert dropped == []
 
 
-def test_keeps_multi_device_request():
+def test_keeps_multi_device_request() -> None:
     lock = _action("lock", "lock", "lock.front_door")
     hue = _action("light", "turn_off", "light.philips_hue_lct015")
     kept, dropped = filter_unrequested_actions(
@@ -103,7 +103,7 @@ def test_keeps_multi_device_request():
     assert dropped == []
 
 
-def test_passes_through_unadjudicable_request():
+def test_passes_through_unadjudicable_request() -> None:
     # Only stopwords ("turn it on"): no device information at all — the guard
     # cannot judge, so it keeps whatever the resolver chose.
     clim = _action("climate", "set_temperature", "climate.living_room")
@@ -112,7 +112,7 @@ def test_passes_through_unadjudicable_request():
     assert dropped == []
 
 
-def test_vetoes_when_specific_words_match_nothing():
+def test_vetoes_when_specific_words_match_nothing() -> None:
     # Words that name nothing we can find ("do the usual"): safer to refuse.
     clim = _action("climate", "set_temperature", "climate.living_room")
     kept, dropped = filter_unrequested_actions("do the usual", [clim], _DEVICES)
@@ -120,26 +120,26 @@ def test_vetoes_when_specific_words_match_nothing():
     assert dropped == [clim]
 
 
-def test_empty_actions_noop():
+def test_empty_actions_noop() -> None:
     assert filter_unrequested_actions("turn off the tv", [], _DEVICES) == ([], [])
 
 
 # ── resolver output parsing tolerates prose wrapping ─────────────────────────
 
 
-def test_parse_actions_prose_wrapped():
+def test_parse_actions_prose_wrapped() -> None:
     raw = 'Here are the actions:\n[{"domain": "light", "service": "turn_off", "entity_id": "light.x"}]\nDone.'
     parsed = _bare_agent("x")._parse_actions_json(raw)
     assert parsed == [{"domain": "light", "service": "turn_off", "entity_id": "light.x"}]
 
 
-def test_parse_actions_fenced_still_works():
+def test_parse_actions_fenced_still_works() -> None:
     raw = '```json\n[{"domain": "light", "service": "turn_off", "entity_id": "light.x"}]\n```'
     parsed = _bare_agent("x")._parse_actions_json(raw)
     assert parsed[0]["entity_id"] == "light.x"
 
 
-def test_parse_actions_garbage_still_raises():
+def test_parse_actions_garbage_still_raises() -> None:
 
     import pytest
 
@@ -150,14 +150,14 @@ def test_parse_actions_garbage_still_raises():
 # ── color detection reads only the user's words ──────────────────────────────
 
 
-def _bare_agent(request):
+def _bare_agent(request) -> "OneOffActuatorAgent":
     # __new__ skips Actor init — these helpers only read self.request.
     agent = OneOffActuatorAgent.__new__(OneOffActuatorAgent)
     agent.request = request
     return agent
 
 
-def test_color_detection_ignores_entity_list():
+def test_color_detection_ignores_entity_list() -> None:
     enriched = (
         "turn on the tv\n\n"
         "[AVAILABLE HA ENTITIES — match the user's device to one of these:\n"
@@ -168,13 +168,13 @@ def test_color_detection_ignores_entity_list():
     assert _bare_agent(enriched)._requested_rgb() is None
 
 
-def test_color_detection_requires_whole_word():
+def test_color_detection_requires_whole_word() -> None:
     assert _bare_agent("turn on the infrared heater")._requested_rgb() is None
     assert _bare_agent("pair my bluetooth speaker")._requested_rgb() is None
     assert _bare_agent("make the lamp red")._requested_rgb() == [255, 0, 0]
 
 
-def test_max_brightness_ignores_entity_list():
+def test_max_brightness_ignores_entity_list() -> None:
     enriched = (
         "turn on the lamp\n\n"
         "[AVAILABLE HA ENTITIES:\n  sensor.full_brightness_meter (Full Brightness Meter)\n]"
@@ -183,7 +183,7 @@ def test_max_brightness_ignores_entity_list():
     assert _bare_agent("lamp to full brightness please")._requests_max_brightness()
 
 
-def test_ignores_injected_entity_list():
+def test_ignores_injected_entity_list() -> None:
     # Routing enriches the request with every discovered entity; the guard
     # must judge only the user's words, or every action self-matches.
     enriched = (

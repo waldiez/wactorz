@@ -22,6 +22,7 @@ from collections import deque
 from collections.abc import Sequence
 from itertools import islice
 from pathlib import Path
+from typing import Any
 
 from .cancellation import cancel_until_done
 from .mqtt import publish_properties
@@ -705,7 +706,7 @@ class MQTTPublisher:
     async def publish(
         self,
         topic: str,
-        payload,
+        payload: Any,
         retain: bool = False,
         qos: int = 0,
         user_properties: UserProperties | None = None,

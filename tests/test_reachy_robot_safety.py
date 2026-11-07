@@ -13,7 +13,9 @@ import tempfile
 import threading
 import types
 import unittest
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
@@ -25,48 +27,48 @@ exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
 class FakeAgent:
     name = "reachy-mini"
 
-    def __init__(self, mini=None):
+    def __init__(self, mini=None) -> None:
         self.state = {"mini": mini, "create_head_pose": lambda **_k: "NEUTRAL"}
         self.published, self.logs = [], []
 
-    async def publish(self, topic, payload):
+    async def publish(self, topic, payload) -> None:
         self.published.append((topic, payload))
 
-    async def log(self, text, level="info"):
+    async def log(self, text, level="info") -> None:
         self.logs.append((level, text))
 
-    def persist(self, key, value):
+    def persist(self, key, value) -> None:
         del key, value
 
-    def run_in_background(self, coro):
+    def run_in_background(self, coro) -> asyncio.Task[Any]:
         return asyncio.create_task(coro)
 
 
 class RobotMini:
     """The motion surface of the SDK's ReachyMini, recording what it is asked."""
 
-    def __init__(self, *, readable_pose=True, cancel_fails=False):
+    def __init__(self, *, readable_pose=True, cancel_fails=False) -> None:
         self.calls = []
         self._cancel_fails = cancel_fails
         if readable_pose:
             self.get_current_head_pose = lambda: "CURRENT"
 
-    def cancel_move(self):
+    def cancel_move(self) -> None:
         self.calls.append(("cancel_move",))
         if self._cancel_fails:
             raise AttributeError("'NoneType' object has no attribute 'stop_playing'")
 
-    def goto_target(self, **kwargs):
+    def goto_target(self, **kwargs) -> None:
         self.calls.append(("goto_target", kwargs))
 
 
-def _stop(agent):
+def _stop(agent) -> Any:
     with mock.patch.dict(NS, {"_stop_audio": mock.AsyncMock(return_value=True)}):
         return asyncio.run(NS["_dispatch"](agent, "stop", {}, True))
 
 
 class StopHoldsWhereItIsTest(unittest.TestCase):
-    def test_stop_cancels_a_recorded_move_and_holds_the_current_pose(self):
+    def test_stop_cancels_a_recorded_move_and_holds_the_current_pose(self) -> None:
         mini = RobotMini()
 
         result = _stop(FakeAgent(mini))
@@ -79,7 +81,7 @@ class StopHoldsWhereItIsTest(unittest.TestCase):
         self.assertEqual(target["head"], "CURRENT")
         self.assertIsNone(target["body_yaw"])
 
-    def test_stop_never_sends_the_head_to_neutral(self):
+    def test_stop_never_sends_the_head_to_neutral(self) -> None:
         mini = RobotMini()
 
         _stop(FakeAgent(mini))
@@ -92,7 +94,7 @@ class StopHoldsWhereItIsTest(unittest.TestCase):
         ]
         self.assertNotIn("NEUTRAL", heads)
 
-    def test_without_a_readable_pose_stop_does_not_move_at_all(self):
+    def test_without_a_readable_pose_stop_does_not_move_at_all(self) -> None:
         mini = RobotMini(readable_pose=False)
 
         result = _stop(FakeAgent(mini))
@@ -101,7 +103,7 @@ class StopHoldsWhereItIsTest(unittest.TestCase):
         self.assertFalse(result["held"])
         self.assertNotIn("goto_target", [call[0] for call in mini.calls])
 
-    def test_a_failed_cancel_still_holds_the_pose(self):
+    def test_a_failed_cancel_still_holds_the_pose(self) -> None:
         mini = RobotMini(cancel_fails=True)
 
         result = _stop(FakeAgent(mini))
@@ -111,7 +113,7 @@ class StopHoldsWhereItIsTest(unittest.TestCase):
 
 
 class OfflineCommandsTest(unittest.TestCase):
-    def test_a_motion_command_over_mqtt_says_the_robot_is_not_connected(self):
+    def test_a_motion_command_over_mqtt_says_the_robot_is_not_connected(self) -> None:
         agent = FakeAgent(mini=None)
 
         for cmd in ("wake", "pose", "stop", "look_at", "gesture"):
@@ -122,7 +124,7 @@ class OfflineCommandsTest(unittest.TestCase):
                 self.assertIn("reachy not connected", result["error"])
                 self.assertNotIn("NoneType", result["error"])
 
-    def test_the_refusal_is_published_as_a_failed_event(self):
+    def test_the_refusal_is_published_as_a_failed_event(self) -> None:
         agent = FakeAgent(mini=None)
 
         asyncio.run(NS["_dispatch"](agent, "wake", {"id": "abc"}, False))
@@ -131,7 +133,7 @@ class OfflineCommandsTest(unittest.TestCase):
         self.assertFalse(topics["custom/reachy/cmd_result/abc"]["ok"])
         self.assertFalse(topics["custom/reachy/events"]["ok"])
 
-    def test_commands_that_need_no_robot_still_answer(self):
+    def test_commands_that_need_no_robot_still_answer(self) -> None:
         agent = FakeAgent(mini=None)
 
         result = asyncio.run(NS["_dispatch"](agent, "help", {}, True))
@@ -140,12 +142,12 @@ class OfflineCommandsTest(unittest.TestCase):
 
 
 class ImuTemperatureTest(unittest.IsolatedAsyncioTestCase):
-    async def test_the_sdk_imu_property_is_read(self):
+    async def test_the_sdk_imu_property_is_read(self) -> None:
         agent = FakeAgent(types.SimpleNamespace(imu={"temperature": 38.04, "gyroscope": [0, 0, 0]}))
 
         self.assertEqual(await NS["_imu_temperature"](agent), 38.0)
 
-    async def test_a_lite_without_an_imu_reports_no_temperature(self):
+    async def test_a_lite_without_an_imu_reports_no_temperature(self) -> None:
         agent = FakeAgent(types.SimpleNamespace(imu=None))
 
         self.assertIsNone(await NS["_imu_temperature"](agent))
@@ -154,23 +156,23 @@ class ImuTemperatureTest(unittest.IsolatedAsyncioTestCase):
 class _StalledCommunicate:
     """A speech service that sends one chunk and then nothing more."""
 
-    async def stream(self):
+    async def stream(self) -> "AsyncIterator[dict[str, Any]]":
         yield {"type": "audio", "data": b"\x00"}
         await asyncio.Future()
 
 
 class SpeechSynthesisTimeoutTest(unittest.TestCase):
-    def _prepare(self, communicate):
+    def _prepare(self, communicate) -> tuple[Any, list[Any]] | tuple[Exception, list[Any]]:
         made = []
         real_join = os.path.join
 
-        def remember(*parts):
+        def remember(*parts) -> Any:
             path = real_join(*parts)
             if str(parts[-1]).startswith("reachy_say_"):
                 made.append(path)
             return path
 
-        async def no_boost(_agent, _path, _trim=0.0):
+        async def no_boost(_agent, _path, _trim=0.0) -> None:
             return None
 
         with (
@@ -191,7 +193,7 @@ class SpeechSynthesisTimeoutTest(unittest.TestCase):
             except Exception as error:
                 return error, made
 
-    def test_a_stalled_speech_service_ends_the_sentence_with_a_reason(self):
+    def test_a_stalled_speech_service_ends_the_sentence_with_a_reason(self) -> None:
         outcome, made = self._prepare(_StalledCommunicate())
 
         self.assertIsInstance(outcome, RuntimeError)
@@ -199,17 +201,17 @@ class SpeechSynthesisTimeoutTest(unittest.TestCase):
         self.assertTrue(made)
         self.assertFalse(any(Path(path).exists() for path in made))
 
-    def test_a_cancelled_synthesis_leaves_no_file_behind(self):
+    def test_a_cancelled_synthesis_leaves_no_file_behind(self) -> None:
         made = []
         real_join = os.path.join
 
-        def remember(*parts):
+        def remember(*parts) -> Any:
             path = real_join(*parts)
             if str(parts[-1]).startswith("reachy_say_"):
                 made.append(path)
             return path
 
-        async def scenario():
+        async def scenario() -> None:
             task = asyncio.create_task(NS["_prepare_speech"](FakeAgent(), "Hello there.", {}))
             await asyncio.sleep(0.05)
             task.cancel()
@@ -232,9 +234,9 @@ class SpeechSynthesisTimeoutTest(unittest.TestCase):
         self.assertTrue(made)
         self.assertFalse(any(Path(path).exists() for path in made))
 
-    def test_a_healthy_stream_is_written_in_full(self):
+    def test_a_healthy_stream_is_written_in_full(self) -> None:
         class Healthy:
-            async def stream(self):
+            async def stream(self) -> "AsyncIterator[dict[str, Any]]":
                 yield {"type": "audio", "data": b"ab"}
                 yield {"type": "WordBoundary", "offset": 0, "duration": 5_000_000}
                 yield {"type": "audio", "data": b"cd"}
@@ -253,17 +255,17 @@ if __name__ == "__main__":
 
 
 class CleanupTest(unittest.TestCase):
-    def test_the_sdk_handle_is_closed_off_the_event_loop(self):
+    def test_the_sdk_handle_is_closed_off_the_event_loop(self) -> None:
         loop_threads = []
         closed_on = []
 
         class Handle:
-            def __exit__(self, *_exc):
+            def __exit__(self, *_exc) -> None:
                 closed_on.append(threading.get_ident())
 
         agent = FakeAgent(Handle())
 
-        async def run():
+        async def run() -> None:
             loop_threads.append(threading.get_ident())
             with mock.patch.dict(NS, {"_conversation_stop": mock.AsyncMock()}):
                 await NS["cleanup"](agent)

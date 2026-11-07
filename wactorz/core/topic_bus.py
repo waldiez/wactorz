@@ -55,10 +55,13 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .addresses import MAIN_NODE, Address, node_of
 from .labels import event_time
+
+if TYPE_CHECKING:
+    from .mqtt_publisher import MQTTPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +143,7 @@ class TopicContract:
     #: where each model's pointers stand is the store's to say, not this.
     models: dict = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Guard against LLM mistakes:
         - Coerce bare strings to single-element lists
         - Filter out bogus entries like literal "publishes"/"subscribes" that
@@ -185,7 +188,7 @@ class TopicContract:
                 return True
         return False
 
-    def update_observed(self, topic: str, payload: dict):
+    def update_observed(self, topic: str, payload: dict) -> None:
         """Record the actual field names and types from a real published message.
         Called automatically by AgentAPI.publish() — agents don't need to
         call this themselves.
@@ -323,7 +326,7 @@ class TopicRegistry:
         → [(producer, consumer, topic), ...]  # auto-wireable pairs
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         #: By the agent's id, since two agents on two hosts may share a name. A
         #: contract written before its agent's id was known is under the name,
         #: until the contract with the id replaces it.
@@ -355,7 +358,7 @@ class TopicRegistry:
         """The last payload seen on each topic from outside, by topic, oldest first."""
         return {topic: dict(sample) for topic, sample in self._outside.items()}
 
-    def register(self, contract: TopicContract):
+    def register(self, contract: TopicContract) -> None:
         if contract.actor_id and self._is_unidentified(contract.name, contract.place):
             del self._contracts[contract.name]
         self._contracts[contract.actor_id or contract.name] = contract
@@ -366,7 +369,7 @@ class TopicRegistry:
             contract.subscribes,
         )
 
-    def unregister(self, name: str, actor_id: str | None = None, node: str | None = None):
+    def unregister(self, name: str, actor_id: str | None = None, node: str | None = None) -> None:
         """Forget the agent ``actor_id``, on ``node``; with no id, every agent called ``name``.
 
         A contract written before the agent's id was known goes with it, when
@@ -559,11 +562,11 @@ class SharedStateHub:
     HA_STATE_TOPIC = "home/state/{domain}/{entity_id}"
     AGENT_DATA_TOPIC = "agents/{name}/data/{key}"
 
-    def __init__(self, mqtt_client):
+    def __init__(self, mqtt_client: MQTTPublisher | None) -> None:
         self._mqtt = mqtt_client
         self._cache: dict[str, Any] = {}  # local cache of retained values
 
-    async def publish_state(self, topic: str, data: Any, retain: bool = True):
+    async def publish_state(self, topic: str, data: Any, retain: bool = True) -> None:
         """Publish to a shared state topic (retained by default)."""
         self._cache[topic] = data
         if self._mqtt:
@@ -572,7 +575,7 @@ class SharedStateHub:
 
     async def publish_presence(
         self, zone: str, present: bool, people: list[str] | None = None, source: str = ""
-    ):
+    ) -> None:
         """Publish occupancy state for a zone."""
         topic = self.PRESENCE_TOPIC.format(zone=zone)
         await self.publish_state(
@@ -586,7 +589,9 @@ class SharedStateHub:
             },
         )
 
-    async def publish_energy(self, kwh: float, cost_per_hour: float = 0.0, source: str = ""):
+    async def publish_energy(
+        self, kwh: float, cost_per_hour: float = 0.0, source: str = ""
+    ) -> None:
         """Publish current energy consumption."""
         await self.publish_state(
             self.ENERGY_TOPIC,
@@ -600,7 +605,7 @@ class SharedStateHub:
 
     async def publish_ha_state(
         self, entity_id: str, state: str, domain: str = "", attributes: dict[str, Any] | None = None
-    ):
+    ) -> None:
         """Mirror an HA entity state to a shared retained topic."""
         if not domain:
             domain = entity_id.split(".")[0] if "." in entity_id else "sensor"
@@ -615,7 +620,7 @@ class SharedStateHub:
             },
         )
 
-    async def publish_agent_data(self, agent_name: str, key: str, data: Any):
+    async def publish_agent_data(self, agent_name: str, key: str, data: Any) -> None:
         """Publish a named piece of world state from an agent."""
         topic = self.AGENT_DATA_TOPIC.format(name=agent_name, key=key)
         await self.publish_state(topic, data)
@@ -648,7 +653,7 @@ class StreamWindow:
 
     def __init__(
         self, topic: str, seconds: float = 300, max_size: int = 1000, *, event_time: bool = False
-    ):
+    ) -> None:
         self.topic = topic
         self.seconds = seconds
         self.max_size = max_size
@@ -667,13 +672,13 @@ class StreamWindow:
             return self._buffer[-1]["_ts"]
         return time.time()
 
-    def _trim(self):
+    def _trim(self) -> None:
         """Remove entries older than the window duration."""
         cutoff = self._now() - self.seconds
         while self._buffer and self._buffer[0]["_ts"] < cutoff:
             self._buffer.popleft()
 
-    def push(self, payload: Any):
+    def push(self, payload: Any) -> None:
         """Add a new data point to the window."""
         arrived = time.time()
         entry = {"_ts": event_time(payload, default=arrived) if self.event_time else arrived}
@@ -765,7 +770,7 @@ class StreamWindow:
                 count += 1
         return count
 
-    def start(self, mqtt_broker: str, mqtt_port: int):
+    def start(self, mqtt_broker: str, mqtt_port: int) -> StreamWindow:
         """Start the background MQTT listener for this window, once.
 
         Idempotent: generated code calls `agent.window(...)` from a process loop
@@ -776,7 +781,7 @@ class StreamWindow:
             self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
         return self
 
-    async def _listen(self, broker: str, port: int):
+    async def _listen(self, broker: str, port: int) -> None:
         from .mqtt import mqtt_client, reconnect_wait  # local: avoids core/__init__ import cycle
 
         # Whether the connection is known to be down, so it is said when it
@@ -809,7 +814,7 @@ class StreamWindow:
                     )
                 await asyncio.sleep(reconnect_wait(WINDOW_RECONNECT_DELAY_S))
 
-    def stop(self):
+    def stop(self) -> None:
         if self._task:
             self._task.cancel()
 
@@ -828,19 +833,26 @@ class TopicBus:
       4. Publishing wiring opportunities to the planner
     """
 
-    def __init__(self, mqtt_client=None, mqtt_broker: str = "localhost", mqtt_port: int = 1883):
+    def __init__(
+        self,
+        mqtt_client: MQTTPublisher | None = None,
+        mqtt_broker: str = "localhost",
+        mqtt_port: int = 1883,
+    ) -> None:
         self.registry = TopicRegistry()
         self.state_hub = SharedStateHub(mqtt_client)
         self._mqtt_broker = mqtt_broker
         self._mqtt_port = mqtt_port
         self._mqtt = mqtt_client
 
-    def register_contract(self, contract: TopicContract):
+    def register_contract(self, contract: TopicContract) -> None:
         """Register an agent's topic contract."""
         self.registry.register(contract)
         self._log_wiring_opportunities(contract)
 
-    def unregister(self, agent_name: str, actor_id: str | None = None, node: str | None = None):
+    def unregister(
+        self, agent_name: str, actor_id: str | None = None, node: str | None = None
+    ) -> None:
         """Remove an agent's contract when it stops."""
         self.registry.unregister(agent_name, actor_id, node)
 
@@ -852,7 +864,7 @@ class TopicBus:
         window.start(self._mqtt_broker, self._mqtt_port)
         return window
 
-    def _log_wiring_opportunities(self, new_contract: TopicContract):
+    def _log_wiring_opportunities(self, new_contract: TopicContract) -> None:
         """Log any new wiring opportunities created by this registration."""
         for pub_topic in new_contract.publishes:
             consumers = self.registry.consumers_of(pub_topic)
@@ -894,7 +906,7 @@ _topic_bus: TopicBus | None = None
 
 
 def init_topic_bus(
-    mqtt_client=None, mqtt_broker: str = "localhost", mqtt_port: int = 1883
+    mqtt_client: MQTTPublisher | None = None, mqtt_broker: str = "localhost", mqtt_port: int = 1883
 ) -> TopicBus:
     global _topic_bus
     _topic_bus = TopicBus(mqtt_client=mqtt_client, mqtt_broker=mqtt_broker, mqtt_port=mqtt_port)

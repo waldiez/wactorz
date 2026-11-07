@@ -14,7 +14,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
 
-    async def test_structured_today_calls_calendar_mcp(self):
+    async def test_structured_today_calls_calendar_mcp(self) -> None:
         agent = GoogleCalendarAgent(
             llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
         )
@@ -30,7 +30,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startTime", arguments)
         self.assertIn("endTime", arguments)
 
-    async def test_today_survives_missing_tz_database(self):
+    async def test_today_survives_missing_tz_database(self) -> None:
         # On systems without the IANA tz database (e.g. Windows without tzdata),
         # even ZoneInfo("UTC") raises. The read path must not crash, and must
         # not send an unusable timeZone key to Google.
@@ -56,7 +56,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("endTime", arguments)
         self.assertNotIn("timeZone", arguments)
 
-    async def test_structured_create_event_requires_start_and_end_when_title_present(self):
+    async def test_structured_create_event_requires_start_and_end_when_title_present(self) -> None:
         agent = GoogleCalendarAgent(
             llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
         )
@@ -67,7 +67,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("start", result["missing"])
         self.assertIn("end", result["missing"])
 
-    async def test_structured_create_event_calls_calendar_mcp(self):
+    async def test_structured_create_event_calls_calendar_mcp(self) -> None:
         agent = GoogleCalendarAgent(
             llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
         )
@@ -94,7 +94,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_help_is_user_friendly(self):
+    async def test_help_is_user_friendly(self) -> None:
         agent = GoogleCalendarAgent(
             llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
         )
@@ -105,7 +105,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("make an event now for 2 hours", result["result"])
         self.assertNotIn("calendar_mcp_url", result["result"])
 
-    async def test_natural_create_now_for_duration_uses_default_title(self):
+    async def test_natural_create_now_for_duration_uses_default_title(self) -> None:
         agent = GoogleCalendarAgent(
             llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
         )
@@ -120,7 +120,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startTime", arguments)
         self.assertIn("endTime", arguments)
 
-    async def test_create_followup_reuses_pending_request(self):
+    async def test_create_followup_reuses_pending_request(self) -> None:
         agent = GoogleCalendarAgent(
             llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
         )
@@ -148,7 +148,7 @@ class GoogleCalendarCatalogTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
 
-    def test_google_calendar_agent_is_catalog_recipe(self):
+    def test_google_calendar_agent_is_catalog_recipe(self) -> None:
         from wactorz.agents.catalog_agent import CatalogAgent
 
         catalog = CatalogAgent(

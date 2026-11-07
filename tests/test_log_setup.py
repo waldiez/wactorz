@@ -15,6 +15,7 @@ import json
 import logging
 import logging.handlers
 import sys
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 
 import pytest
@@ -25,7 +26,7 @@ from wactorz.node import cli as node_cli
 
 
 @pytest.fixture(autouse=True)
-def _restore_root():
+def _restore_root() -> "Iterator[None]":
     root = logging.getLogger()
     handlers = list(root.handlers)
     level = root.level

@@ -21,6 +21,9 @@ from tests.optional_deps import ensure_importable
 
 ensure_importable("openai")
 
+from collections.abc import AsyncIterator
+from typing import Any
+
 from wactorz.agents.llm_agent import (
     LLMAgent,
     LLMProvider,
@@ -99,14 +102,14 @@ def test_ollama_keeps_the_base_url_it_was_given() -> None:
 class _CompleteOnly(LLMProvider):  # pylint: disable=abstract-method
     """A custom provider that implements only the non-streaming path."""
 
-    async def _complete(self, messages, system="", **kwargs):
+    async def _complete(self, messages, system="", **kwargs) -> tuple[str, dict[str, Any]]:
         return "whole answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 
 class _Streaming(LLMProvider):  # pylint: disable=abstract-method
     """A custom provider that really streams."""
 
-    async def _stream(self, messages, system="", **kwargs):
+    async def _stream(self, messages, system="", **kwargs) -> "AsyncIterator[str]":
         yield "a"
         yield "b"
 

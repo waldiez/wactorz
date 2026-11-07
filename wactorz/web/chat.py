@@ -39,12 +39,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Sends one whole reply, or one chunk of a streamed one.
+Reply = Callable[[str], Awaitable[object]]
+#: Says a streamed reply, and so the turn, is over.
+StreamEnd = Callable[[], Awaitable[object]]
+#: Answers a mention that fits more than one agent: the words, and the addresses to pick from.
+Choices = Callable[[str, tuple[str, ...]], Awaitable[object]]
+
 # In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
 # cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
 
 
-def track_chat_task(task):
+def track_chat_task(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
     """Register an in-flight chat-generation task so /chat/stop can cancel it."""
     inflight_chat_tasks.add(task)
     task.add_done_callback(inflight_chat_tasks.discard)
@@ -334,7 +341,12 @@ def server_forms() -> list[Form]:
     return forms
 
 
-async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) -> bool:
+async def handle_slash(
+    text: str,
+    reply_fn: Reply,
+    stream_fn: Reply | None = None,
+    stream_end_fn: StreamEnd | None = None,
+) -> bool:
     """Dispatch a slash command. Returns True if recognised.
 
     `reply_fn` is an async callable that sends a string back to the user as a
@@ -519,11 +531,11 @@ async def _answer_through(
 
 async def route_chat(
     content: str,
-    reply_fn,
-    stream_fn=None,
-    stream_end_fn=None,
+    reply_fn: Reply,
+    stream_fn: Reply | None = None,
+    stream_end_fn: StreamEnd | None = None,
     attachments: list[dict[str, Any]] | None = None,
-    choices_fn=None,
+    choices_fn: Choices | None = None,
 ) -> None:
     """Route one chat turn, and record how long the person waited for it.
 
@@ -586,11 +598,11 @@ class _Channels(NamedTuple):
 async def _route_chat(
     content: str,
     destination: Destination,
-    reply_fn,
-    stream_fn=None,
-    stream_end_fn=None,
+    reply_fn: Reply,
+    stream_fn: Reply | None = None,
+    stream_end_fn: StreamEnd | None = None,
     attachments: list[dict[str, Any]] | None = None,
-    choices_fn=None,
+    choices_fn: Choices | None = None,
 ) -> None:
     """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
@@ -663,7 +675,9 @@ async def _route_to_orchestrator(destination: Destination, channels: _Channels) 
     )
 
 
-async def _route_elsewhere(destination: Destination, channels: _Channels, choices_fn) -> None:
+async def _route_elsewhere(
+    destination: Destination, channels: _Channels, choices_fn: Choices | None
+) -> None:
     """Send a message for an agent not in this process to its node, or say why it goes nowhere."""
     # Main itself, not the orchestrator: a node is reached over main's broker link.
     main_actor = find_main_actor(runtime.registry)

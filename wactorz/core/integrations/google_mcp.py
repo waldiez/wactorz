@@ -24,10 +24,10 @@ import os
 import secrets
 import sys
 import webbrowser
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
@@ -188,7 +188,7 @@ def _looks_mcp_unavailable(text: str) -> bool:
 
 
 class _GoogleTokenStorage(TokenStorage):
-    def __init__(self, config: GoogleMcpConfig):
+    def __init__(self, config: GoogleMcpConfig) -> None:
         self.config = config
         self.path = Path(config.token_file()).expanduser()
 
@@ -243,7 +243,7 @@ class _GoogleTokenStorage(TokenStorage):
         self._write(data)
 
 
-def _make_redirect_handler(config: GoogleMcpConfig):
+def _make_redirect_handler(config: GoogleMcpConfig) -> Callable[[str], Awaitable[None]]:
     async def _open_oauth_browser(url: str) -> None:
         print(
             f"\n{config.label} MCP OAuth required. Open this URL if the browser does not open:\n{url}\n",
@@ -257,7 +257,9 @@ def _make_redirect_handler(config: GoogleMcpConfig):
     return _open_oauth_browser
 
 
-def _make_callback_handler(config: GoogleMcpConfig):
+def _make_callback_handler(
+    config: GoogleMcpConfig,
+) -> Callable[[], Coroutine[Any, Any, tuple[str, str | None]]]:
     async def _wait_for_oauth_callback() -> tuple[str, str | None]:
         parsed = urlparse(config.redirect_uri())
         host = parsed.hostname or "localhost"
@@ -298,14 +300,14 @@ class NeedsLoginError(RuntimeError):
         super().__init__(f"{label} MCP needs interactive authorization; run login() once first")
 
 
-def _make_noninteractive_handler(config: GoogleMcpConfig):
-    async def _handler(*_args, **_kwargs):
+def _make_noninteractive_handler(config: GoogleMcpConfig) -> Callable[..., Awaitable[NoReturn]]:
+    async def _handler(*_args: Any, **_kwargs: Any) -> NoReturn:
         raise NeedsLoginError(config.label)
 
     return _handler
 
 
-def build_auth(config: GoogleMcpConfig, interactive: bool = False):
+def build_auth(config: GoogleMcpConfig, interactive: bool = False) -> OAuthClientProvider | None:
     """Build an OAuth provider.
 
     With ``interactive=False`` (the default, used for normal tool calls) the
@@ -355,7 +357,7 @@ RestHandler = Callable[[dict], Awaitable[str]]
 class GoogleMcpClient:
     """Base client: hosted MCP first, plain REST fallback on permission-denied."""
 
-    def __init__(self, config: GoogleMcpConfig):
+    def __init__(self, config: GoogleMcpConfig) -> None:
         self.config = config
 
     # ── Subclass hook ──────────────────────────────────────────────────────

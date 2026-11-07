@@ -61,7 +61,7 @@ def db_fixture(monkeypatch: pytest.MonkeyPatch) -> _CountingDB:
 
 
 @pytest.fixture(autouse=True)
-def _state(monkeypatch: pytest.MonkeyPatch):
+def _state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         runtime.state,
         "agents",

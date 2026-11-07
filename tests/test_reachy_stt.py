@@ -7,7 +7,8 @@ import sys
 import threading
 import types
 import unittest
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, NoReturn
 from unittest import mock
 
 import numpy as np
@@ -17,13 +18,13 @@ from wactorz.catalogue_agents.reachy_vad import VADConfig
 
 
 class STTConfigTest(unittest.TestCase):
-    def test_defaults_to_deepgram_nova_3(self):
+    def test_defaults_to_deepgram_nova_3(self) -> None:
         config = reachy_stt.STTConfig.resolve({}, {})
         self.assertEqual(config.backend, "deepgram")
         self.assertEqual(config.model, "nova-3")
         self.assertEqual(config.timeout_s, 60.0)
 
-    def test_payload_overrides_environment(self):
+    def test_payload_overrides_environment(self) -> None:
         config = reachy_stt.STTConfig.resolve(
             {
                 "stt_backend": "whisper",
@@ -38,30 +39,30 @@ class STTConfigTest(unittest.TestCase):
         self.assertEqual(config.language, "el")
         self.assertEqual(config.hotwords, "Reachy, Wactorz")
 
-    def test_deepgram_alias_and_timeout_are_resolved(self):
+    def test_deepgram_alias_and_timeout_are_resolved(self) -> None:
         config = reachy_stt.STTConfig.resolve({"stt_backend": "nova-3", "stt_timeout_s": 15}, {})
         self.assertEqual(config.backend, "deepgram")
         self.assertEqual(config.model, "nova-3")
         self.assertEqual(config.timeout_s, 15.0)
 
-    def test_deepgram_prerecorded_auto_detects_when_language_is_unset(self):
+    def test_deepgram_prerecorded_auto_detects_when_language_is_unset(self) -> None:
         config = reachy_stt.STTConfig.resolve({}, {})
         self.assertTrue(config.detect_language)
 
-    def test_an_explicit_language_disables_detection_by_default(self):
+    def test_an_explicit_language_disables_detection_by_default(self) -> None:
         config = reachy_stt.STTConfig.resolve({"stt_language": "el"}, {})
         self.assertFalse(config.detect_language)
 
-    def test_unknown_backend_fails_clearly(self):
+    def test_unknown_backend_fails_clearly(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown Reachy STT backend"):
             reachy_stt.STTConfig.resolve({"stt_backend": "mystery"}, {})
 
 
 class ProviderAbstractionTest(unittest.TestCase):
-    def tearDown(self):
+    def tearDown(self) -> None:
         reachy_stt._LOCAL_MODELS.clear()
 
-    def test_transcribe_wav_dispatches_to_selected_provider(self):
+    def test_transcribe_wav_dispatches_to_selected_provider(self) -> None:
         backend = mock.AsyncMock()
         backend.transcribe.return_value = " hello from reachy "
         with mock.patch.dict(reachy_stt._BACKENDS, {"whisper": backend}):
@@ -76,16 +77,16 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(result.model, "tiny")
         backend.transcribe.assert_awaited_once()
 
-    def test_faster_whisper_backend_is_lazy_and_local(self):
+    def test_faster_whisper_backend_is_lazy_and_local(self) -> None:
         calls = []
 
         transcribe_calls = []
 
         class Model:
-            def __init__(self, name, **kwargs):
+            def __init__(self, name, **kwargs) -> None:
                 calls.append((name, kwargs))
 
-            def transcribe(self, path, **kwargs):
+            def transcribe(self, path, **kwargs) -> "tuple[list[SimpleNamespace], SimpleNamespace]":
                 transcribe_calls.append((path, kwargs))
                 return [
                     types.SimpleNamespace(
@@ -119,7 +120,7 @@ class ProviderAbstractionTest(unittest.TestCase):
         )
         self.assertEqual(calls, [("tiny", {"device": "cpu", "compute_type": "int8"})])
 
-    def test_whisper_backend_is_lazy_and_local(self):
+    def test_whisper_backend_is_lazy_and_local(self) -> None:
         model = types.SimpleNamespace(
             transcribe=mock.Mock(return_value={"text": " classic whisper "})
         )
@@ -131,13 +132,13 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(text, "classic whisper")
         module.load_model.assert_called_once_with("base", device="cpu")
 
-    def test_openai_backend_requires_key_without_hard_coding_one(self):
+    def test_openai_backend_requires_key_without_hard_coding_one(self) -> None:
         config = reachy_stt.STTConfig("openai", "whisper-1")
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY"):
                 asyncio.run(reachy_stt.OpenAIBackend().transcribe(b"RIFFmock", config))
 
-    def test_openai_backend_posts_named_wav(self):
+    def test_openai_backend_posts_named_wav(self) -> None:
         create = mock.AsyncMock(return_value=types.SimpleNamespace(text=" hosted words "))
         client = types.SimpleNamespace(
             audio=types.SimpleNamespace(transcriptions=types.SimpleNamespace(create=create))
@@ -158,17 +159,17 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(kwargs["model"], "whisper-1")
         self.assertEqual(kwargs["language"], "en")
 
-    def test_deepgram_backend_requires_key(self):
+    def test_deepgram_backend_requires_key(self) -> None:
         config = reachy_stt.STTConfig("deepgram", "nova-3")
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "DEEPGRAM_API_KEY"):
                 asyncio.run(reachy_stt.DeepgramBackend().transcribe(b"RIFFmock", config))
 
-    def test_deepgram_backend_posts_wav_with_nova_options(self):
+    def test_deepgram_backend_posts_wav_with_nova_options(self) -> None:
         option_calls = []
 
         class PrerecordedOptions:
-            def __init__(self, **kwargs):
+            def __init__(self, **kwargs) -> None:
                 option_calls.append(kwargs)
 
         transcribe_file = mock.Mock(
@@ -236,12 +237,12 @@ class ProviderAbstractionTest(unittest.TestCase):
             timeout=timeout,
         )
 
-    def test_deepgram_empty_response_fails_clearly(self):
+    def test_deepgram_empty_response_fails_clearly(self) -> None:
         response = types.SimpleNamespace(results=types.SimpleNamespace(channels=[]))
         with self.assertRaisesRegex(RuntimeError, "no transcription channel"):
             reachy_stt._deepgram_result(response)
 
-    def test_deepgram_batch_request_enables_language_detection(self):
+    def test_deepgram_batch_request_enables_language_detection(self) -> None:
         option_calls = []
         response = types.SimpleNamespace(
             results=types.SimpleNamespace(
@@ -276,7 +277,7 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertTrue(option_calls[0]["detect_language"])
         self.assertNotIn("language", option_calls[0])
 
-    def test_deepgram_streams_reachy_pcm_and_stops_on_speech_final(self):
+    def test_deepgram_streams_reachy_pcm_and_stops_on_speech_final(self) -> None:
         callbacks = {}
         option_calls = []
 
@@ -286,21 +287,21 @@ class ProviderAbstractionTest(unittest.TestCase):
             Error = "error"
 
         class LiveOptions:
-            def __init__(self, **kwargs):
+            def __init__(self, **kwargs) -> None:
                 option_calls.append(kwargs)
 
         class Connection:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.frames = []
                 self.finished = False
 
-            def on(self, event, callback):
+            def on(self, event, callback) -> None:
                 callbacks[event] = callback
 
-            def start(self, _options):
+            def start(self, _options) -> bool:
                 return True
 
-            def send(self, frame):
+            def send(self, frame) -> None:
                 self.frames.append(frame)
                 if len(self.frames) == 4:
                     callbacks[Events.Transcript](
@@ -319,33 +320,33 @@ class ProviderAbstractionTest(unittest.TestCase):
                         )
                     )
 
-            def finish(self):
+            def finish(self) -> None:
                 self.finished = True
 
         class Media:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.samples = [np.full((480, 2), 0.3, np.float32)] * 20
 
-            def start_recording(self):
+            def start_recording(self) -> None:
                 pass
 
-            def stop_recording(self):
+            def stop_recording(self) -> None:
                 pass
 
-            def get_audio_sample(self):
+            def get_audio_sample(self) -> Any:
                 return self.samples.pop(0) if self.samples else None
 
-            def get_input_audio_samplerate(self):
+            def get_input_audio_samplerate(self) -> int:
                 return 16000
 
-            def get_input_channels(self):
+            def get_input_channels(self) -> int:
                 return 2
 
         class Vad:
-            def __init__(self, _mode):
+            def __init__(self, _mode) -> None:
                 pass
 
-            def is_speech(self, _pcm, _samplerate):
+            def is_speech(self, _pcm, _samplerate) -> bool:
                 return True
 
         connection = Connection()
@@ -391,7 +392,7 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(option_calls[0]["endpointing"], 500)
         self.assertEqual(option_calls[0]["utterance_end_ms"], "1200")
 
-    def test_deepgram_finalizes_and_waits_for_a_late_final_result(self):
+    def test_deepgram_finalizes_and_waits_for_a_late_final_result(self) -> None:
         callbacks = {}
         option_calls = []
 
@@ -401,20 +402,20 @@ class ProviderAbstractionTest(unittest.TestCase):
             Error = "error"
 
         class Connection:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.finalized = False
                 self.finished = False
 
-            def on(self, event, callback):
+            def on(self, event, callback) -> None:
                 callbacks[event] = callback
 
-            def start(self, _options):
+            def start(self, _options) -> bool:
                 return True
 
-            def send(self, _frame):
+            def send(self, _frame) -> None:
                 pass
 
-            def finalize(self):
+            def finalize(self) -> bool:
                 self.finalized = True
                 callbacks[Events.Transcript](
                     types.SimpleNamespace(
@@ -433,35 +434,35 @@ class ProviderAbstractionTest(unittest.TestCase):
                 )
                 return True
 
-            def finish(self):
+            def finish(self) -> None:
                 self.finished = True
 
         class Media:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.samples = [np.full((480, 1), 0.3, np.float32)] * 4 + [
                     np.zeros((480, 1), np.float32)
                 ] * 4
 
-            def start_recording(self):
+            def start_recording(self) -> None:
                 pass
 
-            def stop_recording(self):
+            def stop_recording(self) -> None:
                 pass
 
-            def get_audio_sample(self):
+            def get_audio_sample(self) -> Any:
                 return self.samples.pop(0) if self.samples else None
 
-            def get_input_audio_samplerate(self):
+            def get_input_audio_samplerate(self) -> int:
                 return 16000
 
-            def get_input_channels(self):
+            def get_input_channels(self) -> int:
                 return 1
 
         class Vad:
-            def __init__(self, _mode):
+            def __init__(self, _mode) -> None:
                 pass
 
-            def is_speech(self, pcm, _samplerate):
+            def is_speech(self, pcm, _samplerate) -> bool:
                 return bool(np.max(np.abs(np.frombuffer(pcm, dtype="<i2"))) > 1000)
 
         connection = Connection()
@@ -497,7 +498,7 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(turn.transcription.text, "κλείσε μου τα φώτα")
         self.assertEqual(turn.transcription.backend, "deepgram-streaming")
 
-    def test_stream_failure_keeps_capture_for_prerecorded_fallback(self):
+    def test_stream_failure_keeps_capture_for_prerecorded_fallback(self) -> None:
         callbacks = {}
 
         class Events:
@@ -506,44 +507,44 @@ class ProviderAbstractionTest(unittest.TestCase):
             Error = "error"
 
         class Connection:
-            def on(self, event, callback):
+            def on(self, event, callback) -> None:
                 callbacks[event] = callback
 
-            def start(self, _options):
+            def start(self, _options) -> bool:
                 return True
 
-            def send(self, _frame):
+            def send(self, _frame) -> None:
                 callbacks[Events.Error](RuntimeError("socket lost"))
 
-            def finish(self):
+            def finish(self) -> None:
                 pass
 
         class Media:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.samples = [np.full((480, 2), 0.3, np.float32)] * 5 + [
                     np.zeros((480, 2), np.float32)
                 ] * 4
 
-            def start_recording(self):
+            def start_recording(self) -> None:
                 pass
 
-            def stop_recording(self):
+            def stop_recording(self) -> None:
                 pass
 
-            def get_audio_sample(self):
+            def get_audio_sample(self) -> Any:
                 return self.samples.pop(0) if self.samples else None
 
-            def get_input_audio_samplerate(self):
+            def get_input_audio_samplerate(self) -> int:
                 return 16000
 
-            def get_input_channels(self):
+            def get_input_channels(self) -> int:
                 return 2
 
         class Vad:
-            def __init__(self, _mode):
+            def __init__(self, _mode) -> None:
                 pass
 
-            def is_speech(self, pcm, _samplerate):
+            def is_speech(self, pcm, _samplerate) -> bool:
                 return bool(np.max(np.abs(np.frombuffer(pcm, dtype="<i2"))) > 1000)
 
         connection = Connection()
@@ -593,7 +594,7 @@ class _Events:
     Error = "error"
 
 
-def _result(text, *, final, speech_final=False):
+def _result(text, *, final, speech_final=False) -> "SimpleNamespace":
     """One Deepgram live result, as the SDK hands it to a Transcript callback."""
     return types.SimpleNamespace(
         is_final=final,
@@ -609,7 +610,9 @@ def _result(text, *, final, speech_final=False):
 class _ScriptedConnection:
     """A live connection that plays `script[n]` after the n-th frame it is sent."""
 
-    def __init__(self, script=None, *, send_fails_at=None, finalize=None, finish_fails=False):
+    def __init__(
+        self, script=None, *, send_fails_at=None, finalize=None, finish_fails=False
+    ) -> None:
         self.callbacks = {}
         self.script = script or {}
         self.sent = 0
@@ -618,20 +621,20 @@ class _ScriptedConnection:
         if finalize is not None:
             self.finalize = finalize
 
-    def on(self, event, callback):
+    def on(self, event, callback) -> None:
         self.callbacks[event] = callback
 
-    def start(self, _options):
+    def start(self, _options) -> bool:
         return True
 
-    def send(self, _frame):
+    def send(self, _frame) -> None:
         self.sent += 1
         if self.sent == self.send_fails_at:
             raise OSError("socket lost while sending")
         for event, argument in self.script.get(self.sent, []):
             self.callbacks[event](argument)
 
-    def finish(self):
+    def finish(self) -> None:
         if self.finish_fails:
             raise OSError("close failed")
 
@@ -639,37 +642,37 @@ class _ScriptedConnection:
 class _SpeakingMedia:
     """A microphone that hears speech for `frames` frames, then silence."""
 
-    def __init__(self, frames=20):
+    def __init__(self, frames=20) -> None:
         self.samples = [np.full((480, 2), 0.3, np.float32)] * frames
         self.silence = np.zeros((480, 2), np.float32)
 
-    def start_recording(self):
+    def start_recording(self) -> None:
         pass
 
-    def stop_recording(self):
+    def stop_recording(self) -> None:
         pass
 
-    def get_audio_sample(self):
+    def get_audio_sample(self) -> Any:
         return self.samples.pop(0) if self.samples else self.silence
 
-    def get_input_audio_samplerate(self):
+    def get_input_audio_samplerate(self) -> int:
         return 16000
 
-    def get_input_channels(self):
+    def get_input_channels(self) -> int:
         return 2
 
 
 class _LoudIsSpeech:
     """Speech is any frame with sound in it, so the turn ends when the audio does."""
 
-    def __init__(self, _mode):
+    def __init__(self, _mode) -> None:
         pass
 
-    def is_speech(self, pcm, _samplerate):
+    def is_speech(self, pcm, _samplerate) -> bool:
         return any(pcm)
 
 
-def _stream(connection, *, env=None, payload=None, on_interim=None, deepgram=True):
+def _stream(connection, *, env=None, payload=None, on_interim=None, deepgram=True) -> Any:
     """Run one streaming turn against `connection` with Reachy's capture path."""
     module = types.SimpleNamespace(
         DeepgramClient=mock.Mock(
@@ -705,7 +708,7 @@ def _stream(connection, *, env=None, payload=None, on_interim=None, deepgram=Tru
 class StreamingEdgesTest(unittest.TestCase):
     """What a streamed turn does when Deepgram is slow, silent, or breaks."""
 
-    def test_interim_text_is_passed_on_once_per_change(self):
+    def test_interim_text_is_passed_on_once_per_change(self) -> None:
         heard = []
         script = {
             1: [(_Events.Transcript, _result("hel", final=False))],
@@ -720,7 +723,7 @@ class StreamingEdgesTest(unittest.TestCase):
         assert turn.transcription is not None
         self.assertEqual(turn.transcription.text, "hello")
 
-    def test_utterance_end_closes_a_turn_that_has_text(self):
+    def test_utterance_end_closes_a_turn_that_has_text(self) -> None:
         script = {
             2: [(_Events.Transcript, _result("hi there", final=True))],
             3: [(_Events.UtteranceEnd, None)],
@@ -731,7 +734,7 @@ class StreamingEdgesTest(unittest.TestCase):
         assert turn.transcription is not None
         self.assertEqual(turn.transcription.text, "hi there")
 
-    def test_a_result_without_a_channel_is_ignored(self):
+    def test_a_result_without_a_channel_is_ignored(self) -> None:
         script = {1: [(_Events.Transcript, types.SimpleNamespace())]}
 
         turn = _stream(_ScriptedConnection(script))
@@ -739,7 +742,7 @@ class StreamingEdgesTest(unittest.TestCase):
         self.assertIsNone(turn.transcription)
         self.assertIn("no final transcript", turn.error or "")
 
-    def test_a_stream_error_keeps_the_capture(self):
+    def test_a_stream_error_keeps_the_capture(self) -> None:
         script = {2: [(_Events.Error, "server hung up")]}
 
         turn = _stream(_ScriptedConnection(script))
@@ -747,7 +750,7 @@ class StreamingEdgesTest(unittest.TestCase):
         self.assertEqual(turn.error, "server hung up")
         self.assertGreater(turn.capture.audio.size, 0)
 
-    def test_a_failed_send_is_reported_and_sending_stops(self):
+    def test_a_failed_send_is_reported_and_sending_stops(self) -> None:
         connection = _ScriptedConnection(send_fails_at=2)
 
         turn = _stream(connection)
@@ -755,20 +758,20 @@ class StreamingEdgesTest(unittest.TestCase):
         self.assertEqual(turn.error, "socket lost while sending")
         self.assertEqual(connection.sent, 2)
 
-    def test_a_finalize_that_fails_is_reported(self):
+    def test_a_finalize_that_fails_is_reported(self) -> None:
         turn = _stream(_ScriptedConnection(finalize=lambda: False))
 
         self.assertEqual(turn.error, "Deepgram streaming finalize failed")
 
-    def test_a_finalize_that_raises_is_reported(self):
-        def finalize():
+    def test_a_finalize_that_raises_is_reported(self) -> None:
+        def finalize() -> NoReturn:
             raise OSError("finalize broke")
 
         turn = _stream(_ScriptedConnection(finalize=finalize))
 
         self.assertEqual(turn.error, "finalize broke")
 
-    def test_a_close_that_fails_is_reported_when_nothing_else_was(self):
+    def test_a_close_that_fails_is_reported_when_nothing_else_was(self) -> None:
         script = {1: [(_Events.Transcript, _result("ok", final=True, speech_final=True))]}
 
         turn = _stream(_ScriptedConnection(script, finish_fails=True))
@@ -776,21 +779,21 @@ class StreamingEdgesTest(unittest.TestCase):
         self.assertEqual(turn.error, "close failed")
         assert turn.transcription is not None
 
-    def test_streaming_needs_the_deepgram_backend(self):
+    def test_streaming_needs_the_deepgram_backend(self) -> None:
         with self.assertRaises(ValueError):
             _stream(_ScriptedConnection(), payload={"stt_backend": "whisper"})
 
-    def test_streaming_needs_a_key(self):
+    def test_streaming_needs_a_key(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "DEEPGRAM_API_KEY"):
             _stream(_ScriptedConnection(), env={"DEEPGRAM_API_KEY": ""})
 
-    def test_streaming_says_how_to_install_the_sdk(self):
+    def test_streaming_says_how_to_install_the_sdk(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "pip install 'deepgram-sdk"):
             _stream(_ScriptedConnection(), deepgram=False)
 
 
 class BoolSettingTest(unittest.TestCase):
-    def test_unset_takes_the_default_and_words_mean_what_they_say(self):
+    def test_unset_takes_the_default_and_words_mean_what_they_say(self) -> None:
         as_bool = reachy_stt._as_bool
 
         self.assertTrue(as_bool(None, True))

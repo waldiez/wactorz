@@ -2133,7 +2133,9 @@ class FakeScanner:
     #: How many starts fail before one succeeds.
     fail_to_start: ClassVar[int] = 0
 
-    def __init__(self, detection_callback: Callable[[Any, Any], None], service_uuids: list[str]):
+    def __init__(
+        self, detection_callback: Callable[[Any, Any], None], service_uuids: list[str]
+    ) -> None:
         self.callback = detection_callback
         self.service_uuids = service_uuids
         self.started = 0

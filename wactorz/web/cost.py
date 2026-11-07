@@ -10,6 +10,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..agents.llm.cost import get_global_alltime_cost
 from . import db_writer, runtime
@@ -78,7 +79,7 @@ def ensure_lifetime_loaded() -> None:
     _take_ledger(_read_ledger())
 
 
-def record_lifetime_cost(agent_id: str, cost_usd) -> None:
+def record_lifetime_cost(agent_id: str, cost_usd: Any) -> None:
     """Bank an agent's reported lifetime cost as a monotonic high-water mark.
     Persisted durably so deletion / hard kills never drop it from the total.
 
@@ -246,7 +247,7 @@ def final_costs() -> dict[str, float]:
     return found
 
 
-def _final_cost_from_db(name: str):
+def _final_cost_from_db(name: str) -> Any:
     """Read the persisted _final_cost cost_usd for an agent name, or None."""
     if runtime.db is None or not name:
         return None
@@ -259,7 +260,7 @@ def _final_cost_from_db(name: str):
     return None
 
 
-def actor_cost(actor, ag: dict, stored: Mapping[str, float] | None = None):
+def actor_cost(actor: Any, ag: dict, stored: Mapping[str, float] | None = None) -> Any:
     """Return the most accurate cost available.
 
     MQTT-derived first, then live object, then SQLite: from ``stored`` when the
@@ -277,7 +278,7 @@ def actor_cost(actor, ag: dict, stored: Mapping[str, float] | None = None):
     return _final_cost_from_db(name)
 
 
-def best_cost(ag, actor, name: str) -> float:
+def best_cost(ag: Mapping[str, Any] | None, actor: Any, name: str) -> float:
     """Resolve an agent's cost the SAME way the cards do (_actor_cost): MQTT
     state first, then the live actor object, then the persisted _final_cost row.
     Returns 0.0 when nothing is known so it can be summed safely. The headline
@@ -301,7 +302,7 @@ def best_cost(ag, actor, name: str) -> float:
     return _stored.final_costs.get(name, 0.0)
 
 
-def best_msgs(ag, actor) -> int:
+def best_msgs(ag: Mapping[str, Any] | None, actor: Any) -> int:
     """Resolve message count: MQTT state first, then the live actor's metrics."""
     if ag is not None:
         m = ag.get("messages_processed")

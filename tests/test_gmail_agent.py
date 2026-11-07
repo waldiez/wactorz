@@ -17,10 +17,10 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
 
-    def _agent(self):
+    def _agent(self) -> "GmailAgent":
         return GmailAgent(llm_provider=None, persistence_dir=f"{self._tmp.name}/test-gmail")
 
-    async def test_unread_searches_is_unread(self):
+    async def test_unread_searches_is_unread(self) -> None:
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="• Bob — Hi")
 
@@ -31,7 +31,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool, "search_threads")
         self.assertEqual(args["query"], "is:unread")
 
-    async def test_from_sender_builds_query(self):
+    async def test_from_sender_builds_query(self) -> None:
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="results")
 
@@ -41,7 +41,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool, "search_threads")
         self.assertIn("from:stripe@stripe.com", args["query"])
 
-    async def test_labels(self):
+    async def test_labels(self) -> None:
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="Your labels:\n• INBOX")
 
@@ -51,14 +51,14 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         tool, _ = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "list_labels")
 
-    async def test_help_is_user_friendly(self):
+    async def test_help_is_user_friendly(self) -> None:
         agent = self._agent()
         result = await agent._process({"text": "what can you do"})
         self.assertIn("Gmail", result["result"])
         self.assertIn("draft", result["result"].lower())
         self.assertNotIn("gmail_mcp_url", result["result"])
 
-    async def test_draft_followup_reuses_pending(self):
+    async def test_draft_followup_reuses_pending(self) -> None:
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="Draft to sam@x.com created: 'Hi'.")
 
@@ -73,7 +73,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args["to"], "sam@x.com")
         self.assertIn("running 10 min late", args["body"])
 
-    async def test_draft_followup_bare_reply_is_body(self):
+    async def test_draft_followup_bare_reply_is_body(self) -> None:
         # "make an email to X" then a plain reply should become the body.
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(
@@ -91,7 +91,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args["to"], "sam@x.com")
         self.assertEqual(args["body"], "Bloop")
 
-    async def test_read_intent_routes_to_read_email(self):
+    async def test_read_intent_routes_to_read_email(self) -> None:
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="From: Trello …\n\nbody text")
 
@@ -102,7 +102,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool, "read_email")
         self.assertEqual(args["query"], "trello")
 
-    async def test_structured_search_operation(self):
+    async def test_structured_search_operation(self) -> None:
         agent = self._agent()
         agent.client.call_tool = mock.AsyncMock(return_value="found")
 
@@ -123,7 +123,7 @@ class GmailCatalogTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
 
-    def test_gmail_agent_is_catalog_recipe(self):
+    def test_gmail_agent_is_catalog_recipe(self) -> None:
         from wactorz.agents.catalog_agent import CatalogAgent
 
         catalog = CatalogAgent(

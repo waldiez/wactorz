@@ -58,6 +58,8 @@ import urllib.parse
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from wactorz.agents.dynamic.api import AgentAPI
+
 logger = logging.getLogger("manual-agent")
 
 TRUSTED_SITES = [
@@ -169,7 +171,7 @@ _STOPWORDS = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def setup(agent) -> None:
+async def setup(agent: AgentAPI) -> None:
     agent.state.setdefault("manual_text", None)
     agent.state.setdefault("manual_device", None)
     agent.state.setdefault("manual_url", None)
@@ -188,7 +190,7 @@ async def setup(agent) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def handle_task(agent, payload: str | dict[str, Any]) -> dict[str, Any]:
+async def handle_task(agent: AgentAPI, payload: str | dict[str, Any]) -> dict[str, Any]:
     """Handle a task.
 
     Two entry modes:
@@ -261,7 +263,7 @@ async def handle_task(agent, payload: str | dict[str, Any]) -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _dispatch_action(agent, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch_action(agent: AgentAPI, action: str, payload: dict[str, Any]) -> dict[str, Any]:
     if action == "load_manual":
         device = payload.get("device") or payload.get("query") or payload.get("text", "")
         if not device:
@@ -345,7 +347,7 @@ explanation, no extra keys beyond {tool, device, question}.
 """
 
 
-async def _llm_route(agent, text: str) -> dict[str, Any]:
+async def _llm_route(agent: AgentAPI, text: str) -> dict[str, Any]:
     """Ask the LLM which tool to call, then call it."""
     loaded_device = agent.state.get("manual_device")
     loaded_pages = agent.state.get("manual_pages", 0)
@@ -360,8 +362,12 @@ async def _llm_route(agent, text: str) -> dict[str, Any]:
 
     await agent.log(f"Routing via LLM: {text!r}")
 
+    # The caller routes here only with an LLM; without one, the heuristic answers.
+    llm = agent.llm
+    if llm is None:
+        return await _heuristic_route(agent, text)
     try:
-        raw = await agent.llm.complete(
+        raw = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             system=_ROUTER_SYSTEM,
         )
@@ -471,7 +477,7 @@ _LOAD_RE = re.compile(
 )
 
 
-async def _heuristic_route(agent, text: str) -> dict[str, Any]:
+async def _heuristic_route(agent: AgentAPI, text: str) -> dict[str, Any]:
     """No-LLM fallback. Tries to do the right thing with regex/keywords."""
     if _CLEAR_RE.search(text):
         return await _dispatch_action(agent, "clear", {})
@@ -509,7 +515,9 @@ async def _heuristic_route(agent, text: str) -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _load_manual_async(agent, device: str, explicit_url: str | None = None) -> dict[str, Any]:
+async def _load_manual_async(
+    agent: AgentAPI, device: str, explicit_url: str | None = None
+) -> dict[str, Any]:
     """User-facing load.
 
     The full search + download + extract can run well past the
@@ -528,7 +536,7 @@ async def _load_manual_async(agent, device: str, explicit_url: str | None = None
     return await _load_manual(agent, device, explicit_url=explicit_url)
 
 
-async def _load_manual_bg(agent, device: str, explicit_url: str | None = None) -> None:
+async def _load_manual_bg(agent: AgentAPI, device: str, explicit_url: str | None = None) -> None:
     """Run the slow load, then notify the user with the outcome."""
     try:
         result = await _load_manual(agent, device, explicit_url=explicit_url)
@@ -558,7 +566,9 @@ def _ack_load(device: str) -> dict[str, Any]:
     }
 
 
-async def _load_manual(agent, device: str, explicit_url: str | None = None) -> dict[str, Any]:
+async def _load_manual(
+    agent: AgentAPI, device: str, explicit_url: str | None = None
+) -> dict[str, Any]:
     """Try to load a manual for ``device``.
 
     On failure, ask the LLM for spelling/
@@ -606,7 +616,7 @@ async def _load_manual(agent, device: str, explicit_url: str | None = None) -> d
     return last_result
 
 
-async def _suggest_device_variants(agent, device: str) -> list[str]:
+async def _suggest_device_variants(agent: AgentAPI, device: str) -> list[str]:
     """Ask the LLM for up to 3 alternate spellings/forms of the device name
 
     Ordered most-likely first. Returns [] on any failure so the caller can
@@ -626,8 +636,11 @@ async def _suggest_device_variants(agent, device: str) -> list[str]:
         f"Return ONLY a JSON array of strings — no prose, no markdown.\n"
         f'Example output: ["Philips EP2200", "Philips 2200 series"]'
     )
+    llm = agent.llm
+    if llm is None:
+        return []
     try:
-        raw = await agent.llm.complete(
+        raw = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             system="You are a device-naming expert. Return only valid JSON.",
         )
@@ -655,7 +668,9 @@ async def _suggest_device_variants(agent, device: str) -> list[str]:
     return []
 
 
-async def _load_manual_once(agent, device: str, explicit_url: str | None = None) -> dict[str, Any]:
+async def _load_manual_once(
+    agent: AgentAPI, device: str, explicit_url: str | None = None
+) -> dict[str, Any]:
     await agent.log(f"Searching for manual: {device}")
 
     loop = asyncio.get_event_loop()
@@ -768,7 +783,7 @@ async def _load_manual_once(agent, device: str, explicit_url: str | None = None)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _find_manual_candidates(agent, device: str) -> list[str]:
+def _find_manual_candidates(agent: AgentAPI, device: str) -> list[str]:
     """Returns an ORDERED list of candidate URLs (best first).
 
     The loader tries
@@ -841,7 +856,7 @@ def _find_manual_candidates(agent, device: str) -> list[str]:
     return candidates
 
 
-def _ddgs_collect(agent, device: str) -> list[str]:
+def _ddgs_collect(agent: AgentAPI, device: str) -> list[str]:
     """Run DDGS queries, return ALL plausible manual URLs (best-tier first)."""
     queries = [
         f"{device} user manual filetype:pdf",
@@ -849,7 +864,7 @@ def _ddgs_collect(agent, device: str) -> list[str]:
         f"{device} owner manual PDF download",
     ]
 
-    def get_url(r):
+    def get_url(r: dict[str, Any]) -> str:
         return r.get("href") or r.get("url") or r.get("link") or ""
 
     out: list[str] = []
@@ -898,7 +913,7 @@ def _ddgs_collect(agent, device: str) -> list[str]:
     return out
 
 
-def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
+def _ddg_html_scrape(agent: AgentAPI, device: str, headers: dict[str, Any]) -> list[str]:
     """HTML-search-engine scraping with rate-limit handling.
 
     Strategy:
@@ -1041,7 +1056,9 @@ def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
     return deduped
 
 
-def _rank_manual_urls(results, get_url_fn: Callable[[str], str]) -> list[str]:
+def _rank_manual_urls(
+    results: list[dict[str, Any]], get_url_fn: Callable[[dict[str, Any]], str]
+) -> list[str]:
     """Take a list of search-result dicts and return URLs.
 
     In priority order:
@@ -1115,7 +1132,7 @@ def _public_address(url: str) -> bool:
     )
 
 
-async def _fetch_public(agent, client, url: str) -> tuple[int, str, bytes] | None:
+async def _fetch_public(agent: AgentAPI, client: Any, url: str) -> tuple[int, str, bytes] | None:
     """GET ``url`` as (status, content type, body), or None if it may not be fetched.
 
     Redirects are followed here rather than by the client, so every hop is
@@ -1141,7 +1158,7 @@ async def _fetch_public(agent, client, url: str) -> tuple[int, str, bytes] | Non
     return None
 
 
-async def _download_pdf(agent, url: str) -> bytes | None:
+async def _download_pdf(agent: AgentAPI, url: str) -> bytes | None:
     try:
         import httpx  # optional dependency: installed with the recipe
     except ImportError:
@@ -1187,7 +1204,7 @@ async def _download_pdf(agent, url: str) -> bytes | None:
 _MAX_PAGES_EXTRACTED = 80
 
 
-def _extract_text(agent, pdf_bytes: bytes) -> tuple[str, int]:
+def _extract_text(agent: AgentAPI, pdf_bytes: bytes) -> tuple[str, int]:
 
     # ── Strategy 1: PyMuPDF (fitz) — fast, used by the doc-to-pptx agent too ─
     try:
@@ -1254,7 +1271,7 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple[str, int]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _ask(agent, question: str) -> dict[str, Any]:
+async def _ask(agent: AgentAPI, question: str) -> dict[str, Any]:
     manual_text = agent.state.get("manual_text")
     if not manual_text:
         return {
@@ -1329,7 +1346,7 @@ async def _ask(agent, question: str) -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _status(agent) -> dict[str, Any]:
+def _status(agent: AgentAPI) -> dict[str, Any]:
     device = agent.state.get("manual_device")
     if not device:
         return {"status": "idle", "result": "No manual loaded."}
@@ -1375,7 +1392,7 @@ def _keywords(text: str) -> list[str]:
     return [w for w in words if w not in _STOPWORDS and len(w) > 2]
 
 
-def _chunk_text(text: str, chunk_size=600, overlap=100) -> list[str]:
+def _chunk_text(text: str, chunk_size: int = 600, overlap: int = 100) -> list[str]:
     words = text.split()
     chunks = []
     i = 0

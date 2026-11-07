@@ -24,6 +24,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 try:
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -235,7 +236,7 @@ TEMPLATE = """\
 # ── Markdown renderer ──────────────────────────────────────────────────────────
 
 
-def _ensure_markdown():
+def _ensure_markdown() -> bool:
     try:
         import markdown  # noqa: F401
 
@@ -630,12 +631,12 @@ def serve(port: int = 8001, full: bool = False, reload: bool = False) -> None:
     handler = http.server.SimpleHTTPRequestHandler
 
     class _Handler(handler):
-        def log_message(self, fmt, *args):
+        def log_message(self, fmt: str, *args: Any) -> None:
             msg = str(args[0]) if args else ""
             if not any(x in msg for x in (".js", ".css", ".woff", ".png", ".ico", ".svg")):
                 super().log_message(fmt, *args)
 
-        def translate_path(self, path):
+        def translate_path(self, path: str) -> str:
             # strip query string
             path = path.split("?", 1)[0].split("#", 1)[0]
             result = super().translate_path(path)

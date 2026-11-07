@@ -17,9 +17,10 @@ import asyncio
 import dataclasses
 import os
 import socket
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, NoReturn, cast
 
 import asyncssh
 import pytest
@@ -40,7 +41,7 @@ SECRET = "hunter2-should-never-appear"
 
 
 @pytest.fixture
-def targets(monkeypatch: pytest.MonkeyPatch):
+def targets(monkeypatch: pytest.MonkeyPatch) -> "Callable[..., Any]":
     """Install the configured deploy targets (and any host-key settings) for a test.
 
     Both modules are patched: the lookup helpers read ``config.CONFIG``, while
@@ -318,7 +319,7 @@ def test_deploy_never_opens_a_connection_to_a_host_it_was_not_configured_for(
 
     monkeypatch.setattr(socket, "gethostbyname", _resolve)
 
-    async def _opened(*args, **kwargs):  # pragma: no cover - must never run
+    async def _opened(*args, **kwargs) -> NoReturn:  # pragma: no cover - must never run
         raise AssertionError(f"deploy opened a raw connection: {args} {kwargs}")
 
     monkeypatch.setattr(asyncio, "open_connection", _opened)
@@ -430,7 +431,7 @@ async def test_host_keys_are_always_verified(
     assert kwargs["client_keys"] == ["/keys/kitchen"]
 
 
-def _fake_known_hosts(tmp_path: Path):
+def _fake_known_hosts(tmp_path: Path) -> "Callable[..., Any]":
     async def _known_hosts(_host: str, _port: int) -> str:
         return str(tmp_path / "known_hosts")
 
@@ -453,7 +454,7 @@ async def test_first_contact_learns_the_key_then_verifies_against_it(
     key = asyncssh.generate_private_key("ssh-ed25519")
     fetches: list[str] = []
 
-    async def _fetch(host: str, port: int):
+    async def _fetch(host: str, port: int) -> Any:
         fetches.append(host)
         return key.convert_to_public()
 
@@ -538,7 +539,7 @@ async def test_deploy_refuses_an_unusable_name_before_touching_the_network(
     """No SSH, no upload, no runner started — and no success reported."""
     targets(DeployTarget(name="rpi-kitchen#", host="10.0.0.5", password="pw"))
 
-    async def _no_ssh(*_args, **_kwargs):  # pragma: no cover - must never run
+    async def _no_ssh(*_args, **_kwargs) -> NoReturn:  # pragma: no cover - must never run
         raise AssertionError("deploy connected despite an unusable node name")
 
     monkeypatch.setattr(installer_module.asyncssh, "connect", _no_ssh)
@@ -557,7 +558,7 @@ async def test_deploy_refuses_a_name_that_already_means_main(
     # never be moved to.
     targets(DeployTarget(name=taken, host="127.0.0.1", password="pw"))
 
-    async def _no_ssh(*_args, **_kwargs):  # pragma: no cover - must never run
+    async def _no_ssh(*_args, **_kwargs) -> NoReturn:  # pragma: no cover - must never run
         raise AssertionError("deploy connected despite a name that means main")
 
     monkeypatch.setattr(installer_module.asyncssh, "connect", _no_ssh)
@@ -593,7 +594,7 @@ class _FakeSftpClient:
     async def put(self, _local: str, remote: str) -> None:
         self.uploads.append(remote)
 
-    def open(self, path: str, _mode: str):
+    def open(self, path: str, _mode: str) -> Any:
         self.opened.append(path)
         outer = self
 
@@ -627,7 +628,7 @@ class _FakeConn:
     async def __aexit__(self, *_exc: object) -> None:
         return None
 
-    async def run(self, command: str, check: bool = False):
+    async def run(self, command: str, check: bool = False) -> "SimpleNamespace":
         self.commands.append(command)
         stdout = self.home if "cd ~ && pwd" in command else ""
         # `id -u` non-zero keeps the ladder off the root rung; the point of
@@ -743,7 +744,7 @@ async def test_a_changed_host_key_is_rejected(
     original_key = asyncssh.generate_private_key("ssh-ed25519")
     other_key = asyncssh.generate_private_key("ssh-ed25519")
 
-    async def _serve(host_key):
+    async def _serve(host_key) -> Any:
         return await asyncssh.create_server(
             _PasswordServer, "127.0.0.1", unused_tcp_port, server_host_keys=[host_key]
         )

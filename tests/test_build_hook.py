@@ -13,13 +13,15 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import ModuleType
+from typing import NoReturn
 
 import pytest
 
 _HOOK_PATH = Path(__file__).resolve().parents[1] / "scripts" / "hooks" / "build_hook.py"
 
 
-def _load_hook():
+def _load_hook() -> "ModuleType":
     """Import the hook module by path — it lives outside the package."""
     spec = importlib.util.spec_from_file_location("wactorz_build_hook", _HOOK_PATH)
     assert spec and spec.loader
@@ -119,7 +121,7 @@ class TestFingerprint:
         assert hook._input_fingerprint(_frontend(project)) != before
 
     def test_unwritable_cache_is_not_fatal(self, project: Path, monkeypatch) -> None:
-        def _boom(*_args, **_kwargs):
+        def _boom(*_args, **_kwargs) -> NoReturn:
             raise OSError("read-only")
 
         monkeypatch.setattr(Path, "mkdir", _boom)

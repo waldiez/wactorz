@@ -11,7 +11,7 @@ from wactorz.core.actor import Message, MessageType
 
 
 class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
-    async def test_on_start_refreshes_map_and_persists_latest_payload(self):
+    async def test_on_start_refreshes_map_and_persists_latest_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = HomeAssistantMapAgent(
                 name="home-assistant-map-agent-test",
@@ -44,7 +44,7 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(agent.recall("latest_map_payload"), payload)
             self.assertEqual(agent.metrics.tasks_completed, 1)
 
-    async def test_refresh_dispatches_map_update_and_replies(self):
+    async def test_refresh_dispatches_map_update_and_replies(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = HomeAssistantMapAgent(
                 name="home-assistant-map-agent-test",
@@ -80,7 +80,7 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(agent.recall("latest_map_payload"), payload)
             self.assertEqual(agent.metrics.tasks_completed, 1)
 
-    async def test_refresh_simple_dispatches_map_update_without_states(self):
+    async def test_refresh_simple_dispatches_map_update_without_states(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             agent = HomeAssistantMapAgent(
                 name="home-assistant-map-agent-test",
@@ -114,7 +114,7 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
             agent.send.assert_awaited_once_with("sender-1", MessageType.RESULT, payload)
             self.assertEqual(agent.metrics.tasks_completed, 1)
 
-    async def test_dispatcher_chunks_oversized_payloads_on_same_topic(self):
+    async def test_dispatcher_chunks_oversized_payloads_on_same_topic(self) -> None:
         fake_agent = types.SimpleNamespace(
             name="home-assistant-map-agent-test",
             _registry=None,
@@ -170,7 +170,7 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
         rebuilt_payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
         self.assertEqual(rebuilt_payload, payload)
 
-    def test_chunk_builder_respects_4kb_limit_with_double_digit_chunk_indexes(self):
+    def test_chunk_builder_respects_4kb_limit_with_double_digit_chunk_indexes(self) -> None:
         fake_agent = types.SimpleNamespace(
             name="home-assistant-map-agent-test",
             _registry=None,

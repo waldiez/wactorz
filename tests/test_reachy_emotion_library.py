@@ -13,7 +13,7 @@ import asyncio
 import sys
 import types
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
@@ -75,7 +75,7 @@ class TestTheProbeFindsTheClipsWhateverTheAccessorIsCalled:
         assert sorted(load_names(moves)) == sorted(CLIPS)
 
     def test_an_accessor_that_raises_falls_through_to_the_next(self) -> None:
-        def broken():
+        def broken() -> NoReturn:
             raise RuntimeError("not in this version")
 
         moves = types.SimpleNamespace(list_moves=broken, moves=dict.fromkeys(CLIPS, object()))
@@ -124,7 +124,7 @@ class TestSetupSurvivesALibraryItCannotRead:
         agent.state["moves"] = None
         agent.state["emotion_names"] = []
 
-        async def scenario():
+        async def scenario() -> None:
             try:
                 raise RuntimeError("dataset unreachable")
             except Exception as exc:

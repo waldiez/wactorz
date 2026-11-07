@@ -11,9 +11,12 @@ separate binding and patching it does not reach this code.
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...core.persistence import get_db
+
+if TYPE_CHECKING:
+    from ...core.persistence import WactorzDB
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ _GLOBAL_COST_ALLTIME_KEY = "_global_cost_alltime"
 _ALLTIME_SEED_KEY = "_global_cost_alltime_seeded"
 
 
-def _known_persisted_cost_total(db) -> float:
+def _known_persisted_cost_total(db: "WactorzDB") -> float:
     """Best available durable lifetime cost, used only for one-time migration."""
     total = 0.0
     try:
@@ -73,7 +76,7 @@ def _known_persisted_cost_total(db) -> float:
     return round(total, 6)
 
 
-def _bootstrap_active_global_cost(db, period: str) -> None:
+def _bootstrap_active_global_cost(db: "WactorzDB", period: str) -> None:
     """Top up the active period counter once when upgrading stored cost data.
 
     Older builds can have durable _final_cost / lifetime-ledger rows but no
@@ -100,7 +103,7 @@ def _bootstrap_active_global_cost(db, period: str) -> None:
         logger.debug("[cost-limit] bootstrap failed (%s): %s", period, exc)
 
 
-def _seed_alltime_cost(db) -> None:
+def _seed_alltime_cost(db: "WactorzDB") -> None:
     """Seed the all-time counter once from existing durable totals.
 
     Installs that predate this counter have _final_cost / lifetime-ledger data but

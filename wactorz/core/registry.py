@@ -321,7 +321,7 @@ class Supervisor:
         registry: ActorRegistry,
         inject_fn: Callable[[Actor], None],
         poll_interval: float = 2.0,
-    ):
+    ) -> None:
         self._registry = registry
         self._inject = inject_fn  # sets MQTT client + broker/port on actor
         self._poll_interval = poll_interval  # seconds between liveness checks
@@ -394,7 +394,7 @@ class Supervisor:
         spec.actor = actor
         actor.supervisor_id = str(id(self))
 
-    def release(self, name: str):
+    def release(self, name: str) -> None:
         """Voluntarily remove an actor from supervision — the Erlang 'unlink' equivalent.
 
         Call this BEFORE sending a stop or delete command to an actor so the
@@ -559,7 +559,7 @@ class Supervisor:
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
-    async def start(self):
+    async def start(self) -> None:
         """Spawn all supervised actors and start the watch loop."""
         for name, spec in self._entries():
             actor = await self._spawn_actor(name, spec)
@@ -586,7 +586,7 @@ class Supervisor:
     SLOW_RETRY_DELAY = 300.0  # seconds
     MAX_SLOW_RETRY_DELAY = 3600.0  # seconds
 
-    async def _watch_loop(self):
+    async def _watch_loop(self) -> None:
         """Poll supervised actors for failure and start their restarts.
 
         Detection runs under the lock; restarts run as tasks of their own. A
@@ -723,7 +723,7 @@ class Supervisor:
 
     # ── Strategy application ─────────────────────────────────────────────────
 
-    async def _apply_strategy(self, crashed_name: str, crashed_spec: SupervisedSpec):
+    async def _apply_strategy(self, crashed_name: str, crashed_spec: SupervisedSpec) -> None:
         """Restart the actors the strategy calls for.
 
         Skipped: retired specs -- deliberately stopped or deleted, and restarting
@@ -814,7 +814,7 @@ class Supervisor:
             )
         return min(spec.restart_delay * 2 ** max(spec.crash_streak - 1, 0), self.MAX_RESTART_DELAY)
 
-    async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True):
+    async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True) -> None:
         """Restart one actor, after a delay that grows while it keeps crashing.
 
         The old actor is stopped before the wait, not after it. A FAILED actor
@@ -930,7 +930,7 @@ class Supervisor:
         """
         return self._specs.get(name) is spec and not spec.retired
 
-    async def _stop_actor(self, name: str, spec: SupervisedSpec):
+    async def _stop_actor(self, name: str, spec: SupervisedSpec) -> None:
         """Stop an actor gracefully, unregister it, swallow errors."""
         actor = spec.actor
         if actor is None:
@@ -964,7 +964,7 @@ class Supervisor:
         while self._held_reports and main.offer(self._held_reports[0]):
             self._held_reports.popleft()
 
-    async def _notify_main(self, message: str, severity: str = "critical"):
+    async def _notify_main(self, message: str, severity: str = "critical") -> None:
         """Send a supervision event to MainActor via the actor message queue.
 
         Uses MessageType.TASK with _monitor_notification=True so main's
@@ -1054,7 +1054,7 @@ class Supervisor:
             )
         return result
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop supervising, then stop every supervised actor."""
         if self._watch_task and self._watch_task is not asyncio.current_task():
             # Awaited, not just cancelled: restarts now run outside the lock, so
@@ -1099,7 +1099,7 @@ class ActorSystem:
 
     def __init__(
         self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, state_dir: str | None = None
-    ):
+    ) -> None:
         self.registry = ActorRegistry()
         self._mqtt_broker = mqtt_broker
         self._mqtt_port = mqtt_port
@@ -1114,7 +1114,7 @@ class ActorSystem:
         # halfway through the object's life.
         self.topic_bus = None
 
-    def _inject(self, actor: Actor):
+    def _inject(self, actor: Actor) -> None:
         """Inject MQTT client + broker/port into an actor so it can publish and subscribe."""
         actor._mqtt_client = self._mqtt_client
         actor._mqtt_broker = self._mqtt_broker
@@ -1140,7 +1140,7 @@ class ActorSystem:
             "client_id": getattr(self._mqtt_client, "_client_id", "?"),
         }
 
-    async def start(self, *initial_actors: Actor):
+    async def start(self, *initial_actors: Actor) -> None:
         """Bring the system up: MQTT, topic bus, the given actors, supervision."""
         self._running = True
 
@@ -1165,7 +1165,7 @@ class ActorSystem:
 
         logger.info("[ActorSystem] Started with %s actors.", len(initial_actors))
 
-    async def spawn(self, actor_class: type[Actor], **kwargs) -> Actor:
+    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
         """Spawn and register a new actor in the system."""
         actor = actor_class(**kwargs)
         self._inject(actor)
@@ -1173,7 +1173,7 @@ class ActorSystem:
         await actor.start()
         return actor
 
-    async def stop_all(self):
+    async def stop_all(self) -> None:
         """Shut everything down in reverse: supervisor, actors, then MQTT."""
         self._running = False
         self.stopping = True
@@ -1188,7 +1188,7 @@ class ActorSystem:
         gc.collect()  # break aiomqtt↔paho ref cycle while loop is open
         logger.info("[ActorSystem] All actors stopped.")
 
-    async def run_forever(self):
+    async def run_forever(self) -> None:
         """Block until the system is stopped or interrupted.
 
         A cancellation stops everything and is then raised on: the caller

@@ -22,11 +22,14 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from wactorz.core.addresses import parse
 from wactorz.core.paths import resolve_state_dir
 from wactorz.web.uploads import UPLOADS_DIRNAME, discard
+
+if TYPE_CHECKING:
+    from wactorz.core.persistence import PickleStore, WactorzDB
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +56,13 @@ _DEFAULT_STATE = resolve_state_dir()
 _DEFAULT_DB = Path(_DEFAULT_STATE) / "wactorz.db"
 
 
-def _db(db_path: str | None = None):
+def _db(db_path: str | None = None) -> "WactorzDB":
     from wactorz.core.persistence import WactorzDB
 
     return WactorzDB(db_path or _DEFAULT_DB)
 
 
-def _pickle_store(state_dir: str | None = None):
+def _pickle_store(state_dir: str | None = None) -> "PickleStore":
     from wactorz.core.persistence import PickleStore
 
     return PickleStore(state_dir or _DEFAULT_STATE)

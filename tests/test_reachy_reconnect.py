@@ -25,13 +25,14 @@ import sys
 import threading
 import types
 import unittest
-from typing import Any
+from types import ModuleType, SimpleNamespace
+from typing import Any, NoReturn
 from unittest import mock
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
 
 
-def _load_recipe_namespace():
+def _load_recipe_namespace() -> dict[Any, Any]:
     ns: dict = {}
     exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), ns)
     return ns
@@ -43,7 +44,7 @@ NS = _load_recipe_namespace()
 _FAKE_REACHY_SDK = None
 
 
-def setUpModule():
+def setUpModule() -> None:
     """Provide a minimal SDK module while testing reconnect without hardware."""
     global _FAKE_REACHY_SDK
     try:
@@ -59,7 +60,7 @@ def setUpModule():
         sys.modules["reachy_mini"] = sdk
 
 
-def tearDownModule():
+def tearDownModule() -> None:
     if _FAKE_REACHY_SDK is not None and sys.modules.get("reachy_mini") is _FAKE_REACHY_SDK:
         sys.modules.pop("reachy_mini", None)
 
@@ -67,7 +68,7 @@ def tearDownModule():
 class FakeAgent:
     """Just enough of the actor surface for the reconnect path."""
 
-    def __init__(self, mini=None, robot_host="192.168.68.64", connection_mode="network"):
+    def __init__(self, mini=None, robot_host="192.168.68.64", connection_mode="network") -> None:
         self.state = {
             "mini": mini,
             "robot_host": robot_host,
@@ -87,35 +88,35 @@ class FakeAgent:
         self.persisted: dict = {}
         self.background: list[asyncio.Task] = []
 
-    async def publish(self, topic, payload):
+    async def publish(self, topic, payload) -> None:
         self.published.append((topic, payload))
 
-    async def log(self, msg, level="info"):
+    async def log(self, msg, level="info") -> None:
         self.logs.append(msg)
 
-    async def alert(self, msg, severity="info"):
+    async def alert(self, msg, severity="info") -> None:
         self.alerts.append(msg)
 
-    def recall(self, key, default=None):
+    def recall(self, key, default=None) -> Any | None:
         return self.persisted.get(key, default)
 
-    def persist(self, key, value):
+    def persist(self, key, value) -> None:
         self.persisted[key] = value
 
-    def run_in_background(self, coro):
+    def run_in_background(self, coro) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
         self.background.append(task)
         return task
 
-    def events(self):
+    def events(self) -> list[Any]:
         return [p for t, p in self.published if t == "custom/reachy/events"]
 
 
-def _run(coro):
+def _run(coro) -> Any:
     return asyncio.run(coro)
 
 
-def _fake_mini():
+def _fake_mini() -> "SimpleNamespace":
     """A live-looking SDK handle: connected, wakes, exits cleanly."""
     mini = types.SimpleNamespace()
     mini.connected = True
@@ -132,7 +133,7 @@ def _fake_mini():
 
 
 class ReconnectCommandTest(unittest.TestCase):
-    def test_remote_conversation_audio_config_uses_daemon(self):
+    def test_remote_conversation_audio_config_uses_daemon(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         agent.state["mini"].media.audio.daemon_url = "http://robot/"
         response = mock.Mock()
@@ -152,7 +153,7 @@ class ReconnectCommandTest(unittest.TestCase):
         self.assertEqual(params["PP_MGSCALE"], [4.0, 1.0, 1.0])
         self.assertNotIn("PP_NLATTENONOFF", params)
 
-    def test_failed_audio_config_disables_automatic_barge_in(self):
+    def test_failed_audio_config_disables_automatic_barge_in(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         agent.state["mini"].media.audio.daemon_url = "http://robot"
 
@@ -163,11 +164,11 @@ class ReconnectCommandTest(unittest.TestCase):
         self.assertFalse(agent.state["conversation_echo_control"])
         self.assertTrue(any("Voice interruption is unavailable" in line for line in agent.logs))
 
-    def test_reconnect_opens_link_and_brings_robot_up(self):
+    def test_reconnect_opens_link_and_brings_robot_up(self) -> None:
         agent = FakeAgent(mini=None)
         mini = _fake_mini()
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> "tuple[SimpleNamespace, None, str]":
             return mini, None, "host=192.168.68.64+network"
 
         with mock.patch.dict(NS, {"_open_robot": fake_open}):
@@ -182,10 +183,10 @@ class ReconnectCommandTest(unittest.TestCase):
         self.assertTrue(agent.state["awake"])
         self.assertIn("Reconnected", res["result"])
 
-    def test_failed_reconnect_reports_not_ok_with_retry_hint(self):
+    def test_failed_reconnect_reports_not_ok_with_retry_hint(self) -> None:
         agent = FakeAgent(mini=None)
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> tuple[None, OSError, str]:
             return None, OSError("connection refused"), "host=192.168.68.64+network"
 
         with mock.patch.dict(NS, {"_open_robot": fake_open}):
@@ -201,10 +202,10 @@ class ReconnectCommandTest(unittest.TestCase):
         self.assertFalse(events[-1]["ok"])
         self.assertEqual(events[-1]["type"], "reconnect")
 
-    def test_reconnect_clears_reconnecting_flag_after_failure(self):
+    def test_reconnect_clears_reconnecting_flag_after_failure(self) -> None:
         agent = FakeAgent(mini=None)
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> tuple[None, OSError, str]:
             return None, OSError("nope"), "autodetect"
 
         with mock.patch.dict(NS, {"_open_robot": fake_open}):
@@ -212,12 +213,12 @@ class ReconnectCommandTest(unittest.TestCase):
         # A failed attempt must not wedge the agent into "already in progress".
         self.assertFalse(agent.state.get("_reconnecting"))
 
-    def test_already_connected_does_not_reopen(self):
+    def test_already_connected_does_not_reopen(self) -> None:
         mini = _fake_mini()
         agent = FakeAgent(mini=mini)
         opened = []
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> "tuple[SimpleNamespace, None, str]":
             opened.append(True)
             return _fake_mini(), None, "x"
 
@@ -229,12 +230,12 @@ class ReconnectCommandTest(unittest.TestCase):
         self.assertTrue(res["connected"])
         self.assertIs(agent.state["mini"], mini)
 
-    def test_force_reopens_and_releases_stale_handle(self):
+    def test_force_reopens_and_releases_stale_handle(self) -> None:
         stale = _fake_mini()
         agent = FakeAgent(mini=stale)
         fresh = _fake_mini()
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> "tuple[SimpleNamespace, None, str]":
             return fresh, None, "x"
 
         with mock.patch.dict(NS, {"_open_robot": fake_open}):
@@ -249,7 +250,7 @@ class ReconnectCommandTest(unittest.TestCase):
 class ReconnectTargetTest(unittest.TestCase):
     """A reconnect reply names where the link actually goes."""
 
-    def test_local_mode_names_this_computer_not_the_pinned_robot(self):
+    def test_local_mode_names_this_computer_not_the_pinned_robot(self) -> None:
         agent = FakeAgent(mini=object(), connection_mode="local")
 
         res = _run(NS["_reconnect"](agent, {}))
@@ -257,7 +258,7 @@ class ReconnectTargetTest(unittest.TestCase):
         self.assertIn("localhost", res["result"])
         self.assertNotIn("192.168.68.64", res["result"])
 
-    def test_network_mode_names_the_pinned_robot(self):
+    def test_network_mode_names_the_pinned_robot(self) -> None:
         agent = FakeAgent(mini=object(), connection_mode="network")
 
         res = _run(NS["_reconnect"](agent, {}))
@@ -268,15 +269,15 @@ class ReconnectTargetTest(unittest.TestCase):
 class ReconnectReachabilityTest(unittest.TestCase):
     """reconnect must survive the guards that refuse robot commands offline."""
 
-    def test_handle_task_reconnect_text_is_not_bridged_to_main(self):
+    def test_handle_task_reconnect_text_is_not_bridged_to_main(self) -> None:
         agent = FakeAgent(mini=None)
         mini = _fake_mini()
         bridged = []
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> "tuple[SimpleNamespace, None, str]":
             return mini, None, "host=192.168.68.64+network"
 
-        async def fake_bridge(_agent, text, _tid):
+        async def fake_bridge(_agent, text, _tid) -> dict[str, Any]:
             bridged.append(text)
             return {"ok": True, "result": "I'm here! Connection re-established."}
 
@@ -289,11 +290,11 @@ class ReconnectReachabilityTest(unittest.TestCase):
         self.assertTrue(res["reconnected"])
         self.assertIs(agent.state["mini"], mini)
 
-    def test_offline_fail_fast_exempts_reconnect(self):
+    def test_offline_fail_fast_exempts_reconnect(self) -> None:
         agent = FakeAgent(mini=None)
         mini = _fake_mini()
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> "tuple[SimpleNamespace, None, str]":
             return mini, None, "x"
 
         with mock.patch.dict(NS, {"_open_robot": fake_open}):
@@ -302,7 +303,7 @@ class ReconnectReachabilityTest(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertTrue(res["reconnected"])
 
-    def test_offline_fail_fast_still_refuses_other_robot_commands(self):
+    def test_offline_fail_fast_still_refuses_other_robot_commands(self) -> None:
         agent = FakeAgent(mini=None)
         res = _run(NS["handle_task"](agent, {"cmd": "wake"}))
         self.assertFalse(res["ok"])
@@ -311,14 +312,14 @@ class ReconnectReachabilityTest(unittest.TestCase):
 
 
 class DisconnectedMessageTest(unittest.TestCase):
-    def test_no_handle_message_points_at_reconnect(self):
+    def test_no_handle_message_points_at_reconnect(self) -> None:
         agent = FakeAgent(mini=None)
         ok, reason = NS["_is_connected"](agent)
         self.assertFalse(ok)
         self.assertIn("reconnect", reason.lower())
         self.assertNotIn("restart the agent", reason.lower())
 
-    def test_dropped_link_message_points_at_reconnect(self):
+    def test_dropped_link_message_points_at_reconnect(self) -> None:
         mini = _fake_mini()
         mini.connected = False
         agent = FakeAgent(mini=mini)
@@ -336,11 +337,11 @@ class ConfigThenReconnectTest(unittest.TestCase):
     pick up a host published to custom/reachy/config without a restart —
     that's what the failure hint tells users to do."""
 
-    def test_reconnect_uses_host_updated_via_config(self):
+    def test_reconnect_uses_host_updated_via_config(self) -> None:
         agent = FakeAgent(mini=None, robot_host="", connection_mode="auto")
         seen = {}
 
-        def fake_build(host, backend, mode):
+        def fake_build(host, backend, mode) -> list[dict[str, Any]]:
             seen["host"], seen["mode"] = host, mode
             return [{"host": host, "connection_mode": mode}]
 
@@ -365,13 +366,13 @@ class ConfigThenReconnectTest(unittest.TestCase):
         self.assertIs(got, mini)
         self.assertIsNone(err)
 
-    def test_auto_sentinel_maps_to_empty_mode_for_the_ladder(self):
+    def test_auto_sentinel_maps_to_empty_mode_for_the_ladder(self) -> None:
         # state stores "auto" for "no explicit mode"; _build_connection_attempts
         # expects "" — a leaked "auto" would fall through to its network branch.
         agent = FakeAgent(mini=None, robot_host="", connection_mode="auto")
         seen = {}
 
-        def fake_build(host, backend, mode):
+        def fake_build(host, backend, mode) -> list[Any]:
             seen["mode"] = mode
             return []
 
@@ -381,7 +382,7 @@ class ConfigThenReconnectTest(unittest.TestCase):
 
 
 class ConcurrentReconnectTest(unittest.TestCase):
-    def test_second_reconnect_is_rejected_while_one_is_in_flight(self):
+    def test_second_reconnect_is_rejected_while_one_is_in_flight(self) -> None:
         """Two reconnects racing must not both open a link.
 
         The in-progress guard and the flag-set must not be separated by an
@@ -395,7 +396,7 @@ class ConcurrentReconnectTest(unittest.TestCase):
         release_started = threading.Event()
         allow_release = threading.Event()
 
-        def blocking_exit(*_a):
+        def blocking_exit(*_a) -> bool:
             release_started.set()
             allow_release.wait(timeout=5)  # hold the first attempt mid-release
             return False
@@ -404,11 +405,11 @@ class ConcurrentReconnectTest(unittest.TestCase):
         agent = FakeAgent(mini=stale)
         opens = []
 
-        async def fake_open(_agent):
+        async def fake_open(_agent) -> "tuple[SimpleNamespace, None, str]":
             opens.append(True)
             return _fake_mini(), None, "x"
 
-        async def scenario():
+        async def scenario() -> tuple[Any, Any]:
             with mock.patch.dict(NS, {"_open_robot": fake_open}):
                 first = asyncio.create_task(
                     NS["_dispatch"](agent, "reconnect", {}, return_result=True)
@@ -431,7 +432,7 @@ class ConcurrentReconnectTest(unittest.TestCase):
 
 
 class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
-    async def test_motion_only_reconnect_preserves_media_handle(self):
+    async def test_motion_only_reconnect_preserves_media_handle(self) -> None:
         mini = _fake_mini()
         old_client = types.SimpleNamespace(
             host="192.168.68.64",
@@ -453,7 +454,7 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(agent.state["awake"])
         self.assertNotIn("motion_link_error", agent.state)
 
-    async def test_an_automatic_recovery_wakes_without_a_sound(self):
+    async def test_an_automatic_recovery_wakes_without_a_sound(self) -> None:
         # wake_up() plays a sound, and the daemon stops whatever is playing to
         # start it: a recovery run while Reachy talks would cut him off.
         mini = _fake_mini()
@@ -467,16 +468,16 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
         mini.goto_target.assert_called_once()
         self.assertEqual(mini.goto_target.call_args.kwargs["head"], "home-pose")
 
-    async def test_the_full_reconnect_fallback_is_quiet_too(self):
+    async def test_the_full_reconnect_fallback_is_quiet_too(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         payloads = []
 
-        async def fake_reconnect(_agent, payload):
+        async def fake_reconnect(_agent, payload) -> dict[str, bool]:
             payloads.append(payload)
             _agent.state.pop("motion_link_error", None)
             return {"connected": True}
 
-        async def no_motion_client(_agent):
+        async def no_motion_client(_agent) -> bool:
             return False
 
         with mock.patch.dict(
@@ -486,7 +487,7 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payloads, [{"force": True, "quiet": True}])
 
-    async def test_a_quiet_bring_up_never_plays_the_wake_sound(self):
+    async def test_a_quiet_bring_up_never_plays_the_wake_sound(self) -> None:
         mini = _fake_mini()
         agent = FakeAgent(mini=mini)
 
@@ -496,20 +497,20 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
         mini.goto_target.assert_called_once()
         self.assertTrue(agent.state["awake"])
 
-    async def test_recovery_waits_for_the_current_speech_to_end(self):
+    async def test_recovery_waits_for_the_current_speech_to_end(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         agent.state["_speaking"] = True
         order = []
 
-        async def fake_reconnect(_agent, _payload):
+        async def fake_reconnect(_agent, _payload) -> dict[str, bool]:
             order.append("reconnect")
             _agent.state.pop("motion_link_error", None)
             return {"connected": True}
 
-        async def no_motion_client(_agent):
+        async def no_motion_client(_agent) -> bool:
             return False
 
-        async def finish_speaking():
+        async def finish_speaking() -> None:
             await asyncio.sleep(0.2)
             order.append("speech ended")
             agent.state["_speaking"] = False
@@ -521,17 +522,17 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(order, ["speech ended", "reconnect"])
 
-    async def test_waiting_for_quiet_gives_up_after_its_limit(self):
+    async def test_waiting_for_quiet_gives_up_after_its_limit(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         agent.state["_speaking"] = True  # never ends
 
         await asyncio.wait_for(NS["_wait_until_quiet"](agent, limit=0.2), timeout=2)
 
-    async def test_forced_failure_classification_covers_changed_sdk_wording(self):
+    async def test_forced_failure_classification_covers_changed_sdk_wording(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         release = asyncio.Event()
 
-        async def blocked_reconnect(_agent, _payload):
+        async def blocked_reconnect(_agent, _payload) -> dict[str, bool]:
             await release.wait()
             return {"connected": True}
 
@@ -545,11 +546,11 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
             release.set()
             await task
 
-    async def test_motion_failure_retries_until_reconnected(self):
+    async def test_motion_failure_retries_until_reconnected(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         attempts = 0
 
-        async def fake_reconnect(_agent, _payload):
+        async def fake_reconnect(_agent, _payload) -> dict[str, bool]:
             nonlocal attempts
             attempts += 1
             if attempts == 1:
@@ -572,11 +573,11 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("motion_link_error", agent.state)
         self.assertTrue(any("animations resumed" in line for line in agent.logs))
 
-    async def test_repeated_failed_frames_start_one_reconnect_task(self):
+    async def test_repeated_failed_frames_start_one_reconnect_task(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         release = asyncio.Event()
 
-        async def blocked_reconnect(_agent, _payload):
+        async def blocked_reconnect(_agent, _payload) -> dict[str, bool]:
             await release.wait()
             _agent.state.pop("motion_link_error", None)
             return {"connected": True}
@@ -592,15 +593,15 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
 
 
 class PresenterPhraseTest(unittest.IsolatedAsyncioTestCase):
-    async def test_set_volume_presenter_mode_stays_local(self):
+    async def test_set_volume_presenter_mode_stays_local(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         seen = {}
 
-        async def fake_dispatch(_agent, cmd, payload, return_result=False):
+        async def fake_dispatch(_agent, cmd, payload, return_result=False) -> dict[str, Any]:
             seen.update({"cmd": cmd, "payload": payload, "return_result": return_result})
             return {"ok": True, "level": 100, "result": "presenter"}
 
-        async def forbidden_planner(*_args, **_kwargs):
+        async def forbidden_planner(*_args, **_kwargs) -> NoReturn:
             raise AssertionError("presenter mode must not require an LLM call")
 
         with mock.patch.dict(
@@ -616,7 +617,7 @@ class PresenterPhraseTest(unittest.IsolatedAsyncioTestCase):
 _NO_PLUGIN = "Failed to create webrtcsrc element. Is the GStreamer webrtc rust plugin installed?"
 
 
-def _sdk_without_webrtc_plugin(mini, opened):
+def _sdk_without_webrtc_plugin(mini, opened) -> "ModuleType":
     """An SDK that reaches the robot but cannot build the WebRTC media link.
 
     As on a Linux host without gst-plugins-rs: asking for media fails on the
@@ -624,10 +625,10 @@ def _sdk_without_webrtc_plugin(mini, opened):
     connection without media succeeds.
     """
 
-    def construct(**kwargs):
+    def construct(**kwargs) -> "SimpleNamespace":
         opened.append(kwargs)
 
-        def enter(*_args):
+        def enter(*_args) -> Any:
             if kwargs.get("media_backend") == "no_media":
                 return mini
             if kwargs.get("host"):
@@ -644,7 +645,7 @@ def _sdk_without_webrtc_plugin(mini, opened):
 class MediaUnavailableTest(unittest.TestCase):
     """A host that can reach Reachy but not build its media link still moves and speaks."""
 
-    def test_the_robot_is_opened_without_media_when_the_plugin_is_missing(self):
+    def test_the_robot_is_opened_without_media_when_the_plugin_is_missing(self) -> None:
         agent = FakeAgent(mini=None, robot_host="192.168.0.186", connection_mode="network")
         mini, opened = _fake_mini(), []
 
@@ -662,7 +663,7 @@ class MediaUnavailableTest(unittest.TestCase):
         )
         self.assertTrue(any("Movement and speech work" in line for line in agent.logs))
 
-    def test_other_connection_failures_do_not_fall_back(self):
+    def test_other_connection_failures_do_not_fall_back(self) -> None:
         agent = FakeAgent(mini=None, robot_host="", connection_mode="network")
         opened = []
 
@@ -676,7 +677,7 @@ class MediaUnavailableTest(unittest.TestCase):
         self.assertNotIn("media_unavailable", agent.state)
         self.assertFalse(any(kw.get("media_backend") == "no_media" for kw in opened))
 
-    def test_the_daemon_is_found_through_the_control_connection(self):
+    def test_the_daemon_is_found_through_the_control_connection(self) -> None:
         mini = _fake_mini()
         mini.media = None
         mini.client = types.SimpleNamespace(host="192.168.0.186", port=8000)
@@ -685,14 +686,14 @@ class MediaUnavailableTest(unittest.TestCase):
 
         self.assertEqual(NS["_daemon_url"](agent), "http://192.168.0.186:8000")
 
-    def test_with_media_the_control_connection_is_not_consulted(self):
+    def test_with_media_the_control_connection_is_not_consulted(self) -> None:
         mini = _fake_mini()
         mini.client = types.SimpleNamespace(host="elsewhere", port=1)
         agent = FakeAgent(mini=mini)
 
         self.assertIsNone(NS["_daemon_url"](agent))  # media has no daemon_url here
 
-    def test_the_microphone_and_camera_explain_what_is_missing(self):
+    def test_the_microphone_and_camera_explain_what_is_missing(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
         agent.state["media_unavailable"] = _NO_PLUGIN
 
@@ -702,14 +703,14 @@ class MediaUnavailableTest(unittest.TestCase):
         self.assertIn("gst-plugins-rs", str(raised.exception))
         self.assertIn("Movement and speech work", str(raised.exception))
 
-    def test_speech_goes_to_the_daemon_without_media(self):
+    def test_speech_goes_to_the_daemon_without_media(self) -> None:
         mini = _fake_mini()
         mini.media = None
         agent = FakeAgent(mini=mini)
         agent.state.update({"media_unavailable": _NO_PLUGIN, "life_enabled": False})
         played = []
 
-        async def prepare(_agent, _text, _payload):
+        async def prepare(_agent, _text, _payload) -> dict[str, Any]:
             return {
                 "raw_path": "/tmp/a.mp3",
                 "play_path": "/tmp/a.mp3",
@@ -719,7 +720,7 @@ class MediaUnavailableTest(unittest.TestCase):
                 "beats": [],
             }
 
-        async def via_daemon(_agent, path):
+        async def via_daemon(_agent, path) -> None:
             played.append(path)
 
         with mock.patch.dict(NS, {"_prepare_speech": prepare, "_play_via_daemon": via_daemon}):
@@ -732,15 +733,15 @@ class MediaUnavailableTest(unittest.TestCase):
 class MediaUnavailableCommandsTest(unittest.TestCase):
     """What a person sees when a command needs the camera or microphone that are not there."""
 
-    def _agent(self):
+    def _agent(self) -> "FakeAgent":
         agent = FakeAgent(mini=_fake_mini())
         agent.state["media_unavailable"] = _NO_PLUGIN
         return agent
 
-    def test_a_conversation_is_refused_before_it_announces_itself(self):
+    def test_a_conversation_is_refused_before_it_announces_itself(self) -> None:
         agent = self._agent()
 
-        async def must_not_start(_agent, _payload):
+        async def must_not_start(_agent, _payload) -> NoReturn:
             raise AssertionError("the conversation should not start")
 
         with mock.patch.dict(NS, {"_conversation_start": must_not_start}):
@@ -749,7 +750,7 @@ class MediaUnavailableCommandsTest(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertIn("Movement and speech work", res["result"])
 
-    def test_every_camera_and_microphone_command_is_refused_the_same_way(self):
+    def test_every_camera_and_microphone_command_is_refused_the_same_way(self) -> None:
         for cmd in (
             "camera",
             "describe",
@@ -765,20 +766,20 @@ class MediaUnavailableCommandsTest(unittest.TestCase):
                 self.assertFalse(res["ok"])
                 self.assertIn("gst-plugins-rs", res["result"])
 
-    def test_a_failed_command_answers_in_a_sentence(self):
+    def test_a_failed_command_answers_in_a_sentence(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
 
         res = _run(NS["_dispatch"](agent, "no_such_command", {}, return_result=True))
 
         self.assertTrue(res["result"].startswith("I couldn't do that: unknown cmd"))
 
-    def test_a_dropped_motor_link_says_the_reconnect_is_already_happening(self):
+    def test_a_dropped_motor_link_says_the_reconnect_is_already_happening(self) -> None:
         agent = FakeAgent(mini=_fake_mini())
 
-        async def dropped(_agent, _payload):
+        async def dropped(_agent, _payload) -> NoReturn:
             raise RuntimeError("Task did not complete in time.")
 
-        async def recovering(_agent):
+        async def recovering(_agent) -> None:
             return None
 
         with mock.patch.dict(NS, {"_pose": dropped, "_motion_reconnect_loop": recovering}):
@@ -787,15 +788,15 @@ class MediaUnavailableCommandsTest(unittest.TestCase):
         self.assertIn("reconnecting on my own", res["result"])
         self.assertNotIn('Say "reconnect"', res["result"])
 
-    def test_waking_without_media_still_plays_the_chime(self):
+    def test_waking_without_media_still_plays_the_chime(self) -> None:
         agent = self._agent()
         agent.state["motion_lock"] = asyncio.Lock()
         chimes = []
 
-        async def daemon_sound(_agent, sound):
+        async def daemon_sound(_agent, sound) -> None:
             chimes.append(sound)
 
-        async def motors_on(_agent):
+        async def motors_on(_agent) -> bool:
             return True
 
         with mock.patch.dict(

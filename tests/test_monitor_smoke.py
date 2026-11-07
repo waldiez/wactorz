@@ -90,7 +90,7 @@ async def test_every_get_route_responds(client: TestClient) -> None:
     assert not failures, "handlers raised:\n" + "\n".join(failures)
 
 
-async def test_an_uninstalled_optional_feature_degrades_instead_of_crashing(client):
+async def test_an_uninstalled_optional_feature_degrades_instead_of_crashing(client) -> None:
     """An optional feature that is not installed answers 503 with guidance.
 
     The client fixture pins TTS off, so this is the real dep-free behaviour

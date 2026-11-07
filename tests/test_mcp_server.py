@@ -44,17 +44,17 @@ EXPECTED_RESOURCES = {
 
 @unittest.skipUnless(HAVE_MCP, "mcp optional dependency is not installed")
 class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
-    async def test_expected_tools_are_registered(self):
+    async def test_expected_tools_are_registered(self) -> None:
         tools = await mcp_server.mcp.list_tools()
         names = {tool.name for tool in tools}
         self.assertTrue(EXPECTED_TOOLS.issubset(names))
 
-    async def test_expected_resources_are_registered(self):
+    async def test_expected_resources_are_registered(self) -> None:
         resources = await mcp_server.mcp.list_resources()
         uris = {str(resource.uri) for resource in resources}
         self.assertTrue(EXPECTED_RESOURCES.issubset(uris))
 
-    async def test_config_resource_sanitizes_tokens(self):
+    async def test_config_resource_sanitizes_tokens(self) -> None:
         with (
             mock.patch.object(mcp_server, "WACTORZ_API_KEY", "secret-rest-key"),
             mock.patch.object(mcp_server, "HA_TOKEN", "secret-ha-token"),
@@ -81,7 +81,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("secret-ha-token", serialized)
         self.assertNotIn("secret-client-secret", serialized)
 
-    async def test_list_agents_formats_running_agents(self):
+    async def test_list_agents_formats_running_agents(self) -> None:
         agents = [
             {
                 "id": "actor-123",
@@ -102,14 +102,14 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[running   ] @main [protected]  (id: actor-123)", result)
         self.assertIn("[stopped   ] @worker  (id: actor-456)", result)
 
-    async def test_list_agents_surfaces_backend_error(self):
+    async def test_list_agents_surfaces_backend_error(self) -> None:
         error = {"error": "Cannot connect to wactorz at http://localhost:8000. Is it running?"}
         with mock.patch.object(mcp_server, "_wactorz_get", mock.AsyncMock(return_value=error)):
             result = await mcp_server.list_agents()
 
         self.assertEqual(result, error["error"])
 
-    async def test_calendar_status_sanitizes_remote_mcp_auth(self):
+    async def test_calendar_status_sanitizes_remote_mcp_auth(self) -> None:
         with (
             mock.patch.object(mcp_server, "CALENDAR_MCP_URL", "https://calendar.example/mcp"),
             mock.patch.object(mcp_server, "CALENDAR_MCP_TOKEN", ""),
@@ -134,7 +134,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["calendar_mcp_token_file"], "C:/tmp/calendar_token.json")
         self.assertNotIn("secret-client-secret", json.dumps(payload))
 
-    async def test_calendar_list_calls_remote_mcp_list_events(self):
+    async def test_calendar_list_calls_remote_mcp_list_events(self) -> None:
         with mock.patch.object(
             mcp_server,
             "_calendar_mcp_call",
@@ -145,7 +145,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "event list")
         call.assert_awaited_once_with("list_events", {"pageSize": 5, "orderBy": "startTime"})
 
-    async def test_calendar_create_event_calls_remote_mcp_create_event(self):
+    async def test_calendar_create_event_calls_remote_mcp_create_event(self) -> None:
         with mock.patch.object(
             mcp_server,
             "_calendar_mcp_call",
@@ -169,7 +169,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_calendar_create_event_requires_end_time(self):
+    async def test_calendar_create_event_requires_end_time(self) -> None:
         with mock.patch.object(
             mcp_server,
             "_calendar_mcp_call",
@@ -183,14 +183,14 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("requires", result)
         call.assert_not_called()
 
-    async def test_calendar_mcp_call_tool_validates_json_object(self):
+    async def test_calendar_mcp_call_tool_validates_json_object(self) -> None:
         self.assertIn("Invalid arguments_json", await mcp_server.calendar_mcp_call_tool("x", "{"))
         self.assertEqual(
             await mcp_server.calendar_mcp_call_tool("x", "[]"),
             "arguments_json must encode a JSON object.",
         )
 
-    async def test_ha_requires_configuration(self):
+    async def test_ha_requires_configuration(self) -> None:
         with (
             mock.patch.object(mcp_server, "HA_URL", ""),
             mock.patch.object(mcp_server, "HA_TOKEN", ""),

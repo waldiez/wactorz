@@ -19,6 +19,8 @@ the attributes its methods touch.
 
 import threading
 import types
+from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -43,12 +45,12 @@ _USAGE = types.SimpleNamespace(prompt_token_count=11, candidates_token_count=7)
 class _StreamModels:
     """Yields `chunks`, then optionally blocks forever to simulate a stall."""
 
-    def __init__(self, chunks: list[Any], then_hang: bool = False):
+    def __init__(self, chunks: list[Any], then_hang: bool = False) -> None:
         self._chunks = chunks
         self._then_hang = then_hang
         self.released = threading.Event()
 
-    def generate_content_stream(self, **_kwargs: Any):
+    def generate_content_stream(self, **_kwargs: Any) -> "Iterator[Any]":
         yield from self._chunks
         if self._then_hang:
             # Held until the test releases it, so the worker thread cannot
@@ -107,7 +109,7 @@ async def test_a_provider_error_is_reported(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
 
     class _Exploding(_StreamModels):
-        def generate_content_stream(self, **_kwargs: Any):
+        def generate_content_stream(self, **_kwargs: Any) -> "Iterator[SimpleNamespace]":
             yield _chunk("partial")
             raise RuntimeError("upstream refused")
 
@@ -148,7 +150,7 @@ async def test_a_failure_before_any_text_is_raised(monkeypatch: pytest.MonkeyPat
     busy = _Busy("rate limited")
 
     class _Exploding(_StreamModels):
-        def generate_content_stream(self, **_kwargs: Any):
+        def generate_content_stream(self, **_kwargs: Any) -> Any:
             raise busy
             yield  # pragma: no cover  # makes this a generator
 
@@ -181,7 +183,7 @@ async def test_a_stream_that_fails_before_it_starts_is_tried_again(
     class _FailsOnce(_StreamModels):
         attempts = 0
 
-        def generate_content_stream(self, **_kwargs: Any):
+        def generate_content_stream(self, **_kwargs: Any) -> "Iterator[SimpleNamespace]":
             _FailsOnce.attempts += 1
             if _FailsOnce.attempts == 1:
                 raise _Busy("rate limited")

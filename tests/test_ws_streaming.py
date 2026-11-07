@@ -276,7 +276,9 @@ async def _overlapping_turns(
     """A slow turn to main and a quick one to catalog that starts and ends inside it."""
     finish_first = asyncio.Event()
 
-    async def _route(content: str, _reply: Any, *, stream_fn: Any, stream_end_fn: Any, **_: Any):
+    async def _route(
+        content: str, _reply: Any, *, stream_fn: Any, stream_end_fn: Any, **_: Any
+    ) -> None:
         if "slow" in content:
             await stream_fn("main one, ")
             await finish_first.wait()

@@ -168,7 +168,7 @@ class PlanningMixin(_Host):
     def get_pipeline_rules(self) -> dict:
         return self.recall(PIPELINE_RULES_KEY) or {}
 
-    def save_pipeline_rule(self, rule: dict):
+    def save_pipeline_rule(self, rule: dict) -> None:
         rules = self.get_pipeline_rules()
         rules[rule["rule_id"]] = rule
         self.persist(PIPELINE_RULES_KEY, rules)
@@ -209,12 +209,12 @@ class PlanningMixin(_Host):
             self.persist(PENDING_PLANS_KEY, plans)
         return plans
 
-    def save_pending_plan(self, plan: dict):
+    def save_pending_plan(self, plan: dict) -> None:
         plans = self.recall(PENDING_PLANS_KEY) or {}
         plans[plan["plan_id"]] = plan
         self.persist(PENDING_PLANS_KEY, plans)
 
-    def update_plan_status(self, plan_id: str, status: str):
+    def update_plan_status(self, plan_id: str, status: str) -> None:
         plans = self.recall(PENDING_PLANS_KEY) or {}
         if plan_id in plans:
             plans[plan_id]["status"] = status

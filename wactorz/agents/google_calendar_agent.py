@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
@@ -70,7 +71,7 @@ class GoogleCalendarAgent(LLMAgent):
         "status": "Sanitized Calendar configuration status",
     }
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
+    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "google-calendar-agent")
         kwargs.setdefault("system_prompt", CALENDAR_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
@@ -89,7 +90,7 @@ class GoogleCalendarAgent(LLMAgent):
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=time.time())
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
         yield await self.chat(user_message)
         yield {}
 

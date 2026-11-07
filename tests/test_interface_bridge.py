@@ -12,19 +12,19 @@ from wactorz.core.actor import Message, MessageType
 
 
 class DynamicHandleTaskMailboxTest(unittest.IsolatedAsyncioTestCase):
-    async def test_handle_task_runs_in_background_so_results_can_be_received(self):
+    async def test_handle_task_runs_in_background_so_results_can_be_received(self) -> None:
         actor = DynamicAgent(code="", name="bridge-agent")
         entered = asyncio.Event()
         release = asyncio.Event()
         replied = asyncio.Event()
         sent = []
 
-        async def handle_task(_api, _payload):
+        async def handle_task(_api, _payload) -> dict[str, str]:
             entered.set()
             await release.wait()
             return {"result": "done"}
 
-        async def send(target, message_type, payload):
+        async def send(target, message_type, payload) -> None:
             sent.append((target, message_type, payload))
             replied.set()
 
@@ -44,13 +44,13 @@ class DynamicHandleTaskMailboxTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
-    async def test_interface_task_uses_orchestrator_context_and_replies(self):
+    async def test_interface_task_uses_orchestrator_context_and_replies(self) -> None:
         actor = MainActor(llm_provider=None)
         replied = asyncio.Event()
         seen = {}
         sent = []
 
-        async def process(text):
+        async def process(text) -> str:
             seen["source"] = actor._current_interface_source()
             seen["history"] = actor._current_interface_history()
             seen["voice"] = actor._current_interface_is_voice()
@@ -58,7 +58,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
             seen["prefix"] = actor._prefix_with_live_context(text)
             return "It is sunny."
 
-        async def send(target, message_type, payload):
+        async def send(target, message_type, payload) -> None:
             sent.append((target, message_type, payload))
             replied.set()
 
@@ -107,7 +107,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0][2]["_task_id"], "abc")
         self.assertEqual(sent[0][2]["result"], "It is sunny.")
 
-    async def test_interface_actions_are_allowlisted_and_removed_from_reply(self):
+    async def test_interface_actions_are_allowlisted_and_removed_from_reply(self) -> None:
         from wactorz.agents.main import actor as main_module
 
         actor = MainActor(llm_provider=None)
@@ -129,7 +129,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clean, "Okay.")
         self.assertEqual(actions, [{"cmd": "gesture", "name": "turn_around"}])
 
-    async def test_interface_source_cannot_be_redelegated(self):
+    async def test_interface_source_cannot_be_redelegated(self) -> None:
         from wactorz.agents.main import actor as main_module
 
         actor = MainActor(llm_provider=None)

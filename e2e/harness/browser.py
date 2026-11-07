@@ -22,6 +22,7 @@ there checks that every id used here is on it.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -625,7 +626,14 @@ class Dashboard:
             sender, lambda said: matcher.fullmatch(said) is not None, f"/{pattern}/", None, timeout
         )
 
-    def _expect(self, sender, matches, wanted: str, prefix_of: str | None, timeout: float) -> Said:
+    def _expect(
+        self,
+        sender: str,
+        matches: Callable[[str], bool],
+        wanted: str,
+        prefix_of: str | None,
+        timeout: float,
+    ) -> Said:
         def arrived() -> Said | None:
             pending = self.unclaimed()
             if not pending:

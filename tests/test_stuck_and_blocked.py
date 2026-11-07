@@ -25,6 +25,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -297,7 +298,7 @@ def no_systemd_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(name="systemd")
-def systemd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def systemd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A socket standing in for systemd's, which the process is told about.
 
     Named by a path relative to the test's own directory. A socket's path has a

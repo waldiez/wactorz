@@ -485,7 +485,7 @@ class Actor(ABC):
         name: str | None = None,
         persistence_dir: str | None = None,
         mailbox_size: int = 1000,
-    ):
+    ) -> None:
         if actor_id:
             self.actor_id = actor_id
         elif name:
@@ -607,7 +607,7 @@ class Actor(ABC):
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
-    async def start(self):
+    async def start(self) -> None:
         """Start the actor's event loop."""
         self._stopped = None
         self.state = ActorState.RUNNING
@@ -647,7 +647,7 @@ class Actor(ABC):
         await self._publish_status()
         logger.info("[%s] Actor started.", self.name)
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Gracefully stop the actor, once per run however many ask.
 
         A second stop -- a replace or a migration that reaches an actor the
@@ -667,7 +667,7 @@ class Actor(ABC):
             if not self._stopped.done():
                 self._stopped.set_result(None)
 
-    async def _stop_once(self):
+    async def _stop_once(self) -> None:
         """What stopping does: wind down, clean up, save, and say so."""
         self.state = ActorState.STOPPED
         await self._wind_down_tasks()
@@ -848,7 +848,7 @@ class Actor(ABC):
 
     # ─── Message Loop ─────────────────────────────────────────────────────────
 
-    async def _message_loop(self):
+    async def _message_loop(self) -> None:
         """Main message processing loop."""
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
@@ -918,7 +918,7 @@ class Actor(ABC):
             future.set_result(msg.payload)
         return True
 
-    async def _dispatch(self, msg: Message):
+    async def _dispatch(self, msg: Message) -> None:
         """Dispatch message to the appropriate handler, inside the turn it belongs to."""
         with working_on(msg.turn_id, self.name):
             if self._resolve_pending_result(msg):
@@ -929,7 +929,7 @@ class Actor(ABC):
             else:
                 await self.handle_message(msg)
 
-    def _setup_default_handlers(self):
+    def _setup_default_handlers(self) -> None:
         self._handlers = {
             MessageType.START: self._handle_lifecycle,
             MessageType.STOP: self._handle_lifecycle,
@@ -937,7 +937,7 @@ class Actor(ABC):
             MessageType.HEARTBEAT: self._handle_heartbeat_msg,
         }
 
-    async def _handle_lifecycle(self, msg: Message):
+    async def _handle_lifecycle(self, msg: Message) -> None:
         """Apply a lifecycle message through the one implementation of it.
 
         Message-passing is another way to ask for the same thing, not another
@@ -948,19 +948,19 @@ class Actor(ABC):
         """
         await self.apply_command(msg.type.value)
 
-    async def _handle_status_request(self, msg: Message):
+    async def _handle_status_request(self, msg: Message) -> None:
         status = self.get_status()
         # Reply to sender_id (always), reply_to is optional override
         target = msg.reply_to or msg.sender_id
         if target:
             await self.send(target, MessageType.STATUS_RESPONSE, status)
 
-    async def _handle_heartbeat_msg(self, msg: Message):
+    async def _handle_heartbeat_msg(self, msg: Message) -> None:
         pass  # Monitor actor handles these
 
     # ─── Heartbeat ────────────────────────────────────────────────────────────
 
-    async def _heartbeat_loop(self, interval: float = 10.0):
+    async def _heartbeat_loop(self, interval: float = 10.0) -> None:
         """Periodically publish heartbeat via MQTT."""
         # Publish immediately on start so monitor sees agent right away
         await asyncio.sleep(0.5)
@@ -1157,7 +1157,7 @@ class Actor(ABC):
         except Exception:
             logger.exception("[%s] on_delete failed; deleting anyway", self.name)
 
-    async def _command_listener(self):
+    async def _command_listener(self) -> None:
         """Carry commands from agents/{id}/commands to :meth:`apply_command`.
 
         Transport only. Needed for actors a caller cannot reach in process —
@@ -1260,7 +1260,7 @@ class Actor(ABC):
         """
         return await ask_through(self, target, payload, timeout=timeout)
 
-    async def broadcast(self, msg_type: MessageType, payload: Any = None):
+    async def broadcast(self, msg_type: MessageType, payload: Any = None) -> None:
         """Broadcast to all registered actors."""
         if self._registry:
             await self._registry.broadcast(self.actor_id, msg_type, payload)
@@ -1469,7 +1469,7 @@ class Actor(ABC):
 
     # ─── Persistence ──────────────────────────────────────────────────────────
 
-    async def _save_persistent_state(self):
+    async def _save_persistent_state(self) -> None:
         """Save state to disk. Called on stop() after on_stop()."""
         if self._persistence_api is not None:
             # State is kept per key as persist() is called, and its file is
@@ -1479,7 +1479,7 @@ class Actor(ABC):
             return
         self._write_state_file()
 
-    async def _load_persistent_state(self):
+    async def _load_persistent_state(self) -> None:
         """Load state from disk. Called on start() before on_start().
 
         With a persistence API there is nothing to load here: the store reads
@@ -1752,7 +1752,7 @@ class Actor(ABC):
             cost,
         )
 
-    def persist(self, key: str, value: Any):
+    def persist(self, key: str, value: Any) -> None:
         """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
           - Known ephemeral keys → process memory
@@ -1908,7 +1908,9 @@ class Actor(ABC):
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("[%s] Recording what it published on %r failed: %s", self.name, topic, exc)
 
-    async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = False, qos: int = 0
+    ) -> None:
         if self._mqtt_client:
             try:
                 # Stamp telemetry frames with the agent's own name. logs/spawned
@@ -1948,7 +1950,7 @@ class Actor(ABC):
         """MQTT v5 user properties to send with ``encoded`` on ``topic``. None for most actors."""
         return None
 
-    async def _publish_status(self):
+    async def _publish_status(self) -> None:
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
 
     async def notify_user(
@@ -2289,7 +2291,7 @@ class Actor(ABC):
 
     # ─── Abstract / Override ──────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         """Called when actor starts. Override for init logic."""
 
     async def publish_manifest(
@@ -2372,10 +2374,10 @@ class Actor(ABC):
         """
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", b"", retain=True, qos=1)
 
-    async def on_stop(self):
+    async def on_stop(self) -> None:
         """Called when actor stops. Override for cleanup."""
 
-    async def on_delete(self):
+    async def on_delete(self) -> None:
         """Called before the stop that ends a deletion. Override to remove what stop keeps.
 
         A stop is expected to be undone later, so it keeps state; a delete
@@ -2392,8 +2394,8 @@ class Actor(ABC):
         """
 
     @abstractmethod
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         """Handle messages not caught by default handlers."""
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<Actor name={self.name} id={self.actor_id[:8]} state={self.state.value}>"

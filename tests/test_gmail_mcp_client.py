@@ -4,14 +4,16 @@ import json
 import os
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from wactorz.core.integrations.gmail_mcp import GmailMcpClient, _clean_text, _format_message_line
 
 
 class CleanTextTest(unittest.TestCase):
-    def test_strips_urls_and_collapses_blanks(self):
+    def test_strips_urls_and_collapses_blanks(self) -> None:
         out = _clean_text("Hi\n\n\n\nSee https://track.example.com/abc?x=1 now\n\n\n")
         self.assertIn("[link]", out)
         self.assertNotIn("track.example.com", out)
@@ -19,8 +21,10 @@ class CleanTextTest(unittest.TestCase):
         self.assertTrue(out.startswith("Hi"))
 
 
-def _fake_rest(mapping):
-    async def _rest(method, path, params=None, json_body=None):
+def _fake_rest(mapping) -> "Callable[..., Any]":
+    async def _rest(
+        method, path, params=None, json_body=None
+    ) -> tuple[int, dict[str, list[dict[str, str]]]] | tuple[int, dict[str, Any]] | Any:
         if path == "/users/me/messages":
             return (200, {"messages": [{"id": "m1"}, {"id": "m2"}]})
         if path.startswith("/users/me/messages/"):
@@ -44,7 +48,7 @@ def _fake_rest(mapping):
 
 
 class FormatMessageTest(unittest.TestCase):
-    def test_trims_sender_and_subject(self):
+    def test_trims_sender_and_subject(self) -> None:
         line = _format_message_line(
             {
                 "snippet": "hi there",
@@ -60,7 +64,7 @@ class FormatMessageTest(unittest.TestCase):
         self.assertIn("Lunch?", line)
         self.assertIn("hi there", line)
 
-    def test_html_entities_decoded(self):
+    def test_html_entities_decoded(self) -> None:
         line = _format_message_line(
             {
                 "snippet": "didn&#39;t &amp; said &quot;hi&quot;",
@@ -79,7 +83,7 @@ class FormatMessageTest(unittest.TestCase):
 
 
 class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
-    async def test_search_falls_back_and_formats(self):
+    async def test_search_falls_back_and_formats(self) -> None:
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(side_effect=_fake_rest({}))
@@ -94,7 +98,7 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.kwargs["params"]["labelIds"], "UNREAD")
         self.assertNotIn("q", first.kwargs["params"])
 
-    async def test_free_text_search_uses_q(self):
+    async def test_free_text_search_uses_q(self) -> None:
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(side_effect=_fake_rest({}))
@@ -104,7 +108,7 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         params = client._rest_request.await_args_list[0].kwargs["params"]
         self.assertEqual(params["q"], "from:bob@x.com")
 
-    async def test_create_draft_builds_raw_message(self):
+    async def test_create_draft_builds_raw_message(self) -> None:
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="PERMISSION_DENIED")
         client._rest_request = mock.AsyncMock(return_value=(200, {"id": "d1"}))
@@ -124,13 +128,19 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Subject: Hi", decoded)
         self.assertIn("running late", decoded)
 
-    async def test_read_email_extracts_body_and_decodes(self):
+    async def test_read_email_extracts_body_and_decodes(self) -> None:
 
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         plain = base64.urlsafe_b64encode(b"Your bill is 42 EUR.").decode()
 
-        async def rest(method, path, params=None, json_body=None):
+        async def rest(
+            method, path, params=None, json_body=None
+        ) -> (
+            tuple[int, dict[str, list[dict[str, str]]]]
+            | tuple[int, dict[str, Any]]
+            | tuple[int, dict[Any, Any]]
+        ):
             if path == "/users/me/messages":
                 return (200, {"messages": [{"id": "m9"}]})
             if path == "/users/me/messages/m9":
@@ -163,7 +173,7 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(get_call.kwargs["params"]["format"], "full")
 
-    async def test_labels_fallback(self):
+    async def test_labels_fallback(self) -> None:
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="The caller does not have permission")
         client._rest_request = mock.AsyncMock(
@@ -175,7 +185,7 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INBOX", result)
         self.assertIn("Work", result)
 
-    def test_store_token_response_preserves_refresh(self):
+    def test_store_token_response_preserves_refresh(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "tok.json"
             with mock.patch.dict(os.environ, {"GMAIL_MCP_TOKEN_FILE": str(path)}):
@@ -189,7 +199,7 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokens["access_token"], "a2")
         self.assertEqual(tokens["refresh_token"], "r1")
 
-    async def test_no_fallback_when_mcp_ok(self):
+    async def test_no_fallback_when_mcp_ok(self) -> None:
         client = GmailMcpClient()
         client._call_mcp = mock.AsyncMock(return_value="thread details here")
         client._rest_request = mock.AsyncMock()

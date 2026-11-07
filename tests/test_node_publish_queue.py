@@ -357,7 +357,9 @@ class TestDrainingTheQueue:
         # sent — an impossible topic, a payload past the protocol's size — would
         # otherwise stop everything behind it for ever.
         class _Picky(self._Client):
-            def publish(self, topic: str, _payload: Any, qos: int = 0, retain: bool = False):
+            def publish(
+                self, topic: str, _payload: Any, qos: int = 0, retain: bool = False
+            ) -> None:
                 if topic.startswith("bad/"):
                     raise ValueError("payload too large")
                 self.sent.append((topic, qos))

@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import queue
+from collections.abc import AsyncIterator
 from typing import Any
 
 from ..attachments import UNREADABLE
@@ -106,7 +107,7 @@ class GeminiProvider(LLMProvider):
         self,
         model: str = "gemini-2.5-flash",
         api_key: str | None = None,
-    ):
+    ) -> None:
         from google import genai  # optional dependency: the `google` extra
         from google.genai import types as genai_types  # optional dependency: the `google` extra
 
@@ -122,7 +123,7 @@ class GeminiProvider(LLMProvider):
         return True
 
     async def _complete(
-        self, messages: list[dict[str, Any]], system: str = "", **kwargs
+        self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> tuple[str, dict[str, Any]]:
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
@@ -236,7 +237,9 @@ class GeminiProvider(LLMProvider):
             parameters=_gemini_schema(tool.get("parameters", {"type": "object", "properties": {}})),
         )
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
@@ -247,7 +250,7 @@ class GeminiProvider(LLMProvider):
         q: queue.Queue[tuple[str, Any]] = queue.Queue()
         input_tokens = output_tokens = 0
 
-        def _stream_thread():
+        def _stream_thread() -> None:
             try:
                 for chunk in self.client.models.generate_content_stream(
                     model=self.model_name,

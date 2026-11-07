@@ -60,8 +60,8 @@ class LLMAgent(Actor):
         system_prompt: str = "You are a helpful AI agent.",
         max_history: int = 20,
         summarize_threshold: int = 30,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self.llm = llm_provider
         self.system_prompt = system_prompt
@@ -97,7 +97,7 @@ class LLMAgent(Actor):
         """System prompt with the live date/time block prepended every turn."""
         return self._now_context() + "\n" + self.system_prompt
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         self.run_detached(refresh_pricing(), name="refresh-pricing")
         # Restore conversation history and rolling summary from persistence
         saved = self.recall("conversation_history", [])
@@ -163,11 +163,11 @@ class LLMAgent(Actor):
             output_schema=output_schema,
         )
 
-    async def on_stop(self):
+    async def on_stop(self) -> None:
         self.persist("conversation_history", self._conversation_history)
         self.persist("history_summary", self._history_summary)
 
-    async def _maybe_summarize(self):
+    async def _maybe_summarize(self) -> None:
         """If history exceeds summarize_threshold, compress the oldest half into a
         rolling summary and keep only the most recent max_history messages.
         The summary is prepended as a system-style context message when sending
@@ -286,7 +286,7 @@ class LLMAgent(Actor):
                 history[-1]["content"] = f"{flatten(blocks)}\n\n{text}"
         return history
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
 
@@ -310,7 +310,7 @@ class LLMAgent(Actor):
             result = {**result, "_task_id": task_id}
         await self.send(reply_to, MessageType.RESULT, result)
 
-    async def _handle_task(self, msg: Message):
+    async def _handle_task(self, msg: Message) -> None:
         if isinstance(msg.payload, dict):
             # Accept "text", "task", "message", or fall back to JSON dump
             task_text = (
@@ -579,7 +579,7 @@ class LLMAgent(Actor):
                 # worth a log line even though it must not break the turn.
                 logger.warning("[%s] chat_log SQLite write failed: %s", self.name, exc)
 
-    def _persist_cost(self):
+    def _persist_cost(self) -> None:
         """Write lifetime cost to durable SQLite storage after each exchange."""
         delta = self.total_cost_usd - self._last_persisted_usd
         if delta > 0:
@@ -602,5 +602,5 @@ class LLMAgent(Actor):
         m["cost_usd"] = round(self.total_cost_usd, 6)
         return m
 
-    def clear_history(self):
+    def clear_history(self) -> None:
         self._conversation_history = []

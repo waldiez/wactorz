@@ -27,7 +27,7 @@ class TestResolveStateDir:
         monkeypatch.setenv("WACTORZ_STATE_DIR", "/from/env")
         assert resolve_state_dir() == "/from/env"
 
-    def test_default_when_unset(self, monkeypatch):
+    def test_default_when_unset(self, monkeypatch) -> None:
         monkeypatch.delenv("WACTORZ_STATE_DIR", raising=False)
         assert resolve_state_dir() == "./state"
 

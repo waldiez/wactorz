@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -152,7 +153,7 @@ class HomeAssistantAgent(LLMAgent):
         "format": "str — 'csv' when csv field is present",
     }
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs) -> None:
+    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "home-assistant-agent")
         kwargs.setdefault("system_prompt", AUTOMATION_CREATION_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
@@ -192,7 +193,7 @@ class HomeAssistantAgent(LLMAgent):
         self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=ts_reply)
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
         """Override LLMAgent streaming path so direct @home-assistant-agent calls
         still use Home Assistant intent routing instead of generic LLM chat.
         """

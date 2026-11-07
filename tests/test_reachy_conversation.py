@@ -7,7 +7,7 @@ import threading
 import time
 import types
 import unittest
-from typing import Any
+from typing import Any, NoReturn
 from unittest import mock
 
 import numpy as np
@@ -24,19 +24,19 @@ NS["_voice_input_problem"] = lambda _payload, **_kwargs: None
 
 
 class FakeMedia:
-    def start_recording(self):
+    def start_recording(self) -> None:
         pass
 
-    def stop_recording(self):
+    def stop_recording(self) -> None:
         pass
 
-    def get_audio_sample(self):
+    def get_audio_sample(self) -> None:
         return None
 
-    def get_input_audio_samplerate(self):
+    def get_input_audio_samplerate(self) -> int:
         return 16000
 
-    def get_input_channels(self):
+    def get_input_channels(self) -> int:
         return 2
 
 
@@ -47,7 +47,7 @@ class FakeAgent:
     # Set by the tests that stand in for the hosting actor.
     _actor: Any
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.state = {
             "mini": types.SimpleNamespace(media=FakeMedia()),
             "media_backend": "webrtc",
@@ -57,22 +57,22 @@ class FakeAgent:
         }
         self.published, self.notifications, self.chat_messages, self.logs = [], [], [], []
 
-    async def publish(self, topic, payload):
+    async def publish(self, topic, payload) -> None:
         self.published.append((topic, payload))
 
-    async def notify_user(self, text, **extra):
+    async def notify_user(self, text, **extra) -> None:
         self.chat_messages.append((text, extra))
         if extra.get("from") != "user":
             self.notifications.append(text)
 
-    async def log(self, text, level="info"):
+    async def log(self, text, level="info") -> None:
         self.logs.append((level, text))
 
-    def run_in_background(self, coro):
+    def run_in_background(self, coro) -> asyncio.Task[Any]:
         return asyncio.create_task(coro)
 
 
-async def fake_prepare(_agent, text, _payload):
+async def fake_prepare(_agent, text, _payload) -> dict[str, Any]:
     """Stand in for edge-tts: unit tests must not synthesize over the network."""
     return {
         "raw_path": f"/tmp/{abs(hash(text))}.mp3",
@@ -83,17 +83,17 @@ async def fake_prepare(_agent, text, _payload):
     }
 
 
-def captured(reason=None):
+def captured(reason=None) -> "VoiceCapture":
     audio = np.zeros(0, np.float32) if reason else np.full(1600, 0.2, np.float32)
     return VoiceCapture(audio, 16000, 1, 0.1 if audio.size else 0.0, reason, 4)
 
 
-async def immediate_cooldown(agent, session, turn, _seconds):
+async def immediate_cooldown(agent, session, turn, _seconds) -> None:
     await NS["_conversation_publish"](agent, session, "cooldown", turn)
 
 
 class ConversationTest(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         # Developer .env settings must not turn deterministic unit captures into
         # real network streams or background motor loops.
         self._environment = mock.patch.dict(
@@ -108,19 +108,19 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         )
         self._environment.start()
 
-    def tearDown(self):
+    def tearDown(self) -> None:
         self._environment.stop()
 
-    async def run_session(self, agent, payload, clips, texts, bridge):
+    async def run_session(self, agent, payload, clips, texts, bridge) -> tuple[Any, Any]:
         clips, texts = iter(clips), iter(texts)
 
-        async def fake_capture(_agent, _session, _config):
+        async def fake_capture(_agent, _session, _config) -> Any:
             pending = _session.pop("pending_capture", None)
             if pending is not None:
                 return pending
             return next(clips)
 
-        async def fake_stt(_wav, _payload):
+        async def fake_stt(_wav, _payload) -> "Transcription":
             value = next(texts)
             if isinstance(value, Exception):
                 raise value
@@ -144,11 +144,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             await session["task"]
             return result, session
 
-    async def test_three_home_assistant_turns_keep_context(self):
+    async def test_three_home_assistant_turns_keep_context(self) -> None:
         agent, routed, contexts = FakeAgent(), [], []
         responses = ["The light is off.", "The light is back on.", "It is dimmed."]
 
-        async def bridge(_agent, text, _task_id, **kwargs):
+        async def bridge(_agent, text, _task_id, **kwargs) -> dict[str, Any]:
             routed.append(text)
             contexts.append(kwargs.get("conversation_history"))
             reply = responses[len(routed) - 1]
@@ -202,7 +202,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.chat_messages[-1][1].get("from"), "reachy-mini")
         self.assertEqual(agent.chat_messages[-1][1].get("brain"), "main")
 
-    async def test_stop_phrase_never_routes(self):
+    async def test_stop_phrase_never_routes(self) -> None:
         agent, bridge = FakeAgent(), mock.AsyncMock()
         _, session = await self.run_session(
             agent, {"max_turns": 5}, [captured()], ["Goodbye, Reachy!"], bridge
@@ -210,14 +210,14 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["stop_reason"], "stop_phrase")
         bridge.assert_not_awaited()
 
-    async def test_inactivity_timeout(self):
+    async def test_inactivity_timeout(self) -> None:
         agent = FakeAgent()
         _, session = await self.run_session(
             agent, {"max_turns": 5}, [captured("inactivity_timeout")], [], mock.AsyncMock()
         )
         self.assertEqual(session["stop_reason"], "inactivity_timeout")
 
-    async def test_motor_noise_does_not_transcribe_or_consume_a_turn(self):
+    async def test_motor_noise_does_not_transcribe_or_consume_a_turn(self) -> None:
         agent, bridge = FakeAgent(), mock.AsyncMock()
         _, session = await self.run_session(
             agent,
@@ -230,10 +230,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["turn_index"], 1)
         bridge.assert_not_awaited()
 
-    async def test_explicit_mqtt_stop_cancels_listening(self):
+    async def test_explicit_mqtt_stop_cancels_listening(self) -> None:
         agent, entered, cancelled = FakeAgent(), asyncio.Event(), asyncio.Event()
 
-        async def blocked_capture(_agent, _session, _config):
+        async def blocked_capture(_agent, _session, _config) -> None:
             entered.set()
             try:
                 await asyncio.Future()
@@ -250,16 +250,16 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
         self.assertIsNone(agent.state["conversation_session"])
 
-    async def test_explicit_stop_cancels_routing(self):
+    async def test_explicit_stop_cancels_routing(self) -> None:
         agent, entered, cancelled = FakeAgent(), asyncio.Event(), asyncio.Event()
 
-        async def fake_capture(*_):
+        async def fake_capture(*_) -> "VoiceCapture":
             return captured()
 
-        async def fake_stt(*_):
+        async def fake_stt(*_) -> "Transcription":
             return Transcription("Turn off the light", "fake", "fake")
 
-        async def blocked_bridge(*_args, **_kwargs):
+        async def blocked_bridge(*_args, **_kwargs) -> None:
             entered.set()
             try:
                 await asyncio.Future()
@@ -279,16 +279,16 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
         self.assertIsNone(agent.state["conversation_session"])
 
-    async def test_explicit_stop_interrupts_speech(self):
+    async def test_explicit_stop_interrupts_speech(self) -> None:
         agent, entered = FakeAgent(), asyncio.Event()
 
-        async def fake_capture(*_):
+        async def fake_capture(*_) -> "VoiceCapture":
             return captured()
 
-        async def fake_stt(*_):
+        async def fake_stt(*_) -> "Transcription":
             return Transcription("Turn off the light", "fake", "fake")
 
-        async def blocked_speech(_agent, _text, _task_id, **kwargs):
+        async def blocked_speech(_agent, _text, _task_id, **kwargs) -> None:
             await kwargs["before_speak"]("Done")
             agent.state["_speaking"] = True
             entered.set()
@@ -312,11 +312,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         stopped.assert_awaited_once_with(agent)
 
-    async def test_own_speech_finishes_then_stale_audio_flushes(self):
+    async def test_own_speech_finishes_then_stale_audio_flushes(self) -> None:
         agent, timeline = FakeAgent(), []
         count = 0
 
-        async def fake_capture(*_):
+        async def fake_capture(*_) -> "VoiceCapture":
             nonlocal count
             count += 1
             timeline.append(f"listen:{count}")
@@ -327,10 +327,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         texts = iter(("Turn off the light", "stop listening"))
 
-        async def fake_stt(*_):
+        async def fake_stt(*_) -> "Transcription":
             return Transcription(next(texts), "fake", "fake")
 
-        async def bridge(_agent, _text, _task_id, **kwargs):
+        async def bridge(_agent, _text, _task_id, **kwargs) -> dict[str, Any]:
             await kwargs["before_speak"]("Done")
             timeline.append("speech:started")
             self.assertEqual(count, 1)
@@ -338,7 +338,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             timeline.append("speech:finished")
             return {"result": "Done", "spoke": True, "speech_error": None}
 
-        def drain(*_):
+        def drain(*_) -> int:
             timeline.append("flush")
             return 7
 
@@ -352,10 +352,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             await session["task"]
         self.assertEqual(session["stop_reason"], "stop_phrase")
 
-    async def test_second_session_is_rejected(self):
+    async def test_second_session_is_rejected(self) -> None:
         agent, entered = FakeAgent(), asyncio.Event()
 
-        async def blocked_capture(*_):
+        async def blocked_capture(*_) -> None:
             entered.set()
             await asyncio.Future()
 
@@ -367,10 +367,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second["ok"])
         self.assertEqual(second["stage"], "session_active")
 
-    async def test_turn_failure_recovers_cleanly(self):
+    async def test_turn_failure_recovers_cleanly(self) -> None:
         agent, calls = FakeAgent(), 0
 
-        async def bridge(_agent, _text, _task_id, **kwargs):
+        async def bridge(_agent, _text, _task_id, **kwargs) -> dict[str, Any]:
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -390,10 +390,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         errors = [p for _, p in agent.published if p.get("state") == "error"]
         self.assertTrue(any("routing_failed" in (p.get("error") or "") for p in errors))
 
-    async def test_chat_shortcuts_dispatch_start_and_stop(self):
+    async def test_chat_shortcuts_dispatch_start_and_stop(self) -> None:
         agent, seen = FakeAgent(), []
 
-        async def fake_dispatch(_agent, cmd, payload, return_result=False):
+        async def fake_dispatch(_agent, cmd, payload, return_result=False) -> dict[str, Any]:
             seen.append(cmd)
             return {"ok": True, "cmd": cmd, "result": cmd}
 
@@ -404,7 +404,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(start["cmd"], "conversation_start")
         self.assertEqual(stop["cmd"], "conversation_stop")
 
-    async def test_default_session_is_inactivity_driven(self):
+    async def test_default_session_is_inactivity_driven(self) -> None:
         agent = FakeAgent()
         _, session = await self.run_session(
             agent,
@@ -416,10 +416,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["stop_reason"], "inactivity_timeout")
         self.assertNotEqual(session["stop_reason"], "max_turns")
 
-    async def test_barge_in_audio_becomes_the_next_turn(self):
+    async def test_barge_in_audio_becomes_the_next_turn(self) -> None:
         agent, bridge_calls = FakeAgent(), []
 
-        async def bridge(_agent, text, _task_id, **kwargs):
+        async def bridge(_agent, text, _task_id, **kwargs) -> dict[str, Any]:
             bridge_calls.append(text)
             await kwargs["before_speak"]("A long answer that gets interrupted.")
             session = kwargs["barge_in_session"]
@@ -445,7 +445,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(session["history"][0]["interrupted"])
         self.assertEqual(session["history"][0]["response"], "A long answer")
 
-    def test_voice_response_is_short_and_dashboard_friendly(self):
+    def test_voice_response_is_short_and_dashboard_friendly(self) -> None:
         reply = (
             "Here is the result. https://example.com/details "
             + "This is additional information. " * 30
@@ -458,7 +458,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(chunks), 2)
         self.assertTrue(all(len(chunk) <= 120 for chunk in chunks))
 
-    async def test_full_reply_is_displayed_before_full_speech_begins(self):
+    async def test_full_reply_is_displayed_before_full_speech_begins(self) -> None:
         agent = FakeAgent()
         full_reply = (
             "I can help with lights, automations, camera vision, and physical gestures. "
@@ -469,10 +469,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         agent.send_to = mock.AsyncMock(return_value={"text": full_reply})
         events = []
 
-        async def before_speak(text):
+        async def before_speak(text) -> None:
             events.append(("display", text))
 
-        async def speak(_agent, text, **_kwargs):
+        async def speak(_agent, text, **_kwargs) -> dict[str, Any]:
             events.append(("speak", text))
             return {
                 "spoke": True,
@@ -494,7 +494,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1][1], full_reply)
         self.assertEqual(result["result"], full_reply)
 
-    async def test_punctuation_only_transcript_is_ignored(self):
+    async def test_punctuation_only_transcript_is_ignored(self) -> None:
         agent, bridge = FakeAgent(), mock.AsyncMock()
         _, session = await self.run_session(
             agent,
@@ -508,10 +508,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         user_turns = [text for text, extra in agent.chat_messages if extra.get("from") == "user"]
         self.assertEqual(user_turns, ["bye"])
 
-    async def test_low_confidence_whisper_hallucination_is_silently_discarded(self):
+    async def test_low_confidence_whisper_hallucination_is_silently_discarded(self) -> None:
         agent, routed = FakeAgent(), []
 
-        async def bridge(_agent, text, _task_id, **kwargs):
+        async def bridge(_agent, text, _task_id, **kwargs) -> dict[str, Any]:
             routed.append(text)
             await kwargs["before_speak"]("Okay.")
             return {"result": "Okay.", "spoke": True, "speech_error": None}
@@ -530,7 +530,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routed, ["Turn on the light"])
         self.assertEqual(session["turn_index"], 1)
 
-    async def test_barge_in_requires_echo_control_or_explicit_override(self):
+    async def test_barge_in_requires_echo_control_or_explicit_override(self) -> None:
         agent = FakeAgent()
         session = {"payload": {"barge_in": False}, "cancel_event": None}
         disabled = await NS["_begin_barge_in_monitor"](agent, session, 2.0)
@@ -547,8 +547,8 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(monitor)
             await NS["_finish_barge_in_monitor"](session, monitor, False)
 
-    async def test_conversation_start_keeps_barge_in_opt_in(self):
-        async def finished_loop(_agent, _session):
+    async def test_conversation_start_keeps_barge_in_opt_in(self) -> None:
+        async def finished_loop(_agent, _session) -> None:
             return None
 
         with mock.patch.dict(NS, {"_conversation_loop": finished_loop}):
@@ -576,15 +576,15 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(forced_off["barge_in"])
         self.assertTrue(forced_on["barge_in"])
 
-    async def test_barge_in_defaults_are_tuned_for_quiet_close_speech(self):
+    async def test_barge_in_defaults_are_tuned_for_quiet_close_speech(self) -> None:
         agent, seen = FakeAgent(), {}
         capture = VoiceCapture(np.zeros((0,), dtype=np.float32), 16000, 1, 0.0, "cancelled")
 
-        async def fake_do(_fn, _media, _cancel, config, _onset):
+        async def fake_do(_fn, _media, _cancel, config, _onset) -> "VoiceCapture":
             seen["config"] = config
             return capture
 
-        async def fake_guard(_cancel, seconds):
+        async def fake_guard(_cancel, seconds) -> bool:
             seen["guard_s"] = seconds
             return True
 
@@ -603,7 +603,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(seen["config"].min_rms, 0.006)
         self.assertAlmostEqual(seen["config"].min_speech_s, 0.12)
 
-    async def test_silence_phrase_does_not_trigger_another_reply(self):
+    async def test_silence_phrase_does_not_trigger_another_reply(self) -> None:
         agent, bridge = FakeAgent(), mock.AsyncMock()
         _, session = await self.run_session(
             agent,
@@ -618,11 +618,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         user_turns = [text for text, extra in agent.chat_messages if extra.get("from") == "user"]
         self.assertEqual(user_turns, ["shut up", "bye"])
 
-    async def test_optional_state_motion_changes_only_antennas(self):
+    async def test_optional_state_motion_changes_only_antennas(self) -> None:
         agent = FakeAgent()
         calls = []
 
-        def set_target(**kwargs):
+        def set_target(**kwargs) -> None:
             calls.append(kwargs)
 
         goto_target = mock.Mock()
@@ -642,18 +642,18 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(calls[0]), {"antennas"})
         goto_target.assert_not_called()
 
-    async def test_state_motion_is_off_by_default(self):
+    async def test_state_motion_is_off_by_default(self) -> None:
         agent = FakeAgent()
         session = {"payload": {}}
         NS["_schedule_conversation_state_motion"](agent, session, "listening")
         self.assertNotIn("_motion_task", session)
 
-    def test_natural_stop_phrases(self):
+    def test_natural_stop_phrases(self) -> None:
         for phrase in ("Bye.", "Goodbye!", "That's all", "Σταμάτα να ακούς."):
             with self.subTest(phrase=phrase):
                 self.assertTrue(NS["_conversation_stop_phrase"](phrase))
 
-    def test_spoken_reply_removes_visual_flourishes_and_ha_syntax(self):
+    def test_spoken_reply_removes_visual_flourishes_and_ha_syntax(self) -> None:
         visual = "Hey! \U0001f60a *waves enthusiastically* Ready when you are."
         spoken = NS["_voice_friendly_reply"](visual)
         self.assertNotIn("\U0001f60a", spoken)
@@ -666,7 +666,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(actuation, "Okay, the light is pink.")
 
-    def test_spoken_ha_status_reads_the_answer_not_the_table(self):
+    def test_spoken_ha_status_reads_the_answer_not_the_table(self) -> None:
         reply = (
             "None of your lights are currently on. Here's the full status:\n\n"
             "| Light | State |\n|---|---|\n| **Lampa** | 🔴 Off |"
@@ -679,7 +679,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(spoken, "None of your lights are currently on.")
 
-    def test_verified_delegation_result_wins_over_guessed_trailing_prose(self):
+    def test_verified_delegation_result_wins_over_guessed_trailing_prose(self) -> None:
         raw = (
             "✅ weather-agent completed: result=Athens is clear and 34 degrees.\n\n"
             "It is probably overcast and 19 degrees."
@@ -690,7 +690,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "Athens is clear and 34 degrees.",
         )
 
-    def test_planner_details_become_a_short_voice_approval_prompt(self):
+    def test_planner_details_become_a_short_voice_approval_prompt(self) -> None:
         raw = (
             "Proposed pipeline abc with 7 internal steps. "
             "Reply 'yes' to approve or 'no' to discard."
@@ -703,7 +703,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "I can set that up as an automation. Say yes to approve it, no to cancel, or tell me what to change.",
         )
 
-    def test_literal_tell_requests_stay_on_reachy_and_can_add_a_dance(self):
+    def test_literal_tell_requests_stay_on_reachy_and_can_add_a_dance(self) -> None:
         self.assertEqual(
             NS["_parse_speak_compound"](
                 "Hey Ritsy, please tell my brother that he's really stupid and do a little dance"
@@ -718,11 +718,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             [{"cmd": "say", "text": "she is a big bunny with red hair"}],
         )
 
-    async def test_literal_speech_is_displayed_then_spoken_without_main(self):
+    async def test_literal_speech_is_displayed_then_spoken_without_main(self) -> None:
         agent = FakeAgent()
         calls = []
 
-        async def dispatch(_agent, cmd, payload, return_result=False):
+        async def dispatch(_agent, cmd, payload, return_result=False) -> dict[str, Any]:
             calls.append((cmd, dict(payload)))
             result = {"ok": True, "cmd": cmd}
             if cmd == "say":
@@ -750,7 +750,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["physical"])
         self.assertEqual(result["result"], "dinner is ready")
 
-    async def test_ha_delegation_exposes_its_human_result(self):
+    async def test_ha_delegation_exposes_its_human_result(self) -> None:
         agent = FakeAgent()
         agent.send_to = mock.AsyncMock(
             return_value={
@@ -767,7 +767,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["result"], result["ha_result"])
         self.assertIn("creation is disabled", result["result"])
 
-    def test_reachy_name_is_repaired_without_naming_the_user(self):
+    def test_reachy_name_is_repaired_without_naming_the_user(self) -> None:
         # Ricci is not a guess: it is what faster-whisper large-v3-turbo returns
         # for spoken "Reachy" on the machine that drives the robot.
         for alias in ("Richie", "Riti", "Ritsy", "Ritzy", "Rizzi", "Lizzy", "Ricci", "Richi"):
@@ -807,7 +807,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "Turn off the main light",
         )
 
-    def test_conversation_stt_auto_detects_language_and_honors_configuration(self):
+    def test_conversation_stt_auto_detects_language_and_honors_configuration(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             resolved = NS["_conversation_stt_payload"]({})
         self.assertNotIn("stt_language", resolved)
@@ -820,11 +820,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Reachy", explicit["stt_hotwords"])
         self.assertIn("kitchen lamp", explicit["stt_hotwords"])
 
-    def test_unicode_transcripts_are_meaningful(self):
+    def test_unicode_transcripts_are_meaningful(self) -> None:
         self.assertTrue(NS["_conversation_transcript_is_meaningful"]("Άναψε το φως"))
         self.assertFalse(NS["_conversation_transcript_is_meaningful"]("... 🎵"))
 
-    async def test_uncertain_short_language_retries_in_greek(self):
+    async def test_uncertain_short_language_retries_in_greek(self) -> None:
         agent = FakeAgent()
         session = {"stt_language_hint": None, "stt_retry_count": 0}
         uncertain = Transcription("To ono ma mu venine ade", "fake", "fake", 0.8, 0.02, "cs", 0.19)
@@ -841,7 +841,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transcribe.await_args_list[1].args[1]["stt_language"], "el")
         self.assertEqual(session["stt_retry_count"], 1)
 
-    async def test_low_confidence_multilingual_result_retries_in_greek(self):
+    async def test_low_confidence_multilingual_result_retries_in_greek(self) -> None:
         agent = FakeAgent()
         session = {"stt_language_hint": None, "stt_retry_count": 0}
         garbled = Transcription(
@@ -876,7 +876,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "Ρίτσι, κλείσε τη λάμπα")
         self.assertEqual(transcribe.await_args_list[1].args[1]["stt_language"], "el")
 
-    async def test_silence_does_not_trigger_a_second_language_request(self):
+    async def test_silence_does_not_trigger_a_second_language_request(self) -> None:
         agent = FakeAgent()
         session = {"stt_language_hint": None, "stt_retry_count": 0}
         silence = Transcription("", "deepgram", "nova-3", 0.0, None, "multi", None)
@@ -894,7 +894,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, silence)
         transcribe.assert_awaited_once()
 
-    async def test_confident_multilingual_result_stays_single_pass(self):
+    async def test_confident_multilingual_result_stays_single_pass(self) -> None:
         agent = FakeAgent()
         session = {"stt_language_hint": None, "stt_retry_count": 0}
         english = Transcription(
@@ -920,7 +920,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, english)
         transcribe.assert_awaited_once()
 
-    async def test_a_worse_greek_retry_does_not_replace_the_first_result(self):
+    async def test_a_worse_greek_retry_does_not_replace_the_first_result(self) -> None:
         agent = FakeAgent()
         session = {"stt_language_hint": None, "stt_retry_count": 0}
         english = Transcription(
@@ -947,7 +947,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, english)
         self.assertEqual(session["stt_retry_count"], 1)
 
-    def test_uncertain_language_is_not_routed_without_a_fallback(self):
+    def test_uncertain_language_is_not_routed_without_a_fallback(self) -> None:
         uncertain = Transcription("Giritui", "fake", "fake", 0.8, 0.02, "en", 0.17)
 
         credible, reason = NS["_conversation_transcription_is_credible"](uncertain, {})
@@ -955,14 +955,14 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(credible)
         self.assertIn("language_probability", reason)
 
-    def test_greek_voice_volume_request_stays_on_reachy(self):
+    def test_greek_voice_volume_request_stays_on_reachy(self) -> None:
         command = NS["_embodied_command_for_text"](
             "Μπορείς να χαμηλώσεις λίγο τον τόνο της φωνής σου"
         )
 
         self.assertEqual(command, {"cmd": "volume", "delta": -15})
 
-    async def test_greek_voice_volume_executes_locally_and_speaks_greek(self):
+    async def test_greek_voice_volume_executes_locally_and_speaks_greek(self) -> None:
         agent = FakeAgent()
         dispatch = mock.AsyncMock(return_value={"ok": True, "cmd": "volume", "level": 85})
         speak = mock.AsyncMock(
@@ -986,7 +986,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(speak.await_args_list[-1].args[1], "Εντάξει, πιο σιγά.")
         self.assertFalse(result["physical"])
 
-    def test_vision_questions_are_embodied_commands(self):
+    def test_vision_questions_are_embodied_commands(self) -> None:
         self.assertEqual(
             NS["_embodied_command_for_text"]("What do you see?"),
             {"cmd": "look_around"},
@@ -1006,13 +1006,13 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                     {"cmd": "look_around"},
                 )
 
-    def test_natural_health_question_uses_live_robot_health(self):
+    def test_natural_health_question_uses_live_robot_health(self) -> None:
         self.assertEqual(
             NS["_embodied_command_for_text"]("Are you healthy and connected?"),
             {"cmd": "health"},
         )
 
-    async def test_health_sounds_like_reachy_not_an_sdk_diagnostic(self):
+    async def test_health_sounds_like_reachy_not_an_sdk_diagnostic(self) -> None:
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(
             media=types.SimpleNamespace(
@@ -1032,7 +1032,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "Reachy Mini doesn't provide a battery reading.",
         )
 
-    async def test_health_says_when_the_voice_boost_is_off(self):
+    async def test_health_says_when_the_voice_boost_is_off(self) -> None:
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(
             media=types.SimpleNamespace(audio=types.SimpleNamespace(daemon_url="")),
@@ -1045,7 +1045,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["loudness_boost"])
         self.assertIn("voice boost is off because ffmpeg isn't installed", result["result"])
 
-    async def test_health_does_not_call_an_unread_fault_monitor_all_clear(self):
+    async def test_health_does_not_call_an_unread_fault_monitor_all_clear(self) -> None:
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(
             media=types.SimpleNamespace(
@@ -1060,7 +1060,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("I cannot currently read the live motor-fault monitor", result["result"])
         self.assertNotIn("has not seen a fault", result["result"])
 
-    async def test_media_disconnect_reconnects_once_with_a_cooldown(self):
+    async def test_media_disconnect_reconnects_once_with_a_cooldown(self) -> None:
         agent = FakeAgent()
         agent.state["audio_on_robot"] = True
         reconnect = mock.AsyncMock(return_value={"connected": True})
@@ -1073,13 +1073,13 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second)
         reconnect.assert_awaited_once_with(agent, {"force": True})
 
-    def test_unsupported_limbs_are_not_claimed(self):
+    def test_unsupported_limbs_are_not_claimed(self) -> None:
         command = NS["_embodied_command_for_text"]("Wave your right hand at me")
 
         self.assertEqual(command["cmd"], "capability")
         self.assertIn("don't have arms or hands", command["result"])
 
-    def test_ha_state_questions_use_the_information_agent(self):
+    def test_ha_state_questions_use_the_information_agent(self) -> None:
         self.assertEqual(
             NS["_ha_delegate_for_request"]("is Lampa on?"),
             "home-assistant-agent",
@@ -1089,17 +1089,17 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "actuator",
         )
 
-    async def test_repeated_unknown_ha_device_uses_reachys_negative_cache(self):
+    async def test_repeated_unknown_ha_device_uses_reachys_negative_cache(self) -> None:
         class Actor:
             actor_id = "reachy-id"
             _llm_provider = None
             _persistence_dir = types.SimpleNamespace(parent="state")
 
-            def __init__(self):
+            def __init__(self) -> None:
                 self._result_futures = {}
                 self.spawn_count = 0
 
-            async def spawn(self, _cls, **kwargs):
+            async def spawn(self, _cls, **kwargs) -> None:
                 self.spawn_count += 1
                 self._result_futures[kwargs["task_id"]].set_result(
                     {"result": "I couldn't identify a matching device for that request."}
@@ -1115,17 +1115,19 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second["cached_no_match"])
         self.assertEqual(agent._actor.spawn_count, 1)
 
-    def test_wactorz_agent_questions_bypass_home_assistant_planning(self):
+    def test_wactorz_agent_questions_bypass_home_assistant_planning(self) -> None:
         self.assertTrue(NS["_is_wactorz_orchestration_request"]("What agents are running?"))
         self.assertTrue(NS["_is_wactorz_orchestration_request"]("Spawn the weather agent"))
         self.assertFalse(NS["_is_wactorz_orchestration_request"]("Which lights are on?"))
 
-    async def test_voice_vision_uses_reachy_camera_instead_of_main(self):
+    async def test_voice_vision_uses_reachy_camera_instead_of_main(self) -> None:
         agent = FakeAgent()
         main_bridge = mock.AsyncMock()
         local_commands = []
 
-        async def local_bridge(_agent, _transcript, command, _task_id, before_speak, _session):
+        async def local_bridge(
+            _agent, _transcript, command, _task_id, before_speak, _session
+        ) -> dict[str, Any]:
             local_commands.append(command)
             await before_speak("I see books and a desk.")
             return {
@@ -1150,12 +1152,12 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.notifications, ["I see books and a desk."])
         self.assertEqual(session["stop_reason"], "max_turns")
 
-    def test_turn_around_is_an_embodied_command(self):
+    def test_turn_around_is_an_embodied_command(self) -> None:
         command = NS["_embodied_command_for_text"]("Turn around")
 
         self.assertEqual(command, {"cmd": "gesture", "name": "turn_around"})
 
-    def test_left_right_turns_default_to_45_and_honor_explicit_angles(self):
+    def test_left_right_turns_default_to_45_and_honor_explicit_angles(self) -> None:
         cases = {
             "Turn left": {"cmd": "turn", "angle": 45},
             "Turn right": {"cmd": "turn", "angle": -45},
@@ -1167,10 +1169,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(phrase=phrase):
                 self.assertEqual(NS["_embodied_command_for_text"](phrase), expected)
 
-    async def test_relative_turn_moves_body_joint_by_requested_angle(self):
+    async def test_relative_turn_moves_body_joint_by_requested_angle(self) -> None:
         calls = []
 
-        def goto_joint_positions(**kwargs):
+        def goto_joint_positions(**kwargs) -> None:
             calls.append(kwargs)
 
         head = np.zeros(7)
@@ -1197,7 +1199,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["turn_degrees"], 45)
         self.assertEqual(agent.state["_facing_body_yaw_deg"], 75)
 
-    def test_behind_you_is_a_deterministic_rear_view(self):
+    def test_behind_you_is_a_deterministic_rear_view(self) -> None:
         command = NS["_embodied_command_for_text"]("Behind you!")
 
         self.assertEqual(
@@ -1207,7 +1209,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         compound = NS["_embodied_command_for_text"]("Turn around and tell me what you see")
         self.assertEqual(compound["cmd"], "look_behind")
 
-    async def test_debug_commands_toggle_execution_receipts(self):
+    async def test_debug_commands_toggle_execution_receipts(self) -> None:
         agent = FakeAgent()
         self.assertEqual(
             NS["_embodied_command_for_text"]("enable debug"),
@@ -1223,7 +1225,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disabled["result"], "Debug details disabled.")
         self.assertFalse(agent.state["debug"])
 
-    async def test_plain_stop_cuts_speech_without_a_receipt_unless_debug_is_on(self):
+    async def test_plain_stop_cuts_speech_without_a_receipt_unless_debug_is_on(self) -> None:
         agent = FakeAgent()
         dispatch = mock.AsyncMock(
             side_effect=[
@@ -1241,11 +1243,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(quiet["_suppress_reply"])
         self.assertNotIn("_suppress_reply", verbose)
 
-    async def test_action_receipt_is_hidden_until_debug_is_enabled(self):
-        async def planner(_agent, _text):
+    async def test_action_receipt_is_hidden_until_debug_is_enabled(self) -> None:
+        async def planner(_agent, _text) -> list[dict[str, str]]:
             return [{"cmd": "wake"}, {"cmd": "describe"}]
 
-        async def dispatch(_agent, cmd, _payload, return_result=False):
+        async def dispatch(_agent, cmd, _payload, return_result=False) -> dict[str, Any]:
             if cmd == "describe":
                 return {
                     "ok": True,
@@ -1267,14 +1269,14 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ran 2 of 2", verbose["result"])
         self.assertEqual(agent.notifications, ["There are books behind me."])
 
-    async def test_compound_home_and_robot_actions_confirm_both(self):
-        async def planner(_agent, _text):
+    async def test_compound_home_and_robot_actions_confirm_both(self) -> None:
+        async def planner(_agent, _text) -> list[dict[str, str]]:
             return [
                 {"cmd": "ha", "request": "turn on Lampa"},
                 {"cmd": "gesture", "name": "dance"},
             ]
 
-        async def dispatch(_agent, cmd, _payload, return_result=False):
+        async def dispatch(_agent, cmd, _payload, return_result=False) -> dict[str, Any]:
             if cmd == "ha":
                 return {"ok": True, "cmd": cmd, "result": "Done: light.turn_on -> light.lampa."}
             return {"ok": True, "cmd": cmd, "result": "Ta-da! I did a little dance."}
@@ -1287,11 +1289,11 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["result"], "Okay, the light is on. Ta-da! I did a little dance.")
 
-    async def test_single_home_action_hides_the_service_receipt(self):
-        async def planner(_agent, _text):
+    async def test_single_home_action_hides_the_service_receipt(self) -> None:
+        async def planner(_agent, _text) -> list[dict[str, str]]:
             return [{"cmd": "ha", "request": "turn off Lampa"}]
 
-        async def dispatch(_agent, cmd, _payload, return_result=False):
+        async def dispatch(_agent, cmd, _payload, return_result=False) -> dict[str, Any]:
             return {"ok": True, "cmd": cmd, "result": "Done: light.turn_off -> light.lampa."}
 
         with mock.patch.dict(NS, {"_nl_to_commands": planner, "_dispatch": dispatch}):
@@ -1299,7 +1301,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["result"], "Okay, the light is off.")
 
-    async def test_voice_behind_you_speaks_the_rear_description_once(self):
+    async def test_voice_behind_you_speaks_the_rear_description_once(self) -> None:
         agent = FakeAgent()
         dispatch = mock.AsyncMock(
             return_value={
@@ -1335,10 +1337,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["physical"])
         self.assertEqual(result["result"], "There are books behind me.")
 
-    async def test_direct_dance_request_dispatches_a_real_gesture(self):
+    async def test_direct_dance_request_dispatches_a_real_gesture(self) -> None:
         agent, seen = FakeAgent(), []
 
-        async def fake_dispatch(_agent, cmd, payload, return_result=False):
+        async def fake_dispatch(_agent, cmd, payload, return_result=False) -> dict[str, Any]:
             seen.append((cmd, payload.get("name")))
             return {"ok": True, "cmd": cmd, "result": "done"}
 
@@ -1347,7 +1349,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [("gesture", "dance")])
         self.assertEqual(result["cmd"], "gesture")
 
-    async def test_main_interface_action_executes_on_reachy(self):
+    async def test_main_interface_action_executes_on_reachy(self) -> None:
         agent = FakeAgent()
         agent.send_to = mock.AsyncMock(
             return_value={
@@ -1379,7 +1381,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["interface_actions"][0]["name"], "turn_around")
         self.assertTrue(result["spoke"])
 
-    async def test_voice_dance_stays_local_and_moves_the_robot(self):
+    async def test_voice_dance_stays_local_and_moves_the_robot(self) -> None:
         agent, bridge = FakeAgent(), mock.AsyncMock()
         gesture = mock.AsyncMock(
             return_value={"gesture": "dance", "result": "Ta-da! I did a little dance."}
@@ -1407,10 +1409,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         gesture.assert_awaited_once()
         speak.assert_awaited_once()
 
-    async def test_opt_in_idle_motion_stops_on_state_change(self):
+    async def test_opt_in_idle_motion_stops_on_state_change(self) -> None:
         agent, entered = FakeAgent(), asyncio.Event()
 
-        async def blocked_idle(_agent, _session):
+        async def blocked_idle(_agent, _session) -> None:
             entered.set()
             await asyncio.Future()
 
@@ -1428,10 +1430,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
         self.assertTrue(task.cancelled())
 
-    async def test_listening_idle_motion_targets_only_antennas(self):
+    async def test_listening_idle_motion_targets_only_antennas(self) -> None:
         agent, calls = FakeAgent(), []
 
-        def set_target(**kwargs):
+        def set_target(**kwargs) -> None:
             calls.append(kwargs)
 
         agent.state.update(
@@ -1445,10 +1447,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(set(calls[0]), {"antennas"})
 
-    async def test_confirmed_speech_stops_idle_motors_immediately(self):
+    async def test_confirmed_speech_stops_idle_motors_immediately(self) -> None:
         agent = FakeAgent()
 
-        async def moving():
+        async def moving() -> None:
             await asyncio.Future()
 
         idle_task = asyncio.create_task(moving())
@@ -1459,7 +1461,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "_idle_motion_task": idle_task,
         }
 
-        def fake_capture(_media, _cancel, _config, on_speech_start):
+        def fake_capture(_media, _cancel, _config, on_speech_start) -> "VoiceCapture":
             on_speech_start()
             return captured()
 
@@ -1467,7 +1469,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             await NS["_conversation_capture"](agent, session, object())
         await asyncio.gather(idle_task, return_exceptions=True)
 
-    async def test_deepgram_streaming_reuses_reachy_media_and_publishes_interim_text(self):
+    async def test_deepgram_streaming_reuses_reachy_media_and_publishes_interim_text(self) -> None:
         agent = FakeAgent()
         session = {
             "state": "listening",
@@ -1481,7 +1483,9 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             "final words", "deepgram-streaming", "nova-3", confidence=0.95, language="en"
         )
 
-        def stream(media, _cancel, _config, _payload, on_speech_start, on_interim):
+        def stream(
+            media, _cancel, _config, _payload, on_speech_start, on_interim
+        ) -> "StreamingTurn":
             self.assertIs(media, agent.state["mini"].media)
             on_speech_start()
             on_interim("final wor")
@@ -1505,7 +1509,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         interim = [payload for _, payload in agent.published if payload.get("interim_transcript")]
         self.assertEqual(interim[-1]["interim_transcript"], "final wor")
 
-    async def test_stream_error_keeps_the_same_capture_for_batch_fallback(self):
+    async def test_stream_error_keeps_the_same_capture_for_batch_fallback(self) -> None:
         agent = FakeAgent()
         session = {
             "state": "listening",
@@ -1516,7 +1520,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         }
         clip = captured()
 
-        def stream(*_args):
+        def stream(*_args) -> "StreamingTurn":
             return StreamingTurn(clip, None, "socket lost")
 
         with (
@@ -1536,7 +1540,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["stt_stream_fallbacks"], 1)
         self.assertTrue(any("transcribing the captured turn" in text for _, text in agent.logs))
 
-    async def test_dropped_webrtc_microphone_reconnects_and_listens_again(self):
+    async def test_dropped_webrtc_microphone_reconnects_and_listens_again(self) -> None:
         agent = FakeAgent()
         session = {
             "state": "listening",
@@ -1549,7 +1553,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         recover = mock.AsyncMock(return_value=True)
         recapture = mock.AsyncMock(return_value=recovered_capture)
 
-        def stream(*_args):
+        def stream(*_args) -> NoReturn:
             raise RuntimeError("signalling error: receiver is gone")
 
         with (
@@ -1573,7 +1577,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         recover.assert_awaited_once()
         recapture.assert_awaited_once_with(agent, session, mock.ANY)
 
-    async def test_live_transcript_routes_without_a_second_recognizer_call(self):
+    async def test_live_transcript_routes_without_a_second_recognizer_call(self) -> None:
         agent = FakeAgent()
         transcription = Transcription(
             "Turn off the light",
@@ -1583,10 +1587,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             language="en",
         )
 
-        async def listen(*_args):
+        async def listen(*_args) -> "tuple[VoiceCapture, Transcription]":
             return captured(), transcription
 
-        async def bridge(_agent, _text, _task_id, **kwargs):
+        async def bridge(_agent, _text, _task_id, **kwargs) -> dict[str, Any]:
             await kwargs["before_speak"]("Done")
             return {"result": "Done", "spoke": True, "spoken_result": "Done"}
 
@@ -1611,10 +1615,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         final = [payload for _, payload in agent.published if payload.get("state") == "stopped"][-1]
         self.assertTrue(final["stt_streaming"])
 
-    async def test_idle_sweep_is_fluid_and_antenna_only(self):
+    async def test_idle_sweep_is_fluid_and_antenna_only(self) -> None:
         agent, calls = FakeAgent(), []
 
-        def set_target(**kwargs):
+        def set_target(**kwargs) -> None:
             calls.append(kwargs)
 
         agent.state.update(
@@ -1638,16 +1642,16 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(float(np.max(np.abs(np.diff(angles, axis=0)))), 2.0)
         np.testing.assert_allclose(angles[-1], [7.0, 5.0], atol=0.01)
 
-    async def test_idle_motion_is_off_by_default(self):
+    async def test_idle_motion_is_off_by_default(self) -> None:
         agent = FakeAgent()
         session = {"payload": {}}
         NS["_schedule_conversation_idle_motion"](agent, session, "listening")
         self.assertIsNone(session["_idle_motion_task"])
 
-    async def test_dance_choreography_sends_complete_safe_poses(self):
+    async def test_dance_choreography_sends_complete_safe_poses(self) -> None:
         agent, calls = FakeAgent(), []
 
-        def goto_target(**kwargs):
+        def goto_target(**kwargs) -> None:
             calls.append(kwargs)
 
         agent.state.update(
@@ -1667,10 +1671,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         required = {"head", "antennas", "body_yaw", "duration"}
         self.assertTrue(all(set(call) == required for call in calls))
 
-    async def test_head_pose_does_not_reset_persistent_body_yaw(self):
+    async def test_head_pose_does_not_reset_persistent_body_yaw(self) -> None:
         agent, calls = FakeAgent(), []
 
-        def goto_target(**kwargs):
+        def goto_target(**kwargs) -> None:
             calls.append(kwargs)
 
         agent.state.update(
@@ -1688,10 +1692,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(calls[0]["body_yaw"])
         self.assertEqual(agent.state["_facing_body_yaw_deg"], 155.0)
 
-    async def test_turn_around_choreography_drives_body_joint_to_rear_limit(self):
+    async def test_turn_around_choreography_drives_body_joint_to_rear_limit(self) -> None:
         agent, calls = FakeAgent(), []
 
-        def goto_joint_positions(**kwargs):
+        def goto_joint_positions(**kwargs) -> None:
             calls.append(kwargs)
 
         mini = types.SimpleNamespace(
@@ -1728,14 +1732,14 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         "Let me know if you want anything else changed today."
     )
 
-    def setUp(self):
+    def setUp(self) -> None:
         self.assertEqual(len(NS["_speech_chunks"](self.REPLY)), 3)
 
-    async def test_speaker_disconnect_reconnects_and_retries_the_same_audio(self):
+    async def test_speaker_disconnect_reconnects_and_retries_the_same_audio(self) -> None:
         agent = FakeAgent()
         recovered_paths = []
 
-        def fail_play(_path):
+        def fail_play(_path) -> NoReturn:
             raise RuntimeError("websocket connection is closed")
 
         failed_media = types.SimpleNamespace(
@@ -1754,7 +1758,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        async def recover(_agent, _error):
+        async def recover(_agent, _error) -> bool:
             _agent.state["mini"] = types.SimpleNamespace(media=recovered_media)
             return True
 
@@ -1767,7 +1771,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["said"], "Connection restored.")
         self.assertEqual(len(recovered_paths), 1)
 
-    async def test_direct_say_does_not_truncate_after_500_characters(self):
+    async def test_direct_say_does_not_truncate_after_500_characters(self) -> None:
         agent = FakeAgent()
         played = []
         media = types.SimpleNamespace(
@@ -1786,7 +1790,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(long_text), 500)
         prepared_text = []
 
-        async def prepare(_agent, text, _payload):
+        async def prepare(_agent, text, _payload) -> dict[str, Any]:
             prepared_text.append(text)
             return {
                 "raw_path": "/tmp/direct-long.mp3",
@@ -1804,7 +1808,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["said"], long_text.strip())
         self.assertEqual(played, ["/tmp/direct-long.mp3"])
 
-    async def test_a_reply_nobody_waits_for_still_records_when_it_ends(self):
+    async def test_a_reply_nobody_waits_for_still_records_when_it_ends(self) -> None:
         # The speaking flag clears as soon as an unawaited say returns, while
         # the robot goes on talking; recovery reads the end time instead.
         agent = FakeAgent()
@@ -1815,7 +1819,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         )
         agent.state.update({"mini": types.SimpleNamespace(media=media), "life_enabled": False})
 
-        async def prepare(_agent, _text, _payload):
+        async def prepare(_agent, _text, _payload) -> dict[str, Any]:
             return {
                 "raw_path": "/tmp/reply.mp3",
                 "play_path": "/tmp/reply.mp3",
@@ -1831,12 +1835,12 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(agent.state["_speaking"])
         self.assertGreater(agent.state["_speech_ends_at"], time.monotonic() + 25)
 
-    async def test_shutup_during_a_sentence_drops_the_rest_of_the_reply(self):
+    async def test_shutup_during_a_sentence_drops_the_rest_of_the_reply(self) -> None:
         agent = FakeAgent()
         agent.state["stop_speaking"] = False
         said = []
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             said.append(payload["text"])
             if not payload.get("_continuation"):
                 # Mirrors _say: a fresh utterance clears a stale stop request.
@@ -1858,14 +1862,14 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["stopped"])
         self.assertFalse(result["interrupted"])
 
-    async def test_a_reply_is_not_silenced_by_a_stop_from_the_previous_turn(self):
+    async def test_a_reply_is_not_silenced_by_a_stop_from_the_previous_turn(self) -> None:
         # The stale-clear still has to happen once per reply, or a 'shutup' would
         # leave the robot mute for the next thing it is asked to say.
         agent = FakeAgent()
         agent.state["stop_speaking"] = True
         said = []
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             said.append(payload["text"])
             return {
                 "said": payload["text"],
@@ -1879,11 +1883,11 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(said), 3)
         self.assertFalse(result["stopped"])
 
-    async def test_the_gap_between_sentences_is_shorter_than_between_replies(self):
+    async def test_the_gap_between_sentences_is_shorter_than_between_replies(self) -> None:
         agent = FakeAgent()
         pads = []
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             pads.append(payload.get("tail_pad"))
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
@@ -1908,7 +1912,7 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
     """
 
     class BridgeAgent(FakeAgent):
-        def __init__(self, reply, connected=False):
+        def __init__(self, reply, connected=False) -> None:
             super().__init__()
             self.reply = reply
             self.sent = []
@@ -1916,21 +1920,21 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
                 # Skips playback, so the test is about the displayed text only.
                 self.state["mini"] = None
 
-        async def send_to(self, name, payload, timeout=None):
+        async def send_to(self, name, payload, timeout=None) -> dict[str, Any]:
             self.sent.append((name, payload))
             return {"result": self.reply}
 
-    async def _display(self, reply, user_text):
+    async def _display(self, reply, user_text) -> tuple[list[Any], Any]:
         agent = self.BridgeAgent(reply)
         shown = []
 
-        async def before_speak(text):
+        async def before_speak(text) -> None:
             shown.append(text)
 
         result = await NS["_bridge_to_main"](agent, user_text, "task-1", before_speak=before_speak)
         return shown, result
 
-    async def test_an_actuation_is_shown_as_the_sentence_it_was_spoken_as(self):
+    async def test_an_actuation_is_shown_as_the_sentence_it_was_spoken_as(self) -> None:
         shown, result = await self._display(
             "Done: light.turn_on -> light.tapo_l920.",
             "Please turn the LED light green at maximum brightness",
@@ -1939,7 +1943,7 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shown, ["Okay, the light is green."])
         self.assertEqual(result["result"], "Okay, the light is green.")
 
-    async def test_the_raw_acknowledgement_is_still_returned_untouched(self):
+    async def test_the_raw_acknowledgement_is_still_returned_untouched(self) -> None:
         # The technical string is what a caller inspecting the turn wants; it is
         # only the *displayed* text that changes.
         _, result = await self._display(
@@ -1949,7 +1953,7 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["raw_result"], "Done: light.turn_off -> light.tapo_l920.")
         self.assertEqual(result["result"], "Okay, the light is off.")
 
-    async def test_two_differently_worded_requests_no_longer_read_alike(self):
+    async def test_two_differently_worded_requests_no_longer_read_alike(self) -> None:
         green, _ = await self._display(
             "Done: light.turn_on -> light.tapo_l920.", "turn the LED light green"
         )
@@ -1961,7 +1965,7 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blue, ["Okay, the light is blue."])
         self.assertNotEqual(green, blue)
 
-    async def test_an_ordinary_answer_keeps_its_full_text(self):
+    async def test_an_ordinary_answer_keeps_its_full_text(self) -> None:
         # Only machine acknowledgements are rewritten. Ordinary answers retain
         # their original text in both the spoken and displayed result.
         answer = "The living room is 21 degrees and the hallway sensor is offline."
@@ -1975,10 +1979,10 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
 class ConversationInterruptionPhraseTest(unittest.IsolatedAsyncioTestCase):
     """Interruption is reachable in words, not only as hand-written JSON."""
 
-    async def _payload_for(self, text):
+    async def _payload_for(self, text) -> dict[Any, Any]:
         agent, seen = FakeAgent(), {}
 
-        async def fake_start(_agent, payload):
+        async def fake_start(_agent, payload) -> dict[str, Any]:
             seen.update(payload)
             return {"started": True, "result": "ok"}
 
@@ -1986,7 +1990,7 @@ class ConversationInterruptionPhraseTest(unittest.IsolatedAsyncioTestCase):
             await NS["handle_task"](agent, {"text": text})
         return seen
 
-    async def test_asking_for_interruption_turns_barge_in_on(self):
+    async def test_asking_for_interruption_turns_barge_in_on(self) -> None:
         for phrase in (
             "start conversation with interruption",
             "start interruptible conversation",
@@ -1995,7 +1999,7 @@ class ConversationInterruptionPhraseTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(phrase=phrase):
                 self.assertIs((await self._payload_for(phrase)).get("barge_in"), True)
 
-    async def test_the_plain_phrase_still_leaves_it_off(self):
+    async def test_the_plain_phrase_still_leaves_it_off(self) -> None:
         # The mic hears Reachy's own speaker, so barge-in stays opt-in.
         self.assertFalse((await self._payload_for("start conversation")).get("barge_in"))
 
@@ -2007,10 +2011,10 @@ class ConversationStartMessageTest(unittest.IsolatedAsyncioTestCase):
     than as a setting nobody asked for.
     """
 
-    async def _start(self, payload):
+    async def _start(self, payload) -> Any:
         agent = FakeAgent()
 
-        async def fake_loop(_agent, _session):
+        async def fake_loop(_agent, _session) -> None:
             return None
 
         with mock.patch.dict(NS, {"_conversation_loop": fake_loop}):
@@ -2020,13 +2024,13 @@ class ConversationStartMessageTest(unittest.IsolatedAsyncioTestCase):
                 await session["task"]
         return result
 
-    async def test_it_says_how_to_cut_in_when_interruption_is_off(self):
+    async def test_it_says_how_to_cut_in_when_interruption_is_off(self) -> None:
         result = await self._start({})
 
         self.assertFalse(result["barge_in"])
         self.assertIn("stop talking", result["result"])
 
-    async def test_it_says_you_can_talk_over_it_when_interruption_is_on(self):
+    async def test_it_says_you_can_talk_over_it_when_interruption_is_on(self) -> None:
         result = await self._start({"barge_in": True})
 
         self.assertTrue(result["barge_in"])
@@ -2044,18 +2048,20 @@ class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
 
     JOKE = "Why don't eggs tell jokes? Because they'd crack each other up!"
 
-    def _capture(self, voiced=1.0):
+    def _capture(self, voiced=1.0) -> "VoiceCapture":
         audio = np.full(16000, 0.2, np.float32)
         return VoiceCapture(audio, 16000, 1, 1.0, None, 4, voiced_duration_s=voiced)
 
-    def _session(self, **payload):
+    def _session(self, **payload) -> dict[str, Any]:
         return {"payload": payload, "cancel_event": None}
 
-    async def _verify(self, transcript, *, session=None, voiced=1.0, spoken=None, raises=None):
+    async def _verify(
+        self, transcript, *, session=None, voiced=1.0, spoken=None, raises=None
+    ) -> "tuple[Any, Any | dict[str, Any], FakeAgent]":
         agent = FakeAgent()
         session = session if session is not None else self._session()
 
-        async def fake_transcribe(_agent, _wav, _payload, _session):
+        async def fake_transcribe(_agent, _wav, _payload, _session) -> tuple[Any, bool]:
             if raises is not None:
                 raise raises
             return transcript, False
@@ -2067,23 +2073,23 @@ class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
         return verdict, session, agent
 
     @staticmethod
-    def _heard(text, **kwargs):
+    def _heard(text, **kwargs) -> "Transcription":
         return Transcription(text, "fake", "fake", **kwargs)
 
-    async def test_his_own_sentence_coming_back_is_not_an_interruption(self):
+    async def test_his_own_sentence_coming_back_is_not_an_interruption(self) -> None:
         verdict, session, agent = await self._verify(self._heard("why don't eggs tell jokes"))
 
         self.assertFalse(verdict)
         self.assertNotIn("pending_capture", session)
         self.assertTrue(any("my own words" in text for _level, text in agent.logs))
 
-    async def test_a_person_talking_over_him_is_an_interruption(self):
+    async def test_a_person_talking_over_him_is_an_interruption(self) -> None:
         verdict, session, _ = await self._verify(self._heard("okay stop, I have heard it"))
 
         self.assertTrue(verdict)
         self.assertIsNotNone(session["pending_capture"])
 
-    async def test_a_short_word_over_him_still_counts(self):
+    async def test_a_short_word_over_him_still_counts(self) -> None:
         # "stop" is about 0.2s of voice, and echo suppression during playback
         # trims what little there is. A stricter floor here than the one the
         # capture layer used to call it an utterance threw these away — which
@@ -2093,7 +2099,7 @@ class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(verdict)
         self.assertIsNotNone(session["pending_capture"])
 
-    async def test_the_floor_follows_the_one_that_called_it_speech(self):
+    async def test_the_floor_follows_the_one_that_called_it_speech(self) -> None:
         # Raising the capture layer's own minimum raises this with it, rather
         # than leaving two numbers to disagree.
         verdict, _session, _ = await self._verify(
@@ -2104,7 +2110,7 @@ class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(verdict)
 
-    async def test_a_stray_click_is_too_little_voice_to_count(self):
+    async def test_a_stray_click_is_too_little_voice_to_count(self) -> None:
         verdict, session, _ = await self._verify(
             self._heard("okay stop, I have heard it"), voiced=0.05
         )
@@ -2112,19 +2118,19 @@ class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(verdict)
         self.assertNotIn("pending_capture", session)
 
-    async def test_a_transcript_the_recogniser_doubts_is_not_believed(self):
+    async def test_a_transcript_the_recogniser_doubts_is_not_believed(self) -> None:
         verdict, _session, _ = await self._verify(
             self._heard("okay stop", no_speech_probability=0.99)
         )
 
         self.assertFalse(verdict)
 
-    async def test_punctuation_only_output_is_not_a_turn(self):
+    async def test_punctuation_only_output_is_not_a_turn(self) -> None:
         verdict, _session, _ = await self._verify(self._heard("..."))
 
         self.assertFalse(verdict)
 
-    async def test_a_recogniser_failure_leaves_him_talking(self):
+    async def test_a_recogniser_failure_leaves_him_talking(self) -> None:
         # Unverifiable is not the same as real: a failing recogniser must not
         # become a way to silence him.
         verdict, session, agent = await self._verify(
@@ -2141,7 +2147,7 @@ class OwnVoiceRecognitionTest(unittest.TestCase):
 
     JOKE = "Why don't eggs tell jokes? Because they'd crack each other up!"
 
-    def test_a_fragment_of_what_he_is_saying_is_his(self):
+    def test_a_fragment_of_what_he_is_saying_is_his(self) -> None:
         for fragment in (
             "why don't eggs tell jokes",
             "because they'd crack each other up",
@@ -2150,16 +2156,16 @@ class OwnVoiceRecognitionTest(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertTrue(NS["_barge_in_sounds_like_reachy"](fragment, self.JOKE))
 
-    def test_something_he_never_said_is_not(self):
+    def test_something_he_never_said_is_not(self) -> None:
         for said in ("stop talking please", "turn the light blue", "what time is it"):
             with self.subTest(said=said):
                 self.assertFalse(NS["_barge_in_sounds_like_reachy"](said, self.JOKE))
 
-    def test_nothing_heard_is_not_his_voice(self):
+    def test_nothing_heard_is_not_his_voice(self) -> None:
         self.assertFalse(NS["_barge_in_sounds_like_reachy"]("", self.JOKE))
         self.assertFalse(NS["_barge_in_sounds_like_reachy"]("hello", ""))
 
-    def test_a_short_shared_word_is_not_enough(self):
+    def test_a_short_shared_word_is_not_enough(self) -> None:
         # "the" appearing in both must not make a real request look like echo.
         self.assertFalse(
             NS["_barge_in_sounds_like_reachy"]("open the door", "the eggs are cracking")
@@ -2175,16 +2181,16 @@ class InterruptionSurvivesTheRecogniserTest(unittest.IsolatedAsyncioTestCase):
     he talked straight over the person asking him to stop.
     """
 
-    def _capture(self):
+    def _capture(self) -> "VoiceCapture":
         return VoiceCapture(
             np.full(16000, 0.2, np.float32), 16000, 1, 1.0, None, 4, voiced_duration_s=1.0
         )
 
-    async def test_the_check_transcribes_without_the_recognisers_own_vad(self):
+    async def test_the_check_transcribes_without_the_recognisers_own_vad(self) -> None:
         agent, seen = FakeAgent(), {}
         capture = self._capture()
 
-        async def fake_transcribe(_agent, _wav, payload, _session):
+        async def fake_transcribe(_agent, _wav, payload, _session) -> "tuple[Transcription, bool]":
             seen.update(payload)
             return Transcription("stop talking", "fake", "fake"), False
 
@@ -2195,13 +2201,13 @@ class InterruptionSurvivesTheRecogniserTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(verdict)
         self.assertIs(seen["stt_vad_filter"], False)
 
-    async def test_the_words_are_carried_into_the_turn_not_re_derived(self):
+    async def test_the_words_are_carried_into_the_turn_not_re_derived(self) -> None:
         # Re-transcribing would run that VAD over the same clip and lose them.
         agent = FakeAgent()
         capture = self._capture()
         heard = Transcription("stop talking", "fake", "fake")
 
-        async def fake_transcribe(_agent, _wav, _payload, _session):
+        async def fake_transcribe(_agent, _wav, _payload, _session) -> "tuple[Transcription, bool]":
             return heard, False
 
         session = {"payload": {}, "cancel_event": None}
@@ -2217,12 +2223,12 @@ class InterruptionSurvivesTheRecogniserTest(unittest.IsolatedAsyncioTestCase):
 class SttVadFilterOptionTest(unittest.TestCase):
     """The recogniser's VAD is on unless a caller that already gated the audio says otherwise."""
 
-    def test_it_defaults_to_on(self):
+    def test_it_defaults_to_on(self) -> None:
         from wactorz.catalogue_agents.reachy_stt import STTConfig
 
         self.assertTrue(STTConfig.resolve({}, {}).vad_filter)
 
-    def test_a_caller_can_turn_it_off(self):
+    def test_a_caller_can_turn_it_off(self) -> None:
         from wactorz.catalogue_agents.reachy_stt import STTConfig
 
         self.assertFalse(STTConfig.resolve({"stt_vad_filter": False}, {}).vad_filter)
@@ -2236,17 +2242,17 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
     him sound slow. It runs alongside the next sentence now.
     """
 
-    async def _speak(self, verdicts, chunks=3, delay=0.05):
+    async def _speak(self, verdicts, chunks=3, delay=0.05) -> tuple[Any, list[Any]]:
         agent = FakeAgent()
         session = {"payload": {}, "cancel_event": None, "barge_check": None}
         order, pending = [], iter(verdicts)
 
-        async def slow_check(verdict):
+        async def slow_check(verdict) -> Any:
             await asyncio.sleep(delay)
             order.append("checked")
             return verdict
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             order.append(f"said:{payload['text'][:6]}")
             verdict = next(pending, None)
             running = session.get("barge_check")
@@ -2262,7 +2268,7 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
             result = await NS["_speak_reply"](agent, text, await_playback=True, session=session)
         return result, order
 
-    async def test_the_next_sentence_starts_before_the_check_finishes(self):
+    async def test_the_next_sentence_starts_before_the_check_finishes(self) -> None:
         result, order = await self._speak([False, False, False])
 
         self.assertTrue(result["spoke"])
@@ -2272,22 +2278,22 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len([step for step in order if step.startswith("said:")]), 2)
         self.assertLess(order.index("checked"), len(order))
 
-    async def test_a_confirmed_check_still_stops_him(self):
+    async def test_a_confirmed_check_still_stops_him(self) -> None:
         result, _order = await self._speak([True, False, False], delay=0.0)
 
         self.assertTrue(result["interrupted"])
 
-    async def test_he_stops_at_the_next_sentence_not_at_the_end_of_the_reply(self):
+    async def test_he_stops_at_the_next_sentence_not_at_the_end_of_the_reply(self) -> None:
         # The whole point of taking the answer between sentences: without it he
         # would finish the entire reply and only then notice he was interrupted.
         agent = FakeAgent()
         session = {"payload": {}, "cancel_event": None, "barge_check": None}
         said = []
 
-        async def yes():
+        async def yes() -> bool:
             return True
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             said.append(payload["text"])
             if session.get("barge_check") is None:
                 session["barge_check"] = asyncio.create_task(yes())
@@ -2306,16 +2312,16 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["interrupted"])
         self.assertEqual(len(said), 1)
 
-    async def test_a_check_still_running_at_the_end_is_waited_for(self):
+    async def test_a_check_still_running_at_the_end_is_waited_for(self) -> None:
         # The final sentence has nowhere to hand a late answer on to.
         agent = FakeAgent()
         session = {"payload": {}, "cancel_event": None, "barge_check": None}
 
-        async def late_yes():
+        async def late_yes() -> bool:
             await asyncio.sleep(0.05)
             return True
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             session["barge_check"] = asyncio.create_task(late_yes())
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
@@ -2326,14 +2332,14 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["interrupted"])
 
-    async def test_a_check_that_fails_leaves_him_talking(self):
+    async def test_a_check_that_fails_leaves_him_talking(self) -> None:
         agent = FakeAgent()
         session = {"payload": {}, "cancel_event": None, "barge_check": None}
 
-        async def boom():
+        async def boom() -> NoReturn:
             raise RuntimeError("stt down")
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             session["barge_check"] = asyncio.create_task(boom())
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
@@ -2358,13 +2364,13 @@ class SentencesArePreparedAheadTest(unittest.IsolatedAsyncioTestCase):
         f"This is sentence number {n} and it carries on for a while yet." for n in range(3)
     )
 
-    async def _run(self, stop_after=None):
+    async def _run(self, stop_after=None) -> tuple[Any, list[Any], Any]:
         agent, order = FakeAgent(), []
         chunks = NS["_speech_chunks"](self.TEXT)
         self.assertGreater(len(chunks), 2, "text must split into several sentences")
         index_of = {chunk: n for n, chunk in enumerate(chunks)}
 
-        async def fake_prepare(_agent, text, _payload):
+        async def fake_prepare(_agent, text, _payload) -> dict[str, Any]:
             order.append(f"prep:{index_of[text]}")
             return {
                 "raw_path": "/tmp/x.mp3",
@@ -2374,7 +2380,7 @@ class SentencesArePreparedAheadTest(unittest.IsolatedAsyncioTestCase):
                 "trim_db": 0.0,
             }
 
-        async def fake_say(_agent, payload):
+        async def fake_say(_agent, payload) -> dict[str, Any]:
             n = index_of[payload["text"]]
             order.append(f"say-start:{n}")
             await asyncio.sleep(0.02)
@@ -2386,7 +2392,7 @@ class SentencesArePreparedAheadTest(unittest.IsolatedAsyncioTestCase):
             result = await NS["_speak_reply"](agent, self.TEXT, await_playback=True)
         return result, order, chunks
 
-    async def test_the_next_one_is_prepared_before_this_one_finishes(self):
+    async def test_the_next_one_is_prepared_before_this_one_finishes(self) -> None:
         _result, order, _chunks = await self._run()
 
         # Serial would read: say-start:0, say-end:0, prep:1. Pipelined puts the
@@ -2394,14 +2400,14 @@ class SentencesArePreparedAheadTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(order.index("prep:1"), order.index("say-end:0"))
         self.assertLess(order.index("prep:2"), order.index("say-end:1"))
 
-    async def test_the_first_sentence_still_starts_without_waiting_for_the_rest(self):
+    async def test_the_first_sentence_still_starts_without_waiting_for_the_rest(self) -> None:
         # Preparing everything up front would trade these gaps for a slow start.
         _result, order, _chunks = await self._run()
 
         self.assertEqual(order[0], "prep:0")
         self.assertEqual(order[1], "say-start:0")
 
-    async def test_a_sentence_prepared_for_a_reply_that_stops_is_discarded(self):
+    async def test_a_sentence_prepared_for_a_reply_that_stops_is_discarded(self) -> None:
         result, order, chunks = await self._run(stop_after=0)
 
         self.assertTrue(result["stopped"])
@@ -2414,11 +2420,11 @@ class SentencesArePreparedAheadTest(unittest.IsolatedAsyncioTestCase):
 class DiscardPreparedTest(unittest.IsolatedAsyncioTestCase):
     """Dropping an unspoken sentence must not raise, whatever state it is in."""
 
-    async def test_nothing_to_discard_is_fine(self):
+    async def test_nothing_to_discard_is_fine(self) -> None:
         await NS["_discard_prepared"](None)
 
-    async def test_a_running_preparation_is_cancelled(self):
-        async def never():
+    async def test_a_running_preparation_is_cancelled(self) -> None:
+        async def never() -> None:
             await asyncio.sleep(30)
 
         task = asyncio.create_task(never())
@@ -2426,8 +2432,8 @@ class DiscardPreparedTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(task.cancelled() or task.done())
 
-    async def test_a_failed_preparation_is_swallowed(self):
-        async def boom():
+    async def test_a_failed_preparation_is_swallowed(self) -> None:
+        async def boom() -> NoReturn:
             raise RuntimeError("edge-tts down")
 
         await NS["_discard_prepared"](asyncio.create_task(boom()))
@@ -2441,13 +2447,13 @@ class AskingForSilencePolitelyStillWorksTest(unittest.TestCase):
     very thing being asked to stop, and then "Okay." to the next attempt.
     """
 
-    def silence(self, text):
+    def silence(self, text) -> Any:
         return NS["_conversation_silence_phrase"](text)
 
-    def ends(self, text):
+    def ends(self, text) -> Any:
         return NS["_conversation_stop_phrase"](text)
 
-    def test_the_polite_forms_are_understood(self):
+    def test_the_polite_forms_are_understood(self) -> None:
         for text in (
             "Stop talking, please!",
             "you can stop talking right now",
@@ -2460,16 +2466,16 @@ class AskingForSilencePolitelyStillWorksTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(self.silence(text))
 
-    def test_the_bare_forms_still_are(self):
+    def test_the_bare_forms_still_are(self) -> None:
         for text in ("stop", "shut up", "be quiet", "silence", "hush", "enough"):
             with self.subTest(text=text):
                 self.assertTrue(self.silence(text))
 
-    def test_trimming_never_eats_a_phrase_of_its_own(self):
+    def test_trimming_never_eats_a_phrase_of_its_own(self) -> None:
         # "up" is deliberately not filler, or "shut up" would become "shut".
         self.assertTrue(self.silence("shut up please"))
 
-    def test_merely_mentioning_stopping_is_not_a_command(self):
+    def test_merely_mentioning_stopping_is_not_a_command(self) -> None:
         for text in (
             "stop the music",
             "I couldn't stop talking about it yesterday",
@@ -2481,12 +2487,12 @@ class AskingForSilencePolitelyStillWorksTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(self.silence(text))
 
-    def test_ending_the_session_tolerates_politeness_too(self):
+    def test_ending_the_session_tolerates_politeness_too(self) -> None:
         for text in ("goodbye Reachy please", "stop listening now", "that's all", "αντίο reachy"):
             with self.subTest(text=text):
                 self.assertTrue(self.ends(text))
 
-    def test_a_greek_stop_still_ends_it(self):
+    def test_a_greek_stop_still_ends_it(self) -> None:
         self.assertTrue(self.ends("σταμάτα"))
 
 
@@ -2499,22 +2505,22 @@ class TypedAndSpokenAgreeTest(unittest.TestCase):
     only typing it actually stopped anything.
     """
 
-    def test_every_typed_stop_command_is_also_heard_as_one(self):
+    def test_every_typed_stop_command_is_also_heard_as_one(self) -> None:
         for command in NS["_CONVERSATION_STOP_COMMANDS"]:
             with self.subTest(command=command):
                 self.assertTrue(NS["_conversation_stop_phrase"](command))
 
-    def test_the_wording_that_failed_now_works_said_aloud(self):
+    def test_the_wording_that_failed_now_works_said_aloud(self) -> None:
         for text in ("stop conversation", "Stop Conversation", "stop conversation please"):
             with self.subTest(text=text):
                 self.assertTrue(NS["_conversation_stop_phrase"](text))
 
-    def test_talking_about_a_conversation_does_not_end_it(self):
+    def test_talking_about_a_conversation_does_not_end_it(self) -> None:
         for text in ("tell me about our conversation", "conversation", "stop the music"):
             with self.subTest(text=text):
                 self.assertFalse(NS["_conversation_stop_phrase"](text))
 
-    def test_the_spoken_only_phrases_are_still_there(self):
+    def test_the_spoken_only_phrases_are_still_there(self) -> None:
         for text in ("stop listening", "goodbye", "bye", "σταμάτα", "αντίο"):
             with self.subTest(text=text):
                 self.assertTrue(NS["_conversation_stop_phrase"](text))

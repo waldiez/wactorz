@@ -76,10 +76,13 @@ import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
+from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.mqtt import mqtt_client
-from wactorz.core.persistence import get_db
+from wactorz.core.persistence import WactorzDB, get_db
 from wactorz.data.files import event_time_of
 
 logger = logging.getLogger("timeseries-collector")
@@ -105,6 +108,10 @@ DEFAULT_PRUNE_INTERVAL_H = 6.0  # hours between prune passes
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+#: Rows waiting in a buffer for the next flush, each shaped as its table's columns.
+Rows = list[tuple[Any, ...]]
+
+
 class _Readings:
     """The sensor buffer as the routing fills it: each row filed under its event time.
 
@@ -113,17 +120,17 @@ class _Readings:
     where the time came from appended, as ``docs/design/event-time.md`` asks.
     """
 
-    def __init__(self, buffer: list, arrived: float, ts: float, time_source: str) -> None:
+    def __init__(self, buffer: Rows, arrived: float, ts: float, time_source: str) -> None:
         self._buffer = buffer
         self._arrived = arrived
         self._ts = ts
         self._time_source = time_source
 
-    def append(self, row: tuple) -> None:
+    def append(self, row: tuple[Any, ...]) -> None:
         self._buffer.append((self._ts, *row[1:], self._arrived, self._time_source))
 
 
-def _route_message(agent, topic, payload):
+def _route_message(agent: AgentAPI, topic: str, payload: Any) -> None:
     """Route an MQTT message to the correct buffer based on topic."""
     now = time.time()
 
@@ -147,7 +154,7 @@ def _route_message(agent, topic, payload):
         _route_readings(sensor_buf, now, topic, payload)
 
 
-def _route_detections(buffer, now, topic, payload):
+def _route_detections(buffer: Rows, now: float, topic: str, payload: dict[str, Any]) -> None:
     """One row per detection, whether the payload carries a batch or is a single one."""
     detections = payload.get("detections", [])
     if not detections and "class" in payload:
@@ -174,19 +181,21 @@ def _route_detections(buffer, now, topic, payload):
         )
 
 
-def _sinergym_row(now, topic, entity, field, value, source):
+def _sinergym_row(
+    now: float, topic: str, entity: str, field: str, value: float | str, source: str
+) -> tuple[Any, ...]:
     """A sensor row for one number a Sinergym environment reported."""
     return (now, topic, entity, field, float(value), "", "", source, "")
 
 
-def _numbers(values):
+def _numbers(values: Any) -> list[tuple[int, float]]:
     """The positions and values of the numbers in ``values``, a list; nothing when it is not one."""
     if not isinstance(values, list):
         return []
     return [(i, val) for i, val in enumerate(values) if isinstance(val, (int, float))]
 
 
-def _route_observation(buffer, now, topic, payload):
+def _route_observation(buffer: _Readings, now: float, topic: str, payload: dict[str, Any]) -> None:
     """A Sinergym step: its reward, each observation and action dimension, the step, the episode and the info."""
     env_id = payload.get("env_id", "")
     episode = int(payload.get("episode", 0))
@@ -224,7 +233,7 @@ EPISODE_FIELDS = (
 )
 
 
-def _route_episode(buffer, now, topic, payload):
+def _route_episode(buffer: _Readings, now: float, topic: str, payload: dict[str, Any]) -> None:
     """An episode's summary when it ends, as sensor readings for easy querying."""
     if payload.get("event", "") != "episode_end":
         return
@@ -236,7 +245,7 @@ def _route_episode(buffer, now, topic, payload):
             buffer.append(_sinergym_row(now, topic, entity, f"ep_{field}", val, "sinergym-bridge"))
 
 
-def _route_state_change(buffer, now, payload):
+def _route_state_change(buffer: Rows, now: float, payload: dict[str, Any]) -> None:
     """A Home Assistant state change, in its nested form or flattened."""
     entity_id = payload.get("entity_id", "")
     new_state = payload.get("new_state", {})
@@ -259,7 +268,7 @@ def _route_state_change(buffer, now, payload):
 _NOT_READINGS = ("agent", "node", "entity_id", "timestamp", "ts")
 
 
-def _route_readings(buffer, now, topic, payload):
+def _route_readings(buffer: _Readings, now: float, topic: str, payload: dict[str, Any]) -> None:
     """One row per field of a sensor payload: numbers as values, other words (on/off, states) as text."""
     entity_id = payload.get("entity_id", "")
     src_agent = payload.get("agent", "")
@@ -280,7 +289,7 @@ def _route_readings(buffer, now, topic, payload):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def _mqtt_subscriber(agent):
+async def _mqtt_subscriber(agent: AgentAPI) -> None:
     """Subscribe to all configured topics and buffer incoming messages."""
     topics = agent.state["topics"]
     _last_exc = None
@@ -319,7 +328,7 @@ async def _mqtt_subscriber(agent):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _flush(agent):
+def _flush(agent: AgentAPI) -> None:
     """Write all buffered data to SQLite."""
     db = get_db()
     if not db:
@@ -374,7 +383,7 @@ def _flush(agent):
         agent.state["total_written"] += written
 
 
-async def _flush_loop(agent):
+async def _flush_loop(agent: AgentAPI) -> None:
     """Periodically flush buffered data to SQLite."""
     interval = agent.state["batch_interval"]
     while True:
@@ -393,14 +402,14 @@ async def _flush_loop(agent):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _do_prune(agent):
+def _do_prune(agent: AgentAPI) -> int:
     db = get_db()
     if not db:
         return 0
     return db.prune_old_data(agent.state["retention_days"])
 
 
-async def _prune_loop(agent):
+async def _prune_loop(agent: AgentAPI) -> None:
     """Periodically prune old data beyond the retention window.
 
     The interval is read each time round, so `configure` changes it without a
@@ -439,7 +448,7 @@ def _human_bytes(n: float) -> str:
     return f"{size:.1f} TB"
 
 
-def _storage_report(agent):
+def _storage_report(agent: AgentAPI) -> dict[str, Any]:
     """Size of the SQLite database on disk (incl. WAL/SHM) + row counts."""
     db = get_db()
     if not db:
@@ -463,7 +472,7 @@ def _storage_report(agent):
     }
 
 
-async def _publish_storage_report(agent):
+async def _publish_storage_report(agent: AgentAPI) -> dict[str, Any]:
     report = _storage_report(agent)
     if "error" not in report:
         await agent.publish(f"agents/{agent.actor_id}/storage", report)
@@ -475,7 +484,7 @@ async def _publish_storage_report(agent):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-async def setup(agent):
+async def setup(agent: AgentAPI) -> None:
     topics = agent.recall("topics") or DEFAULT_TOPICS
     batch_interval = float(agent.recall("batch_interval") or DEFAULT_BATCH_INTERVAL)
     batch_size = int(agent.recall("batch_size") or DEFAULT_BATCH_SIZE)
@@ -515,7 +524,7 @@ async def setup(agent):
     )
 
 
-async def process(agent):
+async def process(agent: AgentAPI) -> None:
     # The background loops do the real work. This periodic poll (hourly by
     # default: poll_interval=3600) is a safety-net flush so buffered rows are
     # never stranded, plus the hourly storage report on agents/{id}/storage.
@@ -531,7 +540,7 @@ async def process(agent):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _number(value):
+def _number(value: Any) -> float | None:
     """``value`` as a float, or None when it is not a number."""
     try:
         return float(value)
@@ -539,7 +548,7 @@ def _number(value):
         return None
 
 
-def _task_of(payload):
+def _task_of(payload: Any) -> dict[str, Any]:
     """The task as a dict: JSON in a mention's ``text`` read as one, anything not a dict as its action."""
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:
@@ -553,7 +562,7 @@ def _task_of(payload):
     return payload
 
 
-async def handle_task(agent, payload):
+async def handle_task(agent: AgentAPI, payload: Any) -> dict[str, Any]:
     payload = _task_of(payload)
     action = str(payload.get("action") or payload.get("text") or "").strip().lower()
     answer = TASKS.get(action)
@@ -562,7 +571,7 @@ async def handle_task(agent, payload):
     return await _understood(agent, payload, action)
 
 
-async def _stats(agent, _payload):
+async def _stats(agent: AgentAPI, _payload: dict[str, Any]) -> dict[str, Any]:
     db = get_db()
     stats = db.stats() if db else {}
     s = agent.state
@@ -589,7 +598,7 @@ async def _stats(agent, _payload):
     }
 
 
-async def _prune(agent, _payload):
+async def _prune(agent: AgentAPI, _payload: dict[str, Any]) -> dict[str, Any]:
     pruned = _do_prune(agent)
     return {
         "result": f"Pruned {pruned} rows older than {agent.state['retention_days']} days.",
@@ -597,7 +606,7 @@ async def _prune(agent, _payload):
     }
 
 
-async def _flush_now(agent, _payload):
+async def _flush_now(agent: AgentAPI, _payload: dict[str, Any]) -> dict[str, Any]:
     _flush(agent)
     return {"result": "Buffers flushed to SQLite.", "total_written": agent.state["total_written"]}
 
@@ -611,7 +620,9 @@ TABLES = {
 }
 
 
-def _rows_of(db, table, payload, hours, entity, limit):
+def _rows_of(
+    db: WactorzDB, table: str, payload: dict[str, Any], hours: float, entity: str | None, limit: int
+) -> list[dict[str, Any]]:
     """The rows of ``table``, one of `TABLES`' values, as the query asks for them."""
     if table == "sensors":
         return db.query_sensor(
@@ -630,7 +641,7 @@ def _rows_of(db, table, payload, hours, entity, limit):
     return db.query_actuations(hours=hours, entity_id=entity, limit=limit)
 
 
-async def _query(agent, payload):
+async def _query(agent: AgentAPI, payload: dict[str, Any]) -> dict[str, Any]:
     """Serve stored history to other agents (e.g. an optimizer)."""
     db = get_db()
     if not db:
@@ -660,7 +671,7 @@ async def _query(agent, payload):
     }
 
 
-def _positive(payload, field):
+def _positive(payload: dict[str, Any], field: str) -> float | str:
     """``payload[field]`` as a number above zero, or what is wrong with it, in words."""
     value = _number(payload[field])
     if value is None:
@@ -670,7 +681,7 @@ def _positive(payload, field):
     return value
 
 
-async def _configure(agent, payload):
+async def _configure(agent: AgentAPI, payload: dict[str, Any]) -> dict[str, Any]:
     """Change retention at runtime; it persists across restarts."""
     changed = []
     if payload.get("retention_days") is not None:
@@ -698,7 +709,7 @@ async def _configure(agent, payload):
     }
 
 
-async def _storage(agent, _payload):
+async def _storage(agent: AgentAPI, _payload: dict[str, Any]) -> dict[str, Any]:
     """The database's size on demand; it is also published hourly."""
     report = await _publish_storage_report(agent)
     if "error" in report:
@@ -712,7 +723,7 @@ async def _storage(agent, _payload):
 
 
 #: The actions a task names, and what answers each.
-TASKS = {
+TASKS: dict[str, Callable[[AgentAPI, dict[str, Any]], Awaitable[dict[str, Any]]]] = {
     "stats": _stats,
     "prune": _prune,
     "flush": _flush_now,
@@ -728,7 +739,7 @@ KEEP = re.compile(
 )
 
 
-def _days(n, unit):
+def _days(n: float, unit: str) -> float:
     """``n`` of ``unit`` (hours, days, weeks or months) in days."""
     if unit.startswith("h"):
         return n / 24
@@ -739,7 +750,7 @@ def _days(n, unit):
     return n
 
 
-def _hours_asked(low):
+def _hours_asked(low: str) -> float:
     """The window a request for data names, in hours: 24 when it names none."""
     hm = re.search(r"(\d+(?:\.\d+)?)\s*(hour|hours|h\b|day|days|d\b)", low)
     if not hm:
@@ -747,7 +758,7 @@ def _hours_asked(low):
     return float(hm.group(1)) * (24 if hm.group(2).startswith("d") else 1)
 
 
-async def _understood(agent, payload, action):
+async def _understood(agent: AgentAPI, payload: dict[str, Any], action: str) -> dict[str, Any]:
     """Answer a request in words (non-expert users via @mention), or say what is understood."""
     low = str(payload.get("text") or action or "").lower()
     m = KEEP.search(low)

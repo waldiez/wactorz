@@ -625,7 +625,9 @@ class FlakyProvider(LLMProvider):
         self._tick()
         return ToolCompletion(content="ok", usage={"cost_usd": 0.0})
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any):
+    async def _stream(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> "AsyncIterator[str]":
         self._tick()
         yield "ok"
 
@@ -659,7 +661,9 @@ async def test_stream_does_not_replay_what_the_reader_already_saw(no_sleep: None
     attempts = 0
 
     class MidStreamFailure(LLMProvider):
-        async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any):
+        async def _stream(
+            self, messages: list[dict], system: str = "", **kwargs: Any
+        ) -> "AsyncIterator[str]":
             nonlocal attempts
             attempts += 1
             yield "half a "

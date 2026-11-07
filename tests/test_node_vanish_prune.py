@@ -33,20 +33,20 @@ def _bare_main(registry: dict) -> MainActor:
     return m
 
 
-def test_present_agent_is_never_pruned():
+def test_present_agent_is_never_pruned() -> None:
     m = _bare_main({"system-monitor": {"node": "rpi-test"}})
     assert m._agents_to_prune("rpi-test", {"system-monitor"}, {"system-monitor"}) == []
     assert m._node_agent_misses == {}
 
 
-def test_single_missed_heartbeat_does_not_prune():
+def test_single_missed_heartbeat_does_not_prune() -> None:
     m = _bare_main({"system-monitor": {"node": "rpi-test"}})
     # present last heartbeat, absent now → one miss, kept
     assert m._agents_to_prune("rpi-test", set(), {"system-monitor"}) == []
     assert m._node_agent_misses  # counting
 
 
-def test_consecutive_misses_prune():
+def test_consecutive_misses_prune() -> None:
     m = _bare_main({"system-monitor": {"node": "rpi-test"}})
     prev = {"system-monitor"}
     result: list[str] = []
@@ -57,7 +57,7 @@ def test_consecutive_misses_prune():
     assert m._node_agent_misses == {}  # counter cleared on prune
 
 
-def test_reappearance_resets_the_counter():
+def test_reappearance_resets_the_counter() -> None:
     m = _bare_main({"system-monitor": {"node": "rpi-test"}})
     prev = {"system-monitor"}
     for _ in range(VANISH_MISS_THRESHOLD - 1):  # miss short of the threshold
@@ -72,14 +72,14 @@ def test_reappearance_resets_the_counter():
     assert result == []
 
 
-def test_never_appeared_agent_is_not_pruned():
+def test_never_appeared_agent_is_not_pruned() -> None:
     # just spawned into the registry; the node hasn't reported it yet
     m = _bare_main({"just-spawned": {"node": "rpi-test"}})
     assert m._agents_to_prune("rpi-test", set(), set()) == []
     assert m._node_agent_misses == {}
 
 
-def test_migrated_away_agent_is_skipped():
+def test_migrated_away_agent_is_skipped() -> None:
     # registry now names a different node → not this node's concern
     m = _bare_main({"system-monitor": {"node": "other-node"}})
     assert m._agents_to_prune("rpi-test", set(), {"system-monitor"}) == []

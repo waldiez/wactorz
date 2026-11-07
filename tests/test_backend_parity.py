@@ -6,7 +6,7 @@ from tests.backend_parity_harness import FIXTURE_PATH, run_fixtures
 
 
 class BackendParityTest(unittest.IsolatedAsyncioTestCase):
-    async def test_supervisor_contract_matches_fixture(self):
+    async def test_supervisor_contract_matches_fixture(self) -> None:
         actual = await run_fixtures(FIXTURE_PATH)
         fixture = json.loads(FIXTURE_PATH.read_text())
 

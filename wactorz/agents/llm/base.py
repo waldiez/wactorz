@@ -10,7 +10,7 @@ both. They also record how each request ended and how long it took, for
 
 import logging
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -89,7 +89,9 @@ class LLMProvider:
         self._record(started, None)
         return result
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def complete(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         check_cost_limit()
         return await self._measured(
@@ -162,7 +164,9 @@ class LLMProvider:
 
     # ── Provider implementations ────────────────────────────────────────────
 
-    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
     async def _complete_with_tools(
@@ -174,7 +178,9 @@ class LLMProvider:
     ) -> "ToolCompletion":
         raise NotImplementedError(f"{self.__class__.__name__} does not support tool calls")
 
-    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> AsyncIterator[str | dict[str, Any]]:
         raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
         yield ""  # pragma: no cover - unreachable, makes this an async generator
 

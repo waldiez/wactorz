@@ -99,6 +99,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.documents import DocumentRefused, readable_document, writable_document
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ from wactorz.documents import DocumentRefused, readable_document, writable_docum
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _read_pdf_text(path):
+def _read_pdf_text(path: str) -> str:
     """Extract text from PDF using pdfplumber (best for clean text)."""
     import pdfplumber  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe
 
@@ -159,7 +160,9 @@ def _read_document(path: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[dict[str, Any]]:
+def _extract_pdf_images(
+    pdf_path: str, work_dir: str, min_w: int = 200, min_h: int = 150
+) -> list[dict[str, Any]]:
     """Extract embedded images from a PDF using PyMuPDF (fitz).
 
     Returns a list of dicts:
@@ -218,7 +221,9 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
     return results
 
 
-def _assign_images_to_slides(pdf_images, slides, pdf_page_count) -> dict[str, Any]:
+def _assign_images_to_slides(
+    pdf_images: list[dict[str, Any]], slides: list[dict[str, Any]], pdf_page_count: int
+) -> dict[str, Any]:
     """Assign extracted PDF images to slides by page proximity.
 
     Strategy:
@@ -330,7 +335,7 @@ Document text (truncated to 4000 chars):
 """
 
 
-async def _extract_outline(agent, doc_text, slide_count):
+async def _extract_outline(agent: AgentAPI, doc_text: str, slide_count: int) -> dict[str, Any]:
     prompt = OUTLINE_PROMPT.format(
         slide_count=slide_count,
         doc_text=doc_text[:4000],
@@ -354,7 +359,9 @@ async def _extract_outline(agent, doc_text, slide_count):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _nim_generate_missing(agent, slides, assignment, work_dir):
+async def _nim_generate_missing(
+    agent: AgentAPI, slides: list[dict[str, Any]], assignment: dict[str, Any], work_dir: str
+) -> int:
     """For every slide whose assignment[idx] is None, request image generation
     from image-gen-agent (NIM FLUX.1-dev).  Updates assignment in-place.
     Returns count of successfully generated images.
@@ -363,7 +370,7 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
     if not missing:
         return 0
 
-    async def _request(slide):
+    async def _request(slide: dict[str, Any]) -> tuple[Any, str | None]:
         idx = slide["index"]
         prompt = slide.get("image_prompt", "")
         if not prompt:
@@ -421,7 +428,7 @@ _EMU_PER_INCH = 914400
 _BULLET_INDENT = 0.25
 
 
-def _hex_color(value, fallback):
+def _hex_color(value: Any, fallback: str) -> str:
     """Six hex digits, or the default.
 
     The palette is chosen by the model from the *document's* content, so it is
@@ -432,7 +439,7 @@ def _hex_color(value, fallback):
     return value if isinstance(value, str) and _HEX6.fullmatch(value) else fallback
 
 
-def _palette(outline) -> dict[str, str]:
+def _palette(outline: dict[str, Any]) -> dict[str, str]:
     colors = outline.get("theme_colors")
     colors = colors if isinstance(colors, dict) else {}
     return {key: _hex_color(colors.get(key), default) for key, default in _DEFAULT_PALETTE.items()}
@@ -457,7 +464,7 @@ def _opacity(transparency: int) -> str:
     return str((100 - transparency) * 1000)
 
 
-def _rect(slide, box: tuple[int, int, int, int], color: str, transparency: int = 0) -> None:
+def _rect(slide: Any, box: tuple[int, int, int, int], color: str, transparency: int = 0) -> None:
     """A filled rectangle with no visible outline."""
     from pptx.enum.shapes import MSO_SHAPE  # optional dependency: installed with the recipe
     from pptx.oxml.ns import qn  # optional dependency: installed with the recipe
@@ -474,7 +481,7 @@ def _rect(slide, box: tuple[int, int, int, int], color: str, transparency: int =
             colour.append(colour.makeelement(qn("a:alpha"), {"val": _opacity(transparency)}))
 
 
-def _picture(slide, path: str, box: tuple[int, int, int, int], transparency: int = 0) -> bool:
+def _picture(slide: Any, path: str, box: tuple[int, int, int, int], transparency: int = 0) -> bool:
     """`path` filling `box`, cropped rather than stretched; False if it cannot be read.
 
     An image that cannot be read leaves the slide without one rather than
@@ -498,7 +505,7 @@ def _picture(slide, path: str, box: tuple[int, int, int, int], transparency: int
     return True
 
 
-def _bulleted(textbox) -> None:
+def _bulleted(textbox: Any) -> None:
     """Every paragraph of `textbox` as a bullet point, hanging from its first line."""
     from pptx.oxml.ns import qn  # optional dependency: installed with the recipe
 
@@ -510,7 +517,7 @@ def _bulleted(textbox) -> None:
 
 
 def _text(
-    slide,
+    slide: Any,
     box: tuple[int, int, int, int],
     lines: list[Any],
     style: dict[str, Any],
@@ -548,7 +555,9 @@ def _text(
     return textbox
 
 
-def _title_slide(slide, spec, image, colors) -> None:
+def _title_slide(
+    slide: Any, spec: dict[str, Any], image: str | None, colors: dict[str, str]
+) -> None:
     if image and _picture(slide, image, _box(4.6, 0, 5.4, _SLIDE_H)):
         # A dark veil over the picture, so the title beside it stays readable.
         _rect(slide, _box(4.6, 0, 5.4, _SLIDE_H), colors["bg_dark"], transparency=45)
@@ -567,7 +576,9 @@ def _title_slide(slide, spec, image, colors) -> None:
         )
 
 
-def _closing_slide(slide, spec, image, colors) -> None:
+def _closing_slide(
+    slide: Any, spec: dict[str, Any], image: str | None, colors: dict[str, str]
+) -> None:
     if image:
         _picture(slide, image, _box(0, 0, _SLIDE_W, _SLIDE_H), transparency=55)
     centred = {"align": "center"}
@@ -592,7 +603,9 @@ def _closing_slide(slide, spec, image, colors) -> None:
         )
 
 
-def _content_slide(slide, spec, image, colors) -> None:
+def _content_slide(
+    slide: Any, spec: dict[str, Any], image: str | None, colors: dict[str, str]
+) -> None:
     _text(
         slide,
         _box(0.25, 0.2, 9.5, 0.72),
@@ -616,7 +629,9 @@ def _content_slide(slide, spec, image, colors) -> None:
 _LAYOUTS = {"title": _title_slide, "closing": _closing_slide}
 
 
-def _build_deck(outline, image_assignment, output_path: str) -> None:
+def _build_deck(
+    outline: dict[str, Any], image_assignment: dict[str, Any], output_path: str
+) -> None:
     """Write the deck `outline` describes to `output_path`, pictures placed by slide index.
 
     Blocking: it reads every picture and writes the file, so it is run in a
@@ -647,7 +662,7 @@ def _build_deck(outline, image_assignment, output_path: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def setup(agent):
+async def setup(agent: AgentAPI) -> None:
     errors = []
 
     for pkg, imp in [
@@ -684,7 +699,7 @@ def _failed(error: str, **progress: Any) -> dict[str, Any]:
     }
 
 
-async def handle_task(agent, payload: Any) -> Any:
+async def handle_task(agent: AgentAPI, payload: Any) -> Any:
     # Normalise payload — the CLI wraps the user's message as {"text": "..."}
     # so if the payload is a string or contains a JSON string in "text", parse it.
     if isinstance(payload, str):
@@ -845,6 +860,6 @@ async def handle_task(agent, payload: Any) -> Any:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-async def process(agent) -> None:
+async def process(agent: AgentAPI) -> None:
     # Task-driven only — no polling loop needed
     await asyncio.sleep(3600)

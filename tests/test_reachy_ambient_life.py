@@ -16,6 +16,7 @@ import itertools
 import math
 import random
 import types
+from typing import Any
 
 import pytest
 
@@ -31,20 +32,20 @@ class FakeNumpy:
     """Just the two calls the motion path makes."""
 
     @staticmethod
-    def deg2rad(values):
+    def deg2rad(values) -> list[float] | float:
         if isinstance(values, (list, tuple)):
             return [math.radians(float(v)) for v in values]
         return math.radians(float(values))
 
     @staticmethod
-    def rad2deg(value):
+    def rad2deg(value) -> float:
         return math.degrees(float(value))
 
 
 class FakeAgent:
     """Records what reached the robot instead of moving one."""
 
-    def __init__(self, **state):
+    def __init__(self, **state) -> None:
         self.targets: list[dict] = []
         self.logs: list[tuple[str, str]] = []
         mini = types.SimpleNamespace(set_target=self._set_target)
@@ -64,14 +65,14 @@ class FakeAgent:
         }
         self.state.update(state)
 
-    def _set_target(self, **kw):
+    def _set_target(self, **kw) -> None:
         self.targets.append(kw)
 
-    async def log(self, text, level="info"):
+    async def log(self, text, level="info") -> None:
         self.logs.append((level, text))
 
 
-def offsets_at(elapsed, gaze=(0.0, 0.0), amplitude=1.0):
+def offsets_at(elapsed, gaze=(0.0, 0.0), amplitude=1.0) -> Any:
     return NS["_life_offsets"](elapsed, gaze, amplitude)
 
 
@@ -332,7 +333,7 @@ class TestSpeechMotionHandsBackCleanly:
         """A stuck flag would leave ambient life switched off for the rest of the day."""
         agent = FakeAgent()
 
-        async def scenario():
+        async def scenario() -> None:
             task = asyncio.ensure_future(NS["_speech_motion"](agent, [(0.0, 0.3)], 30.0))
             await asyncio.sleep(0.05)
             assert agent.state["_speech_motion"] is True
@@ -353,7 +354,7 @@ class TestSpeechMotionHandsBackCleanly:
     def test_a_deliberate_command_mid_sentence_still_wins(self) -> None:
         agent = FakeAgent(busy=True)
 
-        async def scenario():
+        async def scenario() -> None:
             task = asyncio.ensure_future(NS["_speech_motion"](agent, [(0.0, 0.3)], 30.0))
             await asyncio.sleep(0.15)
             task.cancel()
@@ -504,7 +505,7 @@ class TestAnUnknowableBaseIsAPauseNotADeadEnd:
         agent.state["motion_lock"] = lock
         agent.state["mini"].goto_target = lambda **kw: moved.append(kw)
 
-        async def scenario():
+        async def scenario() -> None:
             await lock.acquire()
             try:
                 await NS["_life_recover_base"](agent)
@@ -809,7 +810,7 @@ class TestAStuckHoldCannotFreezeHimForGood:
         lock = asyncio.Lock()
         agent.state["motion_lock"] = lock
 
-        async def scenario():
+        async def scenario() -> Any:
             await lock.acquire()
             try:
                 return NS["_life_clear_stale_holds"](agent)

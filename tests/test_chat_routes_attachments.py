@@ -10,7 +10,7 @@ The records are turned into blocks here rather than by the agent: the files are
 the web layer's, and only this side knows how to reach them.
 """
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -31,7 +31,9 @@ class _Streamer(Actor):
         self.state = ActorState.RUNNING
         self.got: list[Any] = []
 
-    async def chat_stream(self, user_message: str, attachments: list[dict] | None = None):
+    async def chat_stream(
+        self, user_message: str, attachments: list[dict] | None = None
+    ) -> "AsyncIterator[str]":
         self.got.append(attachments)
         yield "described"
 
@@ -48,7 +50,7 @@ class _TextOnly(Actor):
         self.state = ActorState.RUNNING
         self.asked: list[str] = []
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str) -> "AsyncIterator[str]":
         self.asked.append(user_message)
         yield "booked"
 

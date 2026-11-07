@@ -121,7 +121,9 @@ class _Main:
         #: Whether each remote spawn was a restore, which asks about no packages.
         self.restoring: list[bool] = []
 
-        async def _local(config: dict[str, Any], save: bool = True, *, from_registry: bool = False):
+        async def _local(
+            config: dict[str, Any], save: bool = True, *, from_registry: bool = False
+        ) -> None:
             name = config.get("name", "?")
             if name in local_spawn_fails:
                 raise RuntimeError(_SPAWN_FAILED)

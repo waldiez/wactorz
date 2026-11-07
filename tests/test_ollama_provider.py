@@ -9,17 +9,19 @@ from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissi
 
 ensure_importable("openai")
 
+from typing import Any
+
 from wactorz.agents.llm.retry import ProviderUnavailable
 from wactorz.agents.llm_agent import OllamaProvider
 
 
 class _FakeResponse:
-    def __init__(self, json_data=None, content_chunks=None, status=200):
+    def __init__(self, json_data=None, content_chunks=None, status=200) -> None:
         self._json_data = json_data or {}
         self.content = _FakeContent(content_chunks or [])
         self.status = status
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         if self.status >= 400:
             raise aiohttp.ClientResponseError(
                 request_info=None,  # pyright: ignore[reportArgumentType]
@@ -28,25 +30,25 @@ class _FakeResponse:
                 message="boom",
             )
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeResponse":
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    async def json(self):
+    async def json(self) -> Any | dict[Any, Any]:
         return self._json_data
 
 
 class _FakeContent:
-    def __init__(self, chunks):
+    def __init__(self, chunks) -> None:
         self._chunks = list(chunks)
 
-    def __aiter__(self):
+    def __aiter__(self) -> "_FakeContent":
         self._iter = iter(self._chunks)  # pylint: disable=attribute-defined-outside-init
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> Any:
         try:
             return next(self._iter)
         except StopIteration as exc:
@@ -54,17 +56,17 @@ class _FakeContent:
 
 
 class _FakeSession:
-    def __init__(self, response, calls):
+    def __init__(self, response, calls) -> None:
         self._response = response
         self._calls = calls
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeSession":
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    def post(self, url, json, timeout=None):
+    def post(self, url, json, timeout=None) -> Any:
         self._calls.append({"url": url, "json": json, "timeout": timeout})
         return self._response
 
@@ -74,7 +76,7 @@ class OllamaProviderTest(unittest.IsolatedAsyncioTestCase):
     # Patch only that attribute on the real module — never swap the whole module in
     # sys.modules, which changes aiohttp's class identity for every later test.
 
-    async def test_complete_sends_system_prompt_as_system_message(self):
+    async def test_complete_sends_system_prompt_as_system_message(self) -> None:
         calls = []
         session = _FakeSession(
             _FakeResponse(
@@ -106,7 +108,7 @@ class OllamaProviderTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("system", calls[0]["json"])
 
-    async def test_stream_sends_system_prompt_as_system_message(self):
+    async def test_stream_sends_system_prompt_as_system_message(self) -> None:
         calls = []
         chunks = [
             json_.dumps({"message": {"content": "he"}, "done": False}).encode(),
@@ -152,12 +154,12 @@ class OllamaTimeoutTest(unittest.IsolatedAsyncioTestCase):
     is not a fault, but silence is.
     """
 
-    def _session(self, calls, **resp_kw):
+    def _session(self, calls, **resp_kw) -> "_FakeSession":
         return _FakeSession(
             _FakeResponse(json_data={"message": {"content": "hi"}}, **resp_kw), calls
         )
 
-    async def test_complete_bounds_the_request(self):
+    async def test_complete_bounds_the_request(self) -> None:
         calls = []
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         with patch.object(aiohttp, "ClientSession", lambda *a, **k: self._session(calls)):
@@ -168,7 +170,7 @@ class OllamaTimeoutTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(timeout.total)
         self.assertIsNotNone(timeout.sock_connect)
 
-    async def test_complete_with_tools_bounds_the_request(self):
+    async def test_complete_with_tools_bounds_the_request(self) -> None:
         calls = []
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         with patch.object(aiohttp, "ClientSession", lambda *a, **k: self._session(calls)):
@@ -179,7 +181,7 @@ class OllamaTimeoutTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(calls[0]["timeout"])
         self.assertIsNotNone(calls[0]["timeout"].total)
 
-    async def test_stream_bounds_the_gap_between_chunks_not_the_whole_stream(self):
+    async def test_stream_bounds_the_gap_between_chunks_not_the_whole_stream(self) -> None:
         calls = []
         session = _FakeSession(_FakeResponse(content_chunks=[b'{"done":true}']), calls)
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
@@ -201,7 +203,7 @@ class OllamaErrorTest(unittest.IsolatedAsyncioTestCase):
     What these assert is unchanged: the failure reaches the caller.
     """
 
-    async def test_complete_raises_on_http_error(self):
+    async def test_complete_raises_on_http_error(self) -> None:
         calls = []
         session = _FakeSession(_FakeResponse(json_data={}, status=500), calls)
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
@@ -210,7 +212,7 @@ class OllamaErrorTest(unittest.IsolatedAsyncioTestCase):
                 await provider.complete(messages=[{"role": "user", "content": "ping"}])
         self.assertIsInstance(caught.exception.__cause__, aiohttp.ClientResponseError)
 
-    async def test_complete_with_tools_raises_on_http_error(self):
+    async def test_complete_with_tools_raises_on_http_error(self) -> None:
         calls = []
         session = _FakeSession(_FakeResponse(json_data={}, status=503), calls)
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")

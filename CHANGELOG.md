@@ -471,6 +471,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A slash command the server answers itself ends its turn.** An unknown command, and `/agents`, `/nodes` and
+  `/clear-plans` where this server answers them, replied without closing the turn's stream, so a note about attachments
+  not sent stayed open in the chat.
 - **A chat to an agent on a node says so when the connection closes before it replies.** The turn ends with "The
   connection closed before @agent on node replied." rather than an empty reply.
 - **`/agents restart` restarts an agent handed in by code.** An agent given to `run(agents=...)` or `serve(agents=...)`

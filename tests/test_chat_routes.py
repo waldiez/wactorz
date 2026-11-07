@@ -65,6 +65,9 @@ class _Agents:
     def find_by_name(self, name: str) -> Any:
         return self._by_name.get(name)
 
+    def all_actors(self) -> list[Any]:
+        return list(self._by_name.values())
+
     @asynccontextmanager
     async def reply_slot(self) -> AsyncIterator[tuple[str, asyncio.Future[Any]]]:
         self.slot = asyncio.get_running_loop().create_future()
@@ -329,10 +332,27 @@ class TestACommand:
 
         said = await _say("/no-such-command", FILES)
 
-        assert said[:2] == [
+        assert said == [
             ("chunk", "[note] notes.txt not sent — a command does not take attachments."),
             ("reply", "Unknown command. Type /help for available commands."),
+            ("end",),
         ]
+
+    @pytest.mark.parametrize(
+        ("command", "answer"),
+        [
+            ("/no-such-command", "Unknown command. Type /help for available commands."),
+            ("/agents", "No agents running."),
+            ("/nodes", "Nodes:\n  local    online   (none)"),
+            ("/clear-plans", "[System: Plan cache cleared.]"),
+            ("/deploy rpi", f"[error] {chat.NO_MAIN_FOR_NODES}"),
+        ],
+    )
+    async def test_one_answered_here_ends_the_turn_once(self, command: str, answer: str) -> None:
+        # Without main or an orchestrator, this server answers every one of these itself.
+        runtime.registry = _Agents()
+
+        assert await _say(command) == [("reply", answer), ("end",)]
 
 
 # ── An agent on a node ─────────────────────────────────────────────────────

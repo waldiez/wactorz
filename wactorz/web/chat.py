@@ -340,64 +340,75 @@ async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) 
     `reply_fn` is an async callable that sends a string back to the user as a
     message of its own. Main's commands answer through `stream_fn` instead, one
     message built up chunk by chunk and closed with `stream_end_fn`, so /deploy
-    shows its progress as it goes; without them each chunk is a reply.
+    shows its progress as it goes; without them each chunk is a reply. Given
+    `stream_end_fn`, every command answered here ends with it, whichever way it
+    answered, so the turn it is part of always ends.
     """
-    parts = text.split()
-    cmd = parts[0].lower()
+    cmd = text.split()[0].lower()
+    if cmd in MAIN_COMMANDS:
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is not None:
+            await _say_main_command(main_actor, text, stream_fn or reply_fn)
+        else:
+            await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
+    else:
+        answer = _server_answer(cmd)
+        if answer is None:
+            return False
+        await reply_fn(answer)
+    if stream_end_fn is not None:
+        await stream_end_fn()
+    return True
 
+
+async def _say_main_command(
+    main_actor: Any, text: str, chunk_fn: Callable[[str], Awaitable[Any]]
+) -> None:
+    """Say main's answer to one of its own commands, piece by piece.
+
+    Main itself, not the orchestrator: nodes, and moving agents between them,
+    are main's, and these are main's own commands as any channel reaches them.
+    """
+    async for chunk in main_actor.process_user_input_stream(text):
+        if isinstance(chunk, dict):
+            continue
+        await chunk_fn(str(chunk))
+
+
+def _server_answer(cmd: str) -> str | None:
+    """This server's answer to ``cmd``, or None when the command is not one it answers."""
     if cmd == "/clear-plans":
         # Main itself, not the orchestrator: the plan cache is main's.
         main_actor = find_main_actor(runtime.registry)
         if main_actor:
             main_actor.persist("_plan_cache", {})
-        await reply_fn("[System: Plan cache cleared.]")
-        return True
-
+        return "[System: Plan cache cleared.]"
     if cmd == "/agents" and not answered_past_the_server(cmd):
         # Main answers every /agents command: the list with its descriptions,
         # a capability filter, and the verbs (stop, delete, restart), and an
         # orchestrator that claims /agents answers it its own way. Where
         # neither would, the running agents are listed here.
-        if runtime.registry is None:
-            await reply_fn("[agents] Registry not available.")
-            return True
-        lines = []
-        for actor in runtime.registry.all_actors():
-            status = actor.get_status() if hasattr(actor, "get_status") else {}
-            st = status.get("state", "?")
-            protected = " [protected]" if getattr(actor, "protected", False) else ""
-            node = f" [{status['node']}]" if status.get("node") else ""
-            lines.append(f"  [{st:8s}] @{actor.name:<22s} {actor.actor_id[:8]}{protected}{node}")
-        await reply_fn("Agents:\n" + "\n".join(lines) if lines else "No agents running.")
-        return True
-
+        return _agents_listing()
     if cmd == "/nodes" and find_main_actor(runtime.registry) is None:
         # Main answers /nodes, remote nodes included. Without it (the minimal
         # profile) there are no remote nodes, and this process is the one node.
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
-        await reply_fn(
-            f"Nodes:\n  local    online   {', '.join('@' + n for n in local) or '(none)'}"
-        )
-        return True
+        return f"Nodes:\n  local    online   {', '.join('@' + n for n in local) or '(none)'}"
+    return None
 
-    if cmd in MAIN_COMMANDS:
-        # Main itself, not the orchestrator: nodes, and moving agents between
-        # them, are main's, and these are main's own commands as any channel
-        # reaches them.
-        main_actor = find_main_actor(runtime.registry)
-        if main_actor is None:
-            await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
-            return True
-        chunk_fn = stream_fn or reply_fn
-        async for chunk in main_actor.process_user_input_stream(text):
-            if isinstance(chunk, dict):
-                continue
-            await chunk_fn(str(chunk))
-        if stream_end_fn is not None:
-            await stream_end_fn()
-        return True
 
-    return False
+def _agents_listing() -> str:
+    """The agents running in this process, one line each."""
+    if runtime.registry is None:
+        return "[agents] Registry not available."
+    lines = []
+    for actor in runtime.registry.all_actors():
+        status = actor.get_status() if hasattr(actor, "get_status") else {}
+        st = status.get("state", "?")
+        protected = " [protected]" if getattr(actor, "protected", False) else ""
+        node = f" [{status['node']}]" if status.get("node") else ""
+        lines.append(f"  [{st:8s}] @{actor.name:<22s} {actor.actor_id[:8]}{protected}{node}")
+    return "Agents:\n" + "\n".join(lines) if lines else "No agents running."
 
 
 def _takes_attachments(fn: Callable[..., Any]) -> bool:
@@ -635,7 +646,7 @@ async def _route_command(content: str, channels: _Channels) -> None:
         await _say_stream(main_actor.process_user_input_stream(content), channels)
         await channels.end()
     else:
-        await channels.reply("Unknown command. Type /help for available commands.")
+        await channels.finish("Unknown command. Type /help for available commands.")
 
 
 async def _route_to_orchestrator(destination: Destination, channels: _Channels) -> None:

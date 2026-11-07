@@ -29,6 +29,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **wactorz is typed for the code that uses it.** The package ships `py.typed`, so a type checker reads its
+  annotations: every function in it says what it takes and returns, and `make verifytypes` scores the types it
+  exports as a user's type checker reads them (100% complete; CI fails below that, or without the marker).
 - **A model's readings are watched for drift, and a rule retrains on it.** The `drift` library agent
   (`@catalog spawn drift {"model": "imu-detector", "source": "sensors/imu", "scores": "anomalies/imu"}`)
   reads two windows of the model's recorded source through the loader on a cadence (`WACTORZ_DRIFT_CHECK_S`,

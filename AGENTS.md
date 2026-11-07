@@ -35,7 +35,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
 | Lint | `make lint` (Python + frontend + license lines) · split: `make lint-py` (ruff + basedpyright) / `make lint-frontend` (typecheck + prettier + eslint + markdownlint) / `make lint-licenses` |
 | Format | `make fmt` (Python + frontend) · split: `make fmt-py` / `make fmt-frontend` |
-| Type-check | `make typecheck` (Python + frontend) · split: `make typecheck-py` / `make typecheck-frontend` · the package's public types, scored from an install of it: `make verifytypes` (readiness until `py.typed` ships; fails below a floor that only rises) |
+| Type-check | `make typecheck` (Python + frontend) · split: `make typecheck-py` / `make typecheck-frontend` · the package's public types, scored on an install of it as users' type checkers read them: `make verifytypes` (fails without `py.typed`, or below a floor that only rises) |
 | Workflows, shell scripts, Dockerfiles | `make lint-ci` (zizmor + shellcheck + hadolint, pinned images; needs Docker, online with `GH_TOKEN`) |
 | App image checks | `make image` then `make image-smoke` (beside a broker: probes, no root, no set-id) and `make image-scan` (Trivy; accepted findings in `.trivyignore.yaml`); `IMAGE=` picks another image, and `make image FLAVOUR=ultra` builds the larger of the two (PyTorch, Ultralytics, OpenCV, GStreamer) |
 | Build everything | `make build` · local CI: `make ci` |

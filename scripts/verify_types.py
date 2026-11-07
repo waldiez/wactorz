@@ -8,10 +8,9 @@ and then wactorz itself (not editable: an editable install hides the package
 from the check), and runs the check there with the basedpyright the
 development environment has.
 
-Until the package ships the marker, users' type checkers do not read its types
-at all, and the score is of readiness: the marker is added to the scratch
-install alone, and the output says so. Once it ships, the install carries it
-and the score is of what users receive.
+What is checked is what was installed, marker and all: a build that drops
+``py.typed`` fails here, since without it users' type checkers read none of the
+package's types.
 
 The score is printed with what holds it back most, and the run fails below
 ``--floor``: a ratchet, raised as the score climbs and never lowered.
@@ -59,6 +58,16 @@ class NotTheInstallError(SystemExit):
         super().__init__(f"wactorz was found at {found}, not in the scratch environment")
 
 
+class NoMarkerError(SystemExit):
+    """The installed package carries no ``py.typed``: the build dropped it."""
+
+    def __init__(self, package: Path) -> None:
+        super().__init__(
+            f"{package} has no py.typed, so users' type checkers read none of its types; "
+            "the build must include wactorz/py.typed"
+        )
+
+
 class UnreadablePackageError(SystemExit):
     """basedpyright could not read the installed package, and said why."""
 
@@ -75,8 +84,8 @@ def _run(*cmd: str, cwd: Path | None = None) -> str:
     return done.stdout
 
 
-def _install(scratch: Path, uv: str) -> tuple[Path, bool]:
-    """A scratch environment with the locked dependencies and wactorz in it: its Python, and whether wactorz shipped ``py.typed``."""
+def _install(scratch: Path, uv: str) -> Path:
+    """A scratch environment with the locked dependencies and wactorz in it; its Python."""
     venv = scratch / "venv"
     _run(uv, "venv", "--quiet", "--python", sys.executable, str(venv))
     python = venv / ("Scripts" if sys.platform == "win32" else "bin") / "python"
@@ -96,7 +105,7 @@ def _install(scratch: Path, uv: str) -> tuple[Path, bool]:
     checker = f"basedpyright=={importlib.metadata.version('basedpyright')}"
     _run(uv, "pip", "install", "--quiet", "--python", str(python), checker)
     # Isolated, and from the scratch directory: from the checkout, `import wactorz`
-    # would find the source tree in the working directory and mark that instead.
+    # would find the source tree in the working directory and look at that instead.
     package = Path(
         _run(
             str(python),
@@ -108,12 +117,9 @@ def _install(scratch: Path, uv: str) -> tuple[Path, bool]:
     )
     if not package.is_relative_to(scratch):
         raise NotTheInstallError(package)
-    marker = package / "py.typed"
-    shipped = marker.exists()
-    if not shipped:
-        # Readiness, until the package ships one: see the module docstring.
-        marker.touch()
-    return python, shipped
+    if not (package / "py.typed").is_file():
+        raise NoMarkerError(package)
+    return python
 
 
 def _completeness(python: Path, scratch: Path) -> dict[str, Any]:
@@ -186,10 +192,7 @@ def main() -> None:
         raise NoUvError()
     with tempfile.TemporaryDirectory(prefix="wactorz-verifytypes-") as tmp:
         scratch = Path(tmp)
-        python, shipped = _install(scratch, uv)
-        completeness = _completeness(python, scratch)
-    if not shipped:
-        print("py.typed is not shipped yet: added to the scratch install, so this is readiness.")
+        completeness = _completeness(_install(scratch, uv), scratch)
     print(_summary(completeness, args.top))
     if args.json is not None:
         args.json.write_text(json.dumps(completeness, indent=1))

@@ -138,12 +138,11 @@ typecheck: typecheck-py typecheck-frontend ## Type-check everything (Python + fr
 typecheck-py: ## Type-check Python (basedpyright)
 	$(PYTHON) -m basedpyright
 
-# The least type completeness the package may have, as `make verifytypes` scores it: of
-# readiness until the package ships py.typed, of what users receive once it does.
+# The least type completeness the package may have, as `make verifytypes` scores it.
 # A ratchet: raised as the score rises, never lowered to pass a branch.
 VERIFYTYPES_FLOOR := 100.00
 
-verifytypes: ## Score the package's public types from an install of it; readiness until py.typed ships (fails below the floor)
+verifytypes: ## Score the package's public types as its users' type checkers read them (fails below the floor, or without py.typed)
 	$(PYTHON) scripts/verify_types.py --floor $(VERIFYTYPES_FLOOR)
 
 typecheck-frontend: ## Type-check the frontend (fast)

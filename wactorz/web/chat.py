@@ -669,7 +669,10 @@ async def _route_chat(
                                     except Exception:
                                         text_out = msg.payload.decode()
                                     return str(text_out)
-                                return None
+                                return (
+                                    f"[error] The connection closed before @{target_name} "
+                                    f"on {remote_node} replied."
+                                )
 
                             text_out = await asyncio.wait_for(_get_reply(), timeout=150.0)
                             await reply_fn(text_out)

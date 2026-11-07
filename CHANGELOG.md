@@ -471,6 +471,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A chat to an agent on a node says so when the connection closes before it replies.** The turn ends with "The
+  connection closed before @agent on node replied." rather than an empty reply.
 - **`/agents restart` restarts an agent handed in by code.** An agent given to `run(agents=...)` or `serve(agents=...)`
   has no spawn config to rebuild it from, so restarting it was refused with "not found in spawn registry", though `/stop`
   told you to use `/agents restart` to resume it. Now it is stopped and started again in place, its state kept; one

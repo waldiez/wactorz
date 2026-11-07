@@ -11,6 +11,7 @@ import logging
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
+import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -140,6 +141,41 @@ def _signed_post(client: TestClient, form: dict[str, str]) -> Any:
     return client.post(
         "/webhook/whatsapp", data=form, headers={"X-Twilio-Signature": _signature(url, form)}
     )
+
+
+class TestAFormThatIsNotAllText:
+    """Twilio posts only text, so a form with anything else in it is not Twilio's."""
+
+    async def test_an_upload_is_refused_and_nothing_fails(
+        self, client: TestClient, interface: WhatsAppInterface
+    ) -> None:
+        form = aiohttp.FormData()
+        form.add_field("From", FORM["From"])
+        form.add_field("Body", b"\x00", filename="x.bin", content_type="application/octet-stream")
+
+        # Refused before the signature is checked, which reads every value as text.
+        resp = await client.post(
+            "/webhook/whatsapp", data=form, headers={"X-Twilio-Signature": "anything"}
+        )
+
+        assert resp.status == 403
+        assert interface.orchestrator.seen == []  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def test_a_field_given_twice_is_read_at_its_first_value(
+        self, client: TestClient, interface: WhatsAppInterface
+    ) -> None:
+        url = str(client.make_url("/webhook/whatsapp"))
+        signed = _signature(url, FORM)
+
+        resp = await client.post(
+            "/webhook/whatsapp",
+            data=[("Body", "hello"), ("Body", "something else"), ("From", FORM["From"])],
+            headers={"X-Twilio-Signature": signed},
+        )
+
+        assert resp.status == 200
+        await _replies(interface)
+        assert interface.orchestrator.seen == ["hello"]  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestTwilioIsAnsweredBeforeTheModel:

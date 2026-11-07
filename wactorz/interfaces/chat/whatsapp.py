@@ -4,7 +4,7 @@
 import asyncio
 import logging
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -25,6 +25,24 @@ if TYPE_CHECKING:
     from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
+
+
+def _text_form(form: Mapping[str, object]) -> dict[str, str] | None:
+    """Twilio's form as text, or None when a field holds anything else, such as an upload.
+
+    Twilio posts every field as text, so a form that is not all text is not
+    Twilio's. It is refused before the signature is checked, which computes over
+    the values as strings and would fail on anything else.
+    """
+    text: dict[str, str] = {}
+    # As `dict(form)` reads it: a field given twice is taken at its first value.
+    for name in form:
+        value = form[name]
+        if not isinstance(value, str):
+            return None
+        text[name] = value
+    return text
+
 
 #: How many message ids to remember, to recognise one Twilio delivers again.
 SEEN_MESSAGES = 1000
@@ -189,12 +207,15 @@ class WhatsAppInterface:
         self._twilio = twilio
 
         async def webhook(request):
-            data = await request.post()
-            if not self._signature_valid(validator, request, dict(data)):
+            form = _text_form(await request.post())
+            if form is None:
+                logger.warning("[WhatsApp] Rejected a request whose form is not all text")
+                return web.Response(status=403, text="Forbidden")
+            if not self._signature_valid(validator, request, form):
                 logger.warning("[WhatsApp] Rejected a request with no valid Twilio signature")
                 return web.Response(status=403, text="Forbidden")
-            user_msg = data.get("Body", "")
-            from_number = data.get("From", "")
+            user_msg = form.get("Body", "")
+            from_number = form.get("From", "")
             logger.info("[WhatsApp] Message from %s: %s", from_number, user_msg[:60])
 
             sender = self._normalize_number(from_number)
@@ -204,7 +225,7 @@ class WhatsAppInterface:
 
             # Twilio delivers again when it does not get its answer in time, and
             # a message handled twice is answered twice, and paid for twice.
-            if not self._first_delivery(str(data.get("MessageSid", ""))):
+            if not self._first_delivery(form.get("MessageSid", "")):
                 logger.info("[WhatsApp] Ignoring a message from %s delivered again", sender)
                 return web.Response(text="OK")
 

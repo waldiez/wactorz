@@ -471,6 +471,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The WhatsApp webhook refuses a form that is not all text.** Twilio posts only text; a request with an upload in it
+  failed with a 500 while its signature was checked. It is now refused with a 403 before that, as an unsigned request
+  is.
 - **A migration whose local stop fails stops there.** Moving an agent from main to a node went ahead when the agent
   could not be stopped, leaving it running on main, unregistered, beside the copy started on the node. Now the move is
   refused with the reason, and the agent is registered and supervised again on main.

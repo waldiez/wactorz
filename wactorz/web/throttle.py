@@ -131,4 +131,4 @@ class LoginThrottle:
 
 
 #: The running server's failed sign-in attempts.
-throttle = LoginThrottle()
+throttle: "LoginThrottle" = LoginThrottle()

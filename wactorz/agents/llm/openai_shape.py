@@ -13,7 +13,7 @@ from typing import Any
 from .attachments import NO_DOCUMENTS, UNREADABLE
 from .pricing import calc_cost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

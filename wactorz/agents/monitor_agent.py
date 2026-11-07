@@ -32,7 +32,7 @@ import psutil
 from ..core.actor import Actor, ActorState, Message, MessageType
 from .lookup import find_main_actor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # How long a critical notification is suppressed before re-notifying (seconds)
 _NOTIFY_COOLDOWN = 120.0

@@ -65,7 +65,7 @@ from ..drift import (
 )
 from ..monitoring import model_metrics
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: What the catalogue and the dashboard call it.
 NAME = "drift"
@@ -194,16 +194,16 @@ class DriftAgent(Actor):
         bins: int = Thresholds.bins,
     ) -> None:
         super().__init__(actor_id=actor_id, name=name or NAME, persistence_dir=persistence_dir)
-        self.model = model.strip()
-        self.source = source.strip()
-        self.columns = _columns(columns)
-        self.scores = scores.strip()
-        self.score_column = score_column.strip() or DEFAULT_SCORE_COLUMN
-        self.reference = _window_option(reference, self.source)
-        self.window_s = max(1.0, _number(window_s, DEFAULT_WINDOW_S))
-        self.lateness_s = max(0.0, _number(lateness_s, DEFAULT_LATENESS_S))
-        self.check_s = max(1.0, _number(check_s, DRIFT_CHECK_S))
-        self.thresholds = Thresholds(
+        self.model: str = model.strip()
+        self.source: str = source.strip()
+        self.columns: tuple[str, ...] = _columns(columns)
+        self.scores: str = scores.strip()
+        self.score_column: str = score_column.strip() or DEFAULT_SCORE_COLUMN
+        self.reference: Window | None = _window_option(reference, self.source)
+        self.window_s: float = max(1.0, _number(window_s, DEFAULT_WINDOW_S))
+        self.lateness_s: float = max(0.0, _number(lateness_s, DEFAULT_LATENESS_S))
+        self.check_s: float = max(1.0, _number(check_s, DRIFT_CHECK_S))
+        self.thresholds: Thresholds = Thresholds(
             psi=_number(psi, Thresholds.psi),
             ks=_number(ks, Thresholds.ks),
             ks_p=_number(ks_p, Thresholds.ks_p),
@@ -221,7 +221,7 @@ class DriftAgent(Actor):
         #: What the last check found, and when, for the card and ``status``.
         self.last: list[Reading] = []
         self.checked_at: float | None = None
-        self.checks = 0
+        self.checks: int = 0
 
     @property
     def on_node(self) -> bool:

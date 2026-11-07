@@ -32,7 +32,7 @@ from ..data.files import data_root, event_time_of
 if TYPE_CHECKING:
     from .function_agent import FunctionAgent
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where a model's pairs are filed, under the data directory.
 SHADOW_PREFIX = "shadow"
@@ -160,10 +160,10 @@ class PairRecorder:
 
     def __init__(self, model: str, root: Path | None = None) -> None:
         self.model = model
-        self.root = root if root is not None else data_root(resolve_state_dir())
+        self.root: Path = root if root is not None else data_root(resolve_state_dir())
         self._writer: Any = None
         self.unavailable: str | None = None
-        self.recorded = 0
+        self.recorded: int = 0
 
     def _open(self) -> Any:
         if self._writer is not None or self.unavailable is not None:

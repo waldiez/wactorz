@@ -180,12 +180,12 @@ class Adwin:
         self.delta = delta
         #: Row ``i`` holds buckets of ``2^i`` readings, oldest first.
         self._rows: list[list[_Bucket]] = [[]]
-        self.width = 0
-        self.total = 0.0
+        self.width: int = 0
+        self.total: float = 0.0
         self._variance = 0.0
         self._ticks = 0
         #: How many cuts the window has had.
-        self.changes = 0
+        self.changes: int = 0
 
     @property
     def mean(self) -> float | None:

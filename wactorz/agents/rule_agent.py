@@ -63,7 +63,7 @@ from ..core.labels import LabelError, Labels, event_time
 from ..core.outbound import check_channel, check_options
 from ..core.persistence.stores import get_db
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a webhook call may take. Generous: the cost of a slow hook is a
 #: late action, the cost of a tight limit is an action that never happens.
@@ -458,10 +458,10 @@ class RuleAgent(Actor):
     def __init__(self, config: RuleConfig, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.config = config
-        self.description = config.description or self._describe()
+        self.description: str = config.description or self._describe()
         #: The event time of the trigger the rule last fired on, for the cooldown.
         self._fired_at: float | None = None
-        self.fired = 0
+        self.fired: int = 0
 
     def _describe(self) -> str:
         what = ", ".join(a.type for a in self.config.actions)

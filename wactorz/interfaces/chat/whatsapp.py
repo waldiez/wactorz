@@ -24,7 +24,7 @@ from .social import SocialRateLimiter
 if TYPE_CHECKING:
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _text_form(form: Mapping[str, object]) -> dict[str, str] | None:
@@ -82,12 +82,12 @@ class WhatsAppInterface:
         # The webhook is a public HTTP endpoint, so anyone who finds it can spend
         # tokens unless senders are pinned. Numbers are compared without the
         # `whatsapp:` prefix Twilio adds.
-        self.allowed_numbers = frozenset(
+        self.allowed_numbers: frozenset[str] = frozenset(
             self._normalize_number(n) for n in (allowed_numbers or CONFIG.whatsapp_allowed_numbers)
         )
-        self.limiter = SocialRateLimiter()
-        self.outbox = outbox or Outbox()
-        self.choices = PendingChoices()
+        self.limiter: SocialRateLimiter = SocialRateLimiter()
+        self.outbox: Outbox = outbox or Outbox()
+        self.choices: PendingChoices = PendingChoices()
         #: Replies still being worked out. The webhook answers Twilio before
         #: the model does, so these are what keeps them alive until they finish.
         self._replies: set[asyncio.Task[None]] = set()

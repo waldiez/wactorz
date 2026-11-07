@@ -72,7 +72,7 @@ from ..core.refusals import REFUSED, UNANSWERED, RecentRefusals
 from . import node_service
 from .lookup import find_main_actor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The control topics main publishes without retaining them, so a retained message
 #: on one was put there by something else. `desired_state` is not among them: main

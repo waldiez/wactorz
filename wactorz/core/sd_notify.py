@@ -15,7 +15,7 @@ import logging
 import os
 import socket
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def notify(state: str) -> bool:

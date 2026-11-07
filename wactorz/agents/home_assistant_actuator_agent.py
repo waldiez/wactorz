@@ -32,7 +32,7 @@ from ..core.mqtt import (
     session_kwargs,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration dataclasses
@@ -209,9 +209,9 @@ class HomeAssistantActuatorAgent(Actor):
         super().__init__(**kwargs)
 
         self.config = config
-        self.ha_url = (CONFIG.ha_url or "").rstrip("/")
-        self.ha_token = (CONFIG.ha_token or "").strip()
-        self.ha_ws_url = normalize_ha_ws_url(self.ha_url)
+        self.ha_url: str = (CONFIG.ha_url or "").rstrip("/")
+        self.ha_token: str = (CONFIG.ha_token or "").strip()
+        self.ha_ws_url: str = normalize_ha_ws_url(self.ha_url)
 
         self._ha: HAWebSocketClient | None = None
         self._ws_ready: asyncio.Event = asyncio.Event()  # set when HA WS is connected

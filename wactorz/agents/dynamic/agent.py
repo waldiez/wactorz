@@ -49,7 +49,7 @@ from .sanitize import sanitize_code
 if TYPE_CHECKING:
     from ..llm_agent import LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class _ProgramHalted(Exception):
@@ -155,8 +155,8 @@ class DynamicAgent(Actor):
         self._artifacts = {key: dict(entry) for key, entry in (artifacts or {}).items()}
         self.poll_interval = poll_interval
         self.description = description
-        self.input_schema = input_schema or {}
-        self.output_schema = output_schema or {}
+        self.input_schema: dict[str, Any] = input_schema or {}
+        self.output_schema: dict[str, Any] = output_schema or {}
         self._llm_provider = llm_provider
         self._trusted = trusted  # catalog agents bypass safety checks
 
@@ -169,9 +169,9 @@ class DynamicAgent(Actor):
         self._ns: dict[str, Any] = {}
 
         # Cost tracking (populated by LLMInterface if LLM is used)
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
         self._last_period_cost_usd = 0.0
 
         # Error tracking for health classification
@@ -1128,7 +1128,7 @@ class DynamicAgent(Actor):
                         self.name,
                         self._consecutive_errors,
                     )
-                    self.state = ActorState.FAILED
+                    self.state: ActorState = ActorState.FAILED
                     return
                 backoff = min(2**self._consecutive_errors, 30)
                 await asyncio.sleep(backoff)

@@ -10,7 +10,7 @@ from .json_value import NotJsonError
 from .pickle_store import read_state_file
 from .stores import get_memory_store
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ── Migration helper ───────────────────────────────────────────────────────
 

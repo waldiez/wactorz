@@ -20,7 +20,7 @@ from typing import Any
 
 from .json_value import encode
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class MemoryStore:

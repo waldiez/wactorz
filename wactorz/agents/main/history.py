@@ -33,7 +33,7 @@ from typing import Any
 
 from ...core.persistence import get_db
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topic agents on nodes publish their history reads to.
 HISTORY_TOPIC = "main/history_request"

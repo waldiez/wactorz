@@ -10,7 +10,7 @@ from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 STATE_CHANGED_EVENT = "state_changed"
 DEFAULT_OUTPUT_TOPIC = "homeassistant/state_changes"
@@ -41,9 +41,9 @@ class HomeAssistantStateBridgeAgent(Actor):
         super().__init__(**kwargs)
         self.protected = False
 
-        self.ha_url = (os.getenv("HOME_ASSISTANT_URL") or CONFIG.ha_url or "").rstrip("/")
-        self.ha_ws_url = normalize_ha_ws_url(self.ha_url)
-        self.ha_token = (os.getenv("HOME_ASSISTANT_TOKEN") or CONFIG.ha_token or "").strip()
+        self.ha_url: str = (os.getenv("HOME_ASSISTANT_URL") or CONFIG.ha_url or "").rstrip("/")
+        self.ha_ws_url: str = normalize_ha_ws_url(self.ha_url)
+        self.ha_token: str = (os.getenv("HOME_ASSISTANT_TOKEN") or CONFIG.ha_token or "").strip()
 
         self._output_topic = (
             os.getenv("HA_STATE_BRIDGE_OUTPUT_TOPIC")

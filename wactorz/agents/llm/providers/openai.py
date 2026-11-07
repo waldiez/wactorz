@@ -21,7 +21,7 @@ from ..openai_shape import (
 from ..pricing import calc_cost
 from ..retry import attempt_timeout
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(LLMProvider):
@@ -39,13 +39,13 @@ class OpenAIProvider(LLMProvider):
         # configured one for the same reason: left to the SDK's default, a
         # setting of "no limit" would still be cut off at the SDK's.
         timeout = attempt_timeout()
-        self.client = (
+        self.client: Any = (
             openai.AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=timeout)
             if base_url
             else openai.AsyncOpenAI(api_key=api_key, max_retries=0, timeout=timeout)
         )
         self.model = model
-        self.base_url = base_url or None
+        self.base_url: str | None = base_url or None
 
     @classmethod
     def supports_blocks(cls) -> bool:

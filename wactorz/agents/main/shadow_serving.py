@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     from .artifact_service import Change
     from .hosts import SwapHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The pointer this follows.
 SHADOW = "shadow"

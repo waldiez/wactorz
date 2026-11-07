@@ -42,9 +42,9 @@ class Client:
     def __init__(self, url: str, *, api_key: str = "", timeout: float = DEFAULT_TIMEOUT_S) -> None:
         self._transport = Transport(url, api_key, timeout=timeout)
         self._stream = Stream(self._transport)
-        self.files = Files(self._transport)
-        self.chat = Chat(self._transport, self._stream, self.files)
-        self.questions = Questions(self._transport)
+        self.files: Files = Files(self._transport)
+        self.chat: Chat = Chat(self._transport, self._stream, self.files)
+        self.questions: Questions = Questions(self._transport)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Client":

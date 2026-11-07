@@ -20,7 +20,7 @@ from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import facts_extract_prompt, orchestrator_prompt
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:

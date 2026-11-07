@@ -48,8 +48,8 @@ class TokenBucket:
     def __init__(
         self, per_minute: float, burst: int, clock: Callable[[], float] = time.monotonic
     ) -> None:
-        self.per_second = per_minute / 60.0
-        self.burst = max(1, burst)
+        self.per_second: float = per_minute / 60.0
+        self.burst: int = max(1, burst)
         self._clock = clock
         self._tokens = float(self.burst)
         self._at = clock()
@@ -91,8 +91,8 @@ class Lane:
     ) -> None:
         self.per_minute = per_minute
         self.burst = burst
-        self.running_per_node = max(1, running_per_node)
-        self.waiting_per_node = max(0, waiting_per_node)
+        self.running_per_node: int = max(1, running_per_node)
+        self.waiting_per_node: int = max(0, waiting_per_node)
         self._clock = clock
         self._slots = asyncio.Semaphore(max(1, running))
         self._nodes: OrderedDict[str, _Node] = OrderedDict()

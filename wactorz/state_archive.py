@@ -67,7 +67,7 @@ from wactorz.core.blob_transfer import INBOX_DIRNAME
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.state_lock import LOCK_FILE, in_use
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The archive layout this module writes, and the only one it reads.
 FORMAT = 1

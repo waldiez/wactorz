@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .agent import NodeAgent
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where history reads are sent.
 HISTORY_TOPIC = "main/history_request"

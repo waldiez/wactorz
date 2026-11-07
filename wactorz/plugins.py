@@ -30,7 +30,7 @@ from .agents.function_agent import AgentSpec, FunctionAgent, agent_name_from, sp
 from .config import CONFIG
 from .core.actor import Actor, declared_topics
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The entry-point group a package lists its agents under.
 ENTRY_POINT_GROUP = "wactorz.agents"

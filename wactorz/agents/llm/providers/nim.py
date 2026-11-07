@@ -23,7 +23,7 @@ from ..openai_shape import (
 from ..pricing import calc_cost
 from ..retry import attempt_timeout, is_retryable
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NIMToolsError(RuntimeError):
@@ -70,7 +70,7 @@ class NIMProvider(LLMProvider):
         # for every provider, and the two would multiply. The timeout is the
         # configured one for the same reason: left to the SDK's default, a
         # setting of "no limit" would still be cut off at the SDK's.
-        self.client = openai.AsyncOpenAI(
+        self.client: Any = openai.AsyncOpenAI(
             api_key=api_key or "dummy",  # NIM free tier may not require a key locally
             base_url=base_url,
             max_retries=0,

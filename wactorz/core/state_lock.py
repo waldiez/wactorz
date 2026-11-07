@@ -79,7 +79,7 @@ class StateLock:
     """The lock on one state directory, held from :meth:`acquire` to :meth:`release`."""
 
     def __init__(self, directory: str | os.PathLike[str]) -> None:
-        self.directory = Path(directory)
+        self.directory: Path = Path(directory)
         self._file: IO[bytes] | None = None
 
     @property

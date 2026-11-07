@@ -26,7 +26,7 @@ from aiohttp.web import Response
 
 from ..monitoring.log_buffer import get_buffer
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Most records one request may take. The buffer holds ~1000, and a caller does
 #: not get to choose how large a response the server builds.

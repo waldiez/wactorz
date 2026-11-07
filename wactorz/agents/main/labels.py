@@ -48,7 +48,7 @@ from .voices import placed_node, speaks_for
 if TYPE_CHECKING:
     from .hosts import LabelHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: What this listener subscribes to: every agent's question book.
 BOOKS_TOPIC = f"agents/+/{QUESTIONS_LEAF}"

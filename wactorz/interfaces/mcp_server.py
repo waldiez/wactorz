@@ -51,10 +51,10 @@ class McpMissingError(SystemExit):
 
 try:
     from mcp.server.fastmcp import FastMCP
-except ImportError as exc:
-    raise McpMissingError() from exc
+except ImportError as _missing:  # private: the name would otherwise read as part of the module
+    raise McpMissingError() from _missing
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 WACTORZ_URL = os.getenv("WACTORZ_URL", "http://localhost:8000").rstrip("/")
 WACTORZ_API_KEY = os.getenv("WACTORZ_API_KEY", "")

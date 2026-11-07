@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ...core.registry import ActorRegistry, ActorSystem
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Reachable without a key so container and uptime probes keep working.
 UNGUARDED_PATHS = probes.PROBE_PATHS

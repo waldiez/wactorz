@@ -35,7 +35,7 @@ from ..data.retention import DATA_KEY
 from .record import record_failure, record_model, record_start
 from .spec import LOG_FILE, RESULT_FILE, SPEC_FILE, TrainError, TrainSpec, verdict
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where runs are kept under the state directory: the specification, the
 #: result and the log of each, for a person to read after.

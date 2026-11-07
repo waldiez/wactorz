@@ -12,7 +12,7 @@ from ..attachments import NO_DOCUMENTS, UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _ollama_options
 from ..openai_shape import _openai_tools, _parse_tool_arguments
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _OLLAMA_TIMEOUT = aiohttp.ClientTimeout(total=600, sock_connect=10)

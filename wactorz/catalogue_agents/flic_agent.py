@@ -699,7 +699,7 @@ class FlicAgent(Actor):
         """Turn late presses on or off, or say which they are."""
         wanted = _SWITCH_WORDS.get(value.strip().lower())
         if wanted is not None:
-            self.late_presses = wanted == "on"
+            self.late_presses: bool = wanted == "on"
             await self._remember()
         if self.late_presses:
             return (

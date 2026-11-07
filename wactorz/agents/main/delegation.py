@@ -44,7 +44,7 @@ from ...core.node_publications import admit
 if TYPE_CHECKING:
     from .hosts import DelegationHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class _Delegation(NamedTuple):

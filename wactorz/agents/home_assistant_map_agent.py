@@ -16,7 +16,7 @@ from ..core.integrations.home_assistant.ha_helper import (
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 ENTITY_REGISTRY_UPDATED_EVENT = "entity_registry_updated"
 DEFAULT_OUTPUT_TOPIC = "homeassistant/map/entities_with_location"
@@ -168,9 +168,9 @@ class HomeAssistantMapAgent(Actor):
         kwargs.setdefault("name", "home-assistant-map-agent")
         super().__init__(**kwargs)
         self.protected = False
-        self.ha_url = (os.getenv("HOME_ASSISTANT_URL") or CONFIG.ha_url or "").rstrip("/")
-        self.ha_ws_url = normalize_ha_ws_url(self.ha_url)
-        self.ha_token = (os.getenv("HOME_ASSISTANT_TOKEN") or CONFIG.ha_token or "").strip()
+        self.ha_url: str = (os.getenv("HOME_ASSISTANT_URL") or CONFIG.ha_url or "").rstrip("/")
+        self.ha_ws_url: str = normalize_ha_ws_url(self.ha_url)
+        self.ha_token: str = (os.getenv("HOME_ASSISTANT_TOKEN") or CONFIG.ha_token or "").strip()
         self._output_topic = (
             os.getenv("HA_MAP_AGENT_OUTPUT_TOPIC")
             or os.getenv("HOME_ASSISTANT_MAP_OUTPUT_TOPIC")

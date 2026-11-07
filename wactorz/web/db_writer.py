@@ -39,7 +39,7 @@ from ..core.persistence.db import ChatRow
 from ..monitoring import chat_metrics
 from . import runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Chat rows waiting at most, and their bytes at most, before new ones are dropped.
 MAX_ROWS = 2000
@@ -277,4 +277,4 @@ class DbWriter:
 
 
 #: The running server's writer.
-writer = DbWriter()
+writer: "DbWriter" = DbWriter()

@@ -72,7 +72,7 @@ from zoneinfo import ZoneInfo
 from ..core.actor import Actor, Message, MessageType
 from .lookup import find_main_actor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Day-of-week parsing ──────────────────────────────────────────────────────

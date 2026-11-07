@@ -30,7 +30,7 @@ from typing import Any
 from ..core.blob_transfer import send_file
 from ..data.files import DATA_DIRNAME, data_root
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the node looks for closed files to send.
 SHIP_EVERY_S = 60.0
@@ -71,7 +71,7 @@ class DataShipper:
         every: float = SHIP_EVERY_S,
     ) -> None:
         self.node_name = node_name
-        self.root = data_root(state_dir)
+        self.root: Path = data_root(state_dir)
         self._publish = publish
         self.every = every
         #: path (relative to the data directory) -> what was sent and when,

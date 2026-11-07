@@ -27,7 +27,7 @@ from typing import Any
 from .artifacts import CLEARED, MOVED, PROMOTED, Pointer
 from .provenance import ACTION, DONE, Provenance, ProvNode, model_source, stable_id
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: What the action did, in its payload's ``change`` -- `MOVED`, `CLEARED` or
 #: `PROMOTED`, the shadow cleared by a promotion -- in the words the store's

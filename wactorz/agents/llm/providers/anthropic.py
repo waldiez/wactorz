@@ -10,7 +10,7 @@ from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
 from ..retry import attempt_timeout
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Anthropic removed the sampling parameters on Claude Opus 4.7 and has kept them
 # out of every model released since: `temperature` is a 400, not a field the API
@@ -247,7 +247,7 @@ class AnthropicProvider(LLMProvider):
         # for every provider, and the two would multiply. The timeout is the
         # configured one for the same reason: left to the SDK's default, a
         # setting of "no limit" would still be cut off at the SDK's.
-        self.client = anthropic.AsyncAnthropic(
+        self.client: Any = anthropic.AsyncAnthropic(
             api_key=api_key, max_retries=0, timeout=attempt_timeout()
         )
         self.model = model

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long the planner waits for an agent it sent to a node to be reported
 #: running there. Generous: the node may install the agent's packages first,

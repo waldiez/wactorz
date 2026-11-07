@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Live date/time context (shared by LLMAgent and non-LLMAgent actors) ───────

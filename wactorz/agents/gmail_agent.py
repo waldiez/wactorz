@@ -16,7 +16,7 @@ from ..core.actor import Message, MessageType
 from ..core.integrations.gmail_mcp import GmailMcpClient, gmail_mcp_config_status
 from .llm_agent import LLMAgent, LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 GMAIL_PARSE_PROMPT = """You convert a user Gmail request into JSON only.
@@ -80,7 +80,7 @@ class GmailAgent(LLMAgent):
         kwargs.setdefault("name", "gmail-agent")
         kwargs.setdefault("system_prompt", GMAIL_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.client = GmailMcpClient()
+        self.client: GmailMcpClient = GmailMcpClient()
         self._pending_draft: dict[str, Any] = {}
         self._awaiting_draft = False
 

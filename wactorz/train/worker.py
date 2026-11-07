@@ -38,7 +38,7 @@ from .recipe import Recipe, load_recipe
 from .spec import RESULT_FILE, SPEC_FILE, TrainError, TrainSpec
 from .splits import folds_for
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def limit_memory(megabytes: int) -> bool:

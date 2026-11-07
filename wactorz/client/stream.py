@@ -20,7 +20,7 @@ from .errors import ClientError, UnavailableError
 from .frames import Disconnected, Dropped, Event, Frame, Reconnected
 from .transport import Transport
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Seconds before the first attempt to reconnect, and the most it grows to.
 RECONNECT_FIRST_S = 1.0

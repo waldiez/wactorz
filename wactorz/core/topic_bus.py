@@ -63,7 +63,7 @@ from .labels import event_time
 if TYPE_CHECKING:
     from .mqtt_publisher import MQTTPublisher
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Topic Contract ─────────────────────────────────────────────────────────────
@@ -839,8 +839,8 @@ class TopicBus:
         mqtt_broker: str = "localhost",
         mqtt_port: int = 1883,
     ) -> None:
-        self.registry = TopicRegistry()
-        self.state_hub = SharedStateHub(mqtt_client)
+        self.registry: TopicRegistry = TopicRegistry()
+        self.state_hub: SharedStateHub = SharedStateHub(mqtt_client)
         self._mqtt_broker = mqtt_broker
         self._mqtt_port = mqtt_port
         self._mqtt = mqtt_client

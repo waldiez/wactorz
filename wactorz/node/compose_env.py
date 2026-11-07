@@ -27,7 +27,7 @@ from ..config import CONFIG, MODEL_CODE_NODE
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path, tls_enabled
 from ..core.node_env import UnusableNodeAccountError, node_account, node_env_text
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The node's name when ``WACTORZ_MODEL_CODE_NODE`` names none.
 DEFAULT_NODE = "sandbox"

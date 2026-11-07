@@ -28,7 +28,7 @@ from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
 from . import cost, db_writer, events, relay, runtime, ws
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 async def broadcast_mqtt_msg(topic: str, payload: str, thread_id: str = "") -> None:

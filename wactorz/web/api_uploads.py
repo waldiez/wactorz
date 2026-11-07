@@ -28,7 +28,7 @@ from aiohttp import BodyPartReader, web
 from .. import config
 from . import uploads
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Bytes read from the body at a time: each is one write on a thread, so a full
 #: upload costs a hundred or so hops rather than one per small network read.

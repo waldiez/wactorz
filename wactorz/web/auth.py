@@ -31,7 +31,7 @@ from ..config import _env_truthy
 from ..core.net import is_loopback
 from . import origins, probes, sessions, throttle
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Reachable without a key, whatever else is configured.
 #:

@@ -46,7 +46,7 @@ __all__ = [
 ]
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class LLMAgent(Actor):
@@ -71,9 +71,9 @@ class LLMAgent(Actor):
         self._history_summary: str = ""  # rolling summary of compressed messages
         self._current_task = "idle"
         # Cost / token tracking — must be set here so subclasses (MainActor etc.) inherit them
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cost_usd = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
         self._last_persisted_usd = 0.0
 
     def _current_task_description(self) -> str:

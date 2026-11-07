@@ -18,7 +18,7 @@ from ..core.integrations.google_calendar_mcp import (
 )
 from .llm_agent import LLMAgent, LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 CALENDAR_PARSE_PROMPT = """You convert a user calendar request into JSON only.
@@ -75,7 +75,7 @@ class GoogleCalendarAgent(LLMAgent):
         kwargs.setdefault("name", "google-calendar-agent")
         kwargs.setdefault("system_prompt", CALENDAR_PARSE_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.client = GoogleCalendarMcpClient()
+        self.client: GoogleCalendarMcpClient = GoogleCalendarMcpClient()
         self._pending_create: dict[str, Any] = {}
 
     async def chat(self, user_message: str) -> str:

@@ -21,7 +21,7 @@ from typing import Any
 
 from .config import CONFIG
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The environment variable naming the distributions to load.
 ENV_VAR = "WACTORZ_EXTENSIONS"

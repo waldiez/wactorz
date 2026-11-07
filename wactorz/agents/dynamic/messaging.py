@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long `send_to` waits for its reply subscription before sending anyway.
 #: The same bound, and the same choice, as main's delegation: the task still

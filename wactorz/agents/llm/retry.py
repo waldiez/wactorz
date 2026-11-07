@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 

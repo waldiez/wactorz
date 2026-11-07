@@ -35,7 +35,7 @@ import re
 import threading
 from collections.abc import Iterator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Names that refuse the code wherever they appear, keyed by what they resolve
 #: to through the code's imports. Referencing one is refused as well as calling

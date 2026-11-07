@@ -44,7 +44,7 @@ from .spec import (
     TrainSpec,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Who the move and the graph say asked.
 BY = "cli"

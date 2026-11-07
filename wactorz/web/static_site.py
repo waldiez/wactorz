@@ -16,7 +16,7 @@ from aiohttp import web
 from .. import config
 from . import runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 

@@ -44,7 +44,7 @@ from .voices import placed_node, speaks_for
 if TYPE_CHECKING:
     from .hosts import ManifestHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where a remote agent's data might turn up. Broad on purpose: an agent picks
 #: its own topics, and the point is to learn what it actually publishes.

@@ -19,7 +19,7 @@ from .json_value import encode
 from .migrations import stamp_new_database
 from .schema import ADDED_COLUMN_INDEXES, SCHEMA_SQL, SCHEMA_VERSION
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Set for the duration of a chat turn whose ``chat_log`` rows the transport
 #: that carried it has already written.

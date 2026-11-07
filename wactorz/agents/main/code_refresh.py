@@ -48,7 +48,7 @@ from ...core.mqtt import (
 if TYPE_CHECKING:
     from .hosts import CodeRefreshHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a question stays open. A node answers in the time one MQTT round
 #: trip takes; this is long enough for one that is busy or briefly away, and

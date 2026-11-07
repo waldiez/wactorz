@@ -17,7 +17,7 @@ from ..core.questions import QUESTIONS_LEAF
 from . import chat, cost, runtime
 from . import questions as question_ledger
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 #: Most agents tracked in live state at once. Entries are created on any

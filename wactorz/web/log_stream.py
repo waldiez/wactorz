@@ -29,7 +29,7 @@ from typing import Any
 from ..monitoring.log_buffer import get_buffer
 from . import runtime, ws
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the pump looks for new records. Fast enough to read as live, slow
 #: enough that an idle dashboard costs nothing measurable.

@@ -12,7 +12,7 @@ from typing import Any
 
 from ...config import CONFIG
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _INTERFACE_DEPENDENCIES = {
@@ -45,7 +45,9 @@ class SocialRateLimiter:
     """
 
     def __init__(self, per_minute: int | None = None) -> None:
-        self.per_minute = CONFIG.social_rate_limit_per_min if per_minute is None else per_minute
+        self.per_minute: int = (
+            CONFIG.social_rate_limit_per_min if per_minute is None else per_minute
+        )
         self._hits: dict[str, list[float]] = {}
         self._in_flight: set[str] = set()
 

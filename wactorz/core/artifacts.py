@@ -82,7 +82,7 @@ from .promotion import from_json as policy_from_json
 from .state_lock import StateInUseError, StateLock
 from .torch_checkpoints import CheckpointRefusedError
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How many earlier declarations of what a version is judged on are kept with it.
 JUDGEMENTS_KEPT = 20
@@ -531,7 +531,7 @@ class ArtifactStore:
     """The artifacts kept under one directory."""
 
     def __init__(self, root: str | os.PathLike[str]) -> None:
-        self.root = Path(root)
+        self.root: Path = Path(root)
 
     @classmethod
     def in_state_dir(cls, state_dir: str | os.PathLike[str]) -> "ArtifactStore":

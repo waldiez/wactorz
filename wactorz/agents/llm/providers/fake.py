@@ -73,8 +73,8 @@ class FakeProvider(LLMProvider):
         if intent not in INTENTS:
             msg = f"intent must be one of {INTENTS}, got {intent!r}"
             raise ValueError(msg)
-        self.model = model or "fake"
-        self.script = dict(script or {})
+        self.model: str = model or "fake"
+        self.script: dict[str, str] = dict(script or {})
         self.intent = intent
         #: Every (system, messages) pair this provider was asked, in order. A
         #: scenario asserting "the model was asked at all" needs this; without it

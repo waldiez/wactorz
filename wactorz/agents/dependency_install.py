@@ -18,7 +18,7 @@ from ..core.actor import ReplyError, ask_through
 from ..core.packages import APPROVAL_TIMEOUT_S
 from ..core.pip import install_wait_s, pending_restart
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @dataclass

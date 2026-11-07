@@ -88,7 +88,7 @@ from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import WactorzDB, get_db
 
-logger = logging.getLogger("anomaly-detector")
+logger: logging.Logger = logging.getLogger("anomaly-detector")
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
@@ -123,20 +123,20 @@ class EntityBaseline:
     def __init__(self, entity_id: str, field: str) -> None:
         self.entity_id = entity_id
         self.field = field
-        self.hourly_mean = [0.0] * 24  # mean value per hour-of-day
-        self.hourly_std = [1.0] * 24  # std per hour-of-day
-        self.hourly_count = [0] * 24  # samples per hour slot
-        self.global_mean = 0.0
-        self.global_std = 1.0
-        self.p1 = 0.0  # 1st percentile
-        self.p99 = 0.0  # 99th percentile
-        self.max_rate = 0.0  # max |delta| between consecutive readings
-        self.mean_interval = 0.0  # mean seconds between readings
+        self.hourly_mean: list[float] = [0.0] * 24  # mean value per hour-of-day
+        self.hourly_std: list[float] = [1.0] * 24  # std per hour-of-day
+        self.hourly_count: list[int] = [0] * 24  # samples per hour slot
+        self.global_mean: float = 0.0
+        self.global_std: float = 1.0
+        self.p1: float = 0.0  # 1st percentile
+        self.p99: float = 0.0  # 99th percentile
+        self.max_rate: float = 0.0  # max |delta| between consecutive readings
+        self.mean_interval: float = 0.0  # mean seconds between readings
         self.total_samples = 0
-        self.last_value = None
-        self.last_ts = 0.0
+        self.last_value: float | None = None
+        self.last_ts: float = 0.0
         self.is_binary = False  # on/off sensor
-        self.transition_freq = 0.0  # state changes per hour (binary)
+        self.transition_freq: float = 0.0  # state changes per hour (binary)
         self.ready = False  # enough data to detect?
 
     def to_dict(self) -> dict[str, Any]:

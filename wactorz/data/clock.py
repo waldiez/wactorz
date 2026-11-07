@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .files import DataError, hours_of
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The event-time column every file has.
 TS = "ts"

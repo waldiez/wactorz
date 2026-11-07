@@ -56,7 +56,7 @@ from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
 from ..rule_agent import RuleAgent, RuleConfig
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a spawn waits for each package beyond the operator's answer: the
 #: installer's own bound on a pip run, twice, since a package may be retried

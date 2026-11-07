@@ -33,7 +33,7 @@ from ..core.agent_reset import (
 from ..core.node_signing import signed_publish_kwargs
 from . import cost, db_writer, events, lifecycle, node_reset, runtime, ws
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager

@@ -20,7 +20,7 @@ from .retry import ProviderUnavailable, call_with_retry, stream_with_retry
 
 T = TypeVar("T")
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _resolve_temperature(kwargs: dict[str, Any]) -> float | None:

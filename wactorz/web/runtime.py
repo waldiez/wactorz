@@ -66,7 +66,7 @@ mqtt_connected: bool = False
 server_task: "asyncio.Task[None] | None" = None
 
 # ── Live snapshot (mutated in place — never rebound) ─────────────────────────
-state = {
+state: dict[str, Any] = {
     "agents": {},
     "nodes": {},
     "alerts": [],

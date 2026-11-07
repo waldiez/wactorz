@@ -83,7 +83,7 @@ from wactorz.core.paths import resolve_state_dir
 from wactorz.core.promotion import METRICS, Policy, PolicyError
 from wactorz.core.promotion import declared as policy_declared
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _store(args: argparse.Namespace) -> ArtifactStore:

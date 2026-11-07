@@ -33,7 +33,7 @@ import threading
 import time
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a session lasts, counted from when it was created rather than from
 #: the last request. Absolute rather than sliding: a sliding window renews
@@ -286,7 +286,7 @@ class OneTimeCodes:
 
 
 #: The running server's sessions.
-store = SessionStore()
+store: "SessionStore" = SessionStore()
 
 #: The running server's outstanding sign-in codes.
-codes = OneTimeCodes()
+codes: "OneTimeCodes" = OneTimeCodes()

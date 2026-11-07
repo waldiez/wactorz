@@ -194,7 +194,7 @@ class CommandRegistry:
 
 #: The registry the actor dispatches through. Filled by the package's
 #: `__init__`, which lists the commands in the order they are tried.
-registry = CommandRegistry()
+registry: CommandRegistry = CommandRegistry()
 
 
 def command(

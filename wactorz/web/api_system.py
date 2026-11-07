@@ -20,7 +20,7 @@ from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_
 from . import cost, origins, panels, probes, questions, runtime
 from .metrics import known_nodes
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Rows ``GET /api/chats`` sends when not told, and the most it sends.
 DEFAULT_CHAT_ROWS = 200

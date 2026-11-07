@@ -33,7 +33,7 @@ from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
 from ..data.files import DataError, check_source, data_root, event_time_of
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: What the catalogue and the dashboard call it.
 NAME = "recorder"
@@ -97,8 +97,8 @@ class RecorderAgent(Actor):
         flush_every_s: float = FLUSH_EVERY_S,
     ) -> None:
         super().__init__(actor_id=actor_id, name=name or NAME, persistence_dir=persistence_dir)
-        self.topics = topics_of(topics)
-        self.source_field = source_field.strip()
+        self.topics: tuple[str, ...] = topics_of(topics)
+        self.source_field: str = source_field.strip()
         self.batch_rows = batch_rows
         self.flush_every_s = flush_every_s
         #: One writer per source, opened as its first reading arrives.
@@ -107,8 +107,8 @@ class RecorderAgent(Actor):
         self._unavailable: str | None = None
         self._flusher: asyncio.Task[Any] | None = None
         #: What this agent has recorded and refused, for its card.
-        self.recorded = 0
-        self.refused = 0
+        self.recorded: int = 0
+        self.refused: int = 0
 
     @property
     def root(self) -> Path:

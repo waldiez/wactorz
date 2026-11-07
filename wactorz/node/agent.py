@@ -41,7 +41,7 @@ from .llm import BridgeProvider, request_over_mqtt
 if TYPE_CHECKING:
     from .runner import NodeRunner
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NodeAgent(NodeHosted, DynamicAgent):

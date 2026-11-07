@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from ..mixins.spawning import SpawnPlaceholder
     from .hosts import SpawnHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] = ()) -> str | None:

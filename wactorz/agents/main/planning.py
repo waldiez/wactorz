@@ -22,7 +22,7 @@ from ..mixins import agent_type
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Persistence key for the rules that shape how a pipeline is planned.
 PIPELINE_RULES_KEY = "_pipeline_rules"

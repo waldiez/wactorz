@@ -9,10 +9,11 @@ import logging
 from typing import Any
 
 from .db import WactorzDB
+from .memory_store import MemoryStore
 from .pickle_store import PickleStore
 from .stores import get_memory_store
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ── Unified Persistence API ───────────────────────────────────────────────
 # This is the compatibility shim. It replaces the raw pickle persist/recall
@@ -72,7 +73,7 @@ class PersistenceAPI:
 
     def __init__(self, db: WactorzDB, pickle_store: PickleStore, agent_name: str) -> None:
         self.db = db
-        self.memory = get_memory_store()
+        self.memory: MemoryStore = get_memory_store()
         self.pickle = pickle_store
         self.agent = agent_name
 

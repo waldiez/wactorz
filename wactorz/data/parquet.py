@@ -34,7 +34,7 @@ from .files import (
     hour_start,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How many rows a writer keeps before it writes a part of the hour out.
 DEFAULT_BATCH_ROWS = 5000

@@ -15,7 +15,7 @@ from .db import WactorzDB
 from .memory_store import MemoryStore
 from .pickle_store import PickleStore
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class Stores:

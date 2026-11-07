@@ -16,7 +16,7 @@ from ..turn_actions import TurnActions
 from .dispatch import CommandContext, command
 from .groups import AGENTS, NODES
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _named(ctx: CommandContext, argument: str) -> tuple[Registered, str | None]:

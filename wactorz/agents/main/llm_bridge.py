@@ -59,7 +59,7 @@ from .history import HISTORY_TOPIC, answer_history
 if TYPE_CHECKING:
     from ...core.actor import ActorState
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topic remote agents publish their requests to.
 REQUEST_TOPIC = "main/llm_request"
@@ -141,14 +141,14 @@ class LLMBridge:
         #: node that sends many says so once rather than on every call. Newest
         #: last, and bounded -- see `REPORTED_MEMORY`.
         self._reported: OrderedDict[str, None] = OrderedDict()
-        self.calls = Lane(
+        self.calls: Lane = Lane(
             per_minute=BRIDGE_CALLS_PER_MINUTE,
             burst=BRIDGE_CALLS_PER_MINUTE,
             running_per_node=CALLS_RUNNING_PER_NODE,
             waiting_per_node=CALLS_WAITING_PER_NODE,
             running=CALLS_RUNNING,
         )
-        self.history = Lane(
+        self.history: Lane = Lane(
             per_minute=BRIDGE_HISTORY_PAGES_PER_MINUTE,
             burst=BRIDGE_HISTORY_PAGES_PER_MINUTE,
             running_per_node=HISTORY_RUNNING_PER_NODE,

@@ -27,7 +27,7 @@ from ..monitoring.log_setup import setup_console_logging
 from . import local_setup
 from .runner import NodeRunner
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def node_name_from(args: argparse.Namespace) -> str:

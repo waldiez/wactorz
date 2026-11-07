@@ -27,7 +27,7 @@ from ..core.paths import resolve_state_dir
 from .files import DataError, check_source, data_root, summaries
 from .retention import protected_windows, sweep
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How far back a profile or an export looks when the window is unsaid.
 DEFAULT_WINDOW_S = 24 * 3600.0

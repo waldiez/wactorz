@@ -34,7 +34,7 @@ from ..core.mqtt_publisher import MQTTPublisher
 from ..core.mqtt_tls import client_context, tls_enabled
 from ..core.node_publications import PublicationSigner
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How many messages may wait in memory before telemetry starts giving way, and
 #: which topics are the telemetry that gives way. Both from the server's
@@ -119,7 +119,7 @@ class NodePublisher:
         #: Created in :meth:`run`, inside the event loop that will own it.
         self._queue: asyncio.Queue[QueueItem] | None = None
         #: Messages the cap discarded, for the log.
-        self.dropped = 0
+        self.dropped: int = 0
         #: Taken from the queue and not yet accepted by the client. Held so a
         #: broker that goes away mid-send costs a retry rather than the message.
         self._inflight: QueueItem | None = None

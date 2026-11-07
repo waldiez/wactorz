@@ -44,7 +44,7 @@ from .agents.llm.providers.openai import OpenAIProvider
 from .agents.llm_agent import LLMProvider
 from .config import CONFIG, _unquote
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # Provider instances cached per spec string so repeated spawns (planner,
 # actuator) reuse one client instead of re-constructing it per request.

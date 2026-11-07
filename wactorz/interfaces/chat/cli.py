@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from ...agents.main import MainActor
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 async def resolve_host(hostname: str) -> str | None:

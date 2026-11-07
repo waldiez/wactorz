@@ -78,7 +78,7 @@ if TYPE_CHECKING:
     from wactorz.agents.llm_agent import LLMProvider
     from wactorz.orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Set as the shutdown sequence begins, so the signal handler stops asking the app
 #: task to stop once it is stopping. A threading.Event rather than an asyncio one:

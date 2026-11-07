@@ -24,7 +24,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where an agent's state records the version it is at.
 STATE_VERSION_KEY = "_state_version"

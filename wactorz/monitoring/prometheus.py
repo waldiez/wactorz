@@ -4,9 +4,10 @@
 import asyncio
 import time
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, ClassVar
 
 from aiohttp import web
+from aiohttp.typedefs import Middleware
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -487,7 +488,7 @@ class PrometheusMonitor:
 
     #: Requests to the REST interface, counted and timed in `http_metrics`
     #: under ``server="rest"``; the dashboard's server records its own there too.
-    middleware = staticmethod(http_metrics.middleware_for(http_metrics.REST))
+    middleware: ClassVar[Middleware] = staticmethod(http_metrics.middleware_for(http_metrics.REST))
 
     async def refresh(self) -> None:
         """Read what `render` reports but cannot read on the loop: the spend.

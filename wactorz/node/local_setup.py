@@ -50,7 +50,7 @@ from ..agents.node_service import (
     sandboxed_unit_file,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The node's name, its system user's, and the deploy target main knows it by.
 NODE = "sandbox"

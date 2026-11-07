@@ -380,7 +380,7 @@ class Labels:
 
     def __init__(self, db: WactorzDB) -> None:
         self.db = db
-        self.graph = Provenance(db)
+        self.graph: Provenance = Provenance(db)
 
     def write(
         self,

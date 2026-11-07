@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class PipelineMixin(_Host):

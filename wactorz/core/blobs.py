@@ -43,7 +43,7 @@ from urllib.parse import quote
 
 from .deferred_write import DeferredWriter
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The key of the marker a state file holds where a blob's value was.
 BLOB_MARK = "__wactorz_blob__"

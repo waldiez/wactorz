@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from ..config import NODE_SIGNING
 from .node_signing import node_key
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The user properties a node's publication carries. Named apart from the ones
 #: on main's commands, so a reader of a packet can tell which way it went.
@@ -104,7 +104,7 @@ class PublicationSigner:
 
     def __init__(self, key: bytes, run: str | None = None) -> None:
         self._key = key
-        self.run = run or secrets.token_hex(8)
+        self.run: str = run or secrets.token_hex(8)
         self._count = 0
 
     def properties(self, topic: str, payload: bytes) -> list[tuple[str, str]]:

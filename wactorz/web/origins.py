@@ -32,7 +32,7 @@ from aiohttp import web
 from .. import config
 from .static_site import ingress_path_of
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Ingress peers already named in the log, so each is reported once.
 _seen_peers: set[Any] = set()

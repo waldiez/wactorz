@@ -31,7 +31,7 @@ from wactorz.web.uploads import UPLOADS_DIRNAME, discard
 if TYPE_CHECKING:
     from wactorz.core.persistence import PickleStore, WactorzDB
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _CHAT_KV_KEYS = ("conversation_history", "history_summary")
 _METRIC_KV_KEYS = ("_final_cost", "_messages_processed")

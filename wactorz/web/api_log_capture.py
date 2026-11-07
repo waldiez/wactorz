@@ -30,7 +30,7 @@ from aiohttp.web import Response
 from ..config import _env_truthy
 from .api_logs import LEVELS
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Lets the host allow DEBUG capture. Deliberately an environment variable and
 #: not an option in the API: the point is that turning on the level that prints

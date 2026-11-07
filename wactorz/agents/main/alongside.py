@@ -29,7 +29,7 @@ from .spawn_registry import address_of, placed_on
 if TYPE_CHECKING:
     from .hosts import SpawnHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def target_of(config: dict[str, Any]) -> str:

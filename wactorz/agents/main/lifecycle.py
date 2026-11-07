@@ -39,7 +39,7 @@ from .spawn_registry import placed_on
 if TYPE_CHECKING:
     from .hosts import LifecycleHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How far back `_record_agent_deletion` looks for a note it would repeat. Wide
 #: enough to cover the pair a first path appended, narrow enough that a later

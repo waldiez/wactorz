@@ -36,7 +36,7 @@ from ...core.mqtt import (
 )
 from ...core.outbound import Answer, OutboundMessage, check_options, pick_option
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Every agent's chat frames, whichever machine the agent is on.
 CHAT_FRAMES = "agents/+/chat"

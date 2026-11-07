@@ -46,7 +46,7 @@ from .mixins import KeptHere, spawn_actor_id
 if TYPE_CHECKING:
     from .main import MainActor
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "

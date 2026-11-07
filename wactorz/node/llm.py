@@ -23,7 +23,7 @@ from ..agents.llm.base import LLMProvider
 if TYPE_CHECKING:
     from .agent import NodeAgent
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a bridged call waits for main to answer. Generous rather than tight:
 #: the request is queued here, travels to main, waits on a model and comes back,

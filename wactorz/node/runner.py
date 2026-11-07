@@ -95,7 +95,7 @@ from .signing import (
 )
 from .state import JsonState, agent_state, flush_states, state_path
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a node waits for a pip install an agent asked for. Long enough to
 #: build a wheel from source on a slow board over a slow link.
@@ -128,7 +128,7 @@ class NodeRunner:
         self.broker = broker
         self.port = port
         self.node_name = node_name
-        self.publisher = NodePublisher(broker, port, node_name)
+        self.publisher: NodePublisher = NodePublisher(broker, port, node_name)
         self._running = False
         self._start_time: float = time.time()
         #: Control commands running off the subscriber loop, held so none is
@@ -137,11 +137,11 @@ class NodeRunner:
         #: The long-running loops `run` owns, so a shutdown can end them.
         self._loops: list[asyncio.Task[Any]] = []
         self._loop_lag = LoopLagMonitor()
-        self.registry = ActorRegistry()
+        self.registry: ActorRegistry = ActorRegistry()
         #: Where the other agents are, from their retained manifests, so an agent
         #: here can send to one by its address (see `wactorz.core.agent_directory`).
-        self.directory = AgentDirectory()
-        self.supervisor = Supervisor(self.registry, self._inject)
+        self.directory: AgentDirectory = AgentDirectory()
+        self.supervisor: Supervisor = Supervisor(self.registry, self._inject)
         # The back-reference `ActorSystem` gives the registry on main. Without
         # it an agent here cannot reach its own supervisor, and two things go
         # quiet rather than wrong: a repaired program never reaches the factory,
@@ -153,14 +153,14 @@ class NodeRunner:
         #: The agents being started now: installing, fetching, not yet running.
         self._starting: set[str] = set()
         state_path = self._resolve_state_dir(state_dir)
-        self.state_dir = str(state_path)
+        self.state_dir: str = str(state_path)
         #: Where the blobs of an agent main is placing here arrive, before the
         #: spawn that names them uses them.
         #: Held from `run` until it returns, so nothing else runs on this state.
         self._state_lock = StateLock(self.state_dir)
         # Large enough for either: an agent's own blobs on a migration, and the
         # artifacts it names, which arrive the same way.
-        self.inbox = Inbox(
+        self.inbox: Inbox = Inbox(
             Path(self.state_dir) / INBOX_DIRNAME,
             _largest(MIGRATION_MAX_BLOB_BYTES, ARTIFACT_MAX_BYTES),
         )
@@ -171,12 +171,12 @@ class NodeRunner:
         #: directory that bundle is in, from the moment it is written.
         self._bundled: dict[str, tuple[plugins.AgentPlugin, Path]] = {}
         #: Sends main the readings a recorder here files, one closed file at a time.
-        self.shipper = DataShipper(self.node_name, self.state_dir, self.publish)
+        self.shipper: DataShipper = DataShipper(self.node_name, self.state_dir, self.publish)
         #: One bundle written and imported at a time: each changes `sys.path`
         #: and `sys.modules`, and clears away the bundles no agent here uses.
         self._bundle_lock = asyncio.Lock()
         #: The models agents here have named, kept across restarts.
-        self.artifacts = ArtifactCache(
+        self.artifacts: ArtifactCache = ArtifactCache(
             Path(self.state_dir) / CACHE_DIRNAME, NODE_ARTIFACT_CACHE_BYTES
         )
         # Read from the environment rather than a flag, like the broker

@@ -76,7 +76,7 @@ from .spawns import why_a_node_cannot_run, with_code_for
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0

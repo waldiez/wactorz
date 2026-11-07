@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 from .ha_web_socket_client import HAWebSocketClient  # noqa: E402
 

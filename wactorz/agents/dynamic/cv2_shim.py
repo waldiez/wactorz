@@ -16,7 +16,7 @@ import time
 import types
 from typing import Any, ClassVar
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def resilient_cv2_module(agent_name: str) -> Any | None:

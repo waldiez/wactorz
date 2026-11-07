@@ -37,7 +37,7 @@ from . import runtime, uploads
 if TYPE_CHECKING:
     from ..orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Sends one whole reply, or one chunk of a streamed one.
 Reply = Callable[[str], Awaitable[object]]

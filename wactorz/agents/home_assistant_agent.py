@@ -69,7 +69,7 @@ from .prompts.home_assistant_prompts import (
     HARDWARE_SELECTION_PROMPT,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class AutomationEditError(Exception):
@@ -157,8 +157,8 @@ class HomeAssistantAgent(LLMAgent):
         kwargs.setdefault("name", "home-assistant-agent")
         kwargs.setdefault("system_prompt", AUTOMATION_CREATION_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
-        self.ha_url = (CONFIG.ha_url).rstrip("/")
-        self.ha_token = (CONFIG.ha_token).strip()
+        self.ha_url: str = (CONFIG.ha_url).rstrip("/")
+        self.ha_token: str = (CONFIG.ha_token).strip()
         self._device_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}
         self._device_cache_ttl = 30.0
         self._automation_cache: dict[str, Any] = {"timestamp": 0.0, "data": None}

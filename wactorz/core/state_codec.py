@@ -34,7 +34,7 @@ import logging
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The key of the object that stands for a value JSON cannot hold, naming its kind.
 VALUE_MARK = "__wactorz_value__"

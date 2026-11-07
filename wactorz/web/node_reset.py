@@ -20,7 +20,7 @@ from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
 from ..core.node_signing import signed_publish_kwargs
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a reset waits for the nodes it asked. Generous for one round trip
 #: over the broker; a node slower than this is reported as not having answered,

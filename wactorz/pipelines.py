@@ -43,7 +43,7 @@ from .config import CONFIG
 from .core.topic_bus import topic_matches
 from .plugins import AgentPlugin
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The entry-point group a package lists its pipelines under.
 ENTRY_POINT_GROUP = "wactorz.pipelines"

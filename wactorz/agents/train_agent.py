@@ -124,11 +124,11 @@ class TrainAgent(Actor):
             "memory_mb": memory_mb,
         }
         self.window_s = window_s
-        self.lateness_s = max(0.0, float(lateness_s))
+        self.lateness_s: float = max(0.0, float(lateness_s))
         #: The run in progress, and the last one that ended.
         self.running: TrainSpec | None = None
         self.last: Outcome | None = None
-        self.runs = 0
+        self.runs: int = 0
 
     @property
     def on_node(self) -> bool:

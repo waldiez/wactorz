@@ -22,11 +22,11 @@ from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
 from . import answers, chat, cost, db_writer, events, lifecycle, origins, runtime, uploads
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 #: The conversation, on the console. Its own name rather than this module's:
 #: the server quiets `wactorz.web` to warnings, and what was asked and answered
 #: is what someone watching the console most wants to follow.
-chat_logger = logging.getLogger("wactorz.chat")
+chat_logger: logging.Logger = logging.getLogger("wactorz.chat")
 #: How much of a turn the console shows. The whole turn is in chat_log.
 CHAT_LOG_PREVIEW_CHARS = 500
 
@@ -66,7 +66,7 @@ class Channel:
         self.ws = ws
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_CLIENT_QUEUE_DEPTH)
         self._writer = asyncio.create_task(self._drain())
-        self.dropped = 0
+        self.dropped: int = 0
         #: Whether the writer is inside a write to the socket now, and whether
         #: the channel has been asked to stop. See :meth:`close`.
         self._sending = False

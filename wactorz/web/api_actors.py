@@ -16,7 +16,7 @@ from aiohttp.web import Response
 from ..core.actor import forbidden
 from . import chat, cost, events, lifecycle, runtime, ws
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _actor_payload(ag: dict[str, Any]) -> dict[str, Any]:

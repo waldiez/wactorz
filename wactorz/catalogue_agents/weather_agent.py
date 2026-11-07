@@ -37,7 +37,7 @@ from ..agents.llm.base import LLMProvider
 from ..config import CONFIG
 from ..core.actor import Actor, Message, MessageType
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"

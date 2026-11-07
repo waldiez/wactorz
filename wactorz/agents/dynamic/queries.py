@@ -11,7 +11,7 @@ is main's alone -- on a node it says so the moment its result is used.
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from ...core import topic_bus
 from ...core.persistence import get_db
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 else:
     _Host = object
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The database method answering each history query, named as the bridge to
 #: main names them (see :mod:`wactorz.agents.main.history`).
@@ -219,10 +219,24 @@ class NotFetched:
     def __await__(self) -> Any:
         return self._fetch().__await__()
 
-    def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> NoReturn:
         raise NotAwaited.on_a_node(self._call)
 
-    __iter__ = __len__ = __getitem__ = __contains__ = __bool__ = _refuse
+    # Every way of using it but awaiting it is refused alike.
+    def __iter__(self) -> NoReturn:
+        self._refuse()
+
+    def __len__(self) -> NoReturn:
+        self._refuse()
+
+    def __getitem__(self, _key: Any) -> NoReturn:
+        self._refuse()
+
+    def __contains__(self, _item: Any) -> NoReturn:
+        self._refuse()
+
+    def __bool__(self) -> NoReturn:
+        self._refuse()
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):

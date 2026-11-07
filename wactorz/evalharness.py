@@ -71,7 +71,7 @@ from .agents.prompts.planner_prompts import pipeline_design_prompt
 if TYPE_CHECKING:
     from wactorz.agents.llm.base import LLMProvider
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 CATEGORIES = ("intent", "ha", "actuator", "planner", "dynamic")
 

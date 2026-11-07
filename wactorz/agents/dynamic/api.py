@@ -25,7 +25,7 @@ from .messaging import MessagingMixin
 from .queries import QueriesMixin
 from .streams import StreamsMixin
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where `converse()` keeps its conversation, in `agent.state` and in what the
 #: agent persists.
@@ -151,7 +151,9 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         # Shared mutable namespace — generated code can store anything here
         self.state: dict[str, Any] = {}
         # LLM interface — available if llm_provider was passed at spawn time
-        self.llm = LLMInterface(actor, self.state) if actor._llm_provider else None
+        self.llm: LLMInterface | None = (
+            LLMInterface(actor, self.state) if actor._llm_provider else None
+        )
         # Auto-discovered topics this agent publishes to
         self._published_topics: set[Any] = set()
         #: One window per topic, so repeated `agent.window(...)` calls -- which

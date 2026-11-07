@@ -44,7 +44,7 @@ from typing import Any
 from .blobs import BLOB_MARK, encoder_for, encoder_named
 from .state_codec import NotJson, json_form
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How much of a blob one message carries: well under any broker's limit, and
 #: small enough that a board holds a few in memory without noticing.

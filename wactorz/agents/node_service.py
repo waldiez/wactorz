@@ -27,7 +27,7 @@ import shlex
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 UNIT_NAME = "wactorz-node.service"
 

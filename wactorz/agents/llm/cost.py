@@ -18,7 +18,7 @@ from ...core.persistence import get_db
 if TYPE_CHECKING:
     from ...core.persistence import WactorzDB
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Global cost limit ────────────────────────────────────────────────────────

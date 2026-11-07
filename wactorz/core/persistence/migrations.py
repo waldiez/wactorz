@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from .db import WactorzDB
     from .pickle_store import PickleStore
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ── Current version ────────────────────────────────────────────────────────
 # Increment this when adding new migrations.

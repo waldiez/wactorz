@@ -33,7 +33,7 @@ from ..core.paths import agent_state_dir
 from ..core.state_codec import decode_state
 from ..core.state_snapshot import json_safe
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def state_path(state_dir: Path | str, agent_name: str) -> Path:

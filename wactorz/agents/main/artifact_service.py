@@ -67,7 +67,7 @@ if TYPE_CHECKING:
 #: One pointer's change: name, pointer, where it stands now, where it stood.
 Change = tuple[str, str, "Pointer | None", "Pointer | None"]
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting a dropped subscription.
 RECONNECT_DELAY_S = 5.0

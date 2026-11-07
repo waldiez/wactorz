@@ -21,7 +21,7 @@ from .chat.whatsapp import WhatsAppInterface
 if TYPE_CHECKING:
     from ..orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 #: The interfaces that are chat channels a person is reached on, as the

@@ -19,7 +19,7 @@ from .errors import (
     UnavailableError,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Seconds a request may take. Generous: the bug prevented is a wait with no end,
 #: and a call that is slow when healthy passes its own.
@@ -49,7 +49,7 @@ class Transport:
     """Requests to one server. Nothing connects until `open`."""
 
     def __init__(self, url: str, api_key: str = "", *, timeout: float = DEFAULT_TIMEOUT_S) -> None:
-        self.url = url.rstrip("/")
+        self.url: str = url.rstrip("/")
         self._api_key = api_key
         self.timeout = timeout
         self._session: aiohttp.ClientSession | None = None

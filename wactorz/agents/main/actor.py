@@ -58,7 +58,7 @@ from .spawn_registry import SpawnRegistry
 from .spawns import SpawnService
 from .turn_actions import TurnActions
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _INTERFACE_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -214,21 +214,21 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # would reach for to start it again.
         self.essential = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
-        self.manifests = ManifestRegistry(self)
-        self.labels = LabelRecorder(self)
-        self.nodes = NodeManager(self, self.manifests)
-        self.migration = Migration(self, self.nodes)
-        self.code_refresh = CodeRefresh(self)
-        self.hot_swap = HotSwap(self)
-        self.data_files = DataFiles(self)
-        self.data_retention = DataRetention(self)
-        self.shadow_serving = ShadowServing(self, ask=self.ask_operator)
-        self.artifact_service = ArtifactService(self, follow=self._follow_pointers)
-        self.llm_bridge = LLMBridge(self)
-        self.spawns = SpawnService(self)
-        self.placement = Placement(self)
-        self.delegation = DelegationManager(self)
-        self.lifecycle = LifecycleService(self)
+        self.manifests: ManifestRegistry = ManifestRegistry(self)
+        self.labels: LabelRecorder = LabelRecorder(self)
+        self.nodes: NodeManager = NodeManager(self, self.manifests)
+        self.migration: Migration = Migration(self, self.nodes)
+        self.code_refresh: CodeRefresh = CodeRefresh(self)
+        self.hot_swap: HotSwap = HotSwap(self)
+        self.data_files: DataFiles = DataFiles(self)
+        self.data_retention: DataRetention = DataRetention(self)
+        self.shadow_serving: ShadowServing = ShadowServing(self, ask=self.ask_operator)
+        self.artifact_service: ArtifactService = ArtifactService(self, follow=self._follow_pointers)
+        self.llm_bridge: LLMBridge = LLMBridge(self)
+        self.spawns: SpawnService = SpawnService(self)
+        self.placement: Placement = Placement(self)
+        self.delegation: DelegationManager = DelegationManager(self)
+        self.lifecycle: LifecycleService = LifecycleService(self)
 
     async def dashboard_answer(self, answer: Answer) -> None:
         """A press on the dashboard for a question main asked, handed over in this process.

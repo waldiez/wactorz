@@ -25,7 +25,7 @@ from typing import Any
 from ..core.artifacts import ArtifactStore
 from .files import HOUR_S, hours_of, sources
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The metadata key a stored version names its training windows under.
 DATA_KEY = "data"

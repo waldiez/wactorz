@@ -40,7 +40,7 @@ from .parsing import extract_json_array, loads_lenient, task_hash
 from .pipeline import PipelineMixin
 from .validation import validate_pipeline_code
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 SKIP_AGENTS = {
     "main",

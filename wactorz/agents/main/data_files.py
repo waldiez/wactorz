@@ -46,7 +46,7 @@ from ...data.files import DataError, check_source, data_root
 if TYPE_CHECKING:
     from .hosts import ArtifactHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting a dropped subscription.
 RECONNECT_DELAY_S = 5.0

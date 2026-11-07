@@ -64,7 +64,7 @@ else:
         OAuthClientMetadata = None
         OAuthToken = None
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # an endpoint URL, not a credential
 

@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     from .artifact_service import Change
     from .hosts import SwapHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long main waits for a node's answer before forgetting it asked. A node
 #: that is away gets the command when it is back, held by the broker; one away

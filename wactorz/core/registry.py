@@ -34,7 +34,7 @@ from .actor import (
 )
 from .mqtt_publisher import MQTTPublisher
 from .paths import resolve_state_dir
-from .topic_bus import init_topic_bus
+from .topic_bus import TopicBus, init_topic_bus
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class SupervisedSpec:
         return self._restart_task is not None and not self._restart_task.done()
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ActorRegistry:
@@ -1100,7 +1100,7 @@ class ActorSystem:
     def __init__(
         self, mqtt_broker: str = "localhost", mqtt_port: int = 1883, state_dir: str | None = None
     ) -> None:
-        self.registry = ActorRegistry()
+        self.registry: ActorRegistry = ActorRegistry()
         self._mqtt_broker = mqtt_broker
         self._mqtt_port = mqtt_port
         self._mqtt_client = None
@@ -1112,7 +1112,7 @@ class ActorSystem:
         # Created in start(), which is the first point an MQTT client exists to
         # give it. Declared here so the attribute is not conjured into being
         # halfway through the object's life.
-        self.topic_bus = None
+        self.topic_bus: TopicBus | None = None
 
     def _inject(self, actor: Actor) -> None:
         """Inject MQTT client + broker/port into an actor so it can publish and subscribe."""
@@ -1176,7 +1176,7 @@ class ActorSystem:
     async def stop_all(self) -> None:
         """Shut everything down in reverse: supervisor, actors, then MQTT."""
         self._running = False
-        self.stopping = True
+        self.stopping: bool = True
         # Stop supervisor first so it doesn't try to restart actors we're about to stop
         if self._supervisor:
             await self._supervisor.stop()

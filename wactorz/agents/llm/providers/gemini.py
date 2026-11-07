@@ -11,7 +11,7 @@ from ..attachments import UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 _GEMINI_STREAM_STALL_TIMEOUT = 60

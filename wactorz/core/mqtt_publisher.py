@@ -28,7 +28,7 @@ from .cancellation import cancel_until_done
 from .mqtt import publish_properties
 from .topics import publish_topic_error
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 #: MQTT v5 user properties as (name, value) pairs, the form they are queued and stored in.

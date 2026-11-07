@@ -31,7 +31,7 @@ from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, agent_client_id, mqtt_client
 from .topic_bus import topic_matches
 from .turns import outside_any_turn
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Consecutive callback failures before the binding is dropped and the actor fails.
 MAX_CONSECUTIVE_FAILURES = 5
@@ -105,7 +105,7 @@ class Binding:
         self.queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
         self.workers: list[asyncio.Task[Any]] = []
         #: Messages discarded because the callback fell behind, for the log.
-        self.dropped = 0
+        self.dropped: int = 0
 
     @property
     def worker(self) -> asyncio.Task[Any] | None:

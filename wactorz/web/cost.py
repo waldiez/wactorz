@@ -15,7 +15,7 @@ from typing import Any
 from ..agents.llm.cost import get_global_alltime_cost
 from . import db_writer, runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 # ── Durable lifetime cost ledger ────────────────────────────────────────────
 # The headline total cost must never drop when an agent goes away. The per-agent

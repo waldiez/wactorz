@@ -25,7 +25,7 @@ from typing import Any
 from ..deferred_write import LARGE_STATE_BYTES
 from .stores import get_db
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the jobs run. Long, because none of this is urgent: the point is
 #: that it happens away from the loop and while the system is usually quiet, not

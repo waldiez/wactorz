@@ -30,7 +30,7 @@ from ..core.outbound import Answer, TakesDashboardAnswers, check_options, note_t
 from ..core.topics import topic_name_error
 from . import questions, runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def answer_from_frame(data: dict[str, Any]) -> Answer | str:

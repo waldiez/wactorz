@@ -26,7 +26,7 @@ from ...data.retention import Sweep, protected_windows, sweep
 if TYPE_CHECKING:
     from .hosts import ArtifactHost
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often main looks for hours past the retention. A sweep that finds
 #: nothing costs a directory walk, so a few times a day is plenty.
@@ -44,7 +44,7 @@ class DataRetention:
         self.host = host
         #: Read once: a retention is a deployment setting, not something that
         #: changes while main runs.
-        self.keep_days = DATA_RETENTION_DAYS if keep_days is None else keep_days
+        self.keep_days: float = DATA_RETENTION_DAYS if keep_days is None else keep_days
         self.last: Sweep | None = None
 
     def _sweep_now(self) -> Sweep:

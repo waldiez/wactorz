@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from .migration import Migration
     from .spawn_registry import SpawnRegistry
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 __all__ = ["KeptHere", "NotSpawned", "PlacedOnNode", "Placement", "runs_model_code"]
 

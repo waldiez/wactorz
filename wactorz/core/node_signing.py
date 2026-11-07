@@ -53,7 +53,7 @@ from .._version import __version__
 from .mqtt import publish_properties
 from .paths import ensure_state_dir
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topics under ``nodes/<node>/`` that main signs and a keyed node checks.
 #:

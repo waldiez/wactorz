@@ -56,7 +56,7 @@ from . import (
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # ── Startup preconditions ──────────────────────────────────────────────────

@@ -60,7 +60,7 @@ from typing import Any
 
 from wactorz.agents.dynamic.api import AgentAPI
 
-logger = logging.getLogger("manual-agent")
+logger: logging.Logger = logging.getLogger("manual-agent")
 
 TRUSTED_SITES = [
     "manualslib.com",

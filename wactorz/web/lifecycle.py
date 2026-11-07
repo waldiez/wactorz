@@ -19,7 +19,7 @@ from ..core.node_signing import signed_publish_kwargs
 from ..core.topics import RETAINED_AGENT_LEAVES
 from . import events, runtime
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 async def dispatch_command(agent_id: str, command: str, sender: str) -> str:

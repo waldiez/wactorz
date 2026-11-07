@@ -19,7 +19,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Largest request a model will accept. Everything in the turn shares it.
 _REQUEST_LIMIT_BYTES = 32 * 1024 * 1024

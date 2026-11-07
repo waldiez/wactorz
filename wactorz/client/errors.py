@@ -73,7 +73,7 @@ class TimedOutError(ClientError, asyncio.TimeoutError):
     def __init__(self, method: str, path: str, seconds: float) -> None:
         unknown = "" if method == "GET" else "; it may still have happened"
         super().__init__(f"{method} {path} had no answer in {seconds:g}s{unknown}")
-        self.may_have_happened = method != "GET"
+        self.may_have_happened: bool = method != "GET"
 
 
 class TurnInterruptedError(ClientError):

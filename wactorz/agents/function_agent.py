@@ -54,7 +54,7 @@ from ..core.paths import resolve_state_dir
 from ..core.subscriptions import ConcurrencyError
 from .shadow_serving import PairRecorder, ShadowView, flush_every, now_ms, pair_row, shadow_topic
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The attribute a decorated function carries its specification on.
 SPEC_ATTRIBUTE = "__wactorz_spec__"
@@ -292,8 +292,8 @@ class FunctionAgent(Actor):
     ) -> None:
         super().__init__(actor_id=actor_id, name=name or spec.name, persistence_dir=persistence_dir)
         self.spec = spec
-        self.description = spec.description
-        self.capabilities = list(spec.capabilities)
+        self.description: str = spec.description
+        self.capabilities: list[str] = list(spec.capabilities)
         #: Whatever the spawn config passed as ``options``: a model path, a
         #: threshold. Read by a function that takes the actor.
         self.options: dict[str, Any] = dict(options or {})
@@ -316,8 +316,8 @@ class FunctionAgent(Actor):
         #: Said once on the feed when pairs cannot be kept.
         self._said_pairs_unavailable = False
         #: How many inputs got a shadow pass, and how many were passed over.
-        self.shadow_passes = 0
-        self.shadow_skipped = 0
+        self.shadow_passes: int = 0
+        self.shadow_skipped: int = 0
 
     def declared_models(self) -> dict[str, Any]:
         """The models the decorator named, resolved before `on_start`."""

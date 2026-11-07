@@ -28,7 +28,7 @@ from .. import config
 from . import runtime
 from .metrics import known_nodes
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How often the history is sampled.
 SAMPLE_EVERY_S = 60.0

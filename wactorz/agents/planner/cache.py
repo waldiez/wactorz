@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where the cache sits in the planner's persistent state.
 PLAN_CACHE_KEY = "_plan_cache"

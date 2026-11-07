@@ -44,7 +44,7 @@ from .manifests import ManifestRegistry
 from .spawn_registry import SpawnRegistry
 from .voices import speaks_for
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
@@ -179,7 +179,9 @@ class NodeManager:
         self.known: dict[str, dict[str, Any]] = {}
         #: Consulted before filling a gap: a manifest, when one has arrived, is
         #: better than anything a spawn config can say.
-        self.manifest_registry = manifests if manifests is not None else ManifestRegistry(host)
+        self.manifest_registry: ManifestRegistry = (
+            manifests if manifests is not None else ManifestRegistry(host)
+        )
         #: (node, agent) -> consecutive heartbeats that agent has been missing.
         self.agent_misses: dict[tuple[str, str], int] = {}
         #: Nodes a deploy is restarting right now. Their silence and their empty

@@ -85,7 +85,7 @@ from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import WactorzDB, get_db
 from wactorz.data.files import event_time_of
 
-logger = logging.getLogger("timeseries-collector")
+logger: logging.Logger = logging.getLogger("timeseries-collector")
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 

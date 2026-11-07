@@ -12,7 +12,7 @@ import logging
 import types
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Values that cannot hold an OS resource, so they are never probed.
 SKIP_TYPES = (

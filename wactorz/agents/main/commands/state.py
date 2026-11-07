@@ -17,7 +17,7 @@ from ..planning import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
 from .groups import MEMORY, NOTIFICATIONS, PIPELINES
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 @command(

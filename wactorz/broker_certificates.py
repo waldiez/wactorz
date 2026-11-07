@@ -25,7 +25,7 @@ from .config import CONFIG, MODEL_CODE_NODE, RESERVED_NODE_NAMES
 from .core import broker_accounts, broker_tls
 from .core.mqtt_tls import SYSTEM_TRUST, client_context, generated_ca_path, tls_enabled
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def broker_names() -> list[str]:

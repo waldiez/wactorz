@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def rewrite_aiomqtt_to_subscribe(code: str, topic: str) -> str:

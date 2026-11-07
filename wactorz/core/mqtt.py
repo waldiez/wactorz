@@ -29,7 +29,7 @@ from paho.mqtt.properties import Properties
 
 from .mqtt_tls import client_context, tls_enabled
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where the install id is kept, under the state directory.
 INSTALL_ID_FILE = "install_id"

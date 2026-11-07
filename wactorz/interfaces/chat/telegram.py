@@ -16,7 +16,7 @@ from .social import SocialRateLimiter
 if TYPE_CHECKING:
     from ...orchestration import Orchestrator
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The most text one Telegram message carries.
 MESSAGE_CHARS = 4096
@@ -61,9 +61,9 @@ class TelegramInterface:
         ids = set(allowed_user_ids or ())
         if allowed_user_id:
             ids.add(int(allowed_user_id))
-        self.allowed_user_ids = frozenset(ids)
-        self.limiter = SocialRateLimiter()
-        self.outbox = outbox or Outbox()
+        self.allowed_user_ids: frozenset[int] = frozenset(ids)
+        self.limiter: SocialRateLimiter = SocialRateLimiter()
+        self.outbox: Outbox = outbox or Outbox()
         #: The bot, once `run()` has built it: what `send` talks through.
         self._bot: Any = None
         #: Questions sent with buttons, by the token their buttons carry.

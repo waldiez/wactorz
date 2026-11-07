@@ -10,7 +10,7 @@ import time
 
 import aiohttp
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 # Fallback pricing per 1M tokens (input, output) in USD.

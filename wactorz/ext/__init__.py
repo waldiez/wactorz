@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 
 __all__ = ["PANELS", "PANEL_ICONS", "Panel"]
 
-log = logging.getLogger(__name__)
+log: logging.Logger = logging.getLogger(__name__)
 
 #: The entry-point group an installed package registers an extension under.
 ENTRY_POINT_GROUP = "wactorz.extensions"

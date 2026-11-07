@@ -26,7 +26,7 @@ from ..core.node_signing import (
     signing_input,
 )
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topics whose empty payload is a retained message being cleared, which
 #: their handlers ignore. Every other control topic acts on an empty payload --
@@ -99,7 +99,7 @@ class ControlGuard:
         self._seen: dict[str, list[int]] | None = None
         self._said_open = False
         #: Messages that were not signed for this node, acted on or not.
-        self.failures = 0
+        self.failures: int = 0
 
     def sign_request(self, request: dict[str, Any]) -> dict[str, Any]:
         """``request`` signed with this node's key, for main's LLM bridge.

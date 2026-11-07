@@ -25,7 +25,7 @@ from pathlib import Path
 
 from .atomic_io import write_bytes
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: How long a change waits to be written, so that the ones made just after it
 #: go out in the same write. Also the most that a killed process can lose.

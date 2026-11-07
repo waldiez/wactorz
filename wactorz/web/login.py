@@ -21,7 +21,7 @@ from aiohttp import web
 from . import auth, origins, sessions, throttle
 from .static_site import csp_policy
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 Response = web.Response | web.StreamResponse
 

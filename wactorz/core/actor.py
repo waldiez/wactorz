@@ -76,7 +76,7 @@ class SupervisorStrategy(str, Enum):
     REST_FOR_ONE = "rest_for_one"
 
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Objects the per-heartbeat size walk may visit before it stops descending.
 SIZE_WALK_BUDGET = 2000
@@ -492,13 +492,13 @@ class Actor(ABC):
             # Deterministic UUID from name — same name always gets same ID across restarts
             self.actor_id = derive_actor_id(name)
         else:
-            self.actor_id = str(uuid.uuid4())
+            self.actor_id: str = str(uuid.uuid4())
         #: Whether the id outlives this incarnation: given, or derived from the
         #: name. See `has_stable_id`.
         self.stable_id: bool = bool(actor_id or name)
-        self.name = name or f"actor-{self.actor_id[:8]}"
+        self.name: str = name or f"actor-{self.actor_id[:8]}"
         self.state = ActorState.IDLE
-        self.metrics = ActorMetrics()
+        self.metrics: ActorMetrics = ActorMetrics()
 
         # Async mailbox (inbox)
         self._mailbox: asyncio.Queue[Any] = asyncio.Queue(maxsize=mailbox_size)
@@ -669,7 +669,7 @@ class Actor(ABC):
 
     async def _stop_once(self) -> None:
         """What stopping does: wind down, clean up, save, and say so."""
-        self.state = ActorState.STOPPED
+        self.state: ActorState = ActorState.STOPPED
         await self._wind_down_tasks()
         # Each window holds a broker connection of its own, and a restart builds
         # a new actor with windows of its own.

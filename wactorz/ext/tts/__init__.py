@@ -15,7 +15,7 @@ from typing import Any
 
 from aiohttp import web
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: Seconds the voice list may take. It is read while the server starts, so a
 #: service that never answers would hold the dashboard back with it; generous,

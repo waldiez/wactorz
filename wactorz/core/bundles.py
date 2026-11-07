@@ -41,7 +41,7 @@ from typing import Any
 
 from .pip import refresh_import_caches
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 #: The most source a bundle may hold. Far above the agents it is for; a folder
 #: over it is almost always one holding something else as well.

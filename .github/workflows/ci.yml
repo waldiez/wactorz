@@ -122,12 +122,19 @@ jobs:
       # Sent as one half of a parallel build, and added to the other half by
       # the `coverage` job below. Both halves speak lcov, so the badge is one
       # number over the whole repository rather than one language's.
+      #
+      # A failed upload does not fail the build, here or in the two steps below:
+      # the coverage floor is gated by the test run itself, and the action
+      # fetches its reporter from GitHub's release downloads, so an outage there
+      # or at Coveralls would otherwise fail a change that broke nothing -- and,
+      # in the frontend job, skip the build check after it.
       - name: Send to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           file: coverage/python-coverage.lcov
           flag-name: python
           parallel: true
+          fail-on-error: false
 
   lint-python:
     name: Python lint
@@ -344,6 +351,7 @@ jobs:
           base-path: frontend
           flag-name: frontend
           parallel: true
+          fail-on-error: false
 
       - name: Build
         working-directory: frontend
@@ -381,3 +389,4 @@ jobs:
         with:
           parallel-finished: true
           carryforward: python,frontend
+          fail-on-error: false

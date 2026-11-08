@@ -474,6 +474,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A question in the Inbox is one its agent asked.** The dashboard took any question book published under an agent's
+  topic as that agent's, name included, so anything that could publish there (a node's account, a client of an
+  external broker, an agent's own code) could put a question in front of the operator in another agent's name, or
+  clear one that was waiting. A book now counts as main's labels take it: one of main's own agents is read from the
+  agent, and one on a node only from the node main places it on, signed (or with a warning under
+  `WACTORZ_NODE_SIGNING=warn`). What the browsers are sent is the book as admitted. A book that is not, or a payload
+  that is not a book, leaves the last one standing; books arriving while the server starts are held until it has.
 - **An actor whose start fails is no longer left listed as running.** Spawned through `ActorSystem.spawn`, or given
   to `ActorSystem.start`, an actor whose `on_start` raised (or whose start was cancelled) stayed registered and
   reported running, with nothing running inside it. It is now stopped and taken out of the registry, and the error

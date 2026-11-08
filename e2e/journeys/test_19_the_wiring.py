@@ -75,11 +75,23 @@ def site_fixture(app: backend.Backend) -> Path:
 
 
 @pytest.fixture(scope="module", name="installed")
-def installed_fixture(app: backend.Backend, site: Path) -> Iterator[None]:
+def installed_fixture(
+    app: backend.Backend, site: Path, dashboard: browser.Dashboard
+) -> Iterator[None]:
     app.restart(extra={"PYTHONPATH": str(site), "WACTORZ_EXTENSIONS": DISTRIBUTION})
     yield
-    # The journeys after this one see the install as it was.
+    # The journeys after this one see the install as it was, and the page fed
+    # again: what it reported while there was no server is this restart's doing,
+    # and the next journey's guard would otherwise count it as its own.
     app.restart()
+    waiting.until(
+        lambda: not dashboard.at_sign_in and dashboard.connection() == "● live",
+        what="the page to be fed again after the install was put back",
+        timeout=60.0,
+    )
+    dashboard.page_errors[:] = [
+        e for e in dashboard.page_errors if "ERR_CONNECTION_REFUSED" not in e
+    ]
 
 
 def _signed_in_again(dashboard: browser.Dashboard, unexpected: guard.Guard) -> None:

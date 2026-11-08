@@ -117,12 +117,12 @@ def test_a_deleted_agents_book_is_left_out_before_it_is_cleared() -> None:
 
 
 @pytest.mark.parametrize("payload", ["not json", "[1, 2]", '"text"'])
-def test_a_frame_that_is_not_a_book_leaves_the_agent_with_none(payload: str) -> None:
+def test_a_frame_that_is_not_a_book_leaves_the_last_book_standing(payload: str) -> None:
     _publish("a1", "one", _question("q1", asked_at=1.0))
 
     events.parse_topic(questions_topic("a1"), payload)
 
-    assert _ids("open") == []
+    assert _ids("open") == ["q1"]
 
 
 def test_records_that_are_not_questions_are_left_out_and_a_nameless_agent_is_its_id() -> None:

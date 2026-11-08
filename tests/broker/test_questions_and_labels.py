@@ -20,7 +20,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from wactorz.agents.main.actor import MainActor
 from wactorz.web import questions, runtime
 from wactorz.web.app import build_app
-from wactorz.web.mqtt import mqtt_listener
+from wactorz.web.mqtt import mqtt_listener, system_started
 
 from .conftest import WAIT_S, FastNode, until
 
@@ -59,6 +59,11 @@ async def server_fixture(
     monkeypatch.setattr(runtime, "MQTT_PORT", port)
     monkeypatch.setattr(runtime, "registry", main._registry)
     monkeypatch.setattr(questions, "_books", {})
+    monkeypatch.setattr(questions, "_admitted", {})
+    monkeypatch.setattr(questions, "_held", questions.OrderedDict())
+    monkeypatch.setattr(questions, "_phase", questions.STARTING)
+    # Main is up, as `build_system` says once it is: books are admitted from here on.
+    await system_started(with_main=True)
     listening = asyncio.create_task(mqtt_listener())
     client = TestClient(TestServer(build_app()))
     await client.start_server()

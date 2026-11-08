@@ -362,7 +362,7 @@ A message that offers the person a choice, or goes to a chat channel, carries mo
 **Published by:** The agent that asked
 **Retained:** yes
 **Trigger:** When the agent starts, if it has asked anything, and whenever it asks a question or one is answered
-**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back, and relays it to the dashboard's Inbox. Cleared when the agent is deleted.
+**Purpose:** The agent's question book: every question it still keeps, open or answered, as `ask_operator` records them. The monitor's `GET /api/questions` reads it, so a question asked while the monitor was down is still there when it comes back, and relays it to the dashboard's Inbox. Cleared when the agent is deleted. A book counts only as its agent's word, as main's labels take it: one of main's own agents is read from the agent, and one on a node only from the node main places it on, signed. What the monitor keeps and relays is the book as admitted, never the payload as it came; one that is not admitted, or is not a book, leaves the last one standing.
 
 ```json
 {

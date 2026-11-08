@@ -11,23 +11,54 @@ An agent's book leaves the ledger when the agent goes: its manifest withdrawn,
 or the retained book cleared, which is what deleting an agent does. A deleted
 agent's book is left out of a listing even before either arrives.
 
+A book is taken only as its agent's word, by the rule main's labels use
+(`wactorz.agents.main.labels.admit_book`): an agent in this process is read from
+the agent, and one on a node must come from the node main places it on. A book
+that is not admitted is neither kept nor shown to a browser, and the last one
+admitted stands. Until the system has started there is no main to place agents
+by, so books are held, the newest per agent, and admitted once it has; which
+profile it started in is latched then, so a main that is restarting is not taken
+for a profile that runs none.
+
 The ledger also checks an answer before it is sent: to a question still open,
 with one of the options it offered. A question the ledger does not know -- one
 sent with ``notify_user`` alone, which keeps no book -- is the agent's to judge.
 """
 
 import dataclasses
+import json
+import logging
+from collections import OrderedDict
+from collections.abc import Mapping
 from typing import Any
 
 from aiohttp import web
 
+from ..agents.lookup import find_main_actor
+from ..agents.main.labels import admit_book
 from ..core.outbound import Answer, numbered
-from ..core.questions import ANSWERED_KEPT, Question, questions_in_frame
+from ..core.questions import ANSWERED_KEPT, QUESTIONS_LEAF, Question, questions_in_frame
 from ..monitoring.log_redaction import redact
 from . import runtime
 
+logger: logging.Logger = logging.getLogger(__name__)
+
 #: agent id -> (the agent's name, the questions in its newest book).
 _books: dict[str, tuple[str, list[Question]]] = {}
+
+#: agent id -> (its name, its node) as last admitted: whose a clear is.
+_admitted: dict[str, tuple[str, str]] = {}
+
+#: Where the system is: books are held while it starts, and admitted once it has,
+#: by main (the full profile) or without one (the minimal profile).
+STARTING, WITH_MAIN, WITHOUT_MAIN = "starting", "with main", "without main"
+_phase: str = STARTING
+
+#: agent id -> (topic, payload, properties) of the newest book held, oldest first.
+_held: OrderedDict[str, tuple[str, bytes, dict[str, str]]] = OrderedDict()
+
+#: The most books held at once; the oldest goes past it.
+HELD_KEPT = 1000
 
 
 class AnswerRefusedError(ValueError):
@@ -61,14 +92,93 @@ class NotAnOptionError(AnswerRefusedError):
         super().__init__(f"{option!r} is not one of {', '.join(map(repr, question.options))}")
 
 
-def record(agent_id: str, frame: Any) -> None:
-    """Take ``frame``, one questions-topic payload, as ``agent_id``'s book now.
+def is_book_topic(topic: str) -> bool:
+    """Whether ``topic`` is an agent's question book, ``agents/<id>/questions``."""
+    parts = topic.split("/")
+    return len(parts) == 3 and parts[0] == "agents" and parts[2] == QUESTIONS_LEAF
 
-    Anything that is not a book -- the empty payload that clears a retained
-    topic included -- leaves the agent with none.
+
+def receive(topic: str, payload: bytes, properties: Mapping[str, str]) -> tuple[str, str] | None:
+    """What to take in for a book that came off the broker: its topic and its admitted payload.
+
+    The payload is the book as admitted (its agent's own name and questions),
+    or "" for an admitted clear. None when there is nothing to take: the
+    book is not its agent's word, or it is held until the system has started
+    or while main is not there.
+    """
+    if _phase == STARTING or (_phase == WITH_MAIN and _main() is None):
+        _hold(topic, payload, dict(properties))
+        return None
+    return _admitted_payload(topic, payload, properties)
+
+
+def started(*, with_main: bool) -> list[tuple[str, str]]:
+    """Mark the system started, latching whether it runs main; the held books, admitted."""
+    global _phase
+    _phase = WITH_MAIN if with_main else WITHOUT_MAIN
+    return release()
+
+
+def holding() -> bool:
+    """Whether any book is held, waiting for something to admit it by."""
+    return bool(_held)
+
+
+def release() -> list[tuple[str, str]]:
+    """The books held, each admitted now or dropped, once there is something to admit them by."""
+    if _phase == STARTING or (_phase == WITH_MAIN and _main() is None):
+        return []
+    held = list(_held.values())
+    _held.clear()
+    return [
+        taken
+        for topic, payload, properties in held
+        if (taken := _admitted_payload(topic, payload, properties))
+    ]
+
+
+def _hold(topic: str, payload: bytes, properties: dict[str, str]) -> None:
+    agent_id = topic.split("/")[1]
+    _held.pop(agent_id, None)
+    _held[agent_id] = (topic, payload, properties)
+    while len(_held) > HELD_KEPT:
+        dropped, _ = _held.popitem(last=False)
+        logger.warning(
+            "[questions] Too many books held until main can place their agents; dropped %s's",
+            dropped[:8],
+        )
+
+
+def _main() -> Any:
+    return find_main_actor(runtime.registry) if runtime.registry is not None else None
+
+
+def _admitted_payload(
+    topic: str, payload: bytes, properties: Mapping[str, str]
+) -> tuple[str, str] | None:
+    book = admit_book(
+        topic,
+        payload,
+        properties,
+        host=_main() if _phase == WITH_MAIN else None,
+        registry=runtime.registry,
+        last=_admitted,
+    )
+    if book is None:
+        return None
+    _admitted[book.actor_id] = (book.name, book.node)
+    if book.cleared and not payload:
+        return topic, ""
+    return topic, json.dumps(book.frame())
+
+
+def record(agent_id: str, frame: Any) -> None:
+    """Take ``frame``, an admitted questions-topic payload, as ``agent_id``'s book now.
+
+    Anything that is not a book is passed over, so the last one taken stands;
+    an empty payload, a clear, is `forget`.
     """
     if not isinstance(frame, dict):
-        forget(agent_id)
         return
     agent = frame.get("agent")
     name = agent if isinstance(agent, str) and agent else agent_id[:8]
@@ -78,6 +188,7 @@ def record(agent_id: str, frame: Any) -> None:
 def forget(agent_id: str) -> None:
     """Drop ``agent_id``'s book."""
     _books.pop(agent_id, None)
+    _admitted.pop(agent_id, None)
 
 
 def find(agent_id: str, question_id: str) -> Question | None:

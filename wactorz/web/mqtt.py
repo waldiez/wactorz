@@ -22,11 +22,13 @@ from ..core.mqtt import (
     mqtt_client,
     reconnect_wait,
     session_kwargs,
+    user_properties,
 )
 from ..core.outbound import numbered
 from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
 from . import cost, db_writer, events, relay, runtime, ws
+from . import questions as question_ledger
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -60,19 +62,55 @@ async def set_mqtt_status(connected: bool) -> None:
     await ws.broadcast({"type": "mqtt_status", "connected": connected})
 
 
-async def handle_message(topic: str, payload: str) -> None:
+async def handle_message(
+    topic: str,
+    payload: str,
+    *,
+    raw: bytes | None = None,
+    properties: dict[str, str] | None = None,
+) -> None:
     """Dispatch one broker message: update state, then tell the browsers.
 
     Extracted from the listener loop so it can be exercised without a broker —
     the loop around it is connection management, this is the part with rules.
+    ``raw`` is the payload as it came, and ``properties`` its user properties
+    (``{}`` when it carried none): what a signature is checked over. Left out,
+    the payload is taken as unsigned.
 
     A node's heartbeat is the exception while main runs: anything on the broker
     can publish one, so the dashboard is shown what main took from it instead,
     which main hands over once it has checked it (see `_watch_main_nodes`).
+    A question book is another: it is admitted as its agent's word first, and
+    what is kept and shown is the admitted book, never the payload as it came
+    (`wactorz.web.questions.receive`).
     """
+    # Books held while main was not there are let go on any message once it is
+    # back: main publishes its own heartbeat every few seconds, so its return is
+    # noticed without waiting for the next book, which may never come.
+    if question_ledger.holding():
+        for held in question_ledger.release():
+            await _dispatch(*held)
     if _is_node_heartbeat(topic) and await _watch_main_nodes():
         return
+    if question_ledger.is_book_topic(topic):
+        taken = question_ledger.receive(
+            topic, payload.encode() if raw is None else raw, properties or {}
+        )
+        if taken is None:
+            return
+        topic, payload = taken
     await _dispatch(topic, payload)
+
+
+async def system_started(*, with_main: bool) -> None:
+    """Take in the question books held while the system started, now that they can be admitted.
+
+    Called once, when the system is up: ``with_main`` latches whether this run
+    has a main to place agents by, so a main restarting later is not taken for
+    a profile without one.
+    """
+    for held in question_ledger.started(with_main=with_main):
+        await _dispatch(*held)
 
 
 def _is_node_heartbeat(topic: str) -> bool:
@@ -210,8 +248,12 @@ async def mqtt_listener() -> None:
                     await set_mqtt_status(True)
 
                     async for message in client.messages:
+                        raw = bytes(message.payload or b"")
                         await handle_message(
-                            str(message.topic), message.payload.decode(errors="replace")
+                            str(message.topic),
+                            raw.decode(errors="replace"),
+                            raw=raw,
+                            properties=user_properties(message),
                         )
 
             except Exception as e:

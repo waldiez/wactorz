@@ -72,6 +72,7 @@ from wactorz.orchestration import (
     resolve_orchestrator,
 )
 from wactorz.web import auth, runtime
+from wactorz.web import mqtt as web_mqtt
 from wactorz.web.auth import exposure_refusal
 
 if TYPE_CHECKING:
@@ -765,6 +766,9 @@ async def build_system(
     orchestrator = install_orchestrator(
         system, main_actor, requested=getattr(args, "orchestrator", None)
     )
+    # The question books held while nothing could place their agents, admitted
+    # now; and the profile latched, so a main restarting later is waited for.
+    await web_mqtt.system_started(with_main=not minimal)
     if main_actor is not None:
         _record_pipelines(main_actor, started_pipelines)
 

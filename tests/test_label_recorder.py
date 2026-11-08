@@ -51,6 +51,9 @@ class _Local:
     def find_by_name(self, name: str) -> Any | None:
         return self._agents.get(name)
 
+    def get(self, actor_id: str) -> Any | None:
+        return next((a for a in self._agents.values() if a.actor_id == actor_id), None)
+
 
 class _OwnAgent:
     """One of main's own agents, keeping its questions itself."""

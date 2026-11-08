@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...core.labels import LabelError, Labels, vouched
@@ -42,10 +43,11 @@ from ...core.mqtt import (
 from ...core.node_publications import admit
 from ...core.persistence.stores import get_db
 from ...core.provenance import ProvenanceError
-from ...core.questions import QUESTIONS_LEAF, Question, questions_in_frame
+from ...core.questions import QUESTIONS_LEAF, Question, book_frame, questions_in_frame
 from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
+    from ...core.registry import ActorRegistry
     from .hosts import LabelHost
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -59,6 +61,130 @@ RECONNECT_DELAY_S = 5.0
 #: How many (agent, question) pairs are remembered as recorded, so a book
 #: republished in full is not walked through the database again.
 RECORDED_KEPT = 10_000
+
+
+@dataclass(frozen=True)
+class AdmittedBook:
+    """A question book as its agent's word: who it is, where, and what it asked.
+
+    ``name`` is the agent's own (an agent in this process) or the one its node
+    was found to speak for, never only what the payload claimed. ``node`` is ""
+    for an agent in this process. A book with no questions is a clear.
+    """
+
+    actor_id: str
+    name: str
+    node: str
+    questions: tuple[Question, ...]
+
+    @property
+    def cleared(self) -> bool:
+        """Whether the book holds nothing: the agent's retained topic is to be taken as empty."""
+        return not self.questions
+
+    def frame(self) -> dict[str, Any]:
+        """The book as the questions topic carries it, with the admitted name."""
+        return book_frame(self.name, {q.id: q for q in self.questions})
+
+
+def admit_book(
+    topic: str,
+    payload: bytes,
+    properties: Mapping[str, str] | None,
+    *,
+    host: LabelHost | None,
+    registry: ActorRegistry | None = None,
+    last: Mapping[str, tuple[str, str]] | None = None,
+) -> AdmittedBook | None:
+    """The book on ``topic`` as its agent's word, or None when it is not.
+
+    One rule for every reader of the books, so labels and what a person is
+    shown cannot disagree:
+
+    - an agent in this process, found by the topic's id in ``registry`` (the
+      host's when it has one), is read from the agent itself: whatever the
+      payload says, and an empty payload included, the book is the agent's own;
+    - an agent on a node must be spoken for by the node main places it on, or,
+      for one main placed nowhere, the node whose heartbeat lists it; and the
+      message must be that node's (`admit`: signed, or let through with a
+      warning when signing is not enforced);
+    - with no host (a profile that runs no main) there is nothing to place a
+      node's agent by, and its book is taken as it came, unless it names an
+      agent of this process under another id.
+
+    An empty payload is a clear. It names no agent, so ``last`` -- actor id to
+    the name and node last admitted for it -- says whose it is; with nothing
+    admitted before, a clear has nothing to clear and is None. A clear for an
+    agent of this process that is not registered now -- stopped, restarting or
+    gone -- is refused like any clear no node speaks for: anything on the
+    broker can send an empty payload, and a deleted agent's book goes when its
+    manifest is withdrawn. A payload that is not a book is None, so the last
+    admitted book stands.
+
+    ``properties`` are the user properties the message came with: ``{}`` for
+    an unsigned one off the broker, None for one that did not come off it.
+    """
+    actor_id = _actor_id_from(topic)
+    if not actor_id:
+        return None
+    local_registry = host._registry if host is not None else registry
+    local = local_registry.get(actor_id) if local_registry is not None else None
+    if local is not None:
+        return _own_book(local, actor_id)
+    claimed = _claimed(topic, payload, actor_id, last or {})
+    if claimed is None:
+        return None
+    name, node, frame = claimed
+    questions = tuple(questions_in_frame(frame))
+    if host is None:
+        named = local_registry.find_by_name(name) if local_registry is not None else None
+        return None if named is not None else AdmittedBook(actor_id, name, node, questions)
+    if properties is None:
+        return AdmittedBook(actor_id, name, node, questions)
+    node = _speaking_node(host, name, actor_id, node)
+    if node is None or not admit(node, topic, payload, properties, "a question book"):
+        return None
+    return AdmittedBook(actor_id, name, node, questions)
+
+
+def _own_book(agent: Any, actor_id: str) -> AdmittedBook | None:
+    """The book an agent of this process keeps itself, whatever was published for it."""
+    own = getattr(agent, "questions", None)
+    kept = own() if callable(own) else None
+    if not isinstance(kept, dict):
+        return None
+    return AdmittedBook(actor_id, agent.name, "", tuple(kept.values()))
+
+
+def _claimed(
+    topic: str, payload: bytes, actor_id: str, last: Mapping[str, tuple[str, str]]
+) -> tuple[str, str, dict[str, Any]] | None:
+    """Who a book from the broker says it is, where it was last admitted from, and its frame.
+
+    A clear says nothing of who it is, so it is whoever ``last`` has for the id,
+    and nothing when that is no one.
+    """
+    if not payload:
+        known = last.get(actor_id)
+        return None if known is None else (known[0], known[1], {})
+    book = _book(topic, payload)
+    if book is None:
+        return None
+    _, name, _, frame = book
+    return name, "", frame
+
+
+def _speaking_node(host: LabelHost, name: str, actor_id: str, last_node: str) -> str | None:
+    """The node that may speak for the agent ``name``, or None when none may."""
+    node = placed_node(host, name, actor_id) or _listing_node(host._known_nodes, name) or last_node
+    if speaks_for(host, node, name):
+        return node
+    logger.warning(
+        "[main] Ignoring a question book for %r from %r: main does not place it there",
+        name,
+        node or "an unknown node",
+    )
+    return None
 
 
 class LabelRecorder:
@@ -115,11 +241,15 @@ class LabelRecorder:
         book = _book(topic, payload)
         if book is None:
             return []
-        actor_id, name, raw, frame = book
-        trusted = self._trusted(topic, raw, frame, name, properties)
-        if trusted is None:
+        actor_id, _, raw, _ = book
+        host = self.host
+        admitted = admit_book(topic, raw, properties, host=host) if host is not None else None
+        if host is None:
+            # A recorder with no host to place agents by is a test's: the book as it came.
+            admitted = AdmittedBook(actor_id, book[1], "", tuple(questions_in_frame(book[3])))
+        if admitted is None:
             return []
-        node, questions = trusted
+        name, node, questions = admitted.name, admitted.node, admitted.questions
         # In the order they were answered, so two answers from one book keep
         # their own order when both are written now.
         pending = sorted(
@@ -141,47 +271,6 @@ class LabelRecorder:
         while len(self._recorded) > RECORDED_KEPT:
             self._recorded.pop(next(iter(self._recorded)))
         return written
-
-    def _trusted(
-        self,
-        topic: str,
-        payload: bytes,
-        frame: dict[str, Any],
-        name: str,
-        properties: Mapping[str, str] | None,
-    ) -> tuple[str, list[Question]] | None:
-        """The node an agent's book comes from and its questions, or None when it is not the agent's word.
-
-        Main's own agent: the questions it keeps itself, whatever arrived. An
-        agent on a node: the book, as long as the node main places it on signed
-        it -- or, for one main placed nowhere, the node whose heartbeat lists it.
-        """
-        host = self.host
-        if host is None:
-            return "", questions_in_frame(frame)
-        actor_id = _actor_id_from(topic)
-        local = host._registry.find_by_name(name) if host._registry is not None else None
-        if local is not None and getattr(local, "actor_id", "") == actor_id:
-            # The name in the frame is anyone's to write; the agent here is
-            # read only when the topic is its own. A book under another id is
-            # weighed as one from a node, which may run an agent of the name
-            # as well, or it would be recorded as this agent's answers.
-            own = getattr(local, "questions", None)
-            kept = own() if callable(own) else None
-            return ("", list(kept.values())) if isinstance(kept, dict) else None
-        if properties is None:
-            return ("", questions_in_frame(frame)) if local is None else None
-        node = placed_node(host, name, actor_id) or _listing_node(host._known_nodes, name)
-        if not speaks_for(host, node, name):
-            logger.warning(
-                "[main] Ignoring a question book for %r from %r: main does not place it there",
-                name,
-                node or "an unknown node",
-            )
-            return None
-        if not admit(node, topic, payload, properties, "a question book"):
-            return None
-        return node, questions_in_frame(frame)
 
 
 def _book(topic: str, payload: Any) -> tuple[str, str, bytes, dict[str, Any]] | None:

@@ -241,7 +241,7 @@ def _add_alert(alert: Any) -> None:
         runtime.state["alerts"].pop()
 
 
-def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[str, Any]:
+def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[str, Any] | None:
     """One ``agents/<id>/<metric>`` message: the agent's comings and goings, then its leaf."""
     # A withdrawn manifest is an agent saying it no longer exists. It is the
     # one removal signal every ending publishes — an actor that ends itself,
@@ -256,11 +256,7 @@ def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[s
     # stop window putting it back; a respawn re-admits itself on its first
     # status.
     if metric == "manifest" and not payload_str.strip():
-        runtime.state["agents"].pop(agent_id, None)
-        question_ledger.forget(agent_id)
-        runtime.mark_deleted(agent_id)
-        logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
-        return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
+        return withdraw(agent_id)
 
     if metric == "status" and isinstance(data, dict) and runtime.is_deleted(agent_id):
         _readmit_if_respawned(agent_id, data)
@@ -282,6 +278,24 @@ def _on_agent(agent_id: str, metric: str, data: Any, payload_str: str) -> dict[s
     if frame is not None:
         return frame
     return {"type": "agent", "agent_id": agent_id, "metric": metric, "data": data}
+
+
+def withdraw(agent_id: str) -> dict[str, Any] | None:
+    """Take ``agent_id`` off the dashboard, its withdrawal having stood; the frame that says so.
+
+    The state is cleared every time, and the frame made only the first: one
+    withdrawal is heard more than once (main settles a held one and clears the
+    manifest itself; one main missed is replayed to it), and a card goes once.
+    None when the agent was already gone.
+    """
+    gone_already = runtime.is_deleted(agent_id) and agent_id not in runtime.state["agents"]
+    runtime.state["agents"].pop(agent_id, None)
+    question_ledger.forget(agent_id)
+    runtime.mark_deleted(agent_id)
+    if gone_already:
+        return None
+    logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
+    return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
 
 
 def _readmit_if_respawned(agent_id: str, data: dict[str, Any]) -> None:

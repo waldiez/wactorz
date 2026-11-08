@@ -61,7 +61,7 @@ async def server_fixture(
     monkeypatch.setattr(questions, "_books", {})
     monkeypatch.setattr(questions, "_admitted", {})
     monkeypatch.setattr(questions, "_held", questions.OrderedDict())
-    monkeypatch.setattr(questions, "_phase", questions.STARTING)
+    monkeypatch.setattr(runtime, "started_with_main", None)
     # Main is up, as `build_system` says once it is: books are admitted from here on.
     await system_started(with_main=True)
     listening = asyncio.create_task(mqtt_listener())

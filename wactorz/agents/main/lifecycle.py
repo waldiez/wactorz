@@ -26,8 +26,9 @@ import json
 import logging
 import re
 import shutil
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import derive_actor_id
@@ -64,6 +65,28 @@ PROTECTED_AGENTS = frozenset(
 )
 
 
+#: What a withdrawal comes to: it stands, it is refused, or it waits on a node's next heartbeat.
+STANDS, REFUSED, HELD = "stands", "refused", "held"
+
+#: Told the id of every agent whose withdrawal stands, once it does.
+WithdrawalWatcher = Callable[[str], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class WithdrawalDecision:
+    """Whether a withdrawal stands, and what main's records say of the agent it is for.
+
+    ``name`` and ``node`` are the spawn registry's, when it keeps the agent;
+    ``spawned`` says whether it does, and with it whether a standing withdrawal
+    has a registry entry to remove.
+    """
+
+    verdict: str
+    name: str = ""
+    node: str = ""
+    spawned: bool = False
+
+
 class LifecycleService:
     """Removes an agent and every trace it left behind."""
 
@@ -79,6 +102,9 @@ class LifecycleService:
         #: (agent name, its node) -> its actor id, for a withdrawal that node's
         #: last heartbeat contradicts, until its next one decides it.
         self._held: dict[tuple[str, str], str] = {}
+        #: Told of every withdrawal that stands, by whichever path it comes to:
+        #: at once, or when a node's heartbeat settles it. The dashboard is one.
+        self.watchers: list[WithdrawalWatcher] = []
 
     @contextmanager
     def withdrawals_suppressed(self) -> Iterator[None]:
@@ -152,15 +178,53 @@ class LifecycleService:
         Returns whether the withdrawal stands, and with it whether the agent's
         manifest is to be forgotten. Any node may publish one, and it carries
         nothing that says who did, so it is weighed against where the agent
-        runs: one for an agent running here is refused, since an agent leaves
-        main's registry before it withdraws, and one for an agent its node's
-        latest heartbeat still lists -- recent or not, while main still knows
-        that node -- is held for that node's next heartbeat, or for main
-        forgetting the node, which removes its agents anyway
-        (`settle_withdrawals`).
+        runs (`withdrawal_decision`): one for an agent running here is refused,
+        since an agent leaves main's registry before it withdraws, and the
+        manifest the empty payload took off the broker is put back; one for an
+        agent its node's latest heartbeat still lists -- recent or not, while
+        main still knows that node -- is held for that node's next heartbeat,
+        or for main forgetting the node, which removes its agents anyway
+        (`settle_withdrawals`). Each that stands, now or then, is told to the
+        `watchers`.
+        """
+        decision = self.withdrawal_decision(actor_id, name)
+        if decision.verdict == REFUSED:
+            logger.warning(
+                "[%s] Ignored a withdrawal of %r, which is running here.",
+                self.host.name,
+                decision.name or actor_id[:8],
+            )
+            await self._restore_manifest(actor_id)
+            return False
+        if decision.verdict == HELD:
+            self._held[(decision.name, decision.node)] = actor_id
+            logger.info(
+                "[%s] A withdrawal of %r waits for %r's next heartbeat, which last listed it.",
+                self.host.name,
+                decision.name,
+                decision.node,
+            )
+            return False
+        if decision.spawned and not self._withdrawals_suppressed:
+            await self._withdraw(decision.name, decision.node)
+        await self._tell_watchers(actor_id)
+        return True
+
+    def withdrawal_decision(self, actor_id: str, name: str = "") -> WithdrawalDecision:
+        """What a withdrawal of the agent ``actor_id`` comes to, without acting on it.
+
+        In order: a reset that is clearing state lets every withdrawal stand; an
+        agent running in this process -- main itself and every supervised agent
+        included, which the spawn registry does not keep -- is refused; one the
+        spawn registry does not keep stands, as there is nothing of it to
+        protect; one running here under the registry's name is refused; one
+        whose node's latest heartbeat still lists it is held; the rest stand.
         """
         if self._withdrawals_suppressed:
-            return True
+            return WithdrawalDecision(STANDS, name)
+        live = self.host._registry
+        if live is not None and live.get(actor_id) is not None:
+            return WithdrawalDecision(REFUSED, name)
         registry = self.host._get_spawn_registry()
         # Every entry keeps its id, so the registry is asked whose it is: the
         # name alone may be kept in more than one place, and with no manifest
@@ -170,27 +234,46 @@ class LifecycleService:
         if config is None and name:
             config = registry.only(name)
         if config is None:
-            # Not a spawned agent, or already gone. Either way there is nothing
-            # left to remove, and a withdrawal is not an error.
-            return True
+            return WithdrawalDecision(STANDS, name)
         name = config["name"]
         node = placed_on(config)
-        if not node and self.host._registry and self.host._registry.find_by_name(name):
-            logger.warning(
-                "[%s] Ignored a withdrawal of %r, which is running here.", self.host.name, name
-            )
-            return False
+        if not node and live is not None and live.find_by_name(name):
+            return WithdrawalDecision(REFUSED, name, node, spawned=True)
         if node and self.host._node_last_listing(name) == node:
-            self._held[(name, node)] = actor_id
-            logger.info(
-                "[%s] A withdrawal of %r waits for %r's next heartbeat, which last listed it.",
-                self.host.name,
-                name,
-                node,
-            )
-            return False
-        await self._withdraw(name, node)
-        return True
+            return WithdrawalDecision(HELD, name, node, spawned=True)
+        return WithdrawalDecision(STANDS, name, node, spawned=True)
+
+    async def _restore_manifest(self, actor_id: str) -> None:
+        """Publish again the manifest of the agent ``actor_id`` running here, retained.
+
+        A withdrawal is an empty retained payload, so even one refused has
+        taken the broker's copy away; the agent puts back the one it last sent.
+        """
+        live = self.host._registry
+        agent = live.get(actor_id) if live is not None else None
+        manifest = getattr(agent, "_published_manifest", None)
+        send: Any = getattr(agent, "_send_manifest", None)
+        if isinstance(manifest, dict) and send is not None:
+            try:
+                await send(manifest)
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Could not put back %s's manifest: %s", self.host.name, actor_id[:8], exc
+                )
+
+    async def _tell_watchers(self, actor_id: str) -> None:
+        """Tell every watcher that the withdrawal of ``actor_id`` stands.
+
+        A watcher that fails is logged and the rest are still told: what shows
+        an agent must not stop main removing it.
+        """
+        for watcher in list(self.watchers):
+            try:
+                await watcher(actor_id)
+            except Exception:
+                logger.exception(
+                    "[%s] A withdrawal watcher failed on %s", self.host.name, actor_id[:8]
+                )
 
     async def settle_withdrawals(self, node: str, running: set[str]) -> None:
         """Decide the withdrawals held for ``node``, now that it reports ``running``."""
@@ -206,6 +289,7 @@ class LifecycleService:
             await self._clear_agent_manifest(name, actor_id)
             if self.host._get_spawn_registry().at(name, node) is not None:
                 await self._withdraw(name, node)
+            await self._tell_watchers(actor_id)
 
     async def _withdraw(self, name: str, node: str) -> None:
         """Take a withdrawn agent out of the spawn registry and its node's desired state."""

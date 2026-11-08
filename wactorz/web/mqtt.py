@@ -27,7 +27,7 @@ from ..core.mqtt import (
 from ..core.outbound import numbered
 from ..core.persistence.db import ChatRow
 from ..monitoring.log_redaction import redact
-from . import cost, db_writer, events, relay, runtime, ws
+from . import cost, db_writer, events, relay, runtime, withdrawals, ws
 from . import questions as question_ledger
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -90,6 +90,17 @@ async def handle_message(
     if question_ledger.holding():
         for held in question_ledger.release():
             await _dispatch(*held)
+    main = find_main_actor(runtime.registry) if runtime.started_with_main else None
+    if main is not None:
+        # Watched before anything is handed to it, and from the first message
+        # after a restart: a withdrawal it accepts reaches the dashboard only so.
+        withdrawals.watch(main)
+    if withdrawals.holding():
+        await withdrawals.release()
+    withdrawn = withdrawals.withdrawn_agent(topic, payload)
+    if withdrawn:
+        await withdrawals.receive(withdrawn)
+        return
     if _is_node_heartbeat(topic) and await _watch_main_nodes():
         return
     if question_ledger.is_book_topic(topic):
@@ -107,10 +118,15 @@ async def system_started(*, with_main: bool) -> None:
 
     Called once, when the system is up: ``with_main`` latches whether this run
     has a main to place agents by, so a main restarting later is not taken for
-    a profile without one.
+    a profile without one. The withdrawals held meanwhile are handed to main,
+    once its own are watched (`wactorz.web.withdrawals`).
     """
     for held in question_ledger.started(with_main=with_main):
         await _dispatch(*held)
+    main = find_main_actor(runtime.registry) if with_main else None
+    if main is not None:
+        withdrawals.watch(main)
+    await withdrawals.release()
 
 
 def _is_node_heartbeat(topic: str) -> bool:
@@ -157,17 +173,7 @@ async def _dispatch(topic: str, payload: str) -> None:
         return
 
     if event.get("type") == events.DELETE_AGENT_FRAME:
-        # A patch only adds and updates, so a snapshot that no longer names the
-        # agent still leaves its card on screen. This is the frame that removes
-        # it, and the same one the REST and WebSocket delete paths send.
-        await cost.settled_totals()
-        await ws.broadcast(
-            {
-                "type": events.DELETE_AGENT_FRAME,
-                "agent_id": event.get("agent_id", ""),
-                "state": events.snapshot(),
-            }
-        )
+        await withdrawals.broadcast_deleted(str(event.get("agent_id", "")))
         return
 
     metric = event.get("metric", "")

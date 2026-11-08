@@ -112,9 +112,9 @@ def web_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Setup]:
         ("_books", {}),
         ("_admitted", {}),
         ("_held", questions.OrderedDict()),
-        ("_phase", questions.STARTING),
     ):
         monkeypatch.setattr(questions, name, value)
+    monkeypatch.setattr(runtime, "started_with_main", None)
     monkeypatch.setattr("wactorz.core.node_publications.NODE_SIGNING", "enforce")
     setup = _Setup(_Registry(_Agent("hvac-watch", "hvac-id", _question("real"))))
     monkeypatch.setattr(runtime, "registry", setup.registry)

@@ -474,6 +474,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent's card goes only when its withdrawal stands.** An empty payload on an agent's manifest topic took its card
+  off the dashboard and its questions out of the Inbox, whoever sent it, so anything that could publish there could make
+  a running agent, main included, disappear. The dashboard now follows main's decision: refused for an agent running in
+  main's process (main itself and every supervised agent included, which main also now protects, putting back the
+  manifest the empty payload took off the broker), held for an agent its node still lists, and taken otherwise. A card
+  goes once, however often its withdrawal is heard, and one heard while main restarts is handed to it once it is back.
 - **A question in the Inbox is one its agent asked.** The dashboard took any question book published under an agent's
   topic as that agent's, name included, so anything that could publish there (a node's account, a client of an
   external broker, an agent's own code) could put a question in front of the operator in another agent's name, or

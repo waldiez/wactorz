@@ -52,7 +52,6 @@ _admitted: dict[str, tuple[str, str]] = {}
 #: Where the system is: books are held while it starts, and admitted once it has,
 #: by main (the full profile) or without one (the minimal profile).
 STARTING, WITH_MAIN, WITHOUT_MAIN = "starting", "with main", "without main"
-_phase: str = STARTING
 
 #: agent id -> (topic, payload, properties) of the newest book held, oldest first.
 _held: OrderedDict[str, tuple[str, bytes, dict[str, str]]] = OrderedDict()
@@ -106,7 +105,7 @@ def receive(topic: str, payload: bytes, properties: Mapping[str, str]) -> tuple[
     book is not its agent's word, or it is held until the system has started
     or while main is not there.
     """
-    if _phase == STARTING or (_phase == WITH_MAIN and _main() is None):
+    if _waiting():
         _hold(topic, payload, dict(properties))
         return None
     return _admitted_payload(topic, payload, properties)
@@ -114,8 +113,7 @@ def receive(topic: str, payload: bytes, properties: Mapping[str, str]) -> tuple[
 
 def started(*, with_main: bool) -> list[tuple[str, str]]:
     """Mark the system started, latching whether it runs main; the held books, admitted."""
-    global _phase
-    _phase = WITH_MAIN if with_main else WITHOUT_MAIN
+    runtime.started_with_main = with_main
     return release()
 
 
@@ -126,7 +124,7 @@ def holding() -> bool:
 
 def release() -> list[tuple[str, str]]:
     """The books held, each admitted now or dropped, once there is something to admit them by."""
-    if _phase == STARTING or (_phase == WITH_MAIN and _main() is None):
+    if _waiting():
         return []
     held = list(_held.values())
     _held.clear()
@@ -149,6 +147,18 @@ def _hold(topic: str, payload: bytes, properties: dict[str, str]) -> None:
         )
 
 
+def phase() -> str:
+    """Where the system is, as the latch says: starting, with main, or without one."""
+    if runtime.started_with_main is None:
+        return STARTING
+    return WITH_MAIN if runtime.started_with_main else WITHOUT_MAIN
+
+
+def _waiting() -> bool:
+    """Whether there is nothing yet to admit a book by: not started, or main not there."""
+    return phase() == STARTING or (phase() == WITH_MAIN and _main() is None)
+
+
 def _main() -> Any:
     return find_main_actor(runtime.registry) if runtime.registry is not None else None
 
@@ -160,7 +170,7 @@ def _admitted_payload(
         topic,
         payload,
         properties,
-        host=_main() if _phase == WITH_MAIN else None,
+        host=_main() if phase() == WITH_MAIN else None,
         registry=runtime.registry,
         last=_admitted,
     )

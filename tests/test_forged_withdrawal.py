@@ -33,6 +33,9 @@ class _Actors:
     def find_by_name(self, name: str) -> object | None:
         return object() if name in self.running else None
 
+    def get(self, actor_id: str) -> object | None:
+        return object() if any(derive_actor_id(n) == actor_id for n in self.running) else None
+
 
 class Host:
     """The parts of main a withdrawal touches."""

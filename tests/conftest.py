@@ -9,6 +9,7 @@ confusing rather than loud: the test looks wrong, not the environment.
 
 import pathlib
 import sys
+from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
@@ -23,7 +24,9 @@ from wactorz.ext import tts as tts_extension
 from wactorz.node import state as node_state
 from wactorz.web import cost as web_cost
 from wactorz.web import db_writer, throttle
+from wactorz.web import questions as web_questions
 from wactorz.web import runtime as web_runtime
+from wactorz.web import withdrawals as web_withdrawals
 
 
 @pytest.fixture(autouse=True)
@@ -288,6 +291,22 @@ def _no_leaked_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(web_runtime, "deleted_agent_ids", [])
     monkeypatch.setattr(web_runtime, "hard_resetting", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no system started, and nothing held for one to decide.
+
+    Which profile started is latched once, process-wide, and the books and
+    withdrawals heard before then are held for it. A test that runs a system
+    leaves the latch set and could leave something held, and a later test on
+    the same worker would then see its messages admitted, or held, by a rule
+    it did not choose.
+    """
+    monkeypatch.setattr(web_runtime, "started_with_main", None)
+    monkeypatch.setattr(web_questions, "_held", OrderedDict())
+    monkeypatch.setattr(web_questions, "_admitted", {})
+    monkeypatch.setattr(web_withdrawals, "_held", OrderedDict())
 
 
 @pytest.fixture(autouse=True)

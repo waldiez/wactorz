@@ -82,6 +82,7 @@ Fix rather than list where it is in reach.
 | 18 | A package beside Wactorz adds a tab: listed, it opens with what the package serves, keeps its own place in the address, and is ended when another view opens; left out of `WACTORZ_EXTENSIONS`, it has no tab. |
 | 19 | The Wiring view draws two agents joined by a topic and warns of a topic nobody reads; a box dragged stays put across a reload until the layout is reset, as a graph and as a list. |
 | 20 | A question book forged in an agent's name reaches neither the server's ledger nor the page: one under main's own id shows main's real questions, and one for an agent no node speaks for is not shown at all. |
+| 21 | A withdrawal forged for main leaves its card on the page and in what a page opening now is sent, and main puts its manifest back on the broker. |
 
 ## Order
 

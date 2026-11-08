@@ -86,6 +86,11 @@ deleted_agent_ids: list[Any] = []
 DELETED_IDS_MAX = 1024
 hard_resetting: bool = False
 
+#: Whether the system this server shows runs main: None until it has started,
+#: then latched, so a main that is restarting is waited for rather than taken
+#: for a profile that runs none (`wactorz.web.mqtt.system_started`).
+started_with_main: bool | None = None
+
 
 def mark_deleted(agent_id: str) -> None:
     """Add an agent_id to the deleted list with FIFO eviction. If already

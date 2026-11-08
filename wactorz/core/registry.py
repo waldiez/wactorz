@@ -293,6 +293,29 @@ class ActorRegistry:
 HELD_REPORTS = 100
 
 
+async def start_registered(registry: ActorRegistry, actor: Actor) -> None:
+    """Register ``actor`` with ``registry`` and start it, or leave it neither if the start fails.
+
+    `Actor.start` marks the actor running before ``on_start`` and starts its
+    loops last, so a start that fails part-way would leave it listed as running
+    with nothing running, held by nothing that would stop it. Any failure of
+    the start, a cancellation included, stops the actor and takes it back out of
+    the registry, each tried on its own so that one failing does not skip the
+    other, and the start's own exception is then raised as it was. Registration
+    itself is not wound back from: an actor that cannot be registered was never
+    listed.
+    """
+    await registry.register(actor)
+    try:
+        await actor.start()
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await actor.stop()
+        with contextlib.suppress(Exception):
+            await registry.unregister(actor.actor_id)
+        raise
+
+
 class Supervisor:
     """OTP-inspired supervision tree node.
 
@@ -908,17 +931,8 @@ class Supervisor:
         actor = await made if inspect.isawaitable(made) else made
         self._inject(actor)
         actor.supervisor_id = str(id(self))
-        await self._registry.register(actor)
-        try:
-            await actor.start()
-        except BaseException:
-            # Cancellation included: registered but never handed back, the actor
-            # is held by nothing that would stop it.
-            with contextlib.suppress(Exception):
-                await actor.stop()
-            with contextlib.suppress(Exception):
-                await self._registry.unregister(actor.actor_id)
-            raise
+        # Registered but never handed back if its start fails: wound back here.
+        await start_registered(self._registry, actor)
         logger.debug("[Supervisor] Spawned '%s' (%s).", name, actor.actor_id[:8])
         return actor
 
@@ -1158,19 +1172,23 @@ class ActorSystem:
         )
         logger.info("[ActorSystem] TopicBus initialised")
 
+        # As `Supervisor.start` does: an actor whose start fails is wound back and
+        # its error raised; those started before it run on, for `stop_all`.
         for actor in initial_actors:
             self._inject(actor)
-            await self.registry.register(actor)
-            await actor.start()
+            await start_registered(self.registry, actor)
 
         logger.info("[ActorSystem] Started with %s actors.", len(initial_actors))
 
     async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
-        """Spawn and register a new actor in the system."""
+        """Build an actor of ``actor_class`` with ``kwargs``, register it and start it.
+
+        A start that fails leaves the actor stopped and out of the registry, and
+        raises what it failed with; see :func:`start_registered`.
+        """
         actor = actor_class(**kwargs)
         self._inject(actor)
-        await self.registry.register(actor)
-        await actor.start()
+        await start_registered(self.registry, actor)
         return actor
 
     async def stop_all(self) -> None:

@@ -474,6 +474,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An actor whose start fails is no longer left listed as running.** Spawned through `ActorSystem.spawn`, or given
+  to `ActorSystem.start`, an actor whose `on_start` raised (or whose start was cancelled) stayed registered and
+  reported running, with nothing running inside it. It is now stopped and taken out of the registry, and the error
+  is raised as it was, as the supervisor already did. With several actors given to `start`, those started before
+  the failing one keep running, for `stop_all`. `wactorz.core.registry.start_registered` is the one place this is done.
 - **A device clock far ahead no longer breaks recording.** A reading whose own time is more than five minutes
   ahead of its arrival (a device sending milliseconds, or its local time as UTC) is filed at its arrival and marked
   `time_source: "arrival"`, and the recorder says once per source on the feed that its clock is ahead. One such

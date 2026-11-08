@@ -127,14 +127,17 @@ jobs:
       # the coverage floor is gated by the test run itself, and the action
       # fetches its reporter from GitHub's release downloads, so an outage there
       # or at Coveralls would otherwise fail a change that broke nothing -- and,
-      # in the frontend job, skip the build check after it.
+      # in the frontend job, skip the build check after it. `continue-on-error`
+      # on the step rather than the action's `fail-on-error`: the action checks
+      # its download under `set -e`, so an error page saved in place of the
+      # checksum file ends the step before `fail-on-error` is ever read.
       - name: Send to Coveralls
+        continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           file: coverage/python-coverage.lcov
           flag-name: python
           parallel: true
-          fail-on-error: false
 
   lint-python:
     name: Python lint
@@ -345,13 +348,13 @@ jobs:
       # the Python half writes them relative to the repository root. Without it
       # every file here lands at a path that does not exist.
       - name: Send to Coveralls
+        continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           file: frontend/coverage/lcov.info
           base-path: frontend
           flag-name: frontend
           parallel: true
-          fail-on-error: false
 
       - name: Build
         working-directory: frontend
@@ -385,8 +388,8 @@ jobs:
     if: always()
     steps:
       - name: Combine the two halves
+        continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
           parallel-finished: true
           carryforward: python,frontend
-          fail-on-error: false

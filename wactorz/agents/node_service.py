@@ -196,10 +196,14 @@ def _unit_path_value(path: str) -> str:
 
 
 def user_unit_path(home: str) -> str:
+    """Where the runner's user unit file goes, under ``home``."""
     return f"{home}/.config/systemd/user/{UNIT_NAME}"
 
 
 def unit_path(rung: Rung, home: str) -> str:
+    """Where the runner's unit file goes on ``rung``: the system path, or the user's under
+    ``home``.
+    """
     return SYSTEM_UNIT_PATH if rung.system else user_unit_path(home)
 
 

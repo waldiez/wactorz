@@ -113,6 +113,7 @@ class Binding:
         return self.workers[0] if self.workers else None
 
     def live_workers(self) -> list[asyncio.Task[Any]]:
+        """The binding's workers that have not ended."""
         return [w for w in self.workers if not w.done()]
 
     def offer(self, payload: Any) -> bool:

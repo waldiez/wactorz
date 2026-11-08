@@ -234,6 +234,12 @@ class DynamicAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Compile the agent's program and start it, then publish its manifest.
+
+        A program that does not compile is sent to the model to fix, a few times at most; a fix
+        that compiles is kept for the next start. One that still does not compile leaves the
+        agent failed, with the error published.
+        """
         # ── Compile with LLM self-correction on syntax errors ─────────────
         current_code = self._code
         error_msg = self._compile_code(current_code)
@@ -526,6 +532,9 @@ class DynamicAgent(Actor):
                 logger.warning("[%s] cleanup() error: %s", self.name, e)
 
     async def on_stop(self) -> None:
+        """Keep the agent's final cost, publish its last metrics, leave the topic bus, run the
+        program's own cleanup, and release what it left open.
+        """
         # ── Persist final cost metrics so they survive agent deletion ──────
         # Without this, cost data dies with the agent object and the UI
         # can't show lifetime costs for deleted agents.
@@ -1370,6 +1379,10 @@ class DynamicAgent(Actor):
         return None
 
     async def handle_message(self, msg: Message) -> Any:
+        """Run a task through the program's ``handle_task``, as a task of its own when there is
+        one, so a reply the handler waits for can still reach the mailbox; other messages are
+        ignored.
+        """
         if msg.type == MessageType.TASK:
             # ``handle_task`` may await ``agent.send_to()``. Its RESULT must be
             # consumed by this actor's mailbox, so keep that mailbox free while
@@ -1534,6 +1547,7 @@ class DynamicAgent(Actor):
             logger.warning("[%s] Could not persist fixed code: %s", self.name, exc)
 
     def get_status(self) -> dict[str, Any]:
+        """The actor's status, with the agent's description and program."""
         s = super().get_status()
         s["description"] = self.description
         s["code"] = self._code

@@ -52,6 +52,7 @@ class LogRingBuffer(logging.Handler):
 
     @property
     def capacity(self) -> int:
+        """How many entries the buffer keeps before it drops the oldest."""
         return self._entries.maxlen or 0
 
     def emit(self, record: logging.LogRecord) -> None:

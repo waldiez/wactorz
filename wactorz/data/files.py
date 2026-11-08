@@ -58,6 +58,9 @@ class DataError(ValueError):
 
     @classmethod
     def bad_source(cls, source: str) -> DataError:
+        """The error for a ``source`` name that cannot be a path of levels under the data
+        directory.
+        """
         return cls(
             f"{source!r} cannot name a source: levels of letters, digits, '.', '_', ':', '@' "
             "and '-' separated by '/', none empty, none '.' or '..'"
@@ -65,10 +68,14 @@ class DataError(ValueError):
 
     @classmethod
     def no_event_time(cls, row: Mapping[str, Any]) -> DataError:
+        """The error for a ``row`` without the event time ``ts``; names the keys it has."""
         return cls(f"a row has no event time 'ts': {sorted(row)}")
 
     @classmethod
     def out_of_range(cls, start: float, end: float) -> DataError:
+        """The error for a window ``[start, end)`` outside the Unix seconds a file can be kept
+        under.
+        """
         return cls(f"[{start}, {end}) is not a window of Unix seconds from 0 to {LAST_SECOND:.0f}")
 
 

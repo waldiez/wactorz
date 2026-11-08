@@ -25,6 +25,10 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(LLMProvider):
+    """OpenAI's Chat Completions API, through the ``openai`` package, or any server that speaks
+    it at ``base_url``.
+    """
+
     def __init__(
         self, model: str = "gpt-4o", api_key: str | None = None, base_url: str | None = None
     ) -> None:

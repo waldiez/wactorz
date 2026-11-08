@@ -74,6 +74,7 @@ class Pipeline:
 
     @property
     def schedule_name(self) -> str:
+        """The name of the schedule agent that ticks this pipeline."""
         return f"{self.name}-schedule"
 
     @property
@@ -184,10 +185,12 @@ class PipelineError(ValueError):
 
     @classmethod
     def no_name(cls) -> PipelineError:
+        """The error for a pipeline declared without a name."""
         return cls("a pipeline needs a name")
 
     @classmethod
     def empty(cls, name: str) -> PipelineError:
+        """The error for a pipeline ``name`` declared with neither steps nor rules."""
         return cls(f"pipeline {name!r} has neither steps nor rules")
 
 
@@ -196,10 +199,12 @@ class NotAPipelineError(TypeError):
 
     @classmethod
     def holds(cls, target: str, item: Any) -> NotAPipelineError:
+        """The error for a ``target`` whose value ``item`` is not a :class:`Pipeline`."""
         return cls(f"{target} holds {item!r}, which is not a Pipeline")
 
     @classmethod
     def is_not(cls, target: str) -> NotAPipelineError:
+        """The error for a ``target`` that names something other than a :class:`Pipeline`."""
         return cls(f"{target} is not a Pipeline")
 
 

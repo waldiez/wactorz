@@ -677,6 +677,7 @@ class WeatherAgent(Actor):
         self._geo_cache: dict[str, tuple[float, float, str]] = {}
 
     async def on_start(self) -> None:
+        """Restore the default and last locations the agent remembers, and publish its manifest."""
         stored = self.recall("default_location") if hasattr(self, "recall") else None
         if stored:
             self._default_location = stored
@@ -711,11 +712,18 @@ class WeatherAgent(Actor):
     # ── Entry points ──────────────────────────────────────────────────────
 
     async def chat(self, message: str) -> str:
+        """Answer a message in plain words: read what is asked, fetch it, and say it."""
         payload = await self._parse_smart(message)
         result = await self._handle_cmd(payload)
         return self._format(result)
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with the weather it asks for, sent to its reply address.
+
+        A payload with an ``action`` is taken as it is; otherwise its text, query or place is
+        read as a question. The reply carries the data and the answer in words. Other kinds of
+        message are ignored.
+        """
         if msg.type != MessageType.TASK:
             return
         raw = msg.payload

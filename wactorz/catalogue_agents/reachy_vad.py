@@ -96,10 +96,12 @@ class VADInputError(ValueError):
 
     @classmethod
     def frame_ms(cls) -> "VADInputError":
+        """The error for a frame length WebRTC VAD does not take."""
         return cls("VAD frame_ms must be 10, 20, or 30")
 
     @classmethod
     def samplerate(cls, samplerate: int) -> "VADInputError":
+        """The error for a ``samplerate`` WebRTC VAD does not take."""
         return cls(f"WebRTC VAD does not support {samplerate} Hz input")
 
 

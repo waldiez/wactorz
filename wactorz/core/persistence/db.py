@@ -472,6 +472,7 @@ class WactorzDB:
         metadata: str = "{}",
         node: str = "",
     ) -> None:
+        """Record one detection: what ``agent`` saw, how sure it was, and where in which frame."""
         with self.transaction() as conn:
             conn.execute(
                 "INSERT INTO detections "
@@ -490,6 +491,7 @@ class WactorzDB:
         attributes: str = "{}",
         context: str = "",
     ) -> None:
+        """Record one Home Assistant state change of ``entity_id``."""
         with self.transaction() as conn:
             conn.execute(
                 "INSERT INTO ha_state_changes "
@@ -509,6 +511,7 @@ class WactorzDB:
         trigger: str = "{}",
         rule_id: str = "",
     ) -> None:
+        """Record one service call ``agent`` made to Home Assistant, and what triggered it."""
         with self.transaction() as conn:
             conn.execute(
                 "INSERT INTO actuations "
@@ -709,6 +712,9 @@ class WactorzDB:
         since: float | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        """The detections since ``since`` (the last ``hours`` when None), oldest first, narrowed
+        by agent, class and confidence, a page of ``limit`` from ``offset``.
+        """
         if since is None:
             since = time.time() - (hours * 3600)
         conditions = ["ts >= ?", "confidence >= ?"]
@@ -742,6 +748,9 @@ class WactorzDB:
         since: float | None = None,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        """The Home Assistant state changes since ``since`` (the last ``hours`` when None),
+        oldest first, narrowed by entity and domain, a page of ``limit`` from ``offset``.
+        """
         if since is None:
             since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
@@ -771,6 +780,9 @@ class WactorzDB:
         entity_id: str | None = None,
         limit: int = 10_000,
     ) -> list[dict[str, Any]]:
+        """The service calls made to Home Assistant in the last ``hours``, oldest first, narrowed
+        by entity, at most ``limit``; each payload and trigger parsed from JSON.
+        """
         since = time.time() - (hours * 3600)
         conditions = ["ts >= ?"]
         params: list[Any] = [since]

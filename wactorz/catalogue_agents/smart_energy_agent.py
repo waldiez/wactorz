@@ -137,6 +137,9 @@ class PlugProtectedError(Exception):
 
     @classmethod
     def refused(cls, plug: dict[str, Any], prot: Any) -> "PlugProtectedError":
+        """The error for turning off ``plug``, whose protection ``prot`` does not allow this
+        agent to.
+        """
         return cls(
             f"Refusing to turn off plug '{plug.get('name')}' — protection={prot}. "
             f"Only '{AUTO_OFF}' plugs may be powered down by this agent."
@@ -350,6 +353,9 @@ def _cost(kwh: float, rate: float) -> float:
 
 
 async def setup(agent: AgentAPI) -> None:
+    """Read the plugs, rules, energy totals and rate the agent remembers, and declare what it
+    publishes.
+    """
     agent.state["plugs"] = agent.recall("plugs") or {}  # name -> plug dict
     agent.state["rules"] = agent.recall("rules") or {}  # rule_id -> rule dict
     agent.state["accum"] = agent.recall("accum") or {}  # name -> kWh accumulators
@@ -385,6 +391,9 @@ async def setup(agent: AgentAPI) -> None:
 
 
 async def process(agent: AgentAPI) -> None:
+    """Read each plug's power from Home Assistant, add the energy since the last reading to its
+    totals, apply the rules, and publish the summary.
+    """
     plugs = agent.state["plugs"]
     if not plugs:
         return
@@ -575,6 +584,11 @@ async def _eval_auto_off_on_idle(
 
 
 async def handle_task(agent: AgentAPI, payload: Any) -> dict[str, Any]:
+    """Answer an ``action``: the status, a cost report, adding, listing and removing plugs and
+    rules, or setting the rate.
+
+    The payload may come as JSON in ``text``, as an @mention sends it, or as the bare action.
+    """
     # Unwrap JSON sent as text via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:

@@ -69,6 +69,9 @@ class HomeAssistantStateBridgeAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Restore the agent's counters, publish the manifest, and start forwarding Home
+        Assistant state changes to MQTT.
+        """
         self._events_seen = int(self.recall("events_seen", 0))
         self._last_event_at = float(self.recall("last_event_at", 0.0))
         self._last_error = str(self.recall("last_error", ""))
@@ -96,6 +99,7 @@ class HomeAssistantStateBridgeAgent(Actor):
         )
 
     async def on_stop(self) -> None:
+        """Remember the agent's counters for the next start."""
         self.persist("events_seen", self._events_seen)
         self.persist("last_event_at", self._last_event_at)
         self.persist("last_error", self._last_error)
@@ -124,6 +128,9 @@ class HomeAssistantStateBridgeAgent(Actor):
         )
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer ``status`` with the bridge's state, in words and as fields; anything else is
+        answered with what the agent understands.
+        """
         if msg.type != MessageType.TASK:
             return
 

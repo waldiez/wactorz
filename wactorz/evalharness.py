@@ -281,6 +281,9 @@ def score_intent(output: str, expected: str) -> bool:
 
 
 def score_ha(output: str, expected: str) -> bool:
+    """Whether the first word of ``output``, lower-cased and without punctuation, is
+    ``expected``.
+    """
     token = (output or "").strip().lower().split()[0] if (output or "").strip() else ""
     token = token.strip(".,:;!\"'")
     return token == str(expected).lower()
@@ -510,6 +513,13 @@ async def run_eval(
     temperature: float | None = None,
     profile: str = "ha",
 ) -> list[dict[str, Any]]:
+    """Run every case ``repeat`` times against each model in ``model_specs``, and summarise the
+    results per model and category.
+
+    Each record is appended to ``results.jsonl`` in ``out_dir`` as it is made, and the summary
+    rows returned are also written to ``summary.csv`` there. A spec whose provider cannot be
+    built is skipped, with an error logged.
+    """
     from .llm_factory import create_provider
 
     systems = _system_prompts(profile)
@@ -580,6 +590,9 @@ def _print_summary(rows: list[dict[str, Any]]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the harness from the command line with ``argv`` (the process's arguments when None),
+    print the summary table, and return 0.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m wactorz.evalharness",
         description="Per-call-site SLM/LLM evaluation harness.",

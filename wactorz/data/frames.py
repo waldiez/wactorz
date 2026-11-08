@@ -59,28 +59,38 @@ class SplitError(DataError):
 
     @classmethod
     def nothing_to_split(cls) -> SplitError:
+        """The error for a time split asked of a frame with no rows."""
         return cls("a time split needs rows, and the frame has none")
 
     @classmethod
     def too_few_segments(cls, have: int, k: int) -> SplitError:
+        """The error for leave-``k``-out over ``have`` segments, when that is not more than
+        ``k``.
+        """
         return cls(f"leave-{k}-out needs more than {k} segments; there are {have}")
 
     @classmethod
     def too_few_folds(cls, rows: int, k: int) -> SplitError:
+        """The error for ``k`` forward folds over ``rows`` rows, when that is not more than
+        ``k``.
+        """
         return cls(f"{k} forward folds need at least {k + 1} rows; there are {rows}")
 
     @classmethod
     def unknown_cut(cls, by: str) -> SplitError:
+        """The error for a segment cut ``by`` something that is none of the known cuts."""
         return cls(
             f"segments are cut by {BY_GAP!r}, {BY_LABEL!r}, {BY_COLUMN!r} or {BY_LENGTH!r}, not {by!r}"
         )
 
     @classmethod
     def needs(cls, by: str, what: str) -> SplitError:
+        """The error for a cut ``by`` one thing that was not given ``what`` it needs."""
         return cls(f"cutting by {by!r} needs {what}")
 
     @classmethod
     def no_column(cls, column: str) -> SplitError:
+        """The error for a split that names a ``column`` the frame does not have."""
         return cls(f"the frame has no column {column!r}")
 
 
@@ -98,6 +108,7 @@ class Segment:
 
     @property
     def rows(self) -> int:
+        """How many rows the segment holds."""
         return self.end - self.start
 
 
@@ -122,6 +133,9 @@ class Fold:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Fold:
+        """The fold :meth:`to_dict` wrote, read back from a stored version's manifest; the row
+        counts are recomputed, not read.
+        """
         return cls(
             train=tuple((int(s), int(e)) for s, e in data.get("train", [])),
             test=tuple((int(s), int(e)) for s, e in data.get("test", [])),

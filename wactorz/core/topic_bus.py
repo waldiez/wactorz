@@ -201,6 +201,7 @@ class TopicContract:
         self.observed_samples[topic] = sample_of(payload)
 
     def to_dict(self) -> dict[str, Any]:
+        """The contract as JSON, as :meth:`from_dict` reads it back."""
         return {
             "name": self.name,
             "publishes": self.publishes,
@@ -218,6 +219,9 @@ class TopicContract:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TopicContract:
+        """The contract a JSON ``d`` holds, as :meth:`to_dict` writes it; a missing field takes
+        its default, and a missing timestamp is now.
+        """
         return cls(
             name=d.get("name", ""),
             publishes=d.get("publishes", []),
@@ -359,6 +363,11 @@ class TopicRegistry:
         return {topic: dict(sample) for topic, sample in self._outside.items()}
 
     def register(self, contract: TopicContract) -> None:
+        """Keep ``contract``, by its agent's id when it has one and by its name otherwise.
+
+        A contract with an id replaces one kept under the same name for the same place, which an
+        agent registered before it had an id.
+        """
         if contract.actor_id and self._is_unidentified(contract.name, contract.place):
             del self._contracts[contract.name]
         self._contracts[contract.actor_id or contract.name] = contract
@@ -457,6 +466,7 @@ class TopicRegistry:
         return contract.name
 
     def all_contracts(self) -> list[TopicContract]:
+        """Every contract kept, one per agent."""
         return list(self._contracts.values())
 
     def producers_of(self, topic: str) -> list[TopicContract]:
@@ -716,10 +726,12 @@ class StreamWindow:
         return sum(vals) / len(vals) if vals else None
 
     def min(self, key: str = "value") -> float | None:
+        """The smallest value of ``key`` in the window, or None when it holds none."""
         vals = self.values(key)
         return min(vals) if vals else None
 
     def max(self, key: str = "value") -> float | None:
+        """The largest value of ``key`` in the window, or None when it holds none."""
         vals = self.values(key)
         return max(vals) if vals else None
 
@@ -815,6 +827,7 @@ class StreamWindow:
                 await asyncio.sleep(reconnect_wait(WINDOW_RECONNECT_DELAY_S))
 
     def stop(self) -> None:
+        """Stop reading the topic; the window keeps what it holds."""
         if self._task:
             self._task.cancel()
 
@@ -888,6 +901,7 @@ class TopicBus:
                     )
 
     def summary(self) -> dict[str, Any]:
+        """The registry's summary, with the broker this bus publishes to."""
         return {
             "registry": self.registry.summary(),
             "mqtt_broker": self._mqtt_broker,
@@ -908,10 +922,14 @@ _topic_bus: TopicBus | None = None
 def init_topic_bus(
     mqtt_client: MQTTPublisher | None = None, mqtt_broker: str = "localhost", mqtt_port: int = 1883
 ) -> TopicBus:
+    """Make the process's topic bus, publishing through ``mqtt_client``, and return it; one made
+    before is replaced.
+    """
     global _topic_bus
     _topic_bus = TopicBus(mqtt_client=mqtt_client, mqtt_broker=mqtt_broker, mqtt_port=mqtt_port)
     return _topic_bus
 
 
 def get_topic_bus() -> TopicBus | None:
+    """The process's topic bus, or None before :func:`init_topic_bus` has made one."""
     return _topic_bus

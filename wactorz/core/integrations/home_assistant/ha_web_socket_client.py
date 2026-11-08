@@ -36,22 +36,29 @@ class HAWebSocketError(RuntimeError):
 
     @classmethod
     def not_connected(cls) -> "HAWebSocketError":
+        """The error for a call made before the socket is open."""
         return cls("No WS client")
 
     @classmethod
     def unexpected_hello(cls, hello: Any) -> "HAWebSocketError":
+        """The error for a first frame, ``hello``, that is not Home Assistant asking for
+        authentication.
+        """
         return cls(f"Unexpected hello: {hello}")
 
     @classmethod
     def auth_failed(cls, resp: Any) -> "HAWebSocketError":
+        """The error for Home Assistant refusing the token, with its answer ``resp``."""
         return cls(f"Auth failed: {resp}")
 
     @classmethod
     def call_failed(cls, resp: Any) -> "HAWebSocketError":
+        """The error for a call Home Assistant answered as failed, with its answer ``resp``."""
         return cls(f"WS call failed: {resp}")
 
     @classmethod
     def subscribe_failed(cls, resp: Any) -> "HAWebSocketError":
+        """The error for a subscription Home Assistant refused, with its answer ``resp``."""
         return cls(f"WS subscribe failed: {resp}")
 
 
@@ -60,10 +67,12 @@ class HAWebSocketTimeoutError(TimeoutError):
 
     @classmethod
     def no_answer(cls, ws_type: str) -> "HAWebSocketTimeoutError":
+        """The error for Home Assistant not answering a ``ws_type`` call in time."""
         return cls(f"Home Assistant did not answer {ws_type!r} within {_RESPONSE_TIMEOUT}s")
 
     @classmethod
     def no_confirmation(cls) -> "HAWebSocketTimeoutError":
+        """The error for Home Assistant not confirming a subscription in time."""
         return cls(f"Home Assistant did not confirm the subscription within {_RESPONSE_TIMEOUT}s")
 
 
@@ -72,6 +81,7 @@ class HAPayloadError(TypeError):
 
     @classmethod
     def not_an_object(cls, payload: Any) -> "HAPayloadError":
+        """The error for a frame, ``payload``, that is not a JSON object."""
         return cls(f"Unexpected websocket payload: {payload!r}")
 
 
@@ -102,6 +112,12 @@ async def _measured(command: str, request: Awaitable[T]) -> T:
 
 
 class HAWebSocketClient:
+    """One authenticated connection to Home Assistant's WebSocket API, used as an async context
+    manager.
+
+    Entering opens the socket and authenticates with ``token``; leaving closes it.
+    """
+
     def __init__(self, ws_url: str, token: str) -> None:
         self.ws_url = ws_url
         self.token = token

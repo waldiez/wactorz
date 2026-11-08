@@ -91,16 +91,19 @@ class DriftError(ValueError):
 
     @classmethod
     def not_on_main(cls) -> DriftError:
+        """The error for a drift check on a node, where neither the store nor the data is."""
         return cls(
             "drift is checked on main, where the store and the data are; this node has neither"
         )
 
     @classmethod
     def no_model(cls) -> DriftError:
+        """The error for a drift check with no model to watch."""
         return cls("a check needs the model to watch: set 'model' as a spawn option")
 
     @classmethod
     def no_source(cls, model: str) -> DriftError:
+        """The error for a drift check on ``model`` with no recorded source to read."""
         return cls(
             f"a check needs the recorded source of {model}'s readings: set 'source' as a spawn "
             "option, or serve a version the train step made, which says what it read"
@@ -108,10 +111,12 @@ class DriftError(ValueError):
 
     @classmethod
     def no_version(cls, model: str) -> DriftError:
+        """The error for a drift check on ``model``, of which no version is stored."""
         return cls(f"no version of {model} is stored, so there is nothing to drift from")
 
     @classmethod
     def no_data(cls) -> DriftError:
+        """The error for reading the windows without the ``data`` extra."""
         return cls(f"reading the windows needs {DATA_EXTRA}")
 
 
@@ -234,6 +239,9 @@ class DriftAgent(Actor):
         return ArtifactStore.in_state_dir(resolve_state_dir())
 
     async def on_start(self) -> None:
+        """Publish the manifest and, on main with a model to watch, start checking on schedule;
+        otherwise log why no check runs.
+        """
         await self.publish_manifest(
             description=self.DESCRIPTION,
             publishes=[drift_topic(self.model)] if self.model else [],
@@ -253,6 +261,7 @@ class DriftAgent(Actor):
         )
 
     async def on_stop(self) -> None:
+        """Stop checking, and drop the model's drift metrics."""
         if self._checker is not None:
             self._checker.cancel()
             self._checker = None

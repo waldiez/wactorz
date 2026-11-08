@@ -136,6 +136,9 @@ class TrainAgent(Actor):
         return getattr(self, "_runner", None) is not None
 
     async def on_start(self) -> None:
+        """Publish the manifest, and log a warning when the agent runs on a node, where it cannot
+        train, or lacks the recipe, model or source a task needs.
+        """
         await self.publish_manifest(
             description=self.DESCRIPTION,
             publishes=[],

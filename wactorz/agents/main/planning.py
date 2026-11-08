@@ -166,9 +166,11 @@ class PlanningMixin(_Host):
     _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
 
     def get_pipeline_rules(self) -> dict[str, Any]:
+        """The pipeline rules main keeps, by rule id."""
         return self.recall(PIPELINE_RULES_KEY) or {}
 
     def save_pipeline_rule(self, rule: dict[str, Any]) -> None:
+        """Keep ``rule``, by its ``rule_id``, replacing one kept under that id."""
         rules = self.get_pipeline_rules()
         rules[rule["rule_id"]] = rule
         self.persist(PIPELINE_RULES_KEY, rules)
@@ -195,6 +197,9 @@ class PlanningMixin(_Host):
     PLAN_TTL_S = 24 * 3600  # auto-expire pending plans after 24h
 
     def get_pending_plans(self) -> dict[str, Any]:
+        """The plans main keeps, by plan id; a pending plan older than :attr:`PLAN_TTL_S` is
+        marked expired as it is read.
+        """
         plans = self.recall(PENDING_PLANS_KEY) or {}
         # Expire stale entries on every read so we don't have to gc separately
         now = time.time()
@@ -210,11 +215,13 @@ class PlanningMixin(_Host):
         return plans
 
     def save_pending_plan(self, plan: dict[str, Any]) -> None:
+        """Keep ``plan``, by its ``plan_id``, replacing one kept under that id."""
         plans = self.recall(PENDING_PLANS_KEY) or {}
         plans[plan["plan_id"]] = plan
         self.persist(PENDING_PLANS_KEY, plans)
 
     def update_plan_status(self, plan_id: str, status: str) -> None:
+        """Mark the plan ``plan_id`` as ``status``; nothing happens when there is no such plan."""
         plans = self.recall(PENDING_PLANS_KEY) or {}
         if plan_id in plans:
             plans[plan_id]["status"] = status

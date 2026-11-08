@@ -98,6 +98,9 @@ class LLMAgent(Actor):
         return self._now_context() + "\n" + self.system_prompt
 
     async def on_start(self) -> None:
+        """Restore the conversation, its summary and the cost so far, refresh the model prices in
+        the background, and publish the manifest.
+        """
         self.run_detached(refresh_pricing(), name="refresh-pricing")
         # Restore conversation history and rolling summary from persistence
         saved = self.recall("conversation_history", [])
@@ -164,6 +167,7 @@ class LLMAgent(Actor):
         )
 
     async def on_stop(self) -> None:
+        """Remember the conversation and its summary for the next start."""
         self.persist("conversation_history", self._conversation_history)
         self.persist("history_summary", self._history_summary)
 
@@ -289,6 +293,7 @@ class LLMAgent(Actor):
         return history
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with the model; other messages are ignored."""
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
 
@@ -605,4 +610,5 @@ class LLMAgent(Actor):
         return m
 
     def clear_history(self) -> None:
+        """Forget the conversation; its summary is kept."""
         self._conversation_history = []

@@ -485,6 +485,9 @@ async def _publish_storage_report(agent: AgentAPI) -> dict[str, Any]:
 
 
 async def setup(agent: AgentAPI) -> None:
+    """Read the topics and batching and retention settings the agent remembers, declare its
+    topics, and start the subscriber, the flush loop and the prune loop.
+    """
     topics = agent.recall("topics") or DEFAULT_TOPICS
     batch_interval = float(agent.recall("batch_interval") or DEFAULT_BATCH_INTERVAL)
     batch_size = int(agent.recall("batch_size") or DEFAULT_BATCH_SIZE)
@@ -525,6 +528,9 @@ async def setup(agent: AgentAPI) -> None:
 
 
 async def process(agent: AgentAPI) -> None:
+    """Flush whatever is buffered, and publish the storage report; the background loops do the
+    rest.
+    """
     # The background loops do the real work. This periodic poll (hourly by
     # default: poll_interval=3600) is a safety-net flush so buffered rows are
     # never stranded, plus the hourly storage report on agents/{id}/storage.
@@ -563,6 +569,7 @@ def _task_of(payload: Any) -> dict[str, Any]:
 
 
 async def handle_task(agent: AgentAPI, payload: Any) -> dict[str, Any]:
+    """Answer an action named in :data:`TASKS`, or work out from the text what is asked."""
     payload = _task_of(payload)
     action = str(payload.get("action") or payload.get("text") or "").strip().lower()
     answer = TASKS.get(action)

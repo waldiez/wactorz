@@ -77,26 +77,36 @@ class AutomationEditError(Exception):
 
     @classmethod
     def unidentified(cls, exc: Exception) -> "AutomationEditError":
+        """The error for an edit whose automation could not be identified, with the reason in
+        ``exc``.
+        """
         return cls(f"Could not identify automation to edit: {exc}")
 
     @classmethod
     def which(cls) -> "AutomationEditError":
+        """The error for an edit that does not say which automation it is for."""
         return cls("Could not identify which automation to edit.")
 
     @classmethod
     def no_id(cls) -> "AutomationEditError":
+        """The error for an edit whose automation id could not be worked out."""
         return cls("Could not determine the automation ID to edit.")
 
     @classmethod
     def not_generated(cls, exc: Exception) -> "AutomationEditError":
+        """The error for the model failing to write the edited automation, with the reason in
+        ``exc``.
+        """
         return cls(f"LLM could not generate updated automation: {exc}")
 
     @classmethod
     def invalid_config(cls) -> "AutomationEditError":
+        """The error for an edited automation that is not a valid configuration."""
         return cls("Invalid generated automation config.")
 
     @classmethod
     def config_not_an_object(cls) -> "AutomationEditError":
+        """The error for an edited automation that is not a JSON object."""
         return cls("Generated automation config must be an object.")
 
 
@@ -105,10 +115,12 @@ class NotAnObjectError(TypeError):
 
     @classmethod
     def automation(cls) -> "NotAnObjectError":
+        """The error for an automation that is not a JSON object."""
         return cls("automation must be a JSON object")
 
     @classmethod
     def reply(cls) -> "NotAnObjectError":
+        """The error for a model's reply that is not a JSON object."""
         return cls("LLM response is not a JSON object")
 
 
@@ -208,6 +220,13 @@ class HomeAssistantAgent(LLMAgent):
         yield {}
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task: a named ``operation`` (cameras, snapshots, streams, history), an
+        automation built from the entities or hardware it names, or a request in words,
+        classified first.
+
+        The result goes back to the sender, with the task's id echoed so a planner waiting on it
+        is answered.
+        """
         if msg.type != MessageType.TASK:
             return
 

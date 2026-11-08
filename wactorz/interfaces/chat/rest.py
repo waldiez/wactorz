@@ -380,6 +380,7 @@ class RESTInterface:
         return await handler(request)
 
     async def run(self) -> None:
+        """Serve the REST API on the configured host and this interface's port, until cancelled."""
         runner = web.AppRunner(self.build_app())
         await runner.setup()
         site = web.TCPSite(runner, CONFIG.bind_host, self.port)

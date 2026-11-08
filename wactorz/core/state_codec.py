@@ -103,10 +103,12 @@ class NoJsonFormError(TypeError):
 
     @classmethod
     def of(cls, value: Any) -> "NoJsonFormError":
+        """The error for ``value``, whose type has no JSON form."""
         return cls(f"a {type(value).__name__} has no JSON form")
 
     @classmethod
     def items_not_a_list(cls, mark: Any) -> "NoJsonFormError":
+        """The error for an encoded container marked ``mark`` whose items are not a list."""
         return cls(f"the items of a {mark} are not a list")
 
 

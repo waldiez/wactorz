@@ -41,13 +41,23 @@ class ActorHost(Protocol):
     _registry: ActorRegistry | None
     _persistence_dir: Path
 
-    async def send(self, target_id: str, msg_type: MessageType, payload: Any = None) -> bool: ...
+    async def send(self, target_id: str, msg_type: MessageType, payload: Any = None) -> bool:
+        """Send ``target_id`` a message of ``msg_type`` carrying ``payload``; whether it was
+        delivered.
+        """
+        ...
 
-    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor: ...
+    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
+        """Build and start an actor of ``actor_class`` with ``kwargs``, as a child of this one."""
+        ...
 
-    def persist(self, key: str, value: Any) -> None: ...
+    def persist(self, key: str, value: Any) -> None:
+        """Remember ``value`` under ``key``, across restarts."""
+        ...
 
-    def recall(self, key: str, default: Any = None) -> Any: ...
+    def recall(self, key: str, default: Any = None) -> Any:
+        """What the actor remembers under ``key``, or ``default``."""
+        ...
 
 
 class LLMHost(ActorHost, Protocol):
@@ -75,4 +85,6 @@ class SpawnHost(ActorHost, Protocol):
 
     def run_detached(
         self, coro: Coroutine[Any, Any, Any], *, name: str | None = None
-    ) -> asyncio.Task[Any]: ...
+    ) -> asyncio.Task[Any]:
+        """Run ``coro`` alongside the actor, as a task the actor owns and cancels when it stops."""
+        ...

@@ -60,30 +60,36 @@ class JudgementError(ValueError):
 
     @classmethod
     def not_a_mapping(cls, given: Any) -> "JudgementError":
+        """The error for a judgement given as ``given``, which is not a mapping."""
         return cls(f"what a version is judged on is an object, not {type(given).__name__}")
 
     @classmethod
     def unknown_kind(cls, kind: Any) -> "JudgementError":
+        """The error for a ``kind`` that is none of the kinds of model judged here."""
         return cls(f"{kind!r} is not a kind of model judged here: one of {', '.join(KINDS)}")
 
     @classmethod
     def no_positive(cls) -> "JudgementError":
+        """The error for a detector's judgement with no positive label value."""
         return cls(
             "a detector is judged on the label values that count as positive: name at least one"
         )
 
     @classmethod
     def positive_for_detector(cls, kind: str) -> "JudgementError":
+        """The error for positive label values given to a ``kind`` judged on a field."""
         return cls(
             f"positive label values are what a detector flags; a {kind} is judged on a field"
         )
 
     @classmethod
     def no_field(cls, kind: str) -> "JudgementError":
+        """The error for a ``kind`` judged on a field, given none."""
         return cls(f"a {kind} is judged on the output field it answers in: name it")
 
     @classmethod
     def field_for_detector(cls) -> "JudgementError":
+        """The error for a field given to a detector, which is judged on whether it published."""
         return cls(
             "a detector is judged on whether it published, not on a field: "
             "name its positive values instead"
@@ -91,22 +97,26 @@ class JudgementError(ValueError):
 
     @classmethod
     def bad_field(cls, given: Any) -> "JudgementError":
+        """The error for ``given`` not being an output field name."""
         return cls(
             f"{given!r} is not an output field: a name of at most {MAX_FIELD_CHARS} characters"
         )
 
     @classmethod
     def too_many_positive(cls) -> "JudgementError":
+        """The error for more positive label values than a judgement may hold."""
         return cls(f"at most {MAX_POSITIVE} label values may count as positive")
 
     @classmethod
     def bad_value(cls, value: Any) -> "JudgementError":
+        """The error for ``value`` not being a label value."""
         return cls(
             f"{value!r} is not a label value: a word of at most {MAX_VALUE_CHARS} characters"
         )
 
     @classmethod
     def bad_source(cls, source: Any) -> "JudgementError":
+        """The error for ``source`` not being one label source."""
         return cls(
             f"{source!r} is not a label source: one source, no '+' or '#', "
             f"at most {MAX_SOURCE_CHARS} characters"
@@ -131,6 +141,7 @@ class Judgement:
     extra: dict[str, Any] = dataclass_field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
+        """The judgement as JSON, without ``field`` when it has none."""
         kept = asdict(self)
         kept["positive"] = list(self.positive)
         if self.field is None:

@@ -95,26 +95,34 @@ class ProvenanceError(ValueError):
 
     @classmethod
     def unknown_kind(cls, kind: str) -> ProvenanceError:
+        """The error for a node ``kind`` that is none of the kinds the graph holds."""
         return cls(f"unknown node kind {kind!r}; one of {', '.join(KINDS)}")
 
     @classmethod
     def unknown_relation(cls, relation: str) -> ProvenanceError:
+        """The error for a ``relation`` that is none of the relations the graph holds."""
         return cls(f"unknown relation {relation!r}; one of {', '.join(RELATIONS)}")
 
     @classmethod
     def bad_status(cls, kind: str, status: str) -> ProvenanceError:
+        """The error for a ``status`` that a node of ``kind`` cannot have."""
         return cls(f"a {kind} cannot be {status!r}; one of {', '.join(statuses_of(kind))}")
 
     @classmethod
     def missing(cls, node_id: str) -> ProvenanceError:
+        """The error for ``node_id`` naming no node in the graph."""
         return cls(f"no node {node_id!r} in the graph")
 
     @classmethod
     def wrong_kinds(cls, relation: str, src: str, dst: str) -> ProvenanceError:
+        """The error for a ``relation`` between a ``src`` and a ``dst`` of kinds it does not
+        join.
+        """
         return cls(f"{relation!r} does not join a {src} to a {dst}")
 
     @classmethod
     def self_edge(cls, node_id: str) -> ProvenanceError:
+        """The error for an edge from ``node_id`` to itself."""
         return cls(f"a node cannot cause itself: {node_id!r}")
 
 
@@ -158,6 +166,7 @@ class ProvNode:
     seq: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        """The node as JSON, for the API."""
         return {
             "id": self.id,
             "kind": self.kind,
@@ -173,6 +182,9 @@ class ProvNode:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> ProvNode:
+        """The node a database ``row`` holds; a payload that does not parse as a JSON object is
+        read as empty.
+        """
         try:
             payload = json.loads(row["payload"] or "{}")
         except (TypeError, ValueError):
@@ -203,6 +215,7 @@ class ProvEdge:
     recorded: float
 
     def to_dict(self) -> dict[str, Any]:
+        """The edge as JSON, for the API."""
         return {
             "src": self.src,
             "dst": self.dst,
@@ -349,6 +362,7 @@ class Provenance:
     # ── Reading ──────────────────────────────────────────────────────────────
 
     def get(self, node_id: str) -> ProvNode | None:
+        """The node recorded under ``node_id``, or None when there is none."""
         with self.db.transaction() as conn:
             return _node(conn, node_id)
 

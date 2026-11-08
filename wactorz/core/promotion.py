@@ -65,30 +65,39 @@ class PolicyError(ValueError):
 
     @classmethod
     def not_a_mapping(cls, given: Any) -> PolicyError:
+        """The error for a policy given as ``given``, which is not a mapping."""
         return cls(f"a policy is a mapping of its fields, not {given!r}")
 
     @classmethod
     def unknown_field(cls, name: str) -> PolicyError:
+        """The error for a policy field ``name`` that policies do not have."""
         return cls(f"a policy has no {name!r}; its fields are {', '.join(FIELDS)}")
 
     @classmethod
     def unknown_metric(cls, metric: Any) -> PolicyError:
+        """The error for a policy that compares on ``metric``, which is none of the known
+        metrics.
+        """
         return cls(f"a policy compares on one of {', '.join(METRICS)}, not {metric!r}")
 
     @classmethod
     def not_a_number(cls, name: str, value: Any) -> PolicyError:
+        """The error for the policy field ``name`` given ``value``, which is not a number."""
         return cls(f"{name} is a number, not {value!r}")
 
     @classmethod
     def negative(cls, name: str, value: Any) -> PolicyError:
+        """The error for the policy field ``name`` given ``value``, which is below zero."""
         return cls(f"{name} cannot be below zero: {value!r}")
 
     @classmethod
     def not_a_bool(cls, name: str, value: Any) -> PolicyError:
+        """The error for the policy field ``name`` given ``value``, which is not yes or no."""
         return cls(f"{name} is yes or no, not {value!r}")
 
     @classmethod
     def not_a_count(cls, name: str, value: Any) -> PolicyError:
+        """The error for the policy field ``name`` given ``value``, which is not a whole number."""
         return cls(f"{name} is a whole number, not {value!r}")
 
 
@@ -107,6 +116,7 @@ class Policy:
     at: float = 0.0
 
     def to_json(self) -> dict[str, Any]:
+        """The policy as JSON, one key per field."""
         return asdict(self)
 
     def same_terms(self, other: Policy | None) -> bool:
@@ -214,6 +224,7 @@ class Term:
     met: bool
 
     def to_dict(self) -> dict[str, Any]:
+        """The term as JSON: what was asked, what the trial shows, and whether that is enough."""
         return asdict(self)
 
 
@@ -240,6 +251,9 @@ class Verdict:
         return self.kind is None or self.metric in METRICS_OF_KIND.get(self.kind, ())
 
     def to_dict(self) -> dict[str, Any]:
+        """The verdict as JSON, for the dashboard: each term, the figures compared, the policy
+        and the verdict in words.
+        """
         return {
             "met": self.met,
             "metric": self.metric,

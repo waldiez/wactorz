@@ -144,6 +144,12 @@ class TelegramInterface:
     # ── the bot ───────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        """Poll Telegram and answer the allowed users, until cancelled.
+
+        Returns at once, logging why, when ``python-telegram-bot`` is not installed. With no
+        allowed users it runs in setup mode, answering only ``/start`` with the sender's id.
+        While it runs, the bot is registered as the ``telegram`` outbound channel.
+        """
         try:
             from telegram import Update  # optional dependency: the `telegram` extra
             from telegram.constants import ChatAction  # optional dependency: the `telegram` extra

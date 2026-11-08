@@ -173,6 +173,14 @@ PLANNER_PREFIXES = (
 
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
+    """The orchestrator a person talks to: it answers chat, spawns and places agents, routes
+    tasks to them, and keeps a record of what it spawned, to restore on its next start.
+
+    The work is split across collaborators it owns (``nodes``, ``migration``, ``placement``,
+    ``delegation``, ``lifecycle`` and others), each holding one concern; this class wires them
+    together and keeps the conversation.
+    """
+
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
     CAPABILITIES: ClassVar[list[str]] = [
         "spawn_agent",
@@ -335,6 +343,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Restore the agents main spawned, start the listeners that follow nodes, manifests,
+        labels, migrations, models and data, and put the user's facts into the system prompt.
+        """
         await super().on_start()
         if _strip_delegate_blocks(self._conversation_history):
             self.persist("conversation_history", self._conversation_history)
@@ -473,6 +484,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message) -> None:
+        """Queue a monitor's notification for the next reply, and handle any other task as a
+        turn; other messages are ignored.
+        """
         if msg.type == MessageType.TASK:
             # Intercept monitor notifications BEFORE passing to LLM _handle_task
             if isinstance(msg.payload, dict) and msg.payload.get("_monitor_notification"):
@@ -587,6 +601,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # ── User input ─────────────────────────────────────────────────────────
 
     async def chat(self, user_message: str, attachments: list[dict[str, Any]] | None = None) -> str:
+        """Answer ``user_message``, then save the facts it states, in the background."""
         response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
@@ -596,6 +611,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def chat_stream(
         self, user_message: str, attachments: list[dict[str, Any]] | None = None
     ) -> AsyncGenerator[str | dict[str, Any]]:
+        """Stream the answer to ``user_message``, then save the facts it states in the
+        background, once a model has really answered.
+        """
         full_response = []
         got_usage = False
         async for chunk in super().chat_stream(user_message, attachments):
@@ -1583,19 +1601,27 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def delegate_to_installer(
         self, payload: dict[str, Any], timeout: float = 300.0
     ) -> dict[str, Any]:
+        """Send the installer ``payload`` and wait up to ``timeout`` seconds for its result."""
         return await self.delegation.delegate_to_installer(payload, timeout)
 
     async def delegate_task(
         self, target_name: str, task: Any, timeout: float = 60.0
     ) -> dict[str, Any] | None:
+        """Send ``target_name`` a task, text or structured, and wait up to ``timeout`` seconds
+        for its result; None when there is none.
+        """
         return await self.delegation.delegate_task(target_name, task, timeout)
 
     async def list_agents(self) -> list[dict[str, Any]]:
+        """The status of every actor in the registry; empty without a registry."""
         if not self._registry:
             return []
         return [a.get_status() for a in self._registry.all_actors()]
 
     async def send_command(self, target_name: str, command: MessageType) -> None:
+        """Send the actor called ``target_name`` the control message ``command``; nothing happens
+        when there is no such actor.
+        """
         if not self._registry:
             return
         target = self._registry.find_by_name(target_name)
@@ -1614,6 +1640,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return self.nodes.running_agent(name)
 
     async def delete_spawned_agent(self, name: str, node: str | None = None) -> None:
+        """Delete the agent ``name``, on ``node`` when given, and every trace of it, so a spawn
+        by that name starts afresh.
+        """
         await self.lifecycle.delete_spawned_agent(name, node)
 
     async def _purge_agent_retained_topics(self, actor_id: str | None) -> None:

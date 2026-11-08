@@ -74,34 +74,42 @@ class LabelError(ValueError):
 
     @classmethod
     def no_source(cls) -> LabelError:
+        """The error for a label that names no source."""
         return cls("a label names the source it is about")
 
     @classmethod
     def wildcard_source(cls, source: str) -> LabelError:
+        """The error for a label whose ``source`` is a pattern rather than one source."""
         return cls(f"a label is about one source, not a pattern: {source!r}")
 
     @classmethod
     def no_value(cls) -> LabelError:
+        """The error for a label with no value."""
         return cls("a label has a value")
 
     @classmethod
     def bad_time(cls, what: str, value: Any) -> LabelError:
+        """The error for a label's ``what`` time given as ``value``, which is not Unix seconds."""
         return cls(f"a label's {what} is an event time in Unix seconds, not {value!r}")
 
     @classmethod
     def ends_before_start(cls) -> LabelError:
+        """The error for a label window whose end is not after its start."""
         return cls("a label's window ends after it starts")
 
     @classmethod
     def spec_not_a_mapping(cls) -> LabelError:
+        """The error for a question's label spec given as something other than a mapping."""
         return cls("a question's label is a mapping with 'source', 'start' and 'values'")
 
     @classmethod
     def no_values(cls) -> LabelError:
+        """The error for a question's label spec that maps no option to a value."""
         return cls("a question's label maps at least one option to a value")
 
     @classmethod
     def not_here(cls) -> LabelError:
+        """The error for writing a label from an agent that cannot reach main's database."""
         return cls(
             "labels are kept by main, and this agent cannot write to main's database: "
             "ask the operator with a label spec instead"
@@ -109,6 +117,9 @@ class LabelError(ValueError):
 
     @classmethod
     def not_an_option(cls, option: str) -> LabelError:
+        """The error for a question's label spec mapping ``option``, which the question does not
+        offer.
+        """
         return cls(f"a question's label maps {option!r}, which is not one of its options")
 
 
@@ -229,6 +240,7 @@ class LabelSpec:
             return None
 
     def to_dict(self) -> dict[str, Any]:
+        """The spec as JSON, as a question carries it."""
         return {
             "source": self.source,
             "start": self.start,
@@ -270,6 +282,7 @@ class Label:
 
     @classmethod
     def from_node(cls, node: ProvNode) -> Label:
+        """The label a provenance ``node`` records."""
         payload = node.payload
         return cls(
             id=node.id,
@@ -290,6 +303,7 @@ class Label:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """The label as JSON, for the API and the dashboard."""
         return {
             "id": self.id,
             "source": self.source,
@@ -313,6 +327,9 @@ class Label:
         return _overlap(self.start, self.end, start, end)
 
     def covers(self, moment: float) -> bool:
+        """Whether the label holds at ``moment``: from its start, and up to its end when it has
+        one.
+        """
         return self.start <= moment and (self.end is None or moment < self.end)
 
 
@@ -325,6 +342,7 @@ class Interval:
     label: Label = field(repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        """The interval as JSON, with the label's value and who gave it."""
         return {
             "start": self.start,
             "end": self.end,
@@ -488,6 +506,7 @@ class Labels:
         return [Label.from_node(n) for n in nodes if n.id != exclude]
 
     def get(self, label_id: str) -> Label | None:
+        """The label recorded under ``label_id``, or None when there is no label by that id."""
         node = self.graph.get(label_id)
         return None if node is None or node.kind != LABEL else Label.from_node(node)
 

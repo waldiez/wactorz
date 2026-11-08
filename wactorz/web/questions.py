@@ -37,6 +37,8 @@ class AnswerRefusedError(ValueError):
 
 
 class UnknownQuestionError(AnswerRefusedError):
+    """An answer to a question the agent never asked, or one no longer kept."""
+
     status = 404
 
     def __init__(self, agent_id: str, question_id: str) -> None:
@@ -44,6 +46,8 @@ class UnknownQuestionError(AnswerRefusedError):
 
 
 class AlreadyAnsweredError(AnswerRefusedError):
+    """An answer to a question that already has one."""
+
     status = 409
 
     def __init__(self, question: Question) -> None:
@@ -51,6 +55,8 @@ class AlreadyAnsweredError(AnswerRefusedError):
 
 
 class NotAnOptionError(AnswerRefusedError):
+    """An answer that is not one of the options the question offers."""
+
     def __init__(self, option: str, question: Question) -> None:
         super().__init__(f"{option!r} is not one of {', '.join(map(repr, question.options))}")
 

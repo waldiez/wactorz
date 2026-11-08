@@ -84,6 +84,7 @@ class StateLock:
 
     @property
     def path(self) -> Path:
+        """The lock file in the state directory."""
         return self.directory / LOCK_FILE
 
     def acquire(self) -> None:

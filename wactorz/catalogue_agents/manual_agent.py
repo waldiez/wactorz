@@ -172,6 +172,9 @@ _STOPWORDS = {
 
 
 async def setup(agent: AgentAPI) -> None:
+    """Start with no manual loaded and an empty cache of manual URLs, and say how to talk to the
+    agent.
+    """
     agent.state.setdefault("manual_text", None)
     agent.state.setdefault("manual_device", None)
     agent.state.setdefault("manual_url", None)

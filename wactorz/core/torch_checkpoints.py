@@ -76,6 +76,9 @@ class CheckpointRefusedError(pickle.UnpicklingError):
 
     @classmethod
     def by_an_older_torch(cls, reason: str, version: str) -> "CheckpointRefusedError":
+        """The error for a checkpoint refused for ``reason`` that a newer torch than this one,
+        ``version``, would read.
+        """
         return cls(
             f"{reason}; numpy arrays in a checkpoint are read by torch {ADMITS_ARRAYS_FROM} "
             f"or later, and this is torch {version}"

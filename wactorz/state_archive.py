@@ -106,21 +106,29 @@ class Why(enum.Enum):
 
 
 class NotAnArchive(ArchiveError):
+    """A file that is not a state archive, and why it is not."""
+
     def __init__(self, why: Why) -> None:
         super().__init__(f"not a Wactorz state archive: {why.value}")
 
 
 class NoStateDirectory(ArchiveError):
+    """An export from a state directory that does not exist."""
+
     def __init__(self, directory: Path) -> None:
         super().__init__(f"there is no state directory at {directory}")
 
 
 class DamagedArchive(ArchiveError):
+    """An archive whose member at ``path`` does not match what the archive says of it."""
+
     def __init__(self, path: str, why: str) -> None:
         super().__init__(f"the archive is damaged or altered at {path!r}: {why}")
 
 
 class DirectoryInUse(ArchiveError):
+    """An import into a state directory a running Wactorz process holds."""
+
     def __init__(self, directory: Path) -> None:
         super().__init__(
             f"a Wactorz process is running on {directory}; stop it before importing into it"
@@ -128,6 +136,8 @@ class DirectoryInUse(ArchiveError):
 
 
 class DirectoryNotEmpty(ArchiveError):
+    """An import into a directory that is not empty, without ``--replace``."""
+
     def __init__(self, directory: Path) -> None:
         super().__init__(
             f"{directory} is not empty. Import with --replace to keep it beside the import "
@@ -136,11 +146,15 @@ class DirectoryNotEmpty(ArchiveError):
 
 
 class ArchiveExists(ArchiveError):
+    """An export to a file that exists already."""
+
     def __init__(self, path: Path) -> None:
         super().__init__(f"{path} exists already; name another file")
 
 
 class ArchiveInsideState(ArchiveError):
+    """An export to a file inside the state directory being exported."""
+
     def __init__(self, path: Path) -> None:
         super().__init__(f"{path} is inside the state directory it would hold; put it elsewhere")
 
@@ -212,6 +226,7 @@ def _files(state_dir: Path, *, secrets: bool) -> Iterator[tuple[Path, PurePosixP
 
 
 def default_archive_name() -> str:
+    """A name for an archive made now, by the local date and time it was made."""
     return f"wactorz-state-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
 
 
@@ -529,6 +544,9 @@ def _run(args: argparse.Namespace) -> Exception | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run ``wactorz-state`` with ``argv`` (the process's arguments when None); 0 on success, 1
+    after logging what failed.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     args = _build_parser().parse_args(argv)
     failure = _run(args)

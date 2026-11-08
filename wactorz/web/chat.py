@@ -210,12 +210,21 @@ def _mentioned(content: str) -> Address | None:
 
 
 def catalog_agent_line(agent: dict[str, Any]) -> str:
+    """One catalogue agent as a Markdown list item: its name, and its description when it
+    has one.
+    """
     name = agent.get("name", "unknown")
     description = agent.get("description", "")
     return f"- `{name}` - {description}" if description else f"- `{name}`"
 
 
 def format_catalog_agents_response(payload: dict[str, Any]) -> str:
+    """The catalogue's agents as a chat reply in Markdown, recommended first.
+
+    Experimental agents are listed only when ``payload`` says to show them; otherwise the reply says
+    how many are hidden and how to show them. A payload whose ``agents`` is not a list is returned
+    as its string form.
+    """
     agents = payload.get("agents", [])
     if not isinstance(agents, list):
         return str(payload)

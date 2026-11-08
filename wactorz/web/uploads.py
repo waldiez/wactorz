@@ -90,6 +90,7 @@ def serve_type(stored_mime: str) -> tuple[str, bool]:
 
 
 def new_id() -> str:
+    """A fresh upload id: random, and of the shape :func:`is_id` accepts."""
     return uuid.uuid4().hex
 
 

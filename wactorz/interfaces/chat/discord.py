@@ -91,6 +91,12 @@ class DiscordInterface:
     # ── the bot ───────────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        """Log the bot in and answer messages from the allowed users until the client stops.
+
+        Returns at once, logging why, when ``discord.py`` is not installed or no user is allowed:
+        a bot that answers anyone is not started. While it runs, the bot is registered as the
+        ``discord`` outbound channel.
+        """
         try:
             import discord  # optional dependency: the `discord` extra
         except ImportError:

@@ -240,6 +240,8 @@ def _replayable_block(block: Any) -> dict[str, Any] | None:
 
 
 class AnthropicProvider(LLMProvider):
+    """Anthropic's Messages API, through the ``anthropic`` package."""
+
     def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None) -> None:
         import anthropic  # optional dependency: the `anthropic` extra
 

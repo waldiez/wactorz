@@ -50,14 +50,17 @@ class ChannelNotRunningError(RuntimeError):
 
     @classmethod
     def discord(cls) -> "ChannelNotRunningError":
+        """The error for a message to Discord while the bot is not running."""
         return cls("the Discord bot is not running")
 
     @classmethod
     def telegram(cls) -> "ChannelNotRunningError":
+        """The error for a message to Telegram while the bot is not running."""
         return cls("the Telegram bot is not running")
 
     @classmethod
     def whatsapp(cls) -> "ChannelNotRunningError":
+        """The error for a message to WhatsApp while the webhook is not running."""
         return cls("the WhatsApp webhook is not running")
 
 
@@ -66,14 +69,17 @@ class NotAUserError(ValueError):
 
     @classmethod
     def discord(cls, user: Any) -> "NotAUserError":
+        """The error for a Discord recipient ``user`` that is not a numeric id."""
         return cls(f"a Discord user is a numeric id, not {user!r}")
 
     @classmethod
     def telegram(cls, user: Any) -> "NotAUserError":
+        """The error for a Telegram recipient ``user`` that is not a numeric id."""
         return cls(f"a Telegram user is a numeric id, not {user!r}")
 
     @classmethod
     def whatsapp(cls) -> "NotAUserError":
+        """The error for a WhatsApp recipient that is not a phone number."""
         return cls("a WhatsApp user is a phone number")
 
 

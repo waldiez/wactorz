@@ -51,6 +51,7 @@ class Thresholds:
     bins: int = DEFAULT_BINS
 
     def to_dict(self) -> dict[str, Any]:
+        """These thresholds as a JSON-serialisable dict, one key per field."""
         return asdict(self)
 
 
@@ -63,6 +64,7 @@ class Window:
     until: float
 
     def to_dict(self) -> dict[str, Any]:
+        """This window as a JSON-serialisable dict, one key per field."""
         return asdict(self)
 
 
@@ -91,6 +93,7 @@ class Reading:
         return (self.test, self.column)
 
     def to_dict(self) -> dict[str, Any]:
+        """This reading as a JSON-serialisable dict, one key per field."""
         return asdict(self)
 
     def words(self) -> str:

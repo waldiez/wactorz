@@ -61,14 +61,17 @@ class DataFileError(ValueError):
 
     @classmethod
     def not_a_notice(cls) -> DataFileError:
+        """The error for a notice that does not name a file's source, path, hash and size."""
         return cls("a data file notice names source, path, sha256 and size")
 
     @classmethod
     def path_outside_source(cls, path: str, source: str) -> DataFileError:
+        """The error for a ``path`` that is not one of ``source``'s hourly files."""
         return cls(f"{path!r} is not an hour of {source!r}")
 
     @classmethod
     def too_large(cls, size: int, limit: int) -> DataFileError:
+        """The error for a file of ``size`` bytes, over the most a node may send main."""
         return cls(f"{size} bytes is over the {limit}-byte limit for a file sent to main")
 
 
@@ -111,6 +114,7 @@ class DataFiles:
 
     @property
     def root(self) -> Path:
+        """The data directory under the state directory, where the readings nodes send are filed."""
         return data_root(resolve_state_dir())
 
     async def receive(self, topic: str, payload: bytes | None) -> None:

@@ -88,39 +88,59 @@ class GoogleMcpConfig:
 
     @property
     def key(self) -> str:
+        """The prefix in lower case, which names this service's keys in :meth:`config_status`."""
         return self.prefix.lower()  # "calendar_mcp" / "gmail_mcp"
 
     def mcp_url(self) -> str:
+        """The MCP endpoint, from ``{PREFIX}_URL`` or the default, without a trailing slash."""
         return self._env("URL", self.default_mcp_url).rstrip("/")
 
     def redirect_uri(self) -> str:
+        """Where the OAuth flow returns to, from ``{PREFIX}_REDIRECT_URI`` or the default."""
         return self._env("REDIRECT_URI", self.default_redirect)
 
     def scopes(self) -> str:
+        """The OAuth scopes asked for, from ``{PREFIX}_SCOPES`` or the default."""
         return self._env("SCOPES", self.default_scopes)
 
     def client_id(self) -> str:
+        """The OAuth client id from ``{PREFIX}_CLIENT_ID``; empty when unset."""
         return self._env("CLIENT_ID")
 
     def client_secret(self) -> str:
+        """The OAuth client secret from ``{PREFIX}_CLIENT_SECRET``; empty when unset."""
         return self._env("CLIENT_SECRET")
 
     def token(self) -> str:
+        """A bearer token from ``{PREFIX}_TOKEN``; empty when unset."""
         return self._env("TOKEN")
 
     def authorization(self) -> str:
+        """A whole ``Authorization`` header value from ``{PREFIX}_AUTHORIZATION``; empty when
+        unset.
+        """
         return self._env("AUTHORIZATION")
 
     def token_file(self) -> str:
+        """Where the OAuth token is kept: ``{PREFIX}_TOKEN_FILE``, or a file under
+        ``~/.wactorz``.
+        """
         return self._env("TOKEN_FILE") or str(Path.home() / ".wactorz" / self.token_filename)
 
     def headers(self) -> dict[str, str]:
+        """The ``Authorization`` header to send without OAuth: the configured value, else the
+        bearer token, else none.
+        """
         auth = self.authorization()
         if not auth and self.token():
             auth = f"Bearer {self.token()}"
         return {"Authorization": auth} if auth else {}
 
     def config_status(self) -> dict[str, Any]:
+        """What is configured, for the agent's status answer: the endpoint, whether any
+        credential is set, and the OAuth client's redirect and token file when there is one.
+        Never a secret's value.
+        """
         client_id = self.client_id()
         return {
             f"{self.key}_url": self.mcp_url() or None,
@@ -136,14 +156,19 @@ class GoogleRestError(Exception):
 
     @classmethod
     def missing_id(cls, what: str) -> GoogleRestError:
+        """The error for a call that needs a ``what`` id and was given none."""
         return cls(f"Missing {what} id")
 
     @classmethod
     def not_authenticated(cls, label: str) -> GoogleRestError:
+        """The error for a REST call to the Google service ``label`` with no credentials."""
         return cls(f"Not authenticated for Google {label}")
 
 
 def format_mcp_content(result: Any) -> str:
+    """An MCP tool result as text: its structured content as JSON when it has some, else each
+    content item's text, joined by lines.
+    """
     if getattr(result, "structuredContent", None) is not None:
         return json.dumps(result.structuredContent, indent=2)
     content = getattr(result, "content", None)
@@ -168,6 +193,9 @@ RestParams = Mapping[str, str] | Sequence[tuple[str, str]] | None
 
 
 def rest_error_message(data: Any) -> str:
+    """The message in a Google REST error body ``data``, or the whole body as text when it has
+    none.
+    """
     if isinstance(data, dict):
         err = data.get("error")
         if isinstance(err, dict) and err.get("message"):
@@ -345,6 +373,9 @@ def build_auth(config: GoogleMcpConfig, interactive: bool = False) -> OAuthClien
 
 
 def mcp_timeout() -> float:
+    """Seconds to wait for one MCP call, from ``GOOGLE_MCP_TIMEOUT``; 20 when unset or not a
+    number.
+    """
     try:
         return float(os.getenv("GOOGLE_MCP_TIMEOUT", "20"))
     except ValueError:
@@ -367,6 +398,12 @@ class GoogleMcpClient:
 
     # ── Public API ─────────────────────────────────────────────────────────
     async def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> str:
+        """Call the MCP tool ``tool_name`` with ``arguments`` and return its result as text.
+
+        When the MCP server refuses permission, is unreachable or times out, the call is tried
+        again through the REST API where there is a fallback for the tool. A failure comes back
+        as text saying so, not as an exception.
+        """
         arguments = arguments or {}
         try:
             result = await asyncio.wait_for(
@@ -405,6 +442,11 @@ class GoogleMcpClient:
             return f"{self.config.label} MCP error: {exc}"
 
     async def list_tools(self, interactive: bool = False) -> str:
+        """The MCP server's tools, one ``name: description`` line each; a failure comes back as
+        text saying so.
+
+        With ``interactive``, a missing OAuth token starts the browser consent flow.
+        """
         if ClientSession is None or streamablehttp_client is None:
             return "The 'mcp' package is required. Install with: pip install wactorz[mcp]"
         try:

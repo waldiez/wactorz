@@ -95,14 +95,19 @@ class CliError(ArtifactError):
 
     @classmethod
     def not_key_value(cls, pair: str) -> "CliError":
+        """The error for a ``pair`` on the command line that is not ``KEY=VALUE``."""
         return cls(f"{pair!r} is not KEY=VALUE")
 
     @classmethod
     def code_refused(cls, exc: ArtifactError) -> "CliError":
+        """The error for an artifact refused as code, saying how to store it anyway."""
         return cls(f"{exc}. Add --allow-code to store it anyway.")
 
     @classmethod
     def mismatched(cls, problems: int, checked: int) -> "CliError":
+        """The error for a check that found ``problems`` of the ``checked`` artifacts not
+        matching.
+        """
         return cls(f"{problems} of {checked} artifact(s) do not match")
 
 
@@ -459,6 +464,9 @@ def _run(args: argparse.Namespace) -> Exception | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run ``wactorz-artifacts`` with ``argv`` (the process's arguments when None); 0 on success,
+    1 after logging what failed.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     failure = _run(_build_parser().parse_args(argv))
     if failure is not None:

@@ -63,18 +63,26 @@ class BundleError(Exception):
 
     @classmethod
     def no_module(cls, target: Any) -> "BundleError":
+        """The error for a ``target`` that names no module to bundle."""
         return cls(f"{target!r} names no module")
 
     @classmethod
     def not_importable(cls, module_name: str, exc: Exception) -> "BundleError":
+        """The error for an agent's module, ``module_name``, that cannot be imported on this
+        machine.
+        """
         return cls(f"its module {module_name} cannot be imported here: {exc}")
 
     @classmethod
     def no_files(cls, module_name: str, root: Path) -> "BundleError":
+        """The error for ``module_name``'s folder ``root`` holding no Python files."""
         return cls(f"no Python files were found for {module_name} in {root}")
 
     @classmethod
     def too_large(cls, folder: Path, size: int) -> "BundleError":
+        """The error for a ``folder`` holding ``size`` bytes of Python, over the most a bundle
+        may hold.
+        """
         return cls(
             f"its folder {folder} holds {size} bytes of Python, over "
             f"the {BUNDLE_MAX_BYTES} a bundle may hold"
@@ -82,10 +90,14 @@ class BundleError(Exception):
 
     @classmethod
     def not_from_a_file(cls, module_name: str) -> "BundleError":
+        """The error for ``module_name`` not being read from a file, so having no source to send."""
         return cls(f"{module_name} is not read from a file, so it cannot be sent")
 
     @classmethod
     def imports_outside(cls, named: str) -> "BundleError":
+        """The error for an agent's code importing ``named``, which lives outside its folder and
+        would not go with it.
+        """
         return cls(
             f"it imports code from outside its folder: {named}. An agent's own code has to "
             "live in its folder to go with it. Move that code into the folder, publish it as "
@@ -95,36 +107,46 @@ class BundleError(Exception):
 
     @classmethod
     def does_not_parse(cls, relative: str, exc: SyntaxError) -> "BundleError":
+        """The error for the bundled file ``relative`` not parsing as Python."""
         return cls(f"{relative} does not parse: {exc}")
 
     # ── Checking what arrived, on a node ──────────────────────────────────
 
     @classmethod
     def not_a_bundle(cls) -> "BundleError":
+        """The error for a spawn whose code is not a bundle."""
         return cls("its code is not a bundle")
 
     @classmethod
     def empty(cls) -> "BundleError":
+        """The error for a bundle with no files in it."""
         return cls("its bundle holds no files")
 
     @classmethod
     def not_sources(cls) -> "BundleError":
+        """The error for a bundle holding something other than source files."""
         return cls("its bundle holds something other than source files")
 
     @classmethod
     def bad_path(cls, relative: str) -> "BundleError":
+        """The error for a bundle naming ``relative``, a path it may not hold."""
         return cls(f"its bundle names {relative!r}, which is not a file it may hold")
 
     @classmethod
     def hash_mismatch(cls) -> "BundleError":
+        """The error for a bundle whose contents do not match the hash the spawn names."""
         return cls("its bundle does not match the hash the spawn names")
 
     @classmethod
     def not_from_spawn(cls, target: str) -> "BundleError":
+        """The error for ``target`` being loaded from somewhere other than the code its spawn
+        carries.
+        """
         return cls(f"{target} was not loaded from the code its spawn carries")
 
     @classmethod
     def name_taken(cls, name: str, where: str) -> "BundleError":
+        """The error for a bundled module ``name`` that this node already has from ``where``."""
         return cls(
             f"this node already has a module named {name}, from {where}; give the agent's "
             "module a name of its own"

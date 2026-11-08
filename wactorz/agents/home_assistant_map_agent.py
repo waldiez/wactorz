@@ -48,6 +48,9 @@ class MapUpdateDispatcher:
         )
 
     async def dispatch(self, payload: dict[str, Any]) -> None:
+        """Send ``payload`` to the target actor when one is named and running, else publish it on
+        the MQTT topic when one is set; with neither, it is dropped and logged.
+        """
         if self._target_actor_name and self._agent._registry is not None:
             target = self._agent._registry.find_by_name(self._target_actor_name)
             if target is not None:
@@ -192,6 +195,9 @@ class HomeAssistantMapAgent(Actor):
         self._last_error = ""
 
     async def on_start(self) -> None:
+        """Restore the agent's counters and the last map, announce it, follow the entity registry
+        for changes, and build the map once.
+        """
         self._events_seen = int(self.recall("events_seen", 0))
         self._last_event_at = float(self.recall("last_event_at", 0.0))
         self._last_error = str(self.recall("last_error", ""))
@@ -211,11 +217,15 @@ class HomeAssistantMapAgent(Actor):
         logger.info("[%s] started", self.name)
 
     async def on_stop(self) -> None:
+        """Remember the agent's counters for the next start."""
         self.persist("events_seen", self._events_seen)
         self.persist("last_event_at", self._last_event_at)
         self.persist("last_error", self._last_error)
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer ``status``, ``refresh`` or ``refresh simple`` (the map without states);
+        anything else is answered with what the agent understands.
+        """
         if msg.type != MessageType.TASK:
             return
 
@@ -324,6 +334,7 @@ class HomeAssistantMapAgent(Actor):
         self.persist("latest_map_payload", payload)
 
     def get_latest_map_payload(self) -> dict[str, Any] | None:
+        """The map last built, or None before the first."""
         return self._latest_map_payload
 
     async def _initial_refresh(self) -> None:

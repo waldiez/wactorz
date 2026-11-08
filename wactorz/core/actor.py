@@ -342,10 +342,12 @@ class AskError(RuntimeError):
 
     @classmethod
     def no_registry(cls, asker: str, target: str) -> AskError:
+        """The error for ``asker`` asking ``target`` with no registry to find it in."""
         return cls(f"[{asker}] cannot ask {target!r}: no registry attached")
 
     @classmethod
     def mailbox_full(cls, target: str) -> AskError:
+        """The error for asking ``target`` while its mailbox is full."""
         return cls(f"{target!r} is not taking messages: its mailbox is full")
 
 
@@ -354,10 +356,12 @@ class NotFoundError(LookupError):
 
     @classmethod
     def agent(cls, target: str) -> NotFoundError:
+        """The error for asking ``target`` when no agent by that name is running."""
         return cls(f"no agent named {target!r} is running")
 
     @classmethod
     def question(cls, asker: str, question_id: str) -> NotFoundError:
+        """The error for ``asker`` waiting on ``question_id``, which names no question it asked."""
         return cls(f"[{asker}] no question with id {question_id!r}")
 
 
@@ -370,10 +374,14 @@ class NoAnswerError(asyncio.TimeoutError):
 
     @classmethod
     def from_agent(cls, target: str, timeout: float) -> NoAnswerError:
+        """The error for ``target`` giving no answer within ``timeout`` seconds."""
         return cls(f"{target!r} did not answer within {timeout:g}s")
 
     @classmethod
     def to_question(cls, asker: str, text: str, timeout: float | None) -> NoAnswerError:
+        """The error for no answer to ``asker``'s question ``text``, within ``timeout`` seconds
+        when there was one.
+        """
         waited = "" if timeout is None else f" within {timeout:g}s"
         return cls(f"[{asker}] no answer to {text[:60]!r}{waited}")
 
@@ -409,7 +417,11 @@ class AskHost(Protocol):
     _registry: Any
     _result_futures: Any
 
-    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool: ...
+    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool:
+        """Send ``target_id`` a message of ``msg_type`` carrying ``payload``; whether it was
+        delivered.
+        """
+        ...
 
 
 async def ask_through(

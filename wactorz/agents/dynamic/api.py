@@ -303,6 +303,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # ── Persistence ────────────────────────────────────────────────────────
 
     def persist(self, key: str, value: Any) -> Any:
+        """Remember ``value`` under ``key``, across restarts; the result may be awaited or not."""
         self._actor.persist(key, value)
         return AWAITABLE_NONE  # safe to await
 
@@ -541,7 +542,9 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # ── Metrics ────────────────────────────────────────────────────────────
 
     def increment_processed(self) -> None:
+        """Count one more message processed, in the agent's metrics."""
         self._actor.metrics.messages_processed += 1
 
     def increment_errors(self) -> None:
+        """Count one more error, in the agent's metrics."""
         self._actor.metrics.errors += 1

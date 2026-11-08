@@ -316,6 +316,9 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def host_mismatch(cls, target: DeployTarget, requested: str) -> "DeployRefusedError":
+        """The error for a deploy to ``requested`` while ``target`` is configured for another
+        host.
+        """
         return cls(
             f"Refusing to connect: deploy target '{target.name}' is configured "
             f"as {target.host}, but the task asked for {requested}. Credentials "
@@ -324,6 +327,7 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def unresolvable(cls, target: DeployTarget, mdns: str) -> "DeployRefusedError":
+        """The error for ``target`` having no host, and its mDNS name ``mdns`` not resolving."""
         return cls(
             f"Deploy target '{target.name}' has no host configured and "
             f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
@@ -331,6 +335,9 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def unknown_host_key(cls, host: str, port: int, path: Path) -> "DeployRefusedError":
+        """The error for ``host``'s key not being in the known-hosts file at ``path`` while
+        strict host keys are on.
+        """
         return cls(
             f"Host key for {host}:{port} is not in {path} and "
             "DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
@@ -339,10 +346,12 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def no_host_key(cls, host: str, port: int) -> "DeployRefusedError":
+        """The error for ``host`` offering no SSH host key at all."""
         return cls(f"{host}:{port} offered no SSH host key.")
 
     @classmethod
     def no_target(cls, requested: str) -> "DeployRefusedError":
+        """The error for a deploy to ``requested``, for which no target is configured."""
         return cls(
             f"No deploy target configured for '{requested}'. "
             "SSH credentials come from the environment (DEPLOY_TARGETS plus a "
@@ -351,6 +360,7 @@ class DeployRefusedError(PermissionError):
 
     @classmethod
     def no_credentials(cls, target: DeployTarget) -> "DeployRefusedError":
+        """The error for ``target`` having neither a key nor a password."""
         return cls(
             f"Deploy target '{target.name}' has no credentials. Set "
             f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
@@ -384,6 +394,9 @@ class InstallerAgent(Actor):
         return "idle"
 
     async def on_start(self) -> None:
+        """Remove any password or key path kept in the store, where nothing reads them, announce
+        the interpreter it installs into, and publish the manifest.
+        """
         logger.info("[%s] Installer ready — using: %s", self.name, sys.executable)
         self._scrub_persisted_credentials()
         await self._mqtt_publish(
@@ -400,6 +413,12 @@ class InstallerAgent(Actor):
         )
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with its result, the task's id echoed, sent to its reply address; other
+        messages are ignored.
+
+        Actions that reach a node over SSH, and those that change the packages allowed, are
+        refused to anyone but main.
+        """
         if msg.type == MessageType.TASK:
             result = await self._handle_install(msg)
             # Echo task_id back so caller's future can resolve

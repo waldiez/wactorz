@@ -36,10 +36,14 @@ CALENDAR_CONFIG = GoogleMcpConfig(
 
 
 def calendar_mcp_config_status() -> dict[str, Any]:
+    """What is configured for Google Calendar, for the agent's status answer; never a secret's
+    value.
+    """
     return CALENDAR_CONFIG.config_status()
 
 
 def calendar_mcp_url() -> str:
+    """The Google Calendar MCP endpoint, without a trailing slash."""
     return CALENDAR_CONFIG.mcp_url()
 
 

@@ -66,10 +66,12 @@ class UnsafeAgentNameError(ValueError):
 
     @classmethod
     def unsafe(cls, agent_name: str) -> "UnsafeAgentNameError":
+        """The error for ``agent_name`` holding characters that cannot be part of a state path."""
         return cls(f"unsafe agent name for a state path: {agent_name!r}")
 
     @classmethod
     def escapes(cls, agent_name: str) -> "UnsafeAgentNameError":
+        """The error for ``agent_name`` making a path outside the state directory."""
         return cls(f"agent name escapes the state directory: {agent_name!r}")
 
 

@@ -663,6 +663,9 @@ def _build_deck(
 
 
 async def setup(agent: AgentAPI) -> None:
+    """Check that the libraries the agent needs are installed, and alert, naming the missing
+    ones, when any is not.
+    """
     errors = []
 
     for pkg, imp in [
@@ -700,6 +703,12 @@ def _failed(error: str, **progress: Any) -> dict[str, Any]:
 
 
 async def handle_task(agent: AgentAPI, payload: Any) -> Any:
+    """Turn a PDF or text document into a PowerPoint deck: the document is a ``file_path`` in a
+    document folder or an upload's ``file_id``.
+
+    The payload may arrive as JSON text in ``text``, ``message`` or ``query``. Returns the deck's
+    ``pptx_path``, or an ``error`` saying why none was made.
+    """
     # Normalise payload — the CLI wraps the user's message as {"text": "..."}
     # so if the payload is a string or contains a JSON string in "text", parse it.
     if isinstance(payload, str):
@@ -861,5 +870,6 @@ async def handle_task(agent: AgentAPI, payload: Any) -> Any:
 
 
 async def process(agent: AgentAPI) -> None:
+    """Nothing to do between tasks: the agent only answers requests."""
     # Task-driven only — no polling loop needed
     await asyncio.sleep(3600)

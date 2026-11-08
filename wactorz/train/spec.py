@@ -47,68 +47,88 @@ class TrainError(ValueError):
 
     @classmethod
     def bad_name(cls, error: str) -> TrainError:
+        """The error for a model name refused, with ``error`` saying why."""
         return cls(error)
 
     @classmethod
     def no_recipe(cls) -> TrainError:
+        """The error for a run with no recipe."""
         return cls("a run needs a recipe: a module name or a .py file")
 
     @classmethod
     def no_source(cls) -> TrainError:
+        """The error for a run with no source to read."""
         return cls("a run needs a source to read")
 
     @classmethod
     def bad_window(cls, since: Any, until: Any) -> TrainError:
+        """The error for a window that is not ``[since, until)`` in Unix seconds with ``since``
+        before ``until``.
+        """
         return cls(
             f"the window must be [since, until) in Unix seconds, since < until: {since!r}, {until!r}"
         )
 
     @classmethod
     def unknown_split(cls, kind: Any) -> TrainError:
+        """The error for a split ``kind`` that is none of the known kinds."""
         return cls(f"a split is one of {', '.join(SPLIT_KINDS)}, not {kind!r}")
 
     @classmethod
     def split_needs(cls, kind: str, what: str) -> TrainError:
+        """The error for a split of ``kind`` that was not given ``what`` it needs."""
         return cls(f"a {kind} split needs {what}")
 
     @classmethod
     def unknown_pointer(cls, pointer: Any) -> TrainError:
+        """The error for a run for a ``pointer`` that is none of the pointers a run can move."""
         return cls(f"a run is for one of {', '.join(POINTERS)}, not {pointer!r}")
 
     @classmethod
     def needs_metric(cls, pointer: str) -> TrainError:
+        """The error for a run for ``pointer`` with no metric to compare versions on."""
         return cls(f"a run for {pointer} needs a metric to compare on; say which, or set none")
 
     @classmethod
     def not_a_number(cls, what: str, value: Any) -> TrainError:
+        """The error for a setting ``what`` given a ``value`` that is not a number."""
         return cls(f"{what} must be a number, not {value!r}")
 
     @classmethod
     def split_not_a_mapping(cls, value: Any) -> TrainError:
+        """The error for a split given as something other than a mapping."""
         return cls(f"the split must be a mapping, not {value!r}")
 
     @classmethod
     def settings_not_a_mapping(cls, value: Any) -> TrainError:
+        """The error for settings given as something other than a mapping."""
         return cls(f"the settings must be a mapping, not {value!r}")
 
     @classmethod
     def settings_not_json(cls, exc: Exception) -> TrainError:
+        """The error for settings text that does not parse as JSON."""
         return cls(f"the settings are not JSON: {exc}")
 
     @classmethod
     def no_train(cls, recipe: str) -> TrainError:
+        """The error for a ``recipe`` with no ``train(frame, settings)``."""
         return cls(f"{recipe} defines no train(frame, settings)")
 
     @classmethod
     def no_score(cls, recipe: str) -> TrainError:
+        """The error for a ``recipe`` with no ``score(model, frame)``."""
         return cls(f"{recipe} defines no score(model, frame)")
 
     @classmethod
     def recipe_not_found(cls, recipe: str, exc: Exception) -> TrainError:
+        """The error for a ``recipe`` that cannot be loaded, with the reason ``exc``."""
         return cls(f"cannot load the recipe {recipe}: {exc}")
 
     @classmethod
     def cannot_save(cls, model: Any) -> TrainError:
+        """The error for a ``model`` that ``train()`` returned and the step cannot save without
+        the recipe's ``save``.
+        """
         return cls(
             f"train() returned a {type(model).__name__}, which the step cannot save on its own: "
             "return a mapping of numpy arrays, or define save(model, directory) -> path"
@@ -116,46 +136,63 @@ class TrainError(ValueError):
 
     @classmethod
     def saved_nothing(cls, path: Any) -> TrainError:
+        """The error for a ``save()`` that returned ``path``, which is not a file it wrote."""
         return cls(f"save() returned {path!r}, which is not a file it wrote")
 
     @classmethod
     def bad_metrics(cls, value: Any) -> TrainError:
+        """The error for a ``score()`` that returned ``value``, which is not a mapping of
+        numbers.
+        """
         return cls(f"score() must return a mapping of numbers, not {value!r}")
 
     @classmethod
     def no_such_metric(cls, metric: str, had: list[str]) -> TrainError:
+        """The error for a ``score()`` without the ``metric`` the run compares on; ``had`` is
+        what it gave.
+        """
         return cls(f"score() gave no {metric!r}; it gave {', '.join(had) or 'nothing'}")
 
     @classmethod
     def nothing_to_train_on(cls, source: str, since: float, until: float) -> TrainError:
+        """The error for a ``source`` with no rows in the window ``[since, until)``."""
         return cls(f"{source} has no rows in [{since:.0f}, {until:.0f})")
 
     @classmethod
     def nothing_to_fit(cls) -> TrainError:
+        """The error for a split that leaves no rows to train on."""
         return cls("the split leaves nothing to train on")
 
     @classmethod
     def nothing_to_score(cls) -> TrainError:
+        """The error for a split that leaves no rows to score on."""
         return cls("the split leaves nothing to score on")
 
     @classmethod
     def timed_out(cls, seconds: float) -> TrainError:
+        """The error for a run stopped after its timeout of ``seconds``."""
         return cls(f"the run was stopped after {seconds:g} s (timeout)")
 
     @classmethod
     def child_failed(cls, code: int | None, log: Any) -> TrainError:
+        """The error for a training process that ended with ``code`` and wrote no result; ``log``
+        is where it wrote.
+        """
         return cls(f"the training process ended with code {code} and no result; see {log}")
 
     @classmethod
     def no_result(cls, error: str) -> TrainError:
+        """The error the training process reported, ``error``, in its result."""
         return cls(error)
 
     @classmethod
     def in_progress(cls, run_id: str) -> TrainError:
+        """The error for a run asked for while the run ``run_id`` is still going."""
         return cls(f"a run is in progress ({run_id}); ask again when it has ended")
 
     @classmethod
     def not_on_main(cls) -> TrainError:
+        """The error for a run asked of anything but main."""
         return cls("the trainer runs on main, beside the store and the data directory")
 
 
@@ -289,6 +326,7 @@ class TrainSpec:
         return self.pointer != NONE
 
     def to_dict(self) -> dict[str, Any]:
+        """The spec as JSON, as :meth:`from_dict` reads it back."""
         return {
             "recipe": self.recipe,
             "model": self.model,

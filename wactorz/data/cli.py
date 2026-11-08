@@ -163,6 +163,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run ``wactorz-data`` with ``argv`` (the process's arguments when None); 0 on success, 1
+    after logging what failed.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     failure = _run(_build_parser().parse_args(argv))
     if failure is not None:

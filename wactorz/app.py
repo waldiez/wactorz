@@ -443,10 +443,14 @@ class InterfaceError(StartupError):
 
     @classmethod
     def no_token(cls, variable: str) -> "InterfaceError":
+        """The error for an interface whose token, in the environment variable ``variable``, is not
+        set.
+        """
         return cls(f"{variable} not set.")
 
     @classmethod
     def unknown(cls, interface: str) -> "InterfaceError":
+        """The error for an ``interface`` name that is none of the interfaces this can run."""
         return cls(
             f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
             f"telegram or {HEADLESS}"

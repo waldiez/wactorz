@@ -179,14 +179,19 @@ class ArtifactError(Exception):
 
     @classmethod
     def bad_version(cls, reference: str) -> "ArtifactError":
+        """The error for a version in ``reference`` that is no pointer name and no number from 1."""
         return cls(f"{reference!r}: a version is 'latest', 'active', 'shadow' or a number from 1")
 
     @classmethod
     def not_a_reference(cls, wanted: Any) -> "ArtifactError":
+        """The error for ``wanted`` not being a reference to an artifact."""
         return cls(f"{wanted!r} is not a reference to an artifact")
 
     @classmethod
     def names_the_pointer(cls, reference: str, which: str, name: str) -> "ArtifactError":
+        """The error for a pointer move to ``reference``, which names the ``which`` pointer
+        itself rather than a version of ``name``.
+        """
         return cls(
             f"{reference!r} would mean the {which} pointer itself: name the version "
             f"to move it to, as {name}:3 or {name}:latest"
@@ -194,78 +199,98 @@ class ArtifactError(Exception):
 
     @classmethod
     def not_a_pointer(cls, which: str) -> "ArtifactError":
+        """The error for ``which`` naming none of the pointers."""
         return cls(f"{which!r} is not a pointer: one of {', '.join(POINTERS)}")
 
     @classmethod
     def names_one_version(cls, reference: str) -> "ArtifactError":
+        """The error for removing every version with a ``reference`` that names one."""
         return cls(f"{reference!r} names one version; every version is removed by the bare name")
 
     @classmethod
     def names_every_version(cls, reference: str) -> "ArtifactError":
+        """The error for removing one version with a ``reference`` that names every version."""
         return cls(f"{reference!r} would remove every version: name one, or ask for every version")
 
     # ── What a spawn config names ─────────────────────────────────────────
 
     @classmethod
     def artifacts_not_a_mapping(cls) -> "ArtifactError":
+        """The error for a spawn's artifacts named as something other than a mapping of key to
+        reference.
+        """
         return cls("artifacts are named as a mapping, like {'model': 'imu-detector:3'}")
 
     @classmethod
     def pinned_not_a_mapping(cls) -> "ArtifactError":
+        """The error for a spawn config whose pinned artifacts are not a mapping."""
         return cls("its artifacts are not a mapping")
 
     @classmethod
     def bad_key(cls, error: str) -> "ArtifactError":
+        """The error for an artifact key refused as a name, with ``error`` saying why."""
         return cls(f"the key {error}")
 
     @classmethod
     def not_pinned(cls, entry: Any) -> "ArtifactError":
+        """The error for ``entry`` not being a pinned artifact."""
         return cls(f"{entry!r} is not a pinned artifact")
 
     @classmethod
     def metadata_not_a_mapping(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` whose metadata is not a mapping."""
         return cls(f"{entry!r} has metadata that is not a mapping")
 
     @classmethod
     def no_sha256(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that names no SHA-256."""
         return cls(f"{entry!r} does not name a SHA-256")
 
     @classmethod
     def no_size(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that does not say its size."""
         return cls(f"{entry!r} does not say its size")
 
     @classmethod
     def no_version(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that does not say its version."""
         return cls(f"{entry!r} does not say its version")
 
     @classmethod
     def unknown_entry_format(cls, entry: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` in a format this release does not know."""
         return cls(f"{entry!r} is not in a format this release knows")
 
     @classmethod
     def follows_no_pointer(cls, entry: Any, follows: Any) -> "ArtifactError":
+        """The error for a pinned ``entry`` that follows ``follows``, which is not a pointer."""
         return cls(f"{entry!r} follows {follows!r}, which is not a pointer")
 
     @classmethod
     def not_held(cls, entry: Mapping[str, Any]) -> "ArtifactError":
+        """The error for a pinned ``entry`` whose file this store does not hold."""
         return cls(f"{entry.get('name')}:{entry.get('version')} is not held here")
 
     @classmethod
     def bytes_changed(cls, reference: str) -> "ArtifactError":
+        """The error for ``reference`` now holding bytes other than those it was pinned to."""
         return cls(f"{reference} no longer holds the bytes it was pinned to")
 
     # ── What is offered to the store ──────────────────────────────────────
 
     @classmethod
     def missing(cls, path: Path) -> "ArtifactError":
+        """The error for a file to store at ``path`` that does not exist."""
         return cls(f"{path} does not exist")
 
     @classmethod
     def metadata_not_json(cls, exc: Exception) -> "ArtifactError":
+        """The error for metadata that does not parse as JSON."""
         return cls(f"its metadata is not JSON: {exc}")
 
     @classmethod
     def metadata_too_large(cls, size: int) -> "ArtifactError":
+        """The error for metadata of ``size`` bytes as JSON, over the most a version may carry."""
         return cls(
             f"its metadata is {size} bytes as JSON, over {METADATA_MAX_BYTES}: "
             "keep what an agent reads in metadata, and put larger things inside the artifact"
@@ -273,6 +298,9 @@ class ArtifactError(Exception):
 
     @classmethod
     def refused_checkpoint(cls, path: Path, exc: CheckpointRefusedError) -> "ArtifactError":
+        """The error for a checkpoint at ``path`` that cannot be loaded without running code, and
+        the reason in ``exc``.
+        """
         return cls(
             f"{path} is not a state_dict agents can load without running code ({exc.reason}): "
             "save it with only tensors, numbers, containers and numeric numpy arrays, or store "
@@ -281,14 +309,17 @@ class ArtifactError(Exception):
 
     @classmethod
     def not_a_checkpoint(cls, path: Path, exc: Exception) -> "ArtifactError":
+        """The error for ``path`` not being a torch checkpoint at all."""
         return cls(f"{path} is not a torch checkpoint: {exc}")
 
     @classmethod
     def directory_with_format(cls, path: Path) -> "ArtifactError":
+        """The error for a directory at ``path`` given a file's format."""
         return cls(f"{path} is a directory, which is kept as {DIRECTORY_FORMAT!r}")
 
     @classmethod
     def format_unsaid(cls, path: Path) -> "ArtifactError":
+        """The error for a file at ``path`` whose ending names no format, with none given."""
         return cls(
             f"the ending of {path.name} does not say its format; name one of "
             f"{', '.join(sorted(FORMATS))}"
@@ -296,36 +327,46 @@ class ArtifactError(Exception):
 
     @classmethod
     def file_not_directory(cls, path: Path) -> "ArtifactError":
+        """The error for a directory format given ``path``, which is a file."""
         return cls(f"{path} is a file, not a directory")
 
     @classmethod
     def unknown_format(cls, named: str) -> "ArtifactError":
+        """The error for ``named`` being none of the formats."""
         return cls(f"{named!r} is not a format: one of {', '.join(sorted(FORMATS))}")
 
     @classmethod
     def link(cls, path: Path) -> "ArtifactError":
+        """The error for ``path`` being a symbolic link, which is not kept."""
         return cls(f"{path} is a link; only what it points at could be kept")
 
     @classmethod
     def not_file_or_directory(cls, path: Path) -> "ArtifactError":
+        """The error for ``path`` being neither a file nor a directory."""
         return cls(f"{path} is neither a file nor a directory")
 
     # ── The archive a directory is kept as ────────────────────────────────
 
     @classmethod
     def archive_outside(cls, member: str) -> "ArtifactError":
+        """The error for an archive ``member`` that would unpack outside its directory."""
         return cls(f"the archive names {member!r}, outside where it unpacks")
 
     @classmethod
     def archive_not_a_file(cls, member: str) -> "ArtifactError":
+        """The error for an archive ``member`` that is not a regular file."""
         return cls(f"the archive holds {member!r}, which is not a file")
 
     @classmethod
     def archive_unreadable(cls, member: str) -> "ArtifactError":
+        """The error for an archive ``member`` that cannot be read out of the archive."""
         return cls(f"the archive cannot give {member!r}")
 
     @classmethod
     def unportable_name(cls, path: Path) -> "ArtifactError":
+        """The error for ``path`` having a name Windows would read as a path, so a Windows node
+        could not unpack it.
+        """
         return cls(
             f"{path} has a name with a backslash or a ':', which Windows reads as a path; rename it"
         )
@@ -334,18 +375,24 @@ class ArtifactError(Exception):
 
     @classmethod
     def unreadable_index(cls, path: Path, exc: Exception) -> "ArtifactError":
+        """The error for an index at ``path`` that cannot be read, with the reason ``exc``."""
         return cls(f"the index at {path} cannot be read: {exc}")
 
     @classmethod
     def unknown_index(cls, path: Path) -> "ArtifactError":
+        """The error for an index at ``path`` in a format this release does not read."""
         return cls(f"the index at {path} is not one this release reads")
 
     @classmethod
     def busy(cls, root: Path, exc: Exception) -> "ArtifactError":
+        """The error for the store at ``root`` staying locked by another process past the wait."""
         return cls(f"the store at {root} stayed busy: {exc}")
 
     @classmethod
     def pointer_bytes_changed(cls, name: str, which: str, reference: str) -> "ArtifactError":
+        """The error for ``name``'s ``which`` pointer naming ``reference``, whose bytes have
+        changed since it was set.
+        """
         return cls(
             f"{name}'s {which} pointer names {reference}, which no "
             "longer holds the bytes it was set to; move the pointer"
@@ -353,6 +400,7 @@ class ArtifactError(Exception):
 
     @classmethod
     def pointer_dangles(cls, name: str, which: str, version: int) -> "ArtifactError":
+        """The error for ``name``'s ``which`` pointer naming a ``version`` that is not stored."""
         return cls(
             f"{name}'s {which} pointer names {name}:{version}, which is not stored; "
             "move the pointer"
@@ -364,10 +412,13 @@ class CodeRefusedError(ArtifactError):
 
     @classmethod
     def runs_code(cls, path: Path, description: str) -> "CodeRefusedError":
+        """The error for the file at ``path``, a ``description``, which runs code when it loads."""
         return cls(f"{path.name} is {description}, which runs code when it loads: refused")
 
 
 class ArtifactNotFoundError(ArtifactError):
+    """A reference to an artifact the store does not hold."""
+
     def __init__(self, reference: str) -> None:
         super().__init__(f"no artifact {reference!r}")
 
@@ -381,26 +432,32 @@ class ArtifactConflictError(ArtifactError):
 
     @classmethod
     def already(cls, reference: str, which: str) -> "ArtifactConflictError":
+        """The error for moving the ``which`` pointer to ``reference``, which it names already."""
         return cls(f"{reference} is already {which}")
 
     @classmethod
     def shadow_is_active(cls, reference: str) -> "ArtifactConflictError":
+        """The error for making ``reference`` the shadow while it is the active version."""
         return cls(f"{reference} is active; a shadow is a different version")
 
     @classmethod
     def unset(cls, name: str, which: str) -> "ArtifactConflictError":
+        """The error for an action on ``name``'s ``which`` pointer when it is not set."""
         return cls(f"{name} has no {which} version")
 
     @classmethod
     def no_shadow_to_promote(cls, name: str) -> "ArtifactConflictError":
+        """The error for promoting ``name``'s shadow when it has none."""
         return cls(f"{name} has no shadow version to promote")
 
     @classmethod
     def nothing_to_roll_back(cls, name: str) -> "ArtifactConflictError":
+        """The error for rolling ``name`` back when its active version has no earlier one."""
         return cls(f"{name}'s active version has no earlier one to go back to")
 
     @classmethod
     def in_use(cls, name: str, version: int, which: str) -> "ArtifactConflictError":
+        """The error for removing ``name:version`` while the ``which`` pointer names it."""
         return cls(f"{name}:{version} is the {which} version; move the pointer first")
 
 
@@ -545,6 +602,7 @@ class ArtifactStore:
 
     @property
     def index_path(self) -> Path:
+        """The file the store's index is kept in."""
         return self.root / "index.json"
 
     @property

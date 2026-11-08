@@ -40,6 +40,9 @@ class ModelError(ArtifactError):
 
     @classmethod
     def runs_code(cls, entry: Mapping[str, Any], fmt: str) -> "ModelError":
+        """The error for loading ``entry``, stored as ``fmt``, which runs code when it loads,
+        without ``allow_code``.
+        """
         return cls(
             f"{entry.get('name')}:{entry.get('version')} is {fmt}, which runs code when it "
             "loads: load it with allow_code=True only if you would run its maker's code"
@@ -47,18 +50,23 @@ class ModelError(ArtifactError):
 
     @classmethod
     def no_loader(cls, fmt: str) -> "ModelError":
+        """The error for a model stored as ``fmt``, which no loader here reads."""
         return cls(
             f"there is no loader for {fmt}: open artifact_path() with the library that reads it"
         )
 
     @classmethod
     def needs(cls, library: str) -> "ModelError":
+        """The error for a model whose loader needs ``library``, which is not installed."""
         return cls(f"loading it needs {library}: pip install {library}")
 
     @classmethod
     def refused_checkpoint(
         cls, entry: Mapping[str, Any], exc: CheckpointRefusedError
     ) -> "ModelError":
+        """The error for ``entry``'s checkpoint, which cannot be read without running code, and
+        the reason in ``exc``.
+        """
         return cls(
             f"{entry.get('name')}:{entry.get('version')} cannot be read without running code "
             f"({exc.reason}): save it with only tensors, numbers, containers and numeric numpy "
@@ -68,6 +76,9 @@ class ModelError(ArtifactError):
 
     @classmethod
     def cannot_start(cls, agent: str, exc: ArtifactError) -> "ModelError":
+        """The error for ``agent`` starting without the models it pins, with the reason in
+        ``exc``.
+        """
         return cls(f"{agent} cannot start without its models: {exc}")
 
 

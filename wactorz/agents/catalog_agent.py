@@ -372,6 +372,9 @@ class RecipeRestoreError(ValueError):
 
     @classmethod
     def dependencies_changed(cls, name: str) -> "RecipeRestoreError":
+        """The error for restoring ``name`` when its catalogue dependencies have changed, which
+        needs an install approved through a fresh spawn.
+        """
         return cls(
             f"{name}: catalogue dependencies changed; respawn through "
             "@catalog so installation is approved before restoring this agent"
@@ -777,6 +780,9 @@ class CatalogAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Announce the recipes, publish the manifest, and give main a manifest for each recipe,
+        so it can route to an agent before one is spawned.
+        """
         names = list(self._catalog.keys())
         logger.info("[%s] Catalog ready — %s recipe(s): %s", self.name, len(names), names)
         await self._mqtt_publish(
@@ -841,6 +847,7 @@ class CatalogAgent(Actor):
     # ── Message handling ───────────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task (spawn, list or info), with the task's id echoed, to its reply address."""
         if msg.type != MessageType.TASK:
             return
 
@@ -1320,7 +1327,9 @@ class CatalogAgent(Actor):
     # Public API ─────────────────────────────────────────────────────────────
 
     def list_recipes(self) -> list[str]:
+        """The names of every recipe in the catalogue."""
         return list(self._catalog.keys())
 
     def get_recipe(self, name: str) -> dict[str, Any] | None:
+        """The recipe called ``name``, or None when there is none."""
         return self._catalog.get(name)

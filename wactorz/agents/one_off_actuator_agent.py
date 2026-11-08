@@ -415,6 +415,9 @@ class OneOffActuatorAgent(Actor):
         return self.request[:60] if self.request else "one-shot actuation"
 
     async def on_start(self) -> None:
+        """Publish the manifest and carry out the one request the agent was spawned with, in the
+        background.
+        """
         await self.publish_manifest(
             description=self.DESCRIPTION,
             capabilities=self.CAPABILITIES,
@@ -431,6 +434,7 @@ class OneOffActuatorAgent(Actor):
         self.run_detached(self._run(), name="actuation")
 
     async def handle_message(self, msg: Message) -> None:
+        """Ignore every message: the agent's one request came with its spawn."""
         if msg.type == MessageType.TASK:
             return
 

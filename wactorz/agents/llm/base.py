@@ -107,6 +107,9 @@ class LLMProvider:
         system: str = "",
         **kwargs: Any,
     ) -> "ToolCompletion":
+        """The model's reply to ``messages`` with ``tools`` offered, retried as every call is;
+        refused when the spend limit is reached.
+        """
         check_cost_limit()
         return await self._measured(
             lambda: call_with_retry(

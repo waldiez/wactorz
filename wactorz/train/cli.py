@@ -228,6 +228,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run ``wactorz-train`` with ``argv`` (the process's arguments when None); 0 on success, 1
+    after logging what failed.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     args = _build_parser().parse_args(argv)
     failure = _check(args) if args.command == "check" else asyncio.run(_run(args))

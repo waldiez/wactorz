@@ -255,6 +255,12 @@ class WhatsAppInterface:
         return app
 
     async def run(self) -> None:
+        """Serve the Twilio webhook and answer the allowed numbers, until cancelled.
+
+        Returns at once, logging why, without an auth token to check Twilio's signature with,
+        without an allowed number, or without ``twilio`` installed. While it runs, the webhook is
+        registered as the ``whatsapp`` outbound channel.
+        """
         if not (self.auth_token or "").strip():
             logger.error(
                 "[WhatsApp] Not starting: TWILIO_AUTH_TOKEN is empty. The webhook checks "

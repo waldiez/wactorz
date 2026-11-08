@@ -130,6 +130,9 @@ class NodePublisher:
 
     @property
     def queue(self) -> asyncio.Queue[QueueItem] | None:
+        """The queue of messages waiting to go out; None until :meth:`run` has made it, on its
+        own loop.
+        """
         return self._queue
 
     # ── Enqueuing ─────────────────────────────────────────────────────────────
@@ -361,4 +364,7 @@ class NodePublisher:
             close_mqtt_client(client, "Publisher")
 
     def stop(self) -> None:
+        """Ask the publish loop to end; it does after the message it is sending, and closes its
+        client.
+        """
         self._running = False

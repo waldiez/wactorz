@@ -311,6 +311,9 @@ class CLIInterface:
         return await future
 
     async def run(self) -> None:
+        """Read lines from the terminal and answer each, until ``quit``, ``exit``, end of input
+        or Ctrl-C.
+        """
         print("\nWactorz CLI | Type /help for commands\n")
         while True:
             try:

@@ -121,6 +121,9 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Start the lifetime limit and, with a task given at spawn, plan it in the background;
+        with both an approved plan and plan-only set, the approved plan wins.
+        """
         await self._log(f"Planner ready. Task: {self._task[:80]}")
 
         # Enforce documented precedence: approved_plan wins over plan_only.
@@ -204,6 +207,9 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message) -> None:
+        """Plan a task and reply with the result to the one who asked. After any message the
+        planner ends, unless the plan asked it to stay.
+        """
         if msg.type == MessageType.TASK:
             payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload)}
             task_text = payload.get("text") or payload.get("task") or str(msg.payload)

@@ -119,64 +119,81 @@ class ScheduleError(ValueError):
 
     @classmethod
     def not_a_dict(cls, schedule: Any) -> "ScheduleError":
+        """The error for a ``schedule`` given as something other than a dict."""
         return cls(f"ScheduledAgent requires a 'schedule' dict, got {type(schedule).__name__}")
 
     @classmethod
     def invalid(cls, name: str, exc: Exception) -> "ScheduleError":
+        """The error for agent ``name``'s schedule being refused, with the reason in ``exc``."""
         return cls(f"Invalid schedule for {name}: {exc}")
 
     @classmethod
     def unknown_type(cls, stype: Any) -> "ScheduleError":
+        """The error for a schedule type ``stype`` that is none of the known ones."""
         return cls(
             f"Unknown schedule type: {stype!r}. Use one of: daily, weekly, interval, once, cron."
         )
 
     @classmethod
     def daily_without_at(cls) -> "ScheduleError":
+        """The error for a daily schedule with no time of day."""
         return cls("daily schedule requires 'at' (e.g. '17:00')")
 
     @classmethod
     def weekly_without_at(cls) -> "ScheduleError":
+        """The error for a weekly schedule with no time of day."""
         return cls("weekly schedule requires 'at'")
 
     @classmethod
     def weekly_without_days(cls) -> "ScheduleError":
+        """The error for a weekly schedule with no days."""
         return cls("weekly schedule requires non-empty 'days' list")
 
     @classmethod
     def once_without_at(cls) -> "ScheduleError":
+        """The error for a once schedule with no moment."""
         return cls("once schedule requires 'at' (ISO-8601 datetime)")
 
     @classmethod
     def cron_without_expr(cls) -> "ScheduleError":
+        """The error for a cron schedule with no expression."""
         return cls("cron schedule requires 'expr' (e.g. '0 17 * * *')")
 
     @classmethod
     def not_hhmm(cls, at: str) -> "ScheduleError":
+        """The error for a time of day ``at`` that is not ``HH:MM``."""
         return cls(f"Time string must be HH:MM, got {at!r}")
 
     @classmethod
     def time_out_of_range(cls, at: str) -> "ScheduleError":
+        """The error for a time of day ``at`` with an hour or minute out of range."""
         return cls(f"Time out of range: {at!r}")
 
     @classmethod
     def unknown_day(cls, day: str) -> "ScheduleError":
+        """The error for a ``day`` that is none of the days of the week."""
         return cls(f"Unknown day: {day!r} (use mon|tue|wed|thu|fri|sat|sun)")
 
     @classmethod
     def interval_not_positive(cls, seconds: int) -> "ScheduleError":
+        """The error for an interval of ``seconds`` that is not above zero."""
         return cls(f"interval seconds must be positive, got {seconds}")
 
     @classmethod
     def interval_not_a_number(cls, seconds: Any) -> "ScheduleError":
+        """The error for an interval given ``seconds`` that is not a whole number."""
         return cls(f"interval schedule requires 'seconds' (int), got {seconds!r}")
 
     @classmethod
     def once_not_iso(cls, at: str) -> "ScheduleError":
+        """The error for a once schedule's ``at`` that is not an ISO-8601 moment."""
         return cls(f"once schedule 'at' must be ISO-8601 (YYYY-MM-DDTHH:MM:SS), got {at!r}")
 
     @classmethod
     def no_croniter(cls) -> "ScheduleError":
+        """The error for a cron schedule without the ``croniter`` package, saying how to do
+        without it.
+        """
         return cls(
             "Cron schedules require the 'croniter' package. Install with "
             "`pip install 'wactorz[cron]'`, OR use a structured schedule "
@@ -186,6 +203,9 @@ class ScheduleError(ValueError):
 
     @classmethod
     def bad_cron(cls, expr: str, exc: Exception) -> "ScheduleError":
+        """The error for a cron expression ``expr`` that ``croniter`` refuses, with the reason in
+        ``exc``.
+        """
         return cls(f"Invalid cron expression {expr!r}: {exc}")
 
 
@@ -364,6 +384,11 @@ class ScheduledAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Restore when the schedule last fired, and start the scheduling loop.
+
+        A once schedule that has fired already, or whose moment is past, deletes the agent
+        instead; a moment missed by no more than the catch-up window is fired first.
+        """
         # Restore last-fire state if persisted
         state = self.recall("_schedule_state") or {}
         if isinstance(state, dict):
@@ -413,6 +438,7 @@ class ScheduledAgent(Actor):
         self._loop_task = asyncio.create_task(self._run_loop())
 
     async def on_stop(self) -> None:
+        """Cancel the scheduling loop and wait for it, logging an error it ended with."""
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
             # gather rather than a bare await: the scheduling loop's own

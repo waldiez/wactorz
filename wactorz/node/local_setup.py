@@ -100,38 +100,48 @@ class SetupError(Exception):
 
     @classmethod
     def not_root(cls) -> "SetupError":
+        """The error for a setup run by a user other than root."""
         return cls("Run it as root: sudo wactorz-node setup-local")
 
     @classmethod
     def not_linux(cls) -> "SetupError":
+        """The error for a setup on a machine that is not Linux."""
         return cls(
             "A sandbox node needs Linux with systemd. Elsewhere, model-written code stays on main."
         )
 
     @classmethod
     def no_systemd(cls) -> "SetupError":
+        """The error for a setup on a machine where systemd is not running."""
         return cls("systemd is not running here, and the sandbox node is a systemd unit.")
 
     @classmethod
     def no_main_user(cls) -> "SetupError":
+        """The error for a setup that cannot tell which user runs main."""
         return cls(
             "Say which user runs main: --main-user NAME (sudo sets it for you as SUDO_USER)."
         )
 
     @classmethod
     def main_is_root(cls) -> "SetupError":
+        """The error for a setup that names root as the user who runs main."""
         return cls("Main should not run as root; give the user that runs it with --main-user.")
 
     @classmethod
     def unknown_user(cls, name: str) -> "SetupError":
+        """The error for a ``--main-user`` that names no user on this machine."""
         return cls(f"There is no user {name!r} on this machine.")
 
     @classmethod
     def no_env_file(cls, path: Path) -> "SetupError":
+        """The error for main's settings file not found at ``path``."""
         return cls(f"Main's settings are not at {path}; give their path with --env-file.")
 
     @classmethod
     def unsafe_path(cls, path: Path) -> "SetupError":
+        """The error for a ``path`` a systemd unit file cannot hold: one with a space, quote or
+        backslash.
+        """
         return cls(
             f"{path} has a space, quote or backslash in it, which a unit file cannot hold. "
             "Move main's state somewhere without one."
@@ -139,6 +149,9 @@ class SetupError(Exception):
 
     @classmethod
     def foreign_unit(cls, path: Path) -> "SetupError":
+        """The error for a unit already at ``path`` that setup did not write: the machine is a
+        deployed node.
+        """
         return cls(
             f"{path} is already here and was not written by setup-local: this machine is "
             "a deployed node. Remove that node first."
@@ -146,6 +159,7 @@ class SetupError(Exception):
 
     @classmethod
     def readable(cls, paths: Sequence[Path]) -> "SetupError":
+        """The error for main's secrets at ``paths`` being readable by the node's user."""
         listed = "\n".join(f"  {path}" for path in paths)
         return cls(
             f"{NODE_USER} could read main's secrets:\n{listed}\n"
@@ -154,6 +168,7 @@ class SetupError(Exception):
 
     @classmethod
     def failed(cls, command: Sequence[str], output: str) -> "SetupError":
+        """The error for a ``command`` that failed, with what it printed."""
         return cls(f"`{shlex.join(command)}` failed: {output.strip()}")
 
 
@@ -349,6 +364,7 @@ def _run(command: Sequence[str]) -> tuple[int, str]:
 
 
 def get_args(argv: Sequence[str]) -> argparse.Namespace:
+    """The setup's options, read from ``argv``."""
     parser = argparse.ArgumentParser(
         prog="wactorz-node setup-local",
         description=(

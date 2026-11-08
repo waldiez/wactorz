@@ -56,38 +56,47 @@ class STTError(RuntimeError):
 
     @classmethod
     def no_faster_whisper(cls) -> STTError:
+        """The error for the faster-whisper backend without its package."""
         return cls("faster-whisper is not installed; run: pip install faster-whisper")
 
     @classmethod
     def no_whisper(cls) -> STTError:
+        """The error for the whisper backend without its package."""
         return cls("whisper is not installed; run: pip install openai-whisper")
 
     @classmethod
     def no_openai_key(cls) -> STTError:
+        """The error for the OpenAI backend without ``OPENAI_API_KEY``."""
         return cls("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
 
     @classmethod
     def no_openai(cls) -> STTError:
+        """The error for the OpenAI backend without its package."""
         return cls("openai is not installed; run: pip install 'wactorz[openai]'")
 
     @classmethod
     def no_deepgram_channel(cls) -> STTError:
+        """The error for a Deepgram answer with no transcription channel in it."""
         return cls("Deepgram returned no transcription channel")
 
     @classmethod
     def no_deepgram_key(cls) -> STTError:
+        """The error for the Deepgram backend without ``DEEPGRAM_API_KEY``."""
         return cls("DEEPGRAM_API_KEY is required when REACHY_STT_BACKEND=deepgram")
 
     @classmethod
     def no_deepgram(cls) -> STTError:
+        """The error for the Deepgram backend without its package."""
         return cls("deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'")
 
     @classmethod
     def no_streaming_key(cls) -> STTError:
+        """The error for Deepgram streaming without ``DEEPGRAM_API_KEY``."""
         return cls("DEEPGRAM_API_KEY is required for Deepgram streaming")
 
     @classmethod
     def stream_not_started(cls) -> STTError:
+        """The error for a Deepgram streaming connection that did not start."""
         return cls("Deepgram streaming connection did not start")
 
 
@@ -96,14 +105,17 @@ class STTInputError(ValueError):
 
     @classmethod
     def unknown_backend(cls, raw_backend: Any, choices: str) -> STTInputError:
+        """The error for ``raw_backend`` naming none of the backends in ``choices``."""
         return cls(f"unknown Reachy STT backend {raw_backend!r}; choose {choices}")
 
     @classmethod
     def empty_wav(cls) -> STTInputError:
+        """The error for a transcription request with no audio."""
         return cls("WAV payload is empty")
 
     @classmethod
     def streaming_backend(cls) -> STTInputError:
+        """The error for streaming capture asked of a backend other than Deepgram."""
         return cls("streaming capture requires the Deepgram backend")
 
 
@@ -132,6 +144,11 @@ class STTConfig:
         payload: Mapping[str, Any] | None = None,
         environ: Mapping[str, str] | None = None,
     ) -> STTConfig:
+        """The settings for one request: each from ``payload``'s ``stt_*`` keys, else the
+        ``REACHY_STT_*`` variables in ``environ``, else its default.
+
+        Raises :class:`STTInputError` for a backend that is none of the known ones.
+        """
         payload = payload or {}
         environ = os.environ if environ is None else environ
         raw_backend = (
@@ -219,7 +236,11 @@ class _BackendResult:
 
 
 class STTBackend(Protocol):
-    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str | _BackendResult: ...
+    """A speech-to-text backend: WAV bytes in, a transcript out."""
+
+    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str | _BackendResult:
+        """The transcript of ``wav_bytes``, as text alone or with what the recogniser says of it."""
+        ...
 
 
 def _temporary_wav(wav_bytes: bytes) -> Path:
@@ -232,6 +253,13 @@ class FasterWhisperBackend:
     """Local transcription using the optional ``faster-whisper`` package."""
 
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
+        """Transcribe locally with faster-whisper, off the event loop, with the confidence, the
+        no-speech probability and the language it detected.
+
+        The model is loaded once per model, device and compute type, and kept for the next
+        request.
+        """
+
         def run() -> _BackendResult:
             try:
                 from faster_whisper import (  # pyright: ignore[reportMissingImports]  # optional
@@ -297,6 +325,10 @@ class WhisperBackend:
     """Local transcription using the optional OpenAI ``whisper`` package."""
 
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
+        """Transcribe locally with whisper, off the event loop; the model is loaded once per
+        model and device, and kept.
+        """
+
         def run() -> str:
             try:
                 import whisper  # pyright: ignore[reportMissingImports]  # optional backend
@@ -328,6 +360,7 @@ class OpenAIBackend:
     """Hosted OpenAI transcription; enabled only when explicitly selected."""
 
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
+        """Transcribe through OpenAI's transcription API."""
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise STTError.no_openai_key()
@@ -415,6 +448,7 @@ class DeepgramBackend:
     """Hosted Nova transcription using the optional Deepgram SDK v3."""
 
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
+        """Transcribe through Deepgram's prerecorded API, off the event loop."""
         api_key = os.environ.get("DEEPGRAM_API_KEY")
         if not api_key:
             raise STTError.no_deepgram_key()

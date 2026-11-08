@@ -82,6 +82,7 @@ class DataShipper:
 
     @property
     def record_path(self) -> Path:
+        """The file that records what was shipped to main, and whether main answered."""
         return self.root / RECORD_NAME
 
     def _load(self) -> dict[str, dict[str, Any]]:

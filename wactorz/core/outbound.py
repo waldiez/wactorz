@@ -55,18 +55,22 @@ class OptionsError(ValueError):
 
     @classmethod
     def none(cls) -> OptionsError:
+        """The error for a question asked with no options."""
         return cls("ask_operator needs options for the person to pick from")
 
     @classmethod
     def not_a_string(cls, option: Any) -> OptionsError:
+        """The error for an ``option`` that is not a string."""
         return cls(f"an option must be a string, not {type(option).__name__}")
 
     @classmethod
     def empty(cls) -> OptionsError:
+        """The error for an option that is empty."""
         return cls("an option cannot be empty")
 
     @classmethod
     def too_long(cls, text: str) -> OptionsError:
+        """The error for an option, ``text``, longer than an option may be."""
         return cls(
             f"option {text[:20]!r}… is longer than {MAX_OPTION_CHARS} characters; "
             "put the sentence in the message and keep the option to a few words"
@@ -74,10 +78,12 @@ class OptionsError(ValueError):
 
     @classmethod
     def twice(cls, text: str) -> OptionsError:
+        """The error for the option ``text`` offered twice."""
         return cls(f"option {text!r} is offered twice")
 
     @classmethod
     def too_many(cls, count: int) -> OptionsError:
+        """The error for ``count`` options, more than a message may offer."""
         return cls(f"{count} options is more than the {MAX_OPTIONS} a message may offer")
 
 
@@ -197,7 +203,9 @@ class TakesDashboardAnswers(Protocol):
     server, when the agent runs in its process, hands it the press instead.
     """
 
-    async def dashboard_answer(self, answer: Answer) -> None: ...
+    async def dashboard_answer(self, answer: Answer) -> None:
+        """Take the ``answer`` pressed in the dashboard to a question this agent asked."""
+        ...
 
 
 @dataclass(frozen=True)

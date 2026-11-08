@@ -46,6 +46,9 @@ class DocumentRefused(ValueError):
 
     @classmethod
     def outside(cls, raw: str, roots: list[Path]) -> "DocumentRefused":
+        """The error for a path ``raw`` outside every document folder in ``roots``, saying how to
+        reach it.
+        """
         where = ", ".join(str(root) for root in roots)
         return cls(
             f"{raw} is outside the document folders ({where}); copy it there, "
@@ -54,34 +57,42 @@ class DocumentRefused(ValueError):
 
     @classmethod
     def unusable(cls, raw: str) -> "DocumentRefused":
+        """The error for ``raw`` not being a path that can be used at all."""
         return cls(f"{raw!r} is not a usable path")
 
     @classmethod
     def in_state(cls, raw: str) -> "DocumentRefused":
+        """The error for a path ``raw`` inside the state directory, which agents may not use."""
         return cls(f"{raw} is inside the state directory, which agents may not use")
 
     @classmethod
     def not_an_id(cls, file_id: str) -> "DocumentRefused":
+        """The error for ``file_id`` not having the shape of an upload id."""
         return cls(f"{file_id} is not an upload id")
 
     @classmethod
     def upload_gone(cls, file_id: str) -> "DocumentRefused":
+        """The error for an upload id ``file_id`` with no upload behind it."""
         return cls(f"No upload {file_id}; it may have been removed")
 
     @classmethod
     def nothing_named(cls) -> "DocumentRefused":
+        """The error for a request that names no file at all."""
         return cls("Name the file: a path in a document folder, or an upload's id")
 
     @classmethod
     def not_found(cls, raw: str) -> "DocumentRefused":
+        """The error for a path ``raw`` that names no file."""
         return cls(f"File not found: {raw}")
 
     @classmethod
     def wrong_kind(cls, raw: str, suffix: str) -> "DocumentRefused":
+        """The error for a path ``raw`` that does not end in ``suffix``."""
         return cls(f"{raw} must end in {suffix}")
 
     @classmethod
     def no_folder(cls, path: Path) -> "DocumentRefused":
+        """The error for an output ``path`` whose folder does not exist."""
         return cls(f"No folder {path.parent} to write {path.name} into")
 
 

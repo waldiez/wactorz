@@ -160,6 +160,7 @@ class Packed:
 
     @property
     def blob_bytes(self) -> int:
+        """How many bytes the blobs hold together."""
         return sum(len(data) for data in self.blobs.values())
 
 
@@ -190,26 +191,36 @@ class BlobsUnusable(Exception):
 
 
 class BlobFormatUnknown(BlobsUnusable):
+    """A blob whose stored format this side does not know how to read."""
+
     def __init__(self, key: str) -> None:
         super().__init__(f"'{key}' is in a format this side does not know")
 
 
 class BlobMissing(BlobsUnusable):
+    """A blob the snapshot names that never arrived."""
+
     def __init__(self, key: str) -> None:
         super().__init__(f"'{key}' never arrived")
 
 
 class BlobDidNotLoad(BlobsUnusable):
+    """A blob that arrived and could not be loaded."""
+
     def __init__(self, key: str, exc: Exception) -> None:
         super().__init__(f"'{key}' did not load: {type(exc).__name__}: {exc}")
 
 
 class BlobsLate(BlobsUnusable):
+    """Blobs still missing when the wait for them ran out."""
+
     def __init__(self, missing: int, wanted: int, timeout: float) -> None:
         super().__init__(f"{missing} of {wanted} blob(s) did not arrive within {timeout:.0f}s")
 
 
 class BlobsTooLarge(BlobsUnusable):
+    """Blobs that together are over the size this side accepts."""
+
     def __init__(self, total: int, limit: int) -> None:
         super().__init__(f"its blobs are {total} bytes, over the {limit}-byte limit")
 
@@ -327,6 +338,9 @@ class Inbox:
         self._complete = asyncio.Condition()
 
     def path(self, sha256: str) -> Path:
+        """Where the complete blob with this ``sha256`` is, or would be, kept; this does not
+        check that it is there.
+        """
         return self.directory / sha256
 
     def _part(self, sha256: str) -> Path:

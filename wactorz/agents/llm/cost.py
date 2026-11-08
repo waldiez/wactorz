@@ -188,10 +188,14 @@ class CostLimitError(RuntimeError):
 
     @classmethod
     def no_database(cls) -> "CostLimitError":
+        """The error for a spend check with no database to read the spend from."""
         return cls("Database not available")
 
     @classmethod
     def reached(cls, info: dict[str, Any]) -> "CostLimitError":
+        """The error for the spend limit in ``info`` being reached, which stops further model
+        calls.
+        """
         return cls(
             f"LLM cost limit of ${info['limit_usd']:.2f} reached "
             f"for {info['period_key']}. Blocking further LLM calls."
@@ -223,6 +227,12 @@ def reset_global_cost() -> dict[str, Any]:
 
 
 def accumulate_global_cost(delta: float) -> None:
+    """Add ``delta`` dollars to the spend of each period and to the all-time total; a delta not
+    above zero, or no database, changes nothing.
+
+    The spend is added whether or not a limit is set, so a limit set part-way through a period
+    starts from what was already spent.
+    """
     if delta <= 0:
         return
     db = get_db()
@@ -249,6 +259,9 @@ def accumulate_global_cost(delta: float) -> None:
 
 
 def check_cost_limit() -> None:
+    """Raise :class:`CostLimitError` when the period's spend limit is reached, and log a warning
+    as it nears; nothing without a limit.
+    """
     info = get_global_cost_info()
     if not info.get("limit_usd"):
         return

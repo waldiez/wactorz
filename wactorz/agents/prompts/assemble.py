@@ -58,6 +58,7 @@ Template = tuple[Part, ...]
 
 
 def slot_names(template: Template) -> set[str]:
+    """The names of the slots ``template`` holds."""
     return {part.name for part in template if isinstance(part, Slot)}
 
 

@@ -44,6 +44,9 @@ class Sweep:
     dry_run: bool = False
 
     def to_dict(self) -> dict[str, Any]:
+        """The sweep as JSON: each hour removed, by source, with the totals, how many were kept
+        for a model, and whether it was a dry run.
+        """
         return {
             "removed": [{"source": s, "hour": h} for s, h in self.removed],
             "hours": len(self.removed),

@@ -73,18 +73,22 @@ class BadRequest(ValueError):
 
     @classmethod
     def unknown_query(cls, query: Any) -> BadRequest:
+        """The error for a ``query`` that is none of the history queries."""
         return cls(f"unknown query {query!r}; one of {sorted([*QUERIES, STATS])}")
 
     @classmethod
     def unknown_filter(cls, query: str, name: str) -> BadRequest:
+        """The error for a filter ``name`` that ``query`` does not take."""
         return cls(f"{query} takes no filter {name!r}")
 
     @classmethod
     def wrong_type(cls, name: str, wanted: type) -> BadRequest:
+        """The error for a filter ``name`` given a value that is not a ``wanted``."""
         return cls(f"{name} must be a {wanted.__name__}")
 
     @classmethod
     def out_of_range(cls, name: str) -> BadRequest:
+        """The error for a filter ``name`` given a value out of range."""
         return cls(f"{name} is out of range")
 
 

@@ -128,13 +128,20 @@ class ShadowView:
         return {**self._actor.artifacts, **self._actor.shadow}
 
     def artifact_path(self, key: str) -> str:
+        """Where the model ``key`` is on disk for the shadow pass: the version on trial where
+        there is one.
+        """
         entry = self._actor.shadow.get(key)
         return str(entry["path"]) if entry is not None else self._actor.artifact_path(key)
 
     async def load_model(self, key: str, *, allow_code: bool = False) -> Any:
+        """Load the model ``key`` for the shadow pass: the version on trial where there is one."""
         return await self._actor.load_shadow_model(key, allow_code=allow_code)
 
     async def publish(self, topic: str, payload: Any, **kwargs: Any) -> None:
+        """Publish on the shadow copy of ``topic``, where the trial reads the answers, not on
+        ``topic`` itself.
+        """
         await self._actor.publish(shadow_topic(topic), payload, **kwargs)
 
     def persist(self, key: str, value: Any) -> None:
@@ -144,6 +151,7 @@ class ShadowView:
         """Nothing, as `persist`."""
 
     async def log(self, message: str, level: str = "info") -> None:
+        """Log ``message``, marked as from the shadow pass."""
         await self._actor.log(f"[shadow] {message}", level)
 
     def __getattr__(self, name: str) -> Any:
@@ -186,10 +194,14 @@ class PairRecorder:
         return None
 
     async def flush(self) -> None:
+        """Write the pairs held so far to disk, off the event loop."""
         if self._writer is not None:
             await asyncio.to_thread(self._writer.flush)
 
     async def close(self) -> None:
+        """Write the pairs held so far and close the file, off the event loop; nothing more is
+        kept after.
+        """
         if self._writer is not None:
             await asyncio.to_thread(self._writer.close)
             self._writer = None

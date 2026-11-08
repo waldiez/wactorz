@@ -129,6 +129,12 @@ def collect_block(
     base_indent: int,
     conts: tuple[str, ...] = ("except", "else", "finally", "elif"),
 ) -> Any:
+    """The lines of the block that starts at ``start``, under a header indented ``base_indent``,
+    and the index of the line after it.
+
+    The block runs while lines are blank or indented deeper, and goes on past a line at the
+    header's level that starts with one of ``conts``, as ``except`` continues a ``try``.
+    """
     j, block = start, []
     pat = r"\s*(" + "|".join(conts) + r")\b" if conts else r"(?!x)x"
     while j < len(lines):

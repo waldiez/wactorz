@@ -85,6 +85,7 @@ class GoogleCalendarAgent(LLMAgent):
         self._pending_create: dict[str, Any] = {}
 
     async def chat(self, user_message: str) -> str:
+        """Answer ``user_message`` and keep the turn in the conversation and the chat log."""
         ts_user = time.time()
         self._conversation_history.append({"role": "user", "content": user_message, "ts": ts_user})
         result = await self._process({"text": user_message})
@@ -97,10 +98,16 @@ class GoogleCalendarAgent(LLMAgent):
         return response
 
     async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
+        """The answer :meth:`chat` gives, whole, followed by an empty usage dict: no model is
+        called.
+        """
         yield await self.chat(user_message)
         yield {}
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer a task with its result, the task's id echoed, sent to its reply address; other
+        messages are ignored.
+        """
         if msg.type != MessageType.TASK:
             return
         payload = msg.payload if isinstance(msg.payload, dict) else {"text": str(msg.payload or "")}

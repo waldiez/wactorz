@@ -342,8 +342,10 @@ ignore = [
     "ANN401",  # `Any` is allowed: where a value is dynamic it is the honest annotation until it is narrowed
     "B008",    # function call in arg defaults: intentional in async handler signatures
     "B027",    # empty base-class methods are optional lifecycle hooks (on_start/on_stop)
-    # docstring presence is not yet required on every public symbol
-    "D100", "D101", "D102", "D103", "D104", "D105", "D107",
+    # Every public class, function and method says what it is for (D101-D103).
+    # Modules, packages, dunder methods and `__init__` are not asked for one: the
+    # class's own docstring is where a constructor's parameters are explained.
+    "D100", "D104", "D105", "D107",
     # docstring layout (summary line, blank-line-after, terminal punctuation) is not enforced
     "D200", "D205", "D415",
     "RUF006",  # dangling asyncio tasks are often intentional fire-and-forget
@@ -386,16 +388,19 @@ ignore = [
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag, and what each
-# prints is what it was run to say.
-"scripts/*" = ["S603", "S607", "S110", "T201"]
-# An example prints what it shows: the score, the model it trained.
-"examples/*" = ["T201"]
+# prints is what it was run to say. Nothing here is imported as an API, so its
+# functions are not asked for docstrings.
+"scripts/*" = ["S603", "S607", "S110", "T201", "D101", "D102", "D103"]
+# An example prints what it shows: the score, the model it trained. It is read
+# as a walk-through, not imported as an API, so it is not asked for docstrings.
+"examples/*" = ["T201", "D101", "D102", "D103"]
 # The end-to-end suite is test code that drives real processes. `assert` is the
 # mechanism, as it is under tests/; every subprocess is a literal argv naming
 # `docker` or this interpreter; and every URL it opens is the backend it
 # started or the Home Assistant instance `HA_URL` names. A failed check is an
-# `AssertionError` saying what was seen, as an `assert` would.
-"e2e/*" = ["S101", "S310", "S603", "S607", "TRY003"]
+# `AssertionError` saying what was seen, as an `assert` would. Like tests/, it
+# is not asked for docstrings.
+"e2e/*" = ["S101", "S310", "S603", "S607", "TRY003", "D101", "D102", "D103"]
 # A node runs agent code it is sent, installs what that code imports, and
 # re-execs itself when main asks it to restart — so the pip subprocess and the
 # `execv` are the feature rather than an oversight. How far either should be

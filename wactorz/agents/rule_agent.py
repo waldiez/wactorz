@@ -98,58 +98,74 @@ class RuleError(ValueError):
 
     @classmethod
     def unknown_operator(cls, op: str) -> RuleError:
+        """The error for a condition operator ``op`` that is none of the known ones."""
         return cls(f"unknown condition operator {op!r}")
 
     @classmethod
     def unknown_action(cls, kind: str) -> RuleError:
+        """The error for an action ``kind`` that is none of the known action types."""
         return cls(f"unknown action type {kind!r}; one of {', '.join(ACTION_TYPES)}")
 
     @classmethod
     def condition_without_field(cls) -> RuleError:
+        """The error for a condition with no field to test."""
         return cls("a condition needs a 'field'")
 
     @classmethod
     def question_without_text(cls) -> RuleError:
+        """The error for an ``ask_operator`` action with no question text."""
         return cls("an ask_operator action needs the 'text' to ask")
 
     @classmethod
     def question_without_options(cls) -> RuleError:
+        """The error for an ``ask_operator`` action with no options."""
         return cls("an ask_operator action needs 'options' to pick from")
 
     @classmethod
     def publish_without_topic(cls) -> RuleError:
+        """The error for a ``publish`` action with no topic."""
         return cls("a publish action needs a 'topic'")
 
     @classmethod
     def task_without_agent(cls) -> RuleError:
+        """The error for a ``task`` action that names no agent."""
         return cls("a task action needs an 'agent'")
 
     @classmethod
     def webhook_without_url(cls) -> RuleError:
+        """The error for a ``webhook`` action with no http(s) URL."""
         return cls("a webhook action needs an http(s) 'url'")
 
     @classmethod
     def label_without_source(cls) -> RuleError:
+        """The error for a ``label`` action that names no source."""
         return cls("a label action needs the 'source' it is about")
 
     @classmethod
     def label_without_value(cls) -> RuleError:
+        """The error for a ``label`` action with no value to record."""
         return cls("a label action needs the 'value' to record")
 
     @classmethod
     def no_trigger(cls) -> RuleError:
+        """The error for a rule with no trigger topic."""
         return cls("a rule needs at least one trigger topic")
 
     @classmethod
     def no_action(cls) -> RuleError:
+        """The error for a rule with no action."""
         return cls("a rule needs at least one action")
 
     @classmethod
     def bad_question(cls, exc: ValueError) -> RuleError:
+        """The error for an ``ask_operator`` action whose question was refused, with the reason
+        in ``exc``.
+        """
         return cls(f"an ask_operator action: {exc}")
 
     @classmethod
     def negative_timeout(cls) -> RuleError:
+        """The error for an ``ask_operator`` action with a negative timeout."""
         return cls("an ask_operator action's 'timeout' is seconds, zero to wait")
 
 
@@ -176,6 +192,11 @@ class RuleCondition:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleCondition:
+        """The condition ``raw`` declares; ``operator`` is read as ``op``, which defaults to
+        ``eq``, and aliases are resolved.
+
+        Raises :class:`RuleError` for an unknown operator or a missing field.
+        """
         op = str(raw.get("op", raw.get("operator", "eq")))
         op = _ALIASES.get(op, op)
         if op not in _OPERATORS and op not in _PRESENCE:
@@ -185,9 +206,14 @@ class RuleCondition:
         return cls(field=str(raw["field"]), op=op, value=raw.get("value"))
 
     def to_dict(self) -> dict[str, Any]:
+        """The condition as JSON, as :meth:`from_dict` reads it back."""
         return {"field": self.field, "op": self.op, "value": self.value}
 
     def holds(self, payload: Any) -> bool:
+        """Whether ``payload`` meets the condition. A field it lacks fails every test but
+        ``absent``, and a comparison that does not apply, such as text against a number, does not
+        hold.
+        """
         present, value = field_value(payload, self.field)
         if self.op == "exists":
             return present
@@ -253,6 +279,10 @@ class RuleAction:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleAction:
+        """The action ``raw`` declares, checked for what its type needs.
+
+        Raises :class:`RuleError` for an unknown type or a missing field.
+        """
         kind = str(raw.get("type", "")).strip()
         if kind not in ACTION_TYPES:
             raise RuleError.unknown_action(kind)
@@ -311,6 +341,9 @@ class RuleAction:
         return fields
 
     def to_dict(self) -> dict[str, Any]:
+        """The action as JSON, as :meth:`from_dict` reads it back, holding only the fields its
+        type uses.
+        """
         out: dict[str, Any] = {"type": self.type, "payload": dict(self.payload)}
         if self.topic:
             out["topic"] = self.topic
@@ -412,6 +445,12 @@ class RuleConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RuleConfig:
+        """The rule ``raw`` declares: its triggers (one topic, or many under ``triggers``,
+        ``trigger`` or ``mqtt_topics``), conditions, actions and cooldown.
+
+        Raises :class:`RuleError` for a rule with no trigger or no action, or for any condition
+        or action that is refused.
+        """
         triggers = raw.get("triggers", raw.get("trigger", raw.get("mqtt_topics", ())))
         if isinstance(triggers, str):
             triggers = (triggers,)
@@ -431,6 +470,7 @@ class RuleConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """The rule as JSON, as :meth:`from_dict` reads it back."""
         return {
             "triggers": list(self.triggers),
             "conditions": [c.to_dict() for c in self.conditions],
@@ -471,6 +511,7 @@ class RuleAgent(Actor):
         return self.description
 
     async def on_start(self) -> None:
+        """Publish the rule's manifest and evaluate it on every message to one of its triggers."""
         await self.publish_manifest(
             description=self.description,
             publishes=list(self.config.publishes),

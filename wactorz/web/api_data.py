@@ -166,6 +166,7 @@ async def profile_handler(request: web.Request) -> web.Response:
 
 
 def setup(app: web.Application) -> None:
+    """Register the data routes on ``app``: the sources, a source's profile, and its series."""
     app.router.add_get("/api/data", sources_handler)
     app.router.add_get("/api/data/{source:.+}/profile", profile_handler)
     app.router.add_get("/api/data/{source:.+}/series", series_handler)

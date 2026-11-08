@@ -50,6 +50,7 @@ class MemoryMixin(_Host):
     _stored_models: tuple[str, ...] = ()
 
     def get_user_facts(self) -> dict[str, Any]:
+        """The facts main keeps about the user, by key; empty before any is saved."""
         return self.recall("_user_facts") or {}
 
     def _preferred_timezone_name(self) -> str | None:

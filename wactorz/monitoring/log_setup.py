@@ -40,6 +40,9 @@ class JsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        """The record as one JSON line: time, level, logger and message, with the traceback and
+        stack when it has them.
+        """
         entry = {
             "ts": datetime.fromtimestamp(record.created, timezone.utc).isoformat(
                 timespec="milliseconds"

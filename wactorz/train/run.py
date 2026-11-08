@@ -73,6 +73,7 @@ class Outcome:
 
     @property
     def reference(self) -> str | None:
+        """The stored version's reference, or None when the run stored nothing."""
         return self.artifact.reference if self.artifact else None
 
     def summary(self) -> str:
@@ -89,6 +90,7 @@ class Outcome:
         return line
 
     def to_dict(self) -> dict[str, Any]:
+        """The outcome as JSON: the train agent's reply, and what ``wactorz-train`` prints."""
         return {
             "run_id": self.run_id,
             "ok": self.ok,
@@ -129,6 +131,7 @@ def new_run_id(now: float) -> str:
 
 
 def runs_root(state_dir: str | Path) -> Path:
+    """The directory under ``state_dir`` that every run's directory is made in."""
     return Path(state_dir) / RUNS_DIRNAME
 
 

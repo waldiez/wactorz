@@ -54,6 +54,10 @@ class ActorMetricsCollector:
         self._registry_provider = registry_provider
 
     def collect(self) -> Iterable[GaugeMetricFamily | CounterMetricFamily]:
+        """The registry's actors as metrics, read when scraped: how many and in which state, and
+        per actor its messages, tasks, errors, mailbox, restarts, uptime, heartbeat age and model
+        usage.
+        """
         registry = self._registry_provider()
         if registry is not None and hasattr(registry, "all_actors"):
             actors = list(registry.all_actors())
@@ -244,6 +248,9 @@ class BrokerMetricsCollector:
         self._publisher_provider = publisher_provider
 
     def collect(self) -> Iterable[GaugeMetricFamily | CounterMetricFamily]:
+        """The broker connection as metrics, read when scraped: whether it is up, and, with a
+        publisher, its outbox depths and its failure and drop counters.
+        """
         publisher = self._publisher_provider()
         connected = GaugeMetricFamily(
             "wactorz_mqtt_connected",
@@ -310,6 +317,9 @@ class NodeMetricsCollector:
         self._expected_provider = expected_provider
 
     def collect(self) -> Iterable[GaugeMetricFamily]:
+        """The edge nodes as metrics, read when scraped: each node known or expected, whether its
+        heartbeat is recent, its age, its agents and what it runs.
+        """
         known = {str(node.get("node")): node for node in self._nodes_provider()}
         names = sorted({*known, *self._expected_provider()})
         now = time.time()
@@ -381,6 +391,9 @@ class RestartLoopMetricsCollector:
         self._nodes_provider = nodes_provider
 
     def collect(self) -> Iterable[GaugeMetricFamily]:
+        """The agents restarting slowly after repeated crashes, here and on each node, as one
+        gauge per agent.
+        """
         slow = GaugeMetricFamily(
             "wactorz_actor_slow_restarts",
             "1 for an agent its supervisor restarts slowly after repeated crashes; "
@@ -410,6 +423,7 @@ class SpendMetricsCollector:
         self.latest: dict[str, Any] | None = None
 
     def collect(self) -> Iterable[GaugeMetricFamily]:
+        """The model spend this period, and its limit when there is one, from the latest report."""
         spend = GaugeMetricFamily(
             "wactorz_llm_spend_usd",
             "Spent on models so far this period, in USD.",
@@ -502,9 +516,11 @@ class PrometheusMonitor:
             self._spend.latest = None
 
     def render(self) -> bytes:
+        """Every registered collector, in the Prometheus text format."""
         return generate_latest(self._registry)
 
     def metrics_response(self) -> web.Response:
+        """The metrics as an HTTP response with the Prometheus content type."""
         return web.Response(
             body=self.render(),
             headers={"Content-Type": CONTENT_TYPE_LATEST},

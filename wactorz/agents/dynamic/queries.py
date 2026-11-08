@@ -197,6 +197,7 @@ class NotAwaited(TypeError):
 
     @classmethod
     def on_a_node(cls, call: str) -> "NotAwaited":
+        """The error for calling ``agent.<call>()`` on a node without awaiting it."""
         return cls(
             f"agent.{call}() reads main's history over the broker on a node, so it must "
             f"be awaited: write `await agent.{call}(...)`"

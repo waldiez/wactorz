@@ -706,6 +706,7 @@ class NodeRunner:
                 )
 
     async def stop_all(self) -> None:
+        """Stop every agent on this node, one after another."""
         for name in list(self.agents):
             await self.stop_agent(name)
 
@@ -1439,6 +1440,12 @@ class NodeRunner:
     # ── Main run loop ─────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        """Run the node until it is cancelled: take the state directory, start publishing, the
+        heartbeat, the data shipping and the supervisor, then listen to the broker.
+
+        On the way out the supervisor stops the agents and the state directory is released.
+        Raises :class:`StateInUseError` when another process holds the state directory.
+        """
         # Before anything reads the state directory: a second node on it would
         # write back over the first, and an import into it would be undone.
         # Raises `StateInUseError` when another process holds it.

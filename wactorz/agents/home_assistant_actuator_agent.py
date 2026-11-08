@@ -58,10 +58,12 @@ class ActuatorAction:
     service_data: dict[str, Any] = field(default_factory=dict)  # e.g. {"color_name": "red"}
 
     def to_dict(self) -> dict[str, Any]:
+        """The action as JSON, one key per field."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ActuatorAction:
+        """The action :meth:`to_dict` wrote; ``service_data`` may be left out."""
         return cls(
             domain=d["domain"],
             service=d["service"],
@@ -116,10 +118,12 @@ class ActuatorCondition:
     value: Any  # e.g. "above_horizon" or 0
 
     def to_dict(self) -> dict[str, Any]:
+        """The condition as JSON, one key per field."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ActuatorCondition:
+        """The condition :meth:`to_dict` wrote."""
         return cls(
             entity_id=d["entity_id"],
             attribute=d["attribute"],
@@ -165,6 +169,7 @@ class ActuatorConfig:
     cooldown_seconds: float = 10.0
 
     def to_dict(self) -> dict[str, Any]:
+        """The configuration as JSON, as :meth:`from_dict` reads it back."""
         return {
             "automation_id": self.automation_id,
             "description": self.description,
@@ -177,6 +182,9 @@ class ActuatorConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ActuatorConfig:
+        """The configuration :meth:`to_dict` wrote; everything but the id and the topics may be
+        left out.
+        """
         return cls(
             automation_id=d["automation_id"],
             description=d.get("description", ""),
@@ -221,6 +229,9 @@ class HomeAssistantActuatorAgent(Actor):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
+        """Restore the actuation count and time, publish the manifest, and start listening on the
+        configured topics, with a connection to Home Assistant kept alive.
+        """
         self._last_actuation_time = float(self.recall("last_actuation_time", 0.0))
         self._actuations_count = int(self.recall("actuations_count", 0))
         self.persist("config", self.config.to_dict())
@@ -243,6 +254,7 @@ class HomeAssistantActuatorAgent(Actor):
         )
 
     async def on_stop(self) -> None:
+        """Remember the actuation count and time for the next start."""
         self.persist("last_actuation_time", self._last_actuation_time)
         self.persist("actuations_count", self._actuations_count)
 
@@ -498,6 +510,7 @@ class HomeAssistantActuatorAgent(Actor):
         )
 
     async def handle_message(self, msg: Message) -> None:
+        """Answer any task with the actuator's status, in words under ``result`` and as fields."""
         if msg.type != MessageType.TASK:
             return
         # `result` first, and it is not decoration: the chat surface reads a

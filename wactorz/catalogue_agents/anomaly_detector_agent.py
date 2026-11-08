@@ -140,6 +140,7 @@ class EntityBaseline:
         self.ready = False  # enough data to detect?
 
     def to_dict(self) -> dict[str, Any]:
+        """The baseline as JSON, for the agent to remember across restarts."""
         return {
             "entity_id": self.entity_id,
             "field": self.field,
@@ -160,6 +161,7 @@ class EntityBaseline:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "EntityBaseline":
+        """The baseline :meth:`to_dict` wrote; a field missing from ``d`` keeps its default."""
         b = EntityBaseline(d["entity_id"], d["field"])
         for k in (
             "hourly_mean",
@@ -405,6 +407,11 @@ def _explain_anomaly(
 
 
 async def setup(agent: AgentAPI) -> None:
+    """Read the settings and the baselines the agent remembers, declare its topics, and start
+    scoring readings as they arrive.
+
+    Detection starts inactive: the agent learns first.
+    """
     # Load config
     baseline_hours = int(agent.recall("baseline_hours") or DEFAULT_BASELINE_HOURS)
     learning_period_h = int(agent.recall("learning_period_hours") or DEFAULT_LEARNING_PERIOD_H)
@@ -462,6 +469,10 @@ async def setup(agent: AgentAPI) -> None:
 
 
 async def process(agent: AgentAPI) -> None:
+    """Turn detection on once the learning period is over or a baseline is ready, rebuild the
+    baselines when they are due, and report every entity silent for longer than its normal
+    interval.
+    """
     now = time.time()
     baselines = agent.state["baselines"]
 
@@ -842,6 +853,11 @@ async def _report_anomaly(
 
 
 async def handle_task(agent: AgentAPI, payload: dict[str, Any]) -> dict[str, Any]:
+    """Answer an ``action``: ``status``, ``report``, ``train`` (or ``rebuild``), ``reset``,
+    ``configure``, ``baselines`` or ``entities``.
+
+    The payload may come as JSON in ``text``, as an @mention sends it, or as the bare action.
+    """
     # Parse JSON from "text" field when routed via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:

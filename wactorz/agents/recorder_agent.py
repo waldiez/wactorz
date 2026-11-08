@@ -118,6 +118,9 @@ class RecorderAgent(Actor):
         return data_root(state_dir or resolve_state_dir())
 
     async def on_start(self) -> None:
+        """Publish the manifest and record every topic given, flushing on schedule; with no
+        topic, log that nothing is recorded.
+        """
         await self.publish_manifest(
             description=self.DESCRIPTION,
             publishes=[],
@@ -133,6 +136,7 @@ class RecorderAgent(Actor):
         await self.log(f"Recording {', '.join(self.topics)} under {self.root}")
 
     async def on_stop(self) -> None:
+        """Stop the flush loop and write what is held, before the base class stops the rest."""
         if self._flusher is not None:
             self._flusher.cancel()
             self._flusher = None

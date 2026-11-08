@@ -48,6 +48,9 @@ class ArtifactCache:
         self.unpacked: Path = unpacked or directory.parent / UNPACKED_DIRNAME
 
     def path(self, sha256: str) -> Path:
+        """Where the artifact with this ``sha256`` is, or would be, kept; this does not check
+        that it is there.
+        """
         return self.directory / sha256
 
     def readable_path(self, entry: Mapping[str, Any]) -> Path:

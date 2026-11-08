@@ -50,6 +50,7 @@ Pointers = Callable[[str], Mapping[str, int | None]]
 
 
 def root_of(topic: str) -> str:
+    """The first level of ``topic``: ``sensors`` for ``sensors/imu/left``."""
     return topic.split("/", 1)[0]
 
 

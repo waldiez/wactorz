@@ -248,6 +248,7 @@ class MeteredLLM:
     async def complete(
         self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
     ) -> tuple[str, dict[str, Any]]:
+        """The provider's completion, with its cost charged to the agent."""
         text, usage = await self._provider.complete(messages, system, **kwargs)
         self._record(usage)
         return text, usage
@@ -259,6 +260,7 @@ class MeteredLLM:
         system: str = "",
         **kwargs: Any,
     ) -> Any:
+        """The provider's completion with tools, with its cost charged to the agent."""
         result = await self._provider.complete_with_tools(messages, tools, system, **kwargs)
         self._record(getattr(result, "usage", None))
         return result
@@ -324,6 +326,9 @@ class FunctionAgent(Actor):
         return self.spec.models
 
     async def on_start(self) -> None:
+        """Publish the manifest, subscribe to each topic the spec names, and find the models on
+        trial.
+        """
         publishes = [self.spec.publishes] if self.spec.publishes else []
         await self.publish_manifest(
             description=self.spec.description,
@@ -340,6 +345,9 @@ class FunctionAgent(Actor):
         await self._resolve_shadows()
 
     async def on_stop(self) -> None:
+        """Stop writing the trials' pairs, closing each file, before the base class stops the
+        rest.
+        """
         if self._pairs_flusher is not None:
             self._pairs_flusher.cancel()
             self._pairs_flusher = None

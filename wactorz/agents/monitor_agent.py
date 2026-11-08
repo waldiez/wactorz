@@ -39,6 +39,14 @@ _NOTIFY_COOLDOWN = 120.0
 
 
 class MonitorActor(Actor):
+    """Watches the other actors: who has gone quiet, who reported errors, and how the host is
+    doing.
+
+    Every check interval it pings the actors, alerts on one silent past the heartbeat timeout and
+    on the errors agents report, and publishes the system's health and the host's load. Main is
+    told of what needs a person.
+    """
+
     def __init__(
         self,
         check_interval: float = 15.0,
@@ -71,6 +79,7 @@ class MonitorActor(Actor):
             pass
 
     async def on_start(self) -> None:
+        """Count every actor as seen now, prime the CPU reading, and start the monitoring loop."""
         if self._registry:
             now = time.time()
             for actor in self._registry.all_actors():
@@ -93,6 +102,9 @@ class MonitorActor(Actor):
     # ── Message handling ───────────────────────────────────────────────────
 
     async def handle_message(self, msg: Message) -> None:
+        """Take any message from an actor as a sign it is alive, and an error event forwarded
+        from an agent as an error to track.
+        """
         # Any message from an actor counts as a liveness signal
         if msg.sender_id and msg.sender_id != self.actor_id:
             self._last_seen[msg.sender_id] = time.time()

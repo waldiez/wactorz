@@ -402,6 +402,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """Run ``wactorz-reset``: clear what the flags name, for one agent with ``--agent`` or for all
+    of them.
+
+    With no flag at all it prints the usage and exits with status 1, so a bare run clears nothing.
+    """
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stdout
     )

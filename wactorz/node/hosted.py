@@ -116,10 +116,14 @@ class NodeHosted(_Base):
         flush_states()
 
     def persist(self, key: str, value: Any) -> None:
+        """Remember ``value`` under ``key``, and write it to the node's state file for the
+        agent's next start.
+        """
         self._persistent_state[key] = value
         self._state_file.save(self._persistent_state, changed=(key,))
 
     def recall(self, key: str, default: Any = None) -> Any:
+        """What is remembered under ``key``, or ``default`` when nothing is."""
         return self._persistent_state.get(key, default)
 
     def _own_state(self) -> dict[str, Any]:
@@ -166,6 +170,7 @@ class NodeHosted(_Base):
 
     @property
     def node(self) -> str:
+        """The name of the node this agent runs on."""
         return self._node
 
     async def _send_manifest(self, manifest: dict[str, Any]) -> None:

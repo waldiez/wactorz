@@ -46,10 +46,12 @@ GMAIL_CONFIG = GoogleMcpConfig(
 
 
 def gmail_mcp_config_status() -> dict[str, Any]:
+    """What is configured for Gmail, for the agent's status answer; never a secret's value."""
     return GMAIL_CONFIG.config_status()
 
 
 def gmail_mcp_url() -> str:
+    """The Gmail MCP endpoint, without a trailing slash."""
     return GMAIL_CONFIG.mcp_url()
 
 

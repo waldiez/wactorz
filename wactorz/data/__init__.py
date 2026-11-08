@@ -14,7 +14,9 @@ imported where it is used rather than here.
 from .clock import DEFAULT_LATENESS_S, newest_event_time, now_of
 from .files import (
     DATA_DIRNAME,
+    FUTURE_ALLOWANCE_S,
     DataError,
+    clock_ahead,
     data_root,
     event_time_of,
     files_for,
@@ -25,7 +27,9 @@ from .files import (
 __all__ = [
     "DATA_DIRNAME",
     "DEFAULT_LATENESS_S",
+    "FUTURE_ALLOWANCE_S",
     "DataError",
+    "clock_ahead",
     "data_root",
     "event_time_of",
     "files_for",

@@ -31,7 +31,7 @@ from typing import Any, ClassVar
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
-from ..data.files import DataError, check_source, data_root, event_time_of
+from ..data.files import DataError, check_source, clock_ahead, data_root, event_time_of
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -56,6 +56,14 @@ def source_from_topic(topic: str) -> str:
             break
         levels.append(level)
     return "/".join(levels)
+
+
+def _duration(seconds: float) -> str:
+    """``seconds`` in the largest unit that keeps it above one, for a person to read."""
+    for unit, size in (("years", 365.25 * 86400), ("days", 86400.0), ("hours", 3600.0)):
+        if seconds >= size:
+            return f"{seconds / size:,.0f} {unit}"
+    return f"{seconds / 60:,.0f} minutes"
 
 
 def topics_of(value: Any) -> tuple[str, ...]:
@@ -109,6 +117,11 @@ class RecorderAgent(Actor):
         #: What this agent has recorded and refused, for its card.
         self.recorded: int = 0
         self.refused: int = 0
+        #: Readings whose own time was too far ahead of their arrival, filed at
+        #: their arrival instead; and the sources that sent them, each said once
+        #: on the feed.
+        self.clock_ahead: int = 0
+        self._clock_ahead_sources: set[str] = set()
 
     @property
     def root(self) -> Path:
@@ -154,6 +167,8 @@ class RecorderAgent(Actor):
             "root": str(self.root),
             "recorded": self.recorded,
             "refused": self.refused,
+            "clock_ahead": self.clock_ahead,
+            "clock_ahead_sources": sorted(self._clock_ahead_sources),
             "pending": sum(w.pending for w in self._writers.values()),
             "sources": sorted(self._writers),
         }
@@ -193,6 +208,9 @@ class RecorderAgent(Actor):
             self.refused += 1
             return False
         ts, time_source = event_time_of(payload, arrived=arrived)
+        ahead = clock_ahead(payload, arrived=arrived)
+        if ahead:
+            await self._clock_is_ahead(writer.source, ahead)
         row = {
             key: value
             for key, value in payload.items()
@@ -201,13 +219,28 @@ class RecorderAgent(Actor):
         row.update({"ts": ts, "arrived": arrived, "time_source": time_source})
         try:
             await asyncio.to_thread(writer.append, row)
-        except (OSError, DataError) as exc:
+        except (OSError, ValueError) as exc:  # DataError, or a time no date can hold
             self.refused += 1
             await self.log(f"cannot record a reading of {writer.source}: {exc}", level="warning")
             return False
         self.recorded += 1
         self.metrics.messages_processed += 1
         return True
+
+    async def _clock_is_ahead(self, source: str, ahead: float) -> None:
+        """Count a reading of ``source`` whose own time was ``ahead`` seconds past its
+        arrival, and say so on the feed the first time ``source`` sends one.
+        """
+        self.clock_ahead += 1
+        if source in self._clock_ahead_sources:
+            return
+        self._clock_ahead_sources.add(source)
+        await self.log(
+            f"{source}'s clock is about {_duration(ahead)} ahead of this one: its readings are "
+            "filed at the time they arrive until it is right. A device sending milliseconds, "
+            "or its local time as UTC, does this.",
+            level="warning",
+        )
 
     def _writer_for(self, source: str) -> Any:
         writer = self._writers.get(source)
@@ -245,7 +278,7 @@ class RecorderAgent(Actor):
         for writer in list(self._writers.values()):
             try:
                 made.extend(await asyncio.to_thread(writer.flush))
-            except OSError as exc:
+            except Exception as exc:  # one source's failure must not stop the others, or the loop
                 await self.log(
                     f"cannot write the readings of {writer.source}: {exc}", level="warning"
                 )

@@ -134,6 +134,12 @@ the clock.
   records them with the version it stores.
 - **"Now" per source** (built, above): the drift agent's window, the
   trainer's default window, the policy's days and a rule's cooldown.
+- **Clock trouble** (built, for the future): a payload time more than five
+  minutes (`wactorz.data.FUTURE_ALLOWANCE_S`) ahead of its arrival is filed at
+  the arrival, marked `time_source: "arrival"`, and the recorder says so once
+  per source on the feed; `clock_ahead` gives the amount. "Now" passes over any
+  time that far ahead of the wall clock already on disk. Still open: a payload
+  time older than the store's retention, dropped and counted.
 - **The simulator** replays recorded data with its original times in the
   payloads, at any speed, through the same recorder and agents, which the
   above makes possible: nothing in the loop reads the machine's clock to

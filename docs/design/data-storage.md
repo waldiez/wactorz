@@ -59,7 +59,7 @@ the order they arrived, with three columns the recorder adds:
 | --- | --- | --- |
 | `ts` | float64 | event time, Unix seconds, as `event-time.md` reads it from the payload |
 | `arrived` | float64 | when the recorder received it, wall clock |
-| `time_source` | string | `payload` when `ts` came from the payload, `arrival` when it is the arrival time |
+| `time_source` | string | `payload` when `ts` came from the payload, `arrival` when it is the arrival time: the payload gave none, or one more than five minutes ahead of its arrival |
 
 Payload fields keep their names and their types as they came: a number is a
 `float64`, a string a `string`, a boolean a `bool`, a nested object or a list

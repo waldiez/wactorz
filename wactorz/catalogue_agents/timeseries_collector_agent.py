@@ -83,7 +83,7 @@ from typing import Any
 from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import WactorzDB, get_db
-from wactorz.data.files import event_time_of
+from wactorz.data.files import clock_ahead, event_time_of
 
 logger: logging.Logger = logging.getLogger("timeseries-collector")
 
@@ -130,6 +130,26 @@ class _Readings:
         self._buffer.append((self._ts, *row[1:], self._arrived, self._time_source))
 
 
+def _note_clock_ahead(agent: AgentAPI, topic: str, ahead: float) -> None:
+    """Log, once per topic, that a reading's own time was ``ahead`` seconds past its arrival.
+
+    `event_time_of` has filed it at its arrival already; this says why, for
+    whoever reads the log wondering where a device's times went.
+    """
+    if not ahead:
+        return
+    warned: set[str] = agent.state.setdefault("clock_ahead_topics", set())
+    if topic in warned:
+        return
+    warned.add(topic)
+    logger.warning(
+        "%s gives times %.0f s ahead of their arrival: stored at the arrival until its clock is "
+        "right (milliseconds, or local time sent as UTC, do this)",
+        topic,
+        ahead,
+    )
+
+
 def _route_message(agent: AgentAPI, topic: str, payload: Any) -> None:
     """Route an MQTT message to the correct buffer based on topic."""
     now = time.time()
@@ -138,6 +158,7 @@ def _route_message(agent: AgentAPI, topic: str, payload: Any) -> None:
         return
 
     ts, time_source = event_time_of(payload, arrived=now)
+    _note_clock_ahead(agent, topic, clock_ahead(payload, arrived=now))
     sensor_buf = _Readings(agent.state["sensor_buffer"], now, ts, time_source)
     detection_buf = agent.state["detection_buffer"]
     ha_buf = agent.state["ha_buffer"]

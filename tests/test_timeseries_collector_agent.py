@@ -190,6 +190,24 @@ class TestRouting:
         assert rows["door"]["value"] is None
         assert (rows["temperature"]["agent"], rows["temperature"]["node"]) == ("bme280", "pi")
 
+    async def test_a_clock_far_ahead_is_stored_at_its_arrival_and_logged_once(
+        self, agent: _Agent, db: WactorzDB, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        sent = time.time()
+        with caplog.at_level(logging.WARNING, logger="timeseries-collector"):
+            for _ in range(2):
+                _route(agent, "sensors/kitchen", {"ts": sent * 1000, "temperature": 21.5})
+            _route(agent, "sensors/hall", {"ts": sent * 1000, "temperature": 20.0})
+        NS["_flush"](agent)
+
+        rows = _rows(db, "sensor_readings")
+        assert {r["time_source"] for r in rows} == {"arrival"}
+        assert all(r["ts"] == r["arrived"] >= sent for r in rows)
+        said = [
+            r.getMessage() for r in caplog.records if "ahead of their arrival" in r.getMessage()
+        ]
+        assert [line.split()[0] for line in said] == ["sensors/kitchen", "sensors/hall"]
+
     async def test_anything_but_an_object_is_ignored(self, agent: _Agent) -> None:
         _route(agent, "sensors/x", [1, 2, 3])
 

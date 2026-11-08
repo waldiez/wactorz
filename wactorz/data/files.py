@@ -40,6 +40,15 @@ HOUR_S = 3600.0
 FROM_PAYLOAD = "payload"
 FROM_ARRIVAL = "arrival"
 
+#: How far ahead of its arrival a payload's own time may be and still be the
+#: reading's event time. Further ahead, it is a device clock that is wrong -- a
+#: device sending its local time as UTC is hours ahead, one sending milliseconds
+#: is millennia ahead -- and the reading is filed at its arrival instead, as
+#: ``docs/design/event-time.md`` ("Clock trouble is visible, not silent") asks.
+#: Readings arrive after they happen, never before, so this needs to cover only
+#: the skew between two honest clocks.
+FUTURE_ALLOWANCE_S = 300.0
+
 #: What one level of a source may be: the characters a topic level or a device
 #: name is made of, never empty, never ``.`` or ``..``.
 _LEVEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]*$")
@@ -252,16 +261,38 @@ def _numbered(directory: Path) -> list[Path]:
     return sorted(p for p in directory.iterdir() if p.is_dir() and p.name.isdigit())
 
 
-def event_time_of(payload: Any, *, arrived: float) -> tuple[float, str]:
+def _said_time(payload: Any) -> float | None:
+    """The time ``payload`` gives itself, as `wactorz.core.labels.event_time` reads it, or None."""
+    sentinel = -1.0
+    said = event_time(payload, default=sentinel)
+    return None if said == sentinel else said
+
+
+def clock_ahead(payload: Any, *, arrived: float, allowance: float = FUTURE_ALLOWANCE_S) -> float:
+    """How many seconds ``payload``'s own time is ahead of ``arrived``, when that is past
+    ``allowance``; 0.0 when it is not, or when the payload gives no time.
+
+    For a caller to say that a source's clock is wrong: `event_time_of` has
+    already filed such a reading at its arrival.
+    """
+    said = _said_time(payload)
+    if said is None or said - float(arrived) <= allowance:
+        return 0.0
+    return said - float(arrived)
+
+
+def event_time_of(
+    payload: Any, *, arrived: float, allowance: float = FUTURE_ALLOWANCE_S
+) -> tuple[float, str]:
     """When ``payload`` says it happened, and where that came from.
 
     The event time as `wactorz.core.labels.event_time` reads it (``ts``, then
     ``timestamp``), marked `FROM_PAYLOAD`; or ``arrived`` marked `FROM_ARRIVAL`
-    when the payload says nothing usable, as ``docs/design/event-time.md``
-    asks.
+    when the payload says nothing usable, or gives a time more than
+    ``allowance`` seconds ahead of its arrival, as ``docs/design/event-time.md``
+    asks. `clock_ahead` says which readings were the second kind.
     """
-    sentinel = -1.0
-    said = event_time(payload, default=sentinel)
-    if said == sentinel:
+    said = _said_time(payload)
+    if said is None or said - float(arrived) > allowance:
         return float(arrived), FROM_ARRIVAL
     return said, FROM_PAYLOAD

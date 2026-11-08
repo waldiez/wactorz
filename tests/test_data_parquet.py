@@ -15,7 +15,15 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from wactorz.data import DataError, data_root, event_time_of, files_for, hour_dir
+from wactorz.data import (
+    FUTURE_ALLOWANCE_S,
+    DataError,
+    clock_ahead,
+    data_root,
+    event_time_of,
+    files_for,
+    hour_dir,
+)
 from wactorz.data import files as data_files
 from wactorz.data.files import (
     FROM_ARRIVAL,
@@ -58,7 +66,7 @@ class TestTheLayout:
 class TestEventTime:
     def test_the_payloads_time_is_taken_and_said_so(self) -> None:
         assert event_time_of({"ts": T0, "x": 1}, arrived=T0 + 9) == (T0, FROM_PAYLOAD)
-        assert event_time_of({"timestamp": "2025-10-09T08:53:20+00:00"}, arrived=1) == (
+        assert event_time_of({"timestamp": "2025-10-09T08:53:20+00:00"}, arrived=T0 + 9) == (
             T0,
             FROM_PAYLOAD,
         )
@@ -67,6 +75,41 @@ class TestEventTime:
         assert event_time_of({"x": 1}, arrived=T0 + 9) == (T0 + 9, FROM_ARRIVAL)
         assert event_time_of("not a mapping", arrived=T0) == (T0, FROM_ARRIVAL)
         assert event_time_of({"ts": "soon"}, arrived=T0) == (T0, FROM_ARRIVAL)
+
+
+class TestAClockAhead:
+    """A payload time far ahead of its arrival is a wrong device clock, filed at the arrival."""
+
+    def test_a_time_ahead_within_the_allowance_is_the_payloads(self) -> None:
+        ahead = T0 + FUTURE_ALLOWANCE_S
+
+        assert event_time_of({"ts": ahead}, arrived=T0) == (ahead, FROM_PAYLOAD)
+        assert clock_ahead({"ts": ahead}, arrived=T0) == 0.0
+
+    def test_milliseconds_are_filed_at_the_arrival(self) -> None:
+        sent = {"ts": T0 * 1000}
+
+        assert event_time_of(sent, arrived=T0) == (T0, FROM_ARRIVAL)
+        assert clock_ahead(sent, arrived=T0) == T0 * 1000 - T0
+
+    def test_local_time_sent_as_utc_is_filed_at_the_arrival(self) -> None:
+        sent = {"timestamp": "2025-10-09T11:53:20+00:00"}  # three hours past T0
+
+        assert event_time_of(sent, arrived=T0) == (T0, FROM_ARRIVAL)
+        assert clock_ahead(sent, arrived=T0) == 3 * HOUR
+
+    def test_the_allowance_can_be_given(self) -> None:
+        sent = {"ts": T0 + 60}
+
+        assert event_time_of(sent, arrived=T0, allowance=30) == (T0, FROM_ARRIVAL)
+        assert clock_ahead(sent, arrived=T0, allowance=30) == 60
+
+    def test_a_time_behind_its_arrival_is_the_payloads_however_late(self) -> None:
+        sent = {"ts": T0 - 30 * 86400}
+
+        assert event_time_of(sent, arrived=T0) == (T0 - 30 * 86400, FROM_PAYLOAD)
+        assert clock_ahead(sent, arrived=T0) == 0.0
+        assert clock_ahead({"x": 1}, arrived=T0) == 0.0
 
 
 class TestTheWriter:

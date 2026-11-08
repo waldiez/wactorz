@@ -474,6 +474,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A device clock far ahead no longer breaks recording.** A reading whose own time is more than five minutes
+  ahead of its arrival (a device sending milliseconds, or its local time as UTC) is filed at its arrival and marked
+  `time_source: "arrival"`, and the recorder says once per source on the feed that its clock is ahead. One such
+  reading used to make the recorder write a file per reading and then stop its timed flush, or move a source's
+  "now" years ahead, so drift was never checked there again. "Now" also passes over any such time already on disk,
+  and one source failing to flush no longer stops the others. The recorder's status counts these readings
+  (`clock_ahead`).
 - **doc-to-pptx says why it cannot outline a document without an LLM.** Spawned without one, it failed with
   "'NoneType' object has no attribute 'chat'"; now it says the agent was spawned without an LLM and the outline needs
   one.

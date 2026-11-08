@@ -7,12 +7,15 @@ time; the source is what the payload names, else the topic without its
 wildcards. ``docs/design/data-storage.md`` is the decision these pin.
 """
 
+import asyncio
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.waiting import until
 from wactorz import plugins
 from wactorz.agents.recorder_agent import RecorderAgent, source_from_topic, topics_of
 from wactorz.core.actor import Message, MessageType
@@ -145,6 +148,97 @@ class TestRecording:
             ["d"],
             "t",
         )
+
+
+class TestAClockAhead:
+    """A device whose clock is far ahead is filed at arrival, and said once per source."""
+
+    async def test_a_reading_in_milliseconds_is_filed_at_its_arrival(
+        self, recorder: RecorderAgent
+    ) -> None:
+        now = time.time()
+
+        assert await recorder.record({"device": "d", "ts": now * 1000, "ax": 1}, "sensors/imu/#")
+        await recorder.flush()
+
+        (row,) = _rows("d")
+        assert row["time_source"] == "arrival"
+        assert row["ts"] == row["arrived"]
+        assert row["arrived"] >= now
+        assert recorder.clock_ahead == 1
+
+    async def test_it_is_said_once_per_source_on_the_feed(
+        self, recorder: RecorderAgent, published: list[tuple[str, Any]]
+    ) -> None:
+        ahead = time.time() + 3 * 3600
+        for _ in range(3):
+            await recorder.record({"device": "d", "ts": ahead}, "sensors/imu/#")
+        await recorder.record({"device": "e", "ts": ahead}, "sensors/imu/#")
+
+        said = [
+            payload["message"]
+            for topic, payload in published
+            if topic.endswith("/logs") and "clock is about" in payload["message"]
+        ]
+        assert [line.split("'")[0] for line in said] == ["d", "e"]
+        assert "3 hours ahead" in said[0]
+        assert recorder.clock_ahead == 4
+
+    async def test_its_status_counts_them(
+        self, recorder: RecorderAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent: list[Any] = []
+
+        async def send(_target: str, _kind: Any, payload: Any) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(recorder, "send", send)
+        await recorder.record({"device": "d", "ts": time.time() * 1000}, "sensors/imu/#")
+
+        await recorder.handle_message(
+            Message(sender_id="main", type=MessageType.TASK, payload={"action": "status"})
+        )
+
+        (reply,) = sent
+        assert (reply["clock_ahead"], reply["clock_ahead_sources"]) == (1, ["d"])
+
+
+class TestFlushing:
+    async def test_one_source_failing_leaves_the_others_written(
+        self, recorder: RecorderAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await recorder.record({"device": "broken", "ts": T0}, "sensors/imu/#")
+        await recorder.record({"device": "fine", "ts": T0}, "sensors/imu/#")
+
+        def fail() -> list[Path]:
+            raise ValueError("year 58818 is out of range")
+
+        monkeypatch.setattr(recorder._writers["broken"], "flush", fail)
+
+        made = await recorder.flush()
+
+        assert len(made) == 1
+        assert len(_rows("fine")) == 1
+
+    async def test_the_timed_flush_goes_on_after_a_failure(
+        self, recorder: RecorderAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await recorder.record({"device": "d", "ts": T0}, "sensors/imu/#")
+        calls: list[int] = []
+
+        def fail() -> list[Path]:
+            calls.append(1)
+            raise RuntimeError("not an OSError")
+
+        monkeypatch.setattr(recorder._writers["d"], "flush", fail)
+        recorder.flush_every_s = 0.01
+        loop = asyncio.create_task(recorder._flush_loop())
+        try:
+            await until(lambda: len(calls) >= 3, "three timed flushes, each failing")
+            assert not loop.done()
+        finally:
+            loop.cancel()
+            await asyncio.gather(loop, return_exceptions=True)
 
 
 class TestTheCatalogue:

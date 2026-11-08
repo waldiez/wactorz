@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.data import DEFAULT_LATENESS_S, data_root, newest_event_time, now_of
+from wactorz.data import (
+    DEFAULT_LATENESS_S,
+    FUTURE_ALLOWANCE_S,
+    data_root,
+    newest_event_time,
+    now_of,
+)
 from wactorz.data import clock as data_clock
 from wactorz.data.parquet import Writer
 
@@ -68,3 +74,52 @@ class TestNow:
         assert now_of(root, SOURCE) == T0 + 9 * HOUR
         assert now_of(root, SOURCE, fallback=T0) == T0
         assert now_of(root, "") == T0 + 9 * HOUR
+
+
+class TestATimeAheadOfTheClock:
+    """A file written before readings ahead of the clock were filed at arrival may hold one."""
+
+    @pytest.fixture(autouse=True)
+    def _clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(data_clock.time, "time", lambda: T0 + 10 * HOUR)
+        monkeypatch.setattr(data_clock, "_ahead_said", set())
+
+    def test_now_passes_over_an_hour_ahead_of_the_clock(self, root: Path) -> None:
+        year_2100 = 4_102_444_800.0
+        _record(root, SOURCE, [T0, T0 + 300, year_2100])
+
+        assert now_of(root, SOURCE, lateness=0) == T0 + 300
+
+    def test_now_passes_over_a_reading_ahead_inside_the_newest_hour(self, root: Path) -> None:
+        clock = T0 + 10 * HOUR
+        _record(root, SOURCE, [clock - 60, clock + FUTURE_ALLOWANCE_S + 60])
+
+        assert now_of(root, SOURCE, lateness=0) == clock - 60
+
+    def test_a_reading_ahead_within_the_allowance_is_now(self, root: Path) -> None:
+        clock = T0 + 10 * HOUR
+        _record(root, SOURCE, [clock - 60, clock + FUTURE_ALLOWANCE_S - 1])
+
+        assert now_of(root, SOURCE, lateness=0) == clock + FUTURE_ALLOWANCE_S - 1
+
+    def test_only_times_ahead_is_the_wall_clock(self, root: Path) -> None:
+        _record(root, SOURCE, [4_102_444_800.0])
+
+        assert now_of(root, SOURCE) == T0 + 10 * HOUR
+
+    def test_it_is_said_once_per_source(self, root: Path, caplog: pytest.LogCaptureFixture) -> None:
+        _record(root, SOURCE, [T0, 4_102_444_800.0])
+
+        with caplog.at_level("WARNING", logger=data_clock.__name__):
+            now_of(root, SOURCE)
+            now_of(root, SOURCE)
+
+        said = [r for r in caplog.records if SOURCE in r.getMessage()]
+        assert len(said) == 1
+        assert "ahead of this machine's clock" in said[0].getMessage()
+
+    def test_without_a_bound_the_newest_time_is_whatever_was_filed(self, root: Path) -> None:
+        _record(root, SOURCE, [T0, 4_102_444_800.0])
+
+        assert newest_event_time(root, SOURCE) == 4_102_444_800.0
+        assert newest_event_time(root, SOURCE, latest=T0 + HOUR) == T0

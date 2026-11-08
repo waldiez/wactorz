@@ -30,9 +30,6 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
-[options.exclude-newer-package]
-pyasn1 = "2026-10-28T00:00:00Z"
-
 [manifest]
 constraints = [
     { name = "filelock", marker = "python_full_version < '3.11'", specifier = "<4.1" },

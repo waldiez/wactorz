@@ -88,7 +88,11 @@ def _install(scratch: Path, uv: str) -> Path:
     """A scratch environment with the locked dependencies and wactorz in it; its Python."""
     venv = scratch / "venv"
     _run(uv, "venv", "--quiet", "--python", sys.executable, str(venv))
-    python = venv / ("Scripts" if sys.platform == "win32" else "bin") / "python"
+    # `uv --python <path>` checks the file directly rather than resolving
+    # PATHEXT the way launching a process does, so Windows needs the suffix
+    # spelled out: without it, `uv pip install --python .../Scripts/python`
+    # reports no environment at a path that very much has one.
+    python = venv / "Scripts" / "python.exe" if sys.platform == "win32" else venv / "bin" / "python"
     requirements = scratch / "requirements.txt"
     # With the extras a user installs for the integrations: without them, the
     # types the package takes from those libraries read as unknown here though

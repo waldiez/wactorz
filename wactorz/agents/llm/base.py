@@ -120,8 +120,8 @@ class LLMProvider:
 
     async def stream(
         self, messages: list[dict[str, Any]], system: str = "", **kwargs: Any
-    ) -> AsyncGenerator[str, None]:
-        """Yield response chunks as they arrive.
+    ) -> AsyncGenerator[str | dict[str, Any], None]:
+        """Yield response chunks as they arrive, a final usage dict last.
 
         The check runs on first iteration rather than at call time, because
         that is when the request is actually made — and it is where a caller

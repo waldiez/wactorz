@@ -673,6 +673,7 @@ async def test_stream_does_not_replay_what_the_reader_already_saw(no_sleep: None
     seen: list[str] = []
     with _with_policy(retries=2), pytest.raises(Boom):
         async for chunk in provider.stream([{"role": "user", "content": "hi"}]):
+            assert isinstance(chunk, str)
             seen.append(chunk)
     assert seen == ["half a "]
     assert attempts == 1

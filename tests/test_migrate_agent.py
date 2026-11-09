@@ -40,6 +40,7 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.artifacts import ArtifactStore
+from wactorz.core.manifests import AgentManifest
 from wactorz.core.registry import ActorRegistry, Supervisor
 
 #: The id an agent on main and its registry entry share.
@@ -119,7 +120,7 @@ class _Main:
         self,
         *,
         spawn_registry: dict[str, dict[str, Any]] | None = None,
-        manifests: dict[str, dict[str, Any]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
         nodes: dict[str, dict[str, Any]] | None = None,
         local: tuple[str, ...] = (),
     ) -> None:

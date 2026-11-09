@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from .. import plugins
 from ..core.actor import Actor, Message, MessageType, ReplyError
 from ..core.addresses import Address
+from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
 from .dependency_install import InstallOutcome, install_for_agent
@@ -817,7 +818,7 @@ class CatalogAgent(Actor):
             await asyncio.sleep(0.5)
 
         for name, recipe in self._catalog.items():
-            manifest = {
+            manifest: AgentManifest = {
                 "name": name,
                 "actor_id": f"catalog.{name}",
                 "description": recipe.get("description", ""),

@@ -549,10 +549,11 @@ class DelegationManager:
         """
         registry = self.host._registry
         manifest = self.host._agent_manifests.get(target_name, {})
-        if not (manifest.get("spawnable") and manifest.get("catalog")) or not registry:
+        catalog = manifest.get("catalog")
+        if not (manifest.get("spawnable") and catalog) or not registry:
             return None, None
 
-        catalogue = registry.find_by_name(manifest["catalog"])
+        catalogue = registry.find_by_name(catalog)
         if not (catalogue and hasattr(catalogue, "_action_spawn")):
             return None, None
 
@@ -560,7 +561,7 @@ class DelegationManager:
             "[%s] %r not running — auto-spawning via %s...",
             self.host.name,
             target_name,
-            manifest["catalog"],
+            catalog,
         )
         try:
             result = await catalogue._action_spawn(target_name, {})  # pyright: ignore[reportAttributeAccessIssue]

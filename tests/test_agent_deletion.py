@@ -35,6 +35,7 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import derive_actor_id
+from wactorz.core.manifests import AgentManifest
 
 _STORE_LOCKED = "database is locked"
 
@@ -116,8 +117,8 @@ class _Main:
         shared: tuple[dict[str, Any], ...] = (),
         heartbeat_node: str = "",
         supervisor: _Supervisor | None = None,
-        manifests: dict[str, Any] | None = None,
-        topics: dict[str, list[dict[str, Any]]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
+        topics: dict[str, list[AgentManifest]] | None = None,
     ) -> None:
         main = MainActor.__new__(MainActor)
         main.name = "main"

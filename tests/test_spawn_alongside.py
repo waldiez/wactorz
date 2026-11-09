@@ -308,7 +308,7 @@ class TestTheManifestsOfASharedName:
 
         await _both(registry)
 
-        ids = {key: m["actor_id"] for key, m in registry.manifests.items()}
+        ids = {key: m.get("actor_id") for key, m in registry.manifests.items()}
         assert ids == {"counter": HERE["actor_id"], "counter@pi": ON_PI["actor_id"]}
 
     async def test_each_publishes_its_own_topics(self) -> None:
@@ -316,10 +316,10 @@ class TestTheManifestsOfASharedName:
 
         await _both(registry)
 
-        assert [m["actor_id"] for m in registry.topic_registry["custom/counter/pi"]] == [
+        assert [m.get("actor_id") for m in registry.topic_registry["custom/counter/pi"]] == [
             ON_PI["actor_id"]
         ]
-        assert [m["actor_id"] for m in registry.topic_registry["custom/counter/here"]] == [
+        assert [m.get("actor_id") for m in registry.topic_registry["custom/counter/here"]] == [
             HERE["actor_id"]
         ]
 

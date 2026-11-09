@@ -38,7 +38,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from ...core import topic_bus
 from ...core.actor import Actor, ActorState, ReplyError, ask_through, derive_actor_id
@@ -91,6 +91,97 @@ def _readable_here(config: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], s
         }, None
     except ArtifactError as exc:
         return {}, str(exc)
+
+
+class SpawnConfig(TypedDict, total=False):
+    """What a spawn config may carry, read the same way wherever one is spawned.
+
+    Not a `type`-discriminated union: `type` is free text an LLM writes (or
+    omits) and `agent_type()` resolves with its own defaulting rules, so a
+    closed set of literal variants would fight that logic rather than describe
+    it. Every key below is optional because which ones matter depends on the
+    resolved kind -- grouped here by who reads them, not by who may set them,
+    since a registry round-trip or a remote spawn can add or drop keys (see
+    `without_transient_keys`, `_inject_llm_bridge_code`).
+
+    Common to every kind:
+        name, type, node, actor_id, replace, alongside, trusted, artifacts,
+        install, minimum_python, require_install_success, description,
+        input_schema, output_schema, _initial_state, host, capabilities,
+        max_restarts, restart_delay
+    dynamic (and the `llm` bridge code synthesized for one spawned remotely):
+        code, publishes, subscribes, poll_interval, task_timeout_s
+    llm:
+        system_prompt, max_history
+    native / module:
+        options; module also: target, bundle
+    ha_actuator:
+        automation_id, mqtt_topics, actions, conditions, detection_filter,
+        cooldown_seconds
+    scheduled:
+        schedule, publish_topic
+    """
+
+    name: str
+    type: str
+    code: str
+    system_prompt: str
+    actor_id: str
+    node: str
+    replace: bool
+    alongside: bool
+    _initial_state: dict[str, Any]
+    trusted: bool
+    artifacts: dict[str, dict[str, Any]]
+    #: A model asked for a list sometimes writes a comma- or space-delimited
+    #: string instead, and "no dependencies" as an explicit `null` rather
+    #: than leaving the key out; `installed_packages()` is where every form
+    #: becomes a plain list.
+    install: str | list[str] | None
+    minimum_python: list[int]
+    require_install_success: bool
+    description: str
+    input_schema: dict[str, str]
+    output_schema: dict[str, str]
+    poll_interval: float
+    task_timeout_s: float | None
+    publishes: list[str]
+    subscribes: list[str]
+    options: dict[str, Any]
+    target: str
+    bundle: dict[str, Any]
+    max_history: int
+    automation_id: str
+    mqtt_topics: list[str]
+    actions: list[dict[str, Any]]
+    conditions: list[dict[str, Any]]
+    detection_filter: dict[str, Any] | None
+    cooldown_seconds: float
+    schedule: dict[str, Any]
+    publish_topic: str
+    host: str
+    #: What the config says this agent does, read by a node before the
+    #: agent's own code has declared or published anything.
+    capabilities: list[str]
+    #: The supervisor policy a node starts this agent under.
+    max_restarts: int
+    restart_delay: float
+
+
+def installed_packages(config: dict[str, Any]) -> list[str]:
+    """``config``'s ``install``, as a list regardless of which form it arrived in.
+
+    An LLM asked for a list sometimes writes a comma- or space-delimited
+    string instead, so both forms reach here: the one place that normalizes,
+    rather than each reader doing it again. ``None`` -- a model-authored
+    ``"install": null``, or the key left out -- means no packages, not a
+    crash: every caller used to reach this by its own truthy guard or
+    `or []`; now this is the one place that needs to.
+    """
+    packages = config.get("install") or []
+    if isinstance(packages, str):
+        return [p.strip() for p in packages.replace(",", " ").split() if p.strip()]
+    return list(packages)
 
 
 def agent_type(config: dict[str, Any]) -> str:
@@ -596,9 +687,7 @@ class SpawnMixin(_Host):
         if tuple(sys.version_info[:2]) < tuple(minimum):
             logger.error("[%s] %s requires Python %s", self.name, name, minimum)
             return None
-        packages = config.get("install", [])
-        if isinstance(packages, str):
-            packages = [p.strip() for p in packages.replace(",", " ").split() if p.strip()]
+        packages = installed_packages(config)
 
         needed = (
             await asyncio.to_thread(self._packages_needing_install, packages) if packages else []

@@ -26,7 +26,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.placement import Placement
 from wactorz.agents.main.spawns import SpawnService, _parse_spawn_config
-from wactorz.agents.mixins import agent_type
+from wactorz.agents.mixins import agent_type, installed_packages
 from wactorz.core.actor import ActorMetrics
 
 _SPAWN_FAILED = "spawn failed"
@@ -469,3 +469,22 @@ class TestParseSpawnConfig:
 )
 def test_the_kind_of_agent_a_config_describes(config: dict[str, Any], kind: str) -> None:
     assert agent_type(config) == kind
+
+
+@pytest.mark.parametrize(
+    ("config", "packages"),
+    [
+        ({}, []),
+        # A model's "no dependencies" is `null`, not an absent key.
+        ({"install": None}, []),
+        ({"install": []}, []),
+        ({"install": ["a", "b"]}, ["a", "b"]),
+        ({"install": "a, b"}, ["a", "b"]),
+        ({"install": "a b"}, ["a", "b"]),
+        ({"install": ""}, []),
+    ],
+)
+def test_installed_packages_from_every_form_the_config_may_hold(
+    config: dict[str, Any], packages: list[str]
+) -> None:
+    assert installed_packages(config) == packages

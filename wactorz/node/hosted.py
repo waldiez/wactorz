@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from ..agents.function_agent import FunctionAgent
 from ..core import agent_reset
 from ..core.actor import Actor, ReplyError, ask_through, forbidden
+from ..core.manifests import AgentManifest
 from ..core.state_codec import decode_state
 from .state import JsonState, agent_state, flush_states
 
@@ -173,7 +174,7 @@ class NodeHosted(_Base):
         """The name of the node this agent runs on."""
         return self._node
 
-    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+    async def _send_manifest(self, manifest: AgentManifest) -> None:
         """Send ``manifest`` naming this node, and that a task reaches it on the node's own topic.
 
         Whatever kind of agent this is, so a node that resolves an address from

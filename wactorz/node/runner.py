@@ -27,7 +27,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .. import __version__, plugins
 from ..config import (
@@ -56,7 +56,9 @@ from ..core.blob_transfer import (
     wait_for,
 )
 from ..core.cancellation import cancel_all_until_done
+from ..core.heartbeats import NodeHeartbeat
 from ..core.identity import given_actor_id
+from ..core.manifests import NodeManifest
 from ..core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -790,8 +792,11 @@ class NodeRunner:
         was sent; the heartbeat carries what changes from moment to moment.
         """
         described = await asyncio.to_thread(machine.describe, Path(self.state_dir))
-        await self.publish(
-            f"nodes/{self.node_name}/manifest",
+        # `describe()` and `_node_identity()` are typed loosely, so the merge
+        # itself is the one trusted point: the keys below are what makes it
+        # an honest `NodeManifest`.
+        manifest = cast(
+            "NodeManifest",
             {
                 **self._node_identity(),
                 **described,
@@ -811,8 +816,8 @@ class NodeRunner:
                 "resets": True,
                 "timestamp": time.time(),
             },
-            retain=True,
         )
+        await self.publish(f"nodes/{self.node_name}/manifest", manifest, retain=True)
 
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself, so the node appears.
@@ -830,8 +835,11 @@ class NodeRunner:
                 # How close this machine is to running out, read off the loop:
                 # some of it is files, and on a Pi a firmware command.
                 readings = await asyncio.to_thread(resources.read, Path(self.state_dir))
-                await self.publish(
-                    f"nodes/{self.node_name}/heartbeat",
+                # `resources.read()` and `_node_identity()` are typed loosely,
+                # so the merge itself is the one trusted point: the keys below
+                # are what makes it an honest `NodeHeartbeat`.
+                heartbeat = cast(
+                    "NodeHeartbeat",
                     {
                         **self._node_identity(),
                         "node_id": node_id,
@@ -854,6 +862,7 @@ class NodeRunner:
                         "slow_retry": self.supervisor.slow_retrying(),
                     },
                 )
+                await self.publish(f"nodes/{self.node_name}/heartbeat", heartbeat)
                 last_error = None
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:

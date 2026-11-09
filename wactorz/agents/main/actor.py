@@ -21,6 +21,7 @@ from ...config import (
 )
 from ...core.actor import Actor, Message, MessageType
 from ...core.addresses import Address, Resolution
+from ...core.manifests import AgentManifest
 from ...core.node_signing import node_control_properties
 from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
@@ -1331,7 +1332,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return self.nodes.agents_to_prune(node_name, curr_agents, prev_agents)
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Latest manifest per agent, owned by `self.manifests`.
 
         Kept as a name here because the catalog agent writes recipe manifests
@@ -1341,16 +1342,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return self.manifests.manifests
 
     @_agent_manifests.setter
-    def _agent_manifests(self, value: dict[str, dict[str, Any]]) -> None:
+    def _agent_manifests(self, value: dict[str, AgentManifest]) -> None:
         self.manifests.manifests = value
 
     @property
-    def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
+    def _topic_registry(self) -> dict[str, list[AgentManifest]]:
         """Topic to publishing agents, owned by `self.manifests`."""
         return self.manifests.topic_registry
 
     @_topic_registry.setter
-    def _topic_registry(self, value: dict[str, list[dict[str, Any]]]) -> None:
+    def _topic_registry(self, value: dict[str, list[AgentManifest]]) -> None:
         self.manifests.topic_registry = value
 
     @property

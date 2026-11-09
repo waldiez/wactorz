@@ -14,7 +14,7 @@ import textwrap
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -25,6 +25,7 @@ from tests.test_spawn_remote import _Main as SpawningMain
 from wactorz import plugins
 from wactorz.core import bundles
 from wactorz.core.bundles import BundleError, bundle_for, checked, digest, prepare_import, write
+from wactorz.core.manifests import NodeManifest
 
 
 class Folder:
@@ -358,7 +359,7 @@ class TestMainSendingOne:
     @staticmethod
     def _main(**manifest: Any) -> SpawningMain:
         main = SpawningMain()
-        main.actor.nodes.node_manifests["rpi"] = manifest
+        main.actor.nodes.node_manifests["rpi"] = cast(NodeManifest, manifest)
         return main
 
     async def test_a_node_that_takes_code_is_sent_it_with_its_packages(

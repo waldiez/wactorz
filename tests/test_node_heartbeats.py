@@ -286,7 +286,7 @@ class TestTheMachineANodeRunsOn:
     async def test_its_manifest_is_kept(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_heartbeats(monkeypatch, [manifest()])
 
-        assert run.main.nodes.node_manifests["rpi"]["ram_total_mb"] == 8064
+        assert run.main.nodes.node_manifests["rpi"].get("ram_total_mb") == 8064
 
     async def test_one_without_a_version_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_heartbeats(monkeypatch, [manifest(manifest_v=None)])
@@ -303,7 +303,7 @@ class TestTheMachineANodeRunsOn:
     ) -> None:
         run = await run_heartbeats(monkeypatch, [manifest(), manifest(ram_total_mb=4096)])
 
-        assert run.main.nodes.node_manifests["rpi"]["ram_total_mb"] == 4096
+        assert run.main.nodes.node_manifests["rpi"].get("ram_total_mb") == 4096
 
 
 class TestPruningAnAgentThatStoppedAppearing:

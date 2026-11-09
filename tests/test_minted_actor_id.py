@@ -26,6 +26,7 @@ from wactorz.agents.mixins import SpawnMixin
 from wactorz.core.actor import Actor, ActorMetrics, Message, build_actor, derive_actor_id
 from wactorz.core.addresses import Address
 from wactorz.core.identity import given_actor_id
+from wactorz.core.manifests import NodeManifest
 from wactorz.core.registry import ActorRegistry, Supervisor
 from wactorz.node.agent import NodeAgent
 from wactorz.node.runner import NodeRunner
@@ -241,7 +242,7 @@ class TestTheIdOnANode:
     ) -> None:
         nodes = NodeManager()
         if manifest is not None:
-            nodes.node_manifests["rpi"] = manifest
+            nodes.node_manifests["rpi"] = cast(NodeManifest, manifest)
 
         assert nodes.takes_actor_ids("rpi") is says
 
@@ -257,7 +258,7 @@ class TestTheIdOnANode:
 
 def _remote_main(manifest: dict[str, Any], registry: dict[str, Any] | None = None) -> _Main:
     main = _Main(known_nodes={"rpi": {}}, spawn_registry=registry)
-    main.actor.nodes.node_manifests["rpi"] = manifest
+    main.actor.nodes.node_manifests["rpi"] = cast(NodeManifest, manifest)
     return main
 
 
@@ -344,8 +345,8 @@ class _NodeHost:
         self.notices.append(notice)
 
 
-def _manifest(**over: Any) -> dict[str, Any]:
-    return {"manifest_v": 1, "agents": [], **over}
+def _manifest(**over: Any) -> NodeManifest:
+    return cast(NodeManifest, {"manifest_v": 1, "agents": [], **over})
 
 
 class TestANodeThatGivesAnotherId:

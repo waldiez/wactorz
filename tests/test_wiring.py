@@ -14,7 +14,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from aiohttp import web
@@ -32,6 +32,7 @@ from wactorz.agents.shadow_serving import SHADOW_TOPIC_PREFIX
 from wactorz.core import topic_bus
 from wactorz.core.actor import Actor, ActorState, Message, declared_topics
 from wactorz.core.artifacts import ArtifactStore
+from wactorz.core.manifests import AgentManifest
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.topic_bus import OUTSIDE_TOPICS_KEPT, TopicBus, TopicContract, TopicRegistry
 from wactorz.core.wiring import EXAMPLE_MAX_CHARS, SHADOW_ROOT, wiring
@@ -405,7 +406,12 @@ class TestMainSamplesTheOutside:
 
         main.manifests._register_contract(
             "scorer",
-            {"name": "scorer", "actor_id": SCORER, "models": {"model": "ahu-scorer", "bad": 3}},
+            # A malformed value on purpose: `cast` stands in for the JSON
+            # this would really arrive as, to drive the filter below it.
+            cast(
+                AgentManifest,
+                {"name": "scorer", "actor_id": SCORER, "models": {"model": "ahu-scorer", "bad": 3}},
+            ),
             ["anomalies/ahu-1"],
         )
 

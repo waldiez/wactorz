@@ -25,10 +25,11 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ...core import topic_bus
 from ...core.addresses import MAIN_NODE, Address, node_of
+from ...core.manifests import AgentManifest
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -81,7 +82,7 @@ def _models_named(declared: Any) -> dict[str, str]:
     return {str(key): str(name) for key, name in declared.items() if isinstance(name, str) and name}
 
 
-def _claimed_node(known_nodes: dict[str, dict[str, Any]], name: str, data: dict[str, Any]) -> str:
+def _claimed_node(known_nodes: dict[str, dict[str, Any]], name: str, data: AgentManifest) -> str:
     """The node an agent main placed nowhere is on: the one it names, or whose heartbeat lists it."""
     named = str(data.get("node") or "").strip()
     if named:
@@ -97,9 +98,9 @@ def is_agent(manifest: Mapping[str, Any], name: str, actor_id: Any) -> bool:
     return not (theirs and actor_id) or theirs == actor_id
 
 
-def _as_sent(manifest: dict[str, Any]) -> dict[str, Any]:
+def _as_sent(manifest: AgentManifest) -> AgentManifest:
     """``manifest`` as a subscriber would read it back: through JSON, as it is published."""
-    return json.loads(json.dumps(manifest, default=str))
+    return cast(AgentManifest, json.loads(json.dumps(manifest, default=str)))
 
 
 class ManifestRegistry:
@@ -108,9 +109,9 @@ class ManifestRegistry:
     def __init__(self, host: ManifestHost | None = None) -> None:
         self.host = host
         #: agent name -> its latest manifest, including declared schemas.
-        self.manifests: dict[str, dict[str, Any]] = {}
+        self.manifests: dict[str, AgentManifest] = {}
         #: topic -> the manifests of the agents publishing it.
-        self.topic_registry: dict[str, list[dict[str, Any]]] = {}
+        self.topic_registry: dict[str, list[AgentManifest]] = {}
 
     async def manifest_listener(self) -> None:
         """Follow `agents/+/manifest` and keep the manifest tables current.
@@ -181,11 +182,14 @@ class ManifestRegistry:
             await self._forget_agent(self._actor_id_from(topic))
             return
         try:
-            data = json.loads(payload)
+            parsed = json.loads(payload)
         except Exception:
             return
-        if not isinstance(data, dict):
+        if not isinstance(parsed, dict):
             return
+        # The one point an incoming manifest is trusted to be shaped like one:
+        # everything past here reads it as `AgentManifest`, never raw JSON.
+        data = cast(AgentManifest, parsed)
         trusted = self._trusted(topic, payload, data, properties)
         if trusted is not None:
             self._accept_manifest(trusted)
@@ -194,9 +198,9 @@ class ManifestRegistry:
         self,
         topic: str,
         payload: bytes,
-        data: dict[str, Any],
+        data: AgentManifest,
         properties: Mapping[str, str] | None,
-    ) -> dict[str, Any] | None:
+    ) -> AgentManifest | None:
         """The manifest to record for ``data``, or None when it is not the agent's word.
 
         For main's own agent, what it published itself, whatever arrived: the
@@ -215,7 +219,7 @@ class ManifestRegistry:
             # arrived. A manifest under another id is weighed as a node's, as a
             # node may run an agent of the same name.
             own = getattr(local, "_published_manifest", None)
-            return _as_sent(own) if isinstance(own, dict) else None
+            return _as_sent(cast(AgentManifest, own)) if isinstance(own, dict) else None
         if properties is None:
             return data
         placed = placed_node(host, name, self._actor_id_from(topic))
@@ -316,7 +320,7 @@ class ManifestRegistry:
             logger.warning("[main] Could not act on the withdrawal of %s: %s", actor_id[:8], exc)
             return True
 
-    def _accept_manifest(self, data: dict[str, Any]) -> None:
+    def _accept_manifest(self, data: AgentManifest) -> None:
         """Record a manifest, replacing whatever that agent said before.
 
         Replacing rather than appending is what keeps the registry bounded:
@@ -337,7 +341,7 @@ class ManifestRegistry:
         self._register_contract(name, data, published)
         logger.debug("[main] Manifest from %r: %s", name, published)
 
-    def _key_for(self, data: dict[str, Any]) -> str:
+    def _key_for(self, data: AgentManifest) -> str:
         """Where ``data`` is kept: under its agent's name, or its address when another agent has the name.
 
         A name is unique on one host, so two agents of a name -- on main and on
@@ -354,7 +358,7 @@ class ManifestRegistry:
             return name
         return str(Address(name, node_of(str(data.get("node") or MAIN_NODE))))
 
-    def _register_contract(self, name: str, data: dict[str, Any], published: list[str]) -> None:
+    def _register_contract(self, name: str, data: AgentManifest, published: list[str]) -> None:
         """Mirror a manifest into the TopicBus so the planner can wire it.
 
         A local agent registers its own contract; a remote one lives in another

@@ -28,8 +28,10 @@ from . import models, topic_bus
 from .artifacts import ArtifactError
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
+from .heartbeats import AgentHeartbeat
 from .identity import derive_actor_id
 from .labels import Label, LabelError, Labels, LabelSpec
+from .manifests import AgentManifest
 from .outbound import DASHBOARD, Answer, OptionsError, answer_topic, check_channel, check_options
 from .paths import agent_state_dir, resolve_state_dir
 from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
@@ -48,6 +50,7 @@ from .questions import (
 )
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
+from .task_text import TaskEnvelope
 from .topic_bus import StreamWindow
 from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
@@ -318,9 +321,8 @@ def ask_payload(payload: Any, *, task_id: str, reply_to: str) -> dict[str, Any]:
     ``_reply_to`` says where the RESULT goes.
     """
     body = dict(payload) if isinstance(payload, dict) else {"text": str(payload)}
-    body["_task_id"] = task_id
-    body["_reply_to"] = reply_to
-    return body
+    envelope: TaskEnvelope = {"_task_id": task_id, "_reply_to": reply_to}
+    return {**body, **envelope}
 
 
 class ReplyError(RuntimeError):
@@ -592,7 +594,7 @@ class Actor(ABC):
         #: `_send_manifest`). Main reads its own agents' manifests from here
         #: rather than from the broker, where any node may publish one under
         #: their names.
-        self._published_manifest: dict[str, Any] | None = None
+        self._published_manifest: AgentManifest | None = None
         #: Who waits for the person's answer to a question, by question id:
         #: one future per question, and how many waiters share it.
         self._answer_waiters: dict[str, tuple[asyncio.Future[str], int]] = {}
@@ -1026,7 +1028,7 @@ class Actor(ABC):
         total += self._mailbox.qsize() * 512
         return total / (1024 * 1024)
 
-    def _build_heartbeat(self) -> dict[str, Any]:
+    def _build_heartbeat(self) -> AgentHeartbeat:
         """What this actor reports every heartbeat.
 
         No CPU figure: actors share one process, and so one CPU reading, which
@@ -2323,7 +2325,7 @@ class Actor(ABC):
             input_schema  = {"city": "str — city name to fetch weather for"}
             output_schema = {"temp_c": "float", "condition": "str", "humidity": "int"}
         """
-        manifest = {
+        manifest: AgentManifest = {
             "name": self.name,
             "actor_id": self.actor_id,
             "description": description,
@@ -2358,7 +2360,7 @@ class Actor(ABC):
             subscribes=list(subscribes),
         )
 
-    async def _send_manifest(self, manifest: dict[str, Any]) -> None:
+    async def _send_manifest(self, manifest: AgentManifest) -> None:
         """Publish ``manifest`` as this actor's, retained, and keep it as the one main reads.
 
         Every manifest goes out through here, so the copy main trusts for its

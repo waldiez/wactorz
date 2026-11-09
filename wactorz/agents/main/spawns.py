@@ -38,7 +38,7 @@ from ...core.packages import (
 from ...core.topics import topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 from ..catalog_agent import current_recipe_config
-from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type
+from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type, installed_packages
 from .alongside import Settled, put_back, settle
 from .spawn_registry import (
     NAME_KEYED_REGISTRY_KEY,
@@ -554,12 +554,11 @@ class SpawnService:
                 if matched:
                     agent_name = matched
                     manifest = self.host._agent_manifests.get(matched, {})
-            spawnable = bool(manifest.get("spawnable") and manifest.get("catalog"))
-            if spawnable:
+            catalog = manifest.get("catalog")
+            spawnable = bool(manifest.get("spawnable") and catalog)
+            if spawnable and catalog:
                 catalog_actor = (
-                    self.host._registry.find_by_name(manifest["catalog"])
-                    if self.host._registry
-                    else None
+                    self.host._registry.find_by_name(catalog) if self.host._registry else None
                 )
                 if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                     logger.info("[%s] Auto-spawning %r via catalog...", self.host.name, agent_name)
@@ -1074,9 +1073,7 @@ class SpawnService:
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 
-        packages = wire_config.get("install", [])
-        if isinstance(packages, str):
-            packages = [p.strip() for p in packages.replace(",", " ").split()]
+        packages = installed_packages(wire_config)
 
         logger.info("[%s] Spawning %r on remote node %r", self.host.name, name, node)
         if packages and not await self._packages_placed(config, node, packages, restoring):

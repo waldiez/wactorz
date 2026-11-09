@@ -16,7 +16,7 @@ guessed at rather than typed and are handled in `_execute_llm_delegations`.
 """
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -29,6 +29,7 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.core.actor import ActorMetrics
+from wactorz.core.manifests import AgentManifest
 
 _RECIPE_FAILED = "recipe exploded"
 
@@ -114,7 +115,7 @@ class _Main:
         self,
         *,
         running: tuple[str, ...] = (),
-        manifests: dict[str, dict[str, Any]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
         catalogue: _Catalogue | None = None,
         appears_after_spawn: str | None = None,
         nodes: dict[str, dict[str, Any]] | None = None,
@@ -164,8 +165,8 @@ def node(*agents: str) -> dict[str, Any]:
     return {"agents": list(agents), "last_seen": 0}
 
 
-def recipe(**over: Any) -> dict[str, Any]:
-    return {"spawnable": True, "catalog": "catalog", **over}
+def recipe(**over: Any) -> AgentManifest:
+    return cast(AgentManifest, {"spawnable": True, "catalog": "catalog", **over})
 
 
 class TestReadingWhatWasTyped:

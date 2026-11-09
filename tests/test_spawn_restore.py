@@ -15,7 +15,7 @@ that matches nothing resolves to nothing, and the caller is told whether the
 name was spawnable so it can say which of the two happened.
 """
 
-from typing import Any
+from typing import Any, cast
 
 from wactorz.agents.catalog_agent import _build_catalog
 from wactorz.agents.main.actor import MainActor
@@ -23,6 +23,7 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry, with_actor_id
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.manifests import AgentManifest
 
 _SPAWN_FAILED = "agent failed to start"
 _NODE_UNREACHABLE = "node unreachable"
@@ -99,7 +100,7 @@ class _Main:
         self,
         *,
         spawn_registry: dict[str, dict[str, Any]] | None = None,
-        manifests: dict[str, dict[str, Any]] | None = None,
+        manifests: dict[str, AgentManifest] | None = None,
         registry: _Registry | None = None,
         local_spawn_fails: tuple[str, ...] = (),
         remote_spawn_fails: tuple[str, ...] = (),
@@ -169,9 +170,9 @@ def remote(name: str, node: str = "rpi", **over: Any) -> dict[str, Any]:
     return {"name": name, "code": "print(1)", "node": node, **over}
 
 
-def recipe(**over: Any) -> dict[str, Any]:
+def recipe(**over: Any) -> AgentManifest:
     """A manifest entry the catalogue can spawn from."""
-    return {"spawnable": True, "catalog": "catalog", **over}
+    return cast(AgentManifest, {"spawnable": True, "catalog": "catalog", **over})
 
 
 class TestNotRacingTheSupervisor:

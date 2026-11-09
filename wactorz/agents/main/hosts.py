@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from ...core.actor import ActorState
     from ...core.addresses import Address, Resolution
+    from ...core.manifests import AgentManifest
     from ..llm_agent import LLMProvider
     from ..prompts.assemble import PromptFragment
     from .artifact_service import ArtifactService
@@ -132,7 +133,7 @@ class SpawnHost(Protocol):
     placement: Placement
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-only here: the actor owns this and hands it out."""
         ...
 
@@ -225,7 +226,7 @@ class DelegationHost(Protocol):
         ...
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-only here: says whether a name is a catalogue recipe."""
         ...
 
@@ -313,12 +314,12 @@ class LifecycleHost(Protocol):
     _registry: Any
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-write here: an entry is dropped when its agent is deleted."""
         ...
 
     @property
-    def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
+    def _topic_registry(self) -> dict[str, list[AgentManifest]]:
         """Read-write here: the deleted agent stops claiming its topics."""
         ...
 
@@ -452,7 +453,7 @@ class MigrationHost(NodeHost, Protocol):
     spawns: Any
 
     @property
-    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+    def _agent_manifests(self) -> dict[str, AgentManifest]:
         """Read-only here: the actor owns this and hands it out."""
         ...
 

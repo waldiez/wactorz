@@ -59,6 +59,7 @@ from ...core.blob_transfer import (
     wait_for,
 )
 from ...core.blobs import BLOB_MARK, encoder_named
+from ...core.manifests import AgentManifest
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -69,6 +70,7 @@ from ...core.mqtt import (
 from ...core.paths import resolve_state_dir
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from ...plugins import MODULE_TYPE, is_module_config
+from ..mixins import installed_packages
 from .addresses import registered_agent
 from .spawn_registry import SpawnRegistry, address_of, without_transient_keys
 from .spawns import why_a_node_cannot_run, with_code_for
@@ -404,9 +406,7 @@ class Migration:
         unrunnable = problem or why_a_node_cannot_run(config, targets)
         if unrunnable:
             return config, unrunnable
-        packages = config.get("install") or []
-        if isinstance(packages, str):
-            packages = packages.replace(",", " ").split()
+        packages = installed_packages(config)
         if packages:
             refusal = await self.host.spawns._packages_cleared(
                 str(config.get("name", "")), packages
@@ -1692,7 +1692,7 @@ class _Found:
     config: dict[str, Any] | None
     have_code: bool
     #: Its manifest, which may be one retained from where it ran before.
-    manifest: dict[str, Any]
+    manifest: AgentManifest
     #: Whether it runs in main's own process.
     local_alive: bool
     #: The node it runs on, "" for main.

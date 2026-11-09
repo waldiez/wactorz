@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, cast
 from ...core import topic_bus
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
+from ...core.heartbeats import DynamicAgentHeartbeat
 from ...core.paths import resolve_state_dir
 from ...core.questions import Question
 from ...core.state_versions import StateUpgradeError
@@ -1554,11 +1555,13 @@ class DynamicAgent(Actor):
         s["agent_type"] = "dynamic"
         return s
 
-    def _build_heartbeat(self) -> dict[str, Any]:
-        hb = super()._build_heartbeat()
-        hb["code"] = self._code  # include code in every heartbeat
-        hb["description"] = self.description
-        hb["agent_type"] = "dynamic"
+    def _build_heartbeat(self) -> DynamicAgentHeartbeat:
+        hb: DynamicAgentHeartbeat = {
+            **super()._build_heartbeat(),
+            "code": self._code,  # include code in every heartbeat
+            "description": self.description,
+            "agent_type": "dynamic",
+        }
         return hb
 
     def _current_task_description(self) -> str:

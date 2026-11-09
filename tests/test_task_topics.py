@@ -17,6 +17,7 @@ from wactorz.agents.main.spawn_registry import SpawnRegistry
 from wactorz.core.actor import ActorMetrics
 from wactorz.core.addresses import Address
 from wactorz.core.agent_directory import AgentDirectory
+from wactorz.core.manifests import NodeManifest
 from wactorz.core.topics import (
     is_task_route,
     node_task_subscription,
@@ -70,7 +71,7 @@ class _Main:
     def __init__(self, nodes: dict[str, list[str]], manifests: dict[str, dict[str, Any]]) -> None:
         self.nodes = NodeManager()
         self.nodes.known = {node: {"agents": agents} for node, agents in nodes.items()}
-        self.nodes.node_manifests = manifests
+        self.nodes.node_manifests = cast(dict[str, NodeManifest], manifests)
         self.metrics = ActorMetrics(start_time=0.0)
 
     def _get_spawn_registry(self) -> SpawnRegistry:

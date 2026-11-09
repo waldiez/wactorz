@@ -6,7 +6,30 @@ a typed message to a message-passing agent as a task and show its reply as text.
 """
 
 import json
-from typing import Any
+from typing import Any, TypedDict
+
+
+class TaskEnvelope(TypedDict, total=False):
+    """The tags `ask_through` adds around a request, and the ones a reply carries back.
+
+    Everything else in a TASK or RESULT payload is the agent's own business --
+    free-form, and shaped by whatever that agent's `input_schema` declares. Only
+    these keys are fixed across every agent: `_task_id`/`_reply_to` route the
+    reply, and `error`/`error_phase` are how an agent reports failure instead of
+    an answer (see `wactorz.core.actor.ReplyError`).
+
+    `task` is deliberately not one of these keys, though many agents' replies
+    carry it: some echo the request's *text* under it (an answer, kept as-is),
+    others the older convention of echoing the request's *id* (stripped, since
+    `_task_id` already carries it) -- `reply_value` tells the two apart by
+    comparing the value to the task id, not by the key alone.
+    """
+
+    _task_id: str
+    _reply_to: str
+    error: str
+    error_phase: str
+
 
 #: Where a reply keeps its words, most likely first. `result` leads because that
 #: is the field the prompts tell a generated agent to fill -- "for agents that
@@ -57,4 +80,4 @@ def reply_text(payload: Any) -> str:
     return str(payload)
 
 
-__all__ = ["reply_text", "task_payload"]
+__all__ = ["TaskEnvelope", "reply_text", "task_payload"]

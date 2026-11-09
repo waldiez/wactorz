@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ...core import topic_bus
+from ...core.manifests import AgentManifest
 from ...core.mqtt import mqtt_client
 from ...core.topic_bus import StreamWindow, TopicContract
 
@@ -187,7 +188,7 @@ class StreamsMixin(_Host):
         contract = getattr(actor, "_topic_contract", None) or getattr(
             actor, "_spawn_contract", None
         )
-        manifest = {
+        manifest: AgentManifest = {
             "name": self.name,
             "actor_id": self.actor_id,
             "node": getattr(actor, "_node", None),

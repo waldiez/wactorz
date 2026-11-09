@@ -20,7 +20,7 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from ..._version import __version__
 from ...config import NODE_SIGNING
@@ -28,6 +28,7 @@ from ...core import topic_bus
 from ...core.actor import derive_actor_id
 from ...core.compatibility import compatible
 from ...core.identity import given_actor_id
+from ...core.manifests import NodeManifest
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -176,6 +177,8 @@ class NodeManager:
         self, host: NodeHost | None = None, manifests: ManifestRegistry | None = None
     ) -> None:
         self.host = host
+        #: The shape of each entry: see `wactorz.core.heartbeats.NodeHeartbeat`'s
+        #: docstring for how it differs from the wire heartbeat.
         self.known: dict[str, dict[str, Any]] = {}
         #: Consulted before filling a gap: a manifest, when one has arrived, is
         #: better than anything a spawn config can say.
@@ -194,7 +197,7 @@ class NodeManager:
         #: from `known` and not dropped with it: a node forgotten for going
         #: quiet does not send its manifest again when it comes back -- the
         #: broker delivers a retained message on subscribing, not on reconnects.
-        self.node_manifests: dict[str, dict[str, Any]] = {}
+        self.node_manifests: dict[str, NodeManifest] = {}
         #: node -> run id -> the count of the newest signed heartbeat from that run,
         #: so each heartbeat is taken once. See `wactorz.core.node_publications`.
         self.heartbeat_counts: dict[str, OrderedDict[str, int]] = {}
@@ -447,7 +450,7 @@ class NodeManager:
         if topic.endswith("/migrate_result"):
             self.report_migration(data)
         elif topic.endswith("/manifest"):
-            self.receive_manifest(node_name, data)
+            self.receive_manifest(node_name, cast("NodeManifest", data))
 
     def _heartbeat_signed(
         self, node_name: str, topic: str, payload: bytes, properties: Mapping[str, str] | None
@@ -510,7 +513,7 @@ class NodeManager:
             f"from it (WACTORZ_NODE_SIGNING=enforce). Deploy it again: /deploy {node_name}"
         )
 
-    def receive_manifest(self, node_name: str, data: dict[str, Any]) -> None:
+    def receive_manifest(self, node_name: str, data: NodeManifest) -> None:
         """Take what a node says its machine is.
 
         Kept as it arrived, for the readers that know the fields. One without a
@@ -524,7 +527,7 @@ class NodeManager:
         self.node_manifests[node_name] = data
         self._say_ids_not_honoured(node_name, data)
 
-    def _say_ids_not_honoured(self, node_name: str, manifest: dict[str, Any]) -> None:
+    def _say_ids_not_honoured(self, node_name: str, manifest: NodeManifest) -> None:
         """Say in chat, once per node, which agents it runs under another id than theirs.
 
         Main sends an agent with an id of its own only to a node that says it
@@ -641,7 +644,7 @@ class NodeManager:
             if NODE_SIGNING == "enforce":
                 self._take_unsigned(node_name, data, before)
                 await self._tell_watchers(
-                    node_name, {**data, "agents": self.known[node_name]["agents"]}
+                    node_name, {**data, "agents": self.known[node_name].get("agents", [])}
                 )
                 return
         if signed:

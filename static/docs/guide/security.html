@@ -301,6 +301,12 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   so rotate the shared password once the last one has moved. A node's agents
   share its account: the boundary is the machine, not the agent. See "An account
   per node" in <code>remote-nodes.md</code>.</li>
+<li><strong>Two installs on one broker drive each other unless one has a namespace.</strong>
+  <code>WACTORZ_NAMESPACE</code> moves an install's own topics, and its nodes' access list, under
+  one word of its own, so another install's nodes cannot reach its agents. Main says in
+  chat when another install shares its topics. On a broker Wactorz does not run there
+  is no node access list, and the namespace keeps installs apart by convention only.
+  See "Two installs on one broker" in <code>remote-nodes.md</code>.</li>
 <li><strong><code>/deploy</code> trusts a node's SSH host key the first time it connects.</strong> The key is
   recorded in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code>
   points, and a later change fails the connection. The first connection is the

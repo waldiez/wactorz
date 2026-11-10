@@ -41,6 +41,7 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
+from ...core.topics import NODES, node_topic, own_topic_parts
 from ...data.files import DataError, check_source, data_root
 
 if TYPE_CHECKING:
@@ -122,8 +123,8 @@ class DataFiles:
         host = self.host
         if host is None or not payload:
             return
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "nodes" or parts[2] != "data_file":
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != NODES or parts[2] != "data_file":
             return
         try:
             data = json.loads(payload.decode())
@@ -205,7 +206,7 @@ class DataFiles:
         # Signed on the way out, because it is a node control topic: see
         # `MainActor._publish_properties`.
         await host._mqtt_publish(
-            f"nodes/{node}/data_ack",
+            node_topic(node, "data_ack"),
             {"sha256": sha, "ok": ok, "reason": reason, "timestamp": time.time()},
             qos=1,
         )
@@ -224,7 +225,7 @@ class DataFiles:
                     identifier=client_id("srv", install_id(), "datafiles"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/data_file", qos=1)
+                    await client.subscribe(node_topic("+", "data_file"), qos=1)
                     last_error = None
                     async for message in client.messages:
                         await self.receive(str(message.topic), message.payload)

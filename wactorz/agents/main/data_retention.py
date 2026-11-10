@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from ...config import DATA_RETENTION_DAYS
 from ...core.artifacts import ArtifactStore
 from ...core.paths import resolve_state_dir
+from ...core.topics import agent_topic
 from ...data.files import data_root
 from ...data.retention import Sweep, protected_windows, sweep
 
@@ -85,6 +86,6 @@ class DataRetention:
             return
         logger.info("[%s] %s", host.name, message)
         await host._mqtt_publish(
-            f"agents/{host.actor_id}/logs",
+            agent_topic(host.actor_id, "logs"),
             {"type": "log", "message": message, "timestamp": time.time()},
         )

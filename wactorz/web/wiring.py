@@ -17,6 +17,7 @@ from aiohttp import web
 from ..core import topic_bus
 from ..core.artifacts import ArtifactError, ArtifactStore
 from ..core.paths import resolve_state_dir
+from ..core.topics import display_topic
 from ..core.wiring import wiring
 from . import runtime
 from .questions import asked_by
@@ -63,7 +64,24 @@ async def wiring_handler(_request: web.Request) -> web.Response:
         pointers=lambda name: stands.get(name, {}),
         asked=asked_by(),
     )
-    return web.json_response(graph, dumps=_dumps)
+    return web.json_response(displayed(graph), dumps=_dumps)
+
+
+def displayed(graph: dict[str, Any]) -> dict[str, Any]:
+    """``graph`` with every topic as the page shows it: Wactorz's own without the namespace.
+
+    The graph is built on topics as they travel, so that a namespaced topic and
+    the contracts naming it meet; the page knows no namespace (`display_topic`).
+    """
+    for agent in graph.get("agents", []):
+        agent["publishes"] = [display_topic(t) for t in agent.get("publishes", [])]
+        agent["subscribes"] = [display_topic(t) for t in agent.get("subscribes", [])]
+    for entry in (*graph.get("topics", []), *graph.get("warnings", [])):
+        if isinstance(entry.get("topic"), str):
+            entry["topic"] = display_topic(entry["topic"])
+    for source in graph.get("sources", []):
+        source["topics"] = [display_topic(t) for t in source.get("topics", [])]
+    return graph
 
 
 def _dumps(value: Any) -> str:

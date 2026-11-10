@@ -10,7 +10,7 @@ nothing of its own.
 Three things look wrong:
 
 - **a topic nobody reads**: an agent publishes it, and no agent subscribes;
-  what a model on trial publishes (under `SHADOW_ROOT`) is for the trial, and
+  what a model on trial publishes (under the ``shadow`` root) is for the trial, and
   is marked as such instead;
 - **a subscriber with no producer**: an agent reads a topic no agent publishes
   and nothing has been seen on, outside the world's own roots (`WORLD_ROOTS`),
@@ -31,17 +31,11 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .topic_bus import TopicContract, is_machinery, topic_matches
+from .topics import AGENTS, SHADOW, WORLD_ROOTS, own_topic_parts
 
-#: The roots of topics the world publishes on: a subscription under one is an
-#: outside source, not a missing producer.
-WORLD_ROOTS = ("sensors", "home", "custom", "schedule", "homeassistant")
 #: The roots main keeps samples from (`wactorz.agents.main.manifests`), so a
 #: topic under any other has no fields to show unless an agent published it.
-SAMPLED_ROOTS = ("sensors", "custom", "agents")
-#: The root a model on trial publishes its answers under, in front of the
-#: agent's own topic (`wactorz.agents.shadow_serving.SHADOW_TOPIC_PREFIX`):
-#: they are for the trial, so nobody reading one is no warning.
-SHADOW_ROOT = "shadow"
+SAMPLED_ROOTS = ("sensors", "custom", AGENTS)
 #: The longest last example given whole, as JSON text; a longer one is cut.
 EXAMPLE_MAX_CHARS = 2048
 
@@ -50,8 +44,13 @@ Pointers = Callable[[str], Mapping[str, int | None]]
 
 
 def root_of(topic: str) -> str:
-    """The first level of ``topic``: ``sensors`` for ``sensors/imu/left``."""
-    return topic.split("/", 1)[0]
+    """The root ``topic`` is under: ``sensors`` for ``sensors/imu/left``.
+
+    For one of Wactorz's own that is its root, whatever the namespace in front
+    of it; for any other topic, its first level.
+    """
+    parts = own_topic_parts(topic)
+    return parts[0] if parts is not None else topic.split("/", 1)[0]
 
 
 def agent_id(contract: TopicContract) -> str:
@@ -194,7 +193,8 @@ def _published_topics(
         consumers = [c for c in kept if _reads(c, topic)]
         known = _known(topic, producers, outside)
         named = [agent_id(p) for p in producers]
-        trial = root_of(topic) == SHADOW_ROOT
+        # What a model on trial publishes is for the trial: nobody reading it is no warning.
+        trial = root_of(topic) == SHADOW
         topics.append(
             {
                 "topic": topic,

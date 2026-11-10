@@ -76,8 +76,15 @@ from ..core.sd_notify import watchdog_loop
 from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
 from ..core.topics import (
+    AGENTS,
+    NAMESPACE,
+    NODES,
     RETAINED_AGENT_LEAVES,
+    agent_topic,
     node_task_subscription,
+    node_topic,
+    own_topic_parts,
+    root_prefix,
     task_by_name_topic,
     task_target,
 )
@@ -266,7 +273,7 @@ class NodeRunner:
         # another machine. A forged notice costs one question and one answer.
         self._background(
             self.publish(
-                f"nodes/{self.node_name}/code_changed",
+                node_topic(self.node_name, "code_changed"),
                 {"agent": name, "node": self.node_name, "timestamp": time.time()},
             ),
             "code_changed",
@@ -400,7 +407,7 @@ class NodeRunner:
             return
 
         await self.publish(
-            f"agents/{self.node_name}/logs",
+            agent_topic(self.node_name, "logs"),
             {
                 "type": "spawned",
                 "message": f"Remote agent '{name}' started on {self.node_name}",
@@ -417,7 +424,7 @@ class NodeRunner:
         token = config.get("_migration_token")
         if token:
             await self.publish(
-                f"nodes/{self.node_name}/spawn_ack",
+                node_topic(self.node_name, "spawn_ack"),
                 {
                     "agent": name,
                     "migration_token": token,
@@ -515,7 +522,7 @@ class NodeRunner:
         if not token:
             return
         await self.publish(
-            f"nodes/{self.node_name}/spawn_ack",
+            node_topic(self.node_name, "spawn_ack"),
             {
                 "agent": name,
                 "migration_token": token,
@@ -582,7 +589,7 @@ class NodeRunner:
             logger.info("[runner] Fetching %s artifact(s) for '%s'", len(missing), name)
             await self.inbox.sweep(older_than_s=INBOX_KEEP_S)
             await self.publish(
-                f"nodes/{self.node_name}/artifact_request",
+                node_topic(self.node_name, "artifact_request"),
                 {"agent": name, "sha256": sorted(missing)},
             )
             try:
@@ -701,7 +708,7 @@ class NodeRunner:
         """
         for leaf in RETAINED_AGENT_LEAVES:
             try:
-                await self.publish(f"agents/{actor_id}/{leaf}", b"", retain=True)
+                await self.publish(agent_topic(actor_id, leaf), b"", retain=True)
             except Exception as e:
                 logger.debug(
                     "[runner] Failed to clear retained agents/%s/%s: %s", actor_id, leaf, e
@@ -764,7 +771,7 @@ class NodeRunner:
 
     async def _log_to_dashboard(self, kind: str, message: str) -> None:
         await self.publish(
-            f"agents/{self.node_name}/logs",
+            agent_topic(self.node_name, "logs"),
             {
                 "type": kind,
                 "message": message,
@@ -817,7 +824,7 @@ class NodeRunner:
                 "timestamp": time.time(),
             },
         )
-        await self.publish(f"nodes/{self.node_name}/manifest", manifest, retain=True)
+        await self.publish(node_topic(self.node_name, "manifest"), manifest, retain=True)
 
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself, so the node appears.
@@ -860,9 +867,11 @@ class NodeRunner:
                         # Main says so in chat: the supervisor's own notices
                         # reach only a main in the same process.
                         "slow_retry": self.supervisor.slow_retrying(),
+                        # Which install's topics this node is on; see `NodeHeartbeat`.
+                        "namespace": NAMESPACE,
                     },
                 )
-                await self.publish(f"nodes/{self.node_name}/heartbeat", heartbeat)
+                await self.publish(node_topic(self.node_name, "heartbeat"), heartbeat)
                 last_error = None
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
@@ -885,8 +894,8 @@ class NodeRunner:
         v5 user properties, over the payload bytes as they arrived, so a handler
         sees the payload untouched either way.
         """
-        parts = topic_str.split("/")
-        if len(parts) != 3 or parts[:2] != ["nodes", self.node_name]:
+        parts = own_topic_parts(topic_str)
+        if parts is None or len(parts) != 3 or parts[:2] != [NODES, self.node_name]:
             return True
         leaf = parts[2]
         if leaf not in CONTROL_LEAVES:
@@ -904,23 +913,23 @@ class NodeRunner:
         after, because a table cannot express them.
         """
         exact = {
-            f"nodes/{self.node_name}/desired_state": self._on_desired_state,
-            f"nodes/{self.node_name}/spawn": self._on_spawn,
-            f"nodes/{self.node_name}/stop": self._on_stop,
-            f"nodes/{self.node_name}/migrate": self._on_migrate,
-            f"nodes/{self.node_name}/stop_all": self._on_stop_all,
-            f"nodes/{self.node_name}/restart": self._on_restart,
-            f"nodes/{self.node_name}/restart_agent": self._on_restart_agent,
-            f"nodes/{self.node_name}/list": self._on_list,
-            f"nodes/{self.node_name}/code_request": self._on_code_request,
-            f"nodes/{self.node_name}/reset": self._on_reset,
-            f"nodes/{self.node_name}/swap_model": self._on_swap_model,
-            f"nodes/{self.node_name}/data_ack": self._on_data_ack,
+            node_topic(self.node_name, "desired_state"): self._on_desired_state,
+            node_topic(self.node_name, "spawn"): self._on_spawn,
+            node_topic(self.node_name, "stop"): self._on_stop,
+            node_topic(self.node_name, "migrate"): self._on_migrate,
+            node_topic(self.node_name, "stop_all"): self._on_stop_all,
+            node_topic(self.node_name, "restart"): self._on_restart,
+            node_topic(self.node_name, "restart_agent"): self._on_restart_agent,
+            node_topic(self.node_name, "list"): self._on_list,
+            node_topic(self.node_name, "code_request"): self._on_code_request,
+            node_topic(self.node_name, "reset"): self._on_reset,
+            node_topic(self.node_name, "swap_model"): self._on_swap_model,
+            node_topic(self.node_name, "data_ack"): self._on_data_ack,
         }
         handler = exact.get(topic_str)
         if handler is not None:
             await handler(topic_str, data, msg)
-        elif topic_str.startswith(f"nodes/{self.node_name}/reply/"):
+        elif topic_str.startswith(node_topic(self.node_name, "reply", "")):
             await self._on_reply(topic_str, data, msg)
         elif "/task" in topic_str:
             await self._on_task(topic_str, data, msg)
@@ -1117,7 +1126,7 @@ class NodeRunner:
                     cleared.append(agent.name)
         logger.info("[runner] Reset %s for %s", scope or "nothing", cleared or "no agent")
         await self.publish(
-            f"nodes/{self.node_name}/reset_done",
+            node_topic(self.node_name, "reset_done"),
             {
                 "node": self.node_name,
                 "request": data.get("request"),
@@ -1129,7 +1138,7 @@ class NodeRunner:
 
     async def _on_list(self, topic_str: str, data: Any, msg: Any) -> None:
         await self.publish(
-            f"nodes/{self.node_name}/agents",
+            node_topic(self.node_name, "agents"),
             {
                 "node": self.node_name,
                 "agents": [{"name": a.name, "actor_id": a.actor_id} for a in self.agents.values()],
@@ -1208,7 +1217,7 @@ class NodeRunner:
         await self._answer_swap({**answer, "ok": True, "reason": ""})
 
     async def _answer_swap(self, answer: dict[str, Any]) -> None:
-        await self.publish(f"nodes/{self.node_name}/swap_ack", answer)
+        await self.publish(node_topic(self.node_name, "swap_ack"), answer)
 
     async def _on_data_ack(self, topic_str: str, data: Any, msg: Any) -> None:
         """Main says whether it kept a recorded file this node sent; see `DataShipper`."""
@@ -1249,7 +1258,7 @@ class NodeRunner:
             logger.info("[runner] code_request for '%s', which runs no code here", name)
             return
         await self.publish(
-            f"nodes/{self.node_name}/code_return",
+            node_topic(self.node_name, "code_return"),
             {
                 "agent": name,
                 "token": data.get("token", ""),
@@ -1361,20 +1370,20 @@ class NodeRunner:
         agent by name.
         """
         topics = [
-            f"nodes/{self.node_name}/spawn",
-            f"nodes/{self.node_name}/desired_state",  # reconciliation on reboot
-            f"nodes/{self.node_name}/stop",
-            f"nodes/{self.node_name}/stop_all",
-            f"nodes/{self.node_name}/restart",  # restart the runner process in-place
-            f"nodes/{self.node_name}/restart_agent",  # restart a single named agent
-            f"nodes/{self.node_name}/migrate",
-            f"nodes/{self.node_name}/list",
-            f"nodes/{self.node_name}/code_request",
-            f"nodes/{self.node_name}/reset",
-            f"nodes/{self.node_name}/swap_model",  # serve another version of a model
-            f"nodes/{self.node_name}/data_ack",  # main took a recorded file
-            f"nodes/{self.node_name}/reply/#",
-            f"nodes/{self.node_name}/blob/+",  # an agent's blobs, as main places it here
+            node_topic(self.node_name, "spawn"),
+            node_topic(self.node_name, "desired_state"),  # reconciliation on reboot
+            node_topic(self.node_name, "stop"),
+            node_topic(self.node_name, "stop_all"),
+            node_topic(self.node_name, "restart"),  # restart the runner process in-place
+            node_topic(self.node_name, "restart_agent"),  # restart a single named agent
+            node_topic(self.node_name, "migrate"),
+            node_topic(self.node_name, "list"),
+            node_topic(self.node_name, "code_request"),
+            node_topic(self.node_name, "reset"),
+            node_topic(self.node_name, "swap_model"),  # serve another version of a model
+            node_topic(self.node_name, "data_ack"),  # main took a recorded file
+            node_topic(self.node_name, "reply", "#"),
+            node_topic(self.node_name, "blob", "+"),  # an agent's blobs, as main places it here
             # Tasks for the agents here: on this node's own topic, and by name
             # from a sender on a release that addresses no node.
             node_task_subscription(self.node_name),
@@ -1414,7 +1423,7 @@ class NodeRunner:
     async def _receive(self, msg: Any) -> None:
         """Take one message off the control connection: where agents are, a blob, or a command."""
         topic_str = str(msg.topic)
-        if topic_str.endswith("/manifest") and topic_str.startswith("agents/"):
+        if topic_str.endswith("/manifest") and topic_str.startswith(root_prefix(AGENTS)):
             # Read, never acted on: the directory only says where.
             self.directory.take(topic_str, message_bytes(msg.payload))
             return
@@ -1431,11 +1440,11 @@ class NodeRunner:
 
     @property
     def _blob_prefix(self) -> str:
-        return f"nodes/{self.node_name}/blob/"
+        return node_topic(self.node_name, "blob", "")
 
     def _blob_return_topic(self, sha256: str) -> str:
         """Where this node sends main the blob ``sha256``."""
-        return f"nodes/{self.node_name}/blob_return/{sha256}"
+        return node_topic(self.node_name, "blob_return", sha256)
 
     async def _accept_blob(self, topic: str, payload: Any) -> None:
         sha = sha256_of_topic(topic)
@@ -1546,7 +1555,7 @@ class NodeRunner:
         logger.info("[runner] Restarting runner process via os.execv …")
         await self.stop_all()
         await self.publish(
-            f"nodes/{self.node_name}/heartbeat",
+            node_topic(self.node_name, "heartbeat"),
             {**self._node_identity(), "status": "restarting", "timestamp": time.time()},
         )
         # Let the queue drain before the process image is replaced.
@@ -1574,7 +1583,7 @@ class NodeRunner:
         # waiting goes out now, since nothing will write it later.
         flush_states()
         await self.publish(
-            f"nodes/{self.node_name}/heartbeat",
+            node_topic(self.node_name, "heartbeat"),
             {**self._node_identity(), "status": "offline", "timestamp": time.time()},
         )
         # Let the queue drain, so the heartbeat reaches the broker before the
@@ -1616,7 +1625,7 @@ class NodeRunner:
         if agent is None:
             logger.warning("[runner] migrate: agent '%s' not running here", name)
             await self.publish(
-                f"nodes/{self.node_name}/migrate_result",
+                node_topic(self.node_name, "migrate_result"),
                 {
                     "success": False,
                     "error": f"Agent '{name}' not found on {self.node_name}",
@@ -1645,7 +1654,7 @@ class NodeRunner:
             target_node,
         )
         await self.publish(
-            f"nodes/{self.node_name}/migrate_result",
+            node_topic(self.node_name, "migrate_result"),
             {
                 "success": False,
                 "error": "node-to-node migration is routed through main",
@@ -1724,7 +1733,7 @@ class NodeRunner:
             len(safe_state),
         )
         await self.publish(
-            f"nodes/{self.node_name}/state_return",
+            node_topic(self.node_name, "state_return"),
             {
                 "agent": name,
                 "return_token": payload.get("return_token", ""),
@@ -1736,7 +1745,7 @@ class NodeRunner:
             },
         )
         await self.publish(
-            f"nodes/{self.node_name}/migrate_result",
+            node_topic(self.node_name, "migrate_result"),
             {
                 "success": True,
                 "agent": name,
@@ -1760,7 +1769,7 @@ class NodeRunner:
         dropped = cannot_travel(dict(agent._persistent_state), code_allowed=False)
         logger.warning("[runner] Not migrating '%s': %s", name, reason)
         await self.publish(
-            f"nodes/{self.node_name}/state_return",
+            node_topic(self.node_name, "state_return"),
             {
                 "agent": name,
                 "return_token": payload.get("return_token", ""),
@@ -1773,7 +1782,7 @@ class NodeRunner:
             },
         )
         await self.publish(
-            f"nodes/{self.node_name}/migrate_result",
+            node_topic(self.node_name, "migrate_result"),
             {
                 "success": False,
                 "error": f"'{name}' stays on {self.node_name}: {reason}",

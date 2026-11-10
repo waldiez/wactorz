@@ -23,6 +23,7 @@ import aiomqtt
 import pytest
 
 from wactorz.core import broker_accounts, node_signing
+from wactorz.core.topics import NAMESPACE, wire_topic
 
 from .acl_fixture import LISTED, PASSWORD, SERVER, UNLISTED
 
@@ -87,7 +88,18 @@ async def _hears_statistics(broker: tuple[str, int], account: str | None, wait: 
 async def _delivered(
     broker: tuple[str, int], sender: str | None, topic: str, receiver: str | None, wait: float
 ) -> bool:
-    """Whether a message ``sender`` publishes on ``topic`` reaches ``receiver``."""
+    """Whether a message ``sender`` publishes on ``topic`` reaches ``receiver``.
+
+    ``topic`` is written bare and sent as this install spells it, so the same
+    tests run with a namespace set (`wire_topic`).
+    """
+    return await _delivered_as_sent(broker, sender, wire_topic(topic), receiver, wait)
+
+
+async def _delivered_as_sent(
+    broker: tuple[str, int], sender: str | None, topic: str, receiver: str | None, wait: float
+) -> bool:
+    """`_delivered` for ``topic`` exactly as written, namespace or not."""
     marker = uuid.uuid4().hex
     async with _client(broker, receiver) as listening:
         await listening.subscribe(topic)
@@ -154,6 +166,32 @@ class TestWhatAgentsShare:
         # stop the server's own agents stay out of a node's reach.
         assert await _may_not_write(locked, "node-a", "agents/abc/commands")
         assert await _may_not_read(locked, "node-a", "agents/abc/commands")
+
+
+class TestWhatLibraryAgentsPublishAboutThemselves:
+    @pytest.mark.parametrize(
+        "topic", ["pipelines/watch/tick", "models/air/drift", "shadow/anomalies/imu"]
+    )
+    async def test_it_reads_and_writes_them(self, locked: tuple[str, int], topic: str) -> None:
+        # A pipeline step hears its tick, a rule on the node hears a drift alarm.
+        assert await _may_write(locked, "node-a", topic)
+        assert await _may_read(locked, "node-a", topic)
+
+    async def test_the_rest_of_a_model_is_closed(self, locked: tuple[str, int]) -> None:
+        # A model's pointers are main's to move.
+        assert await _may_not_write(locked, "node-a", "models/air/active")
+
+
+@pytest.mark.skipif(not NAMESPACE, reason="needs WACTORZ_NAMESPACE, as the namespaced run sets")
+class TestUnderANamespace:
+    @pytest.mark.parametrize(
+        "topic", ["agents/abc/status", "nodes/node-a/heartbeat", "other/agents/abc/status"]
+    )
+    async def test_a_node_reaches_neither_the_bare_topics_nor_another_installs(
+        self, locked: tuple[str, int], topic: str
+    ) -> None:
+        assert not await _delivered_as_sent(locked, "node-a", topic, SERVER, ABSENT_S)
+        assert not await _delivered_as_sent(locked, SERVER, topic, "node-a", ABSENT_S)
 
 
 class TestAskingMain:

@@ -69,6 +69,7 @@ from ..core.pip import (
     stale_loaded_distributions,
 )
 from ..core.refusals import REFUSED, UNANSWERED, RecentRefusals
+from ..core.topics import agent_topic, node_topic
 from . import node_service
 from .lookup import find_main_actor
 
@@ -400,7 +401,7 @@ class InstallerAgent(Actor):
         logger.info("[%s] Installer ready — using: %s", self.name, sys.executable)
         self._scrub_persisted_credentials()
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Installer ready ({sys.executable})",
@@ -749,7 +750,7 @@ class InstallerAgent(Actor):
 
             logger.info("[%s] Installing %s into %s...", self.name, pip_name, sys.executable)
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
+                agent_topic(self.actor_id, "logs"),
                 {"type": "log", "message": f"Installing {pip_name}...", "timestamp": time.time()},
             )
             if notify:
@@ -797,7 +798,7 @@ class InstallerAgent(Actor):
                 status = f"✗ {pip_name} FAILED: {err_snippet}"
             logger.info("[%s] %s", self.name, status)
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
+                agent_topic(self.actor_id, "logs"),
                 {"type": "log", "message": status, "timestamp": time.time()},
             )
 
@@ -1084,7 +1085,7 @@ class InstallerAgent(Actor):
         and a node ignores them.
         """
         for leaf in UNRETAINED_CONTROL_TOPICS:
-            await self._mqtt_publish(f"nodes/{node_name}/{leaf}", b"", retain=True, qos=1)
+            await self._mqtt_publish(node_topic(node_name, leaf), b"", retain=True, qos=1)
 
     @staticmethod
     def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
@@ -1454,7 +1455,7 @@ class InstallerAgent(Actor):
         logger.info("[%s] %s", self.name, message)
         self.run_detached(
             self._mqtt_publish(
-                f"agents/{self.actor_id}/logs",
+                agent_topic(self.actor_id, "logs"),
                 {"type": "log", "message": message, "timestamp": time.time()},
             ),
             name="log",

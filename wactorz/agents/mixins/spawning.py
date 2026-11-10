@@ -50,7 +50,7 @@ from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.pip import PIP_TIMEOUT_S, install_wait_s, missing_requirements, pending_restart
 from ...core.state_codec import decode_state
 from ...core.topic_bus import TopicContract
-from ...core.topics import topic_name_error
+from ...core.topics import agent_topic, topic_name_error
 from ...plugins import for_target
 from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
@@ -740,7 +740,7 @@ class SpawnMixin(_Host):
         try:
             if publish is not None:
                 await publish(
-                    f"agents/{self.actor_id}/logs",
+                    agent_topic(self.actor_id, "logs"),
                     {
                         "type": "log",
                         "message": f"Installing {packages} for {name}…",
@@ -761,7 +761,7 @@ class SpawnMixin(_Host):
                     self._unregister_spawn(name, config.get("actor_id"))
                 if publish is not None:
                     await publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {
                             "type": "error",
                             "message": f"Not spawning '{name}': {refusal}",
@@ -785,7 +785,7 @@ class SpawnMixin(_Host):
                 self._register_spawn(config)
                 if publish is not None:
                     await publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {
                             "type": "spawned",
                             "message": f"'{name}' spawned after install",

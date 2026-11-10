@@ -380,7 +380,7 @@ compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
 
 | Setting | What it does |
 | ------- | ------------ |
-| `WACTORZ_NODE_TOPICS` | More data topics for every node, comma-separated: `zigbee2mqtt/#, read:weather/#`. A filter prefixed `read:` may be read and not written. One under `nodes/`, `agents/`, `main/`, `system/` or `$` is refused, with a message, because it would open for every node what the list exists to close. |
+| `WACTORZ_NODE_TOPICS` | More data topics for every node, comma-separated: `zigbee2mqtt/#, read:weather/#`. A filter prefixed `read:` may be read and not written. One that reaches Wactorz's own topics (`agents/`, `nodes/`, `main/`, `system/`, `models/`, `pipelines/`, `shadow/`), bare or under another install's namespace (`other/agents/#`), or `#` or `$`, is refused, with a message, because it would open for every node what the list exists to close. Do not add another install's namespace as a data topic: `other/#` cannot be told from any other prefix. |
 | `WACTORZ_BROKER_ACCOUNTS` | Other accounts on this broker that keep all of it, comma-separated: `homeassistant, zigbee2mqtt`. The server's own account (`MQTT_USERNAME`) is always one of them. |
 
 **An agent on a node that uses a topic outside the list gets no error.** The
@@ -660,9 +660,50 @@ sent all the same and starts when the node does; the chat says so.
 
 ---
 
+## Two installs on one broker
+
+Two Wactorz installs that share a broker -- a dev instance pointed at the house
+broker, say -- share every control topic unless one of them has a namespace: each
+hears the other's agents and nodes, and either can drive them. Main says so in
+chat when it hears another install's health on its own topics.
+
+Set `WACTORZ_NAMESPACE` to one word on at least one of them (the add-ons offer it as
+`namespace`):
+
+```bash
+WACTORZ_NAMESPACE=dev
+```
+
+Wactorz's own topics then go under it -- `dev/agents/...`, `dev/nodes/...`,
+`dev/main/...`, `dev/system/...`, `dev/models/...`, `dev/pipelines/...`,
+`dev/shadow/...` -- and the node access list with them. The topics that describe the
+world (`sensors/`, `home/`, `custom/`, `schedule/`, `homeassistant/`) stay shared, so
+both installs read the same sensors. Agent programs, panels and the dashboard keep
+writing Wactorz's topics bare: the server and `AgentAPI` put the namespace on and take
+it off. A program that opens its own broker connection does not get that.
+
+The value is one topic level: no spaces, none of `/ + # $`, and not the name of a
+root. Main and a node refuse to start on one that cannot be used, and say why. Empty
+is no namespace.
+
+**Changing it is a deploy.** After setting, renaming or clearing a namespace, run
+`/deploy` for every node: a node is told its namespace in its `.env`, and one on
+another namespace than main's publishes where main does not listen. Main says in chat
+when it hears one of its own nodes on another namespace. Retained topics from before
+are left on the broker, since another install may own what is under them; main logs
+once when it finds its own manifest there, and one can be cleared with
+`mosquitto_pub -r -n -t <topic>`.
+
+**It is enforced where Wactorz writes the access list:** the compose broker and the
+add-ons' embedded broker. On a broker Wactorz does not run (the official Mosquitto
+add-on, an external one), nodes have no access list, and two installs sharing it are
+kept apart by their topics alone.
+
 ## MQTT topics
 
 The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.
+Under a namespace (see [Two installs on one broker](#two-installs-on-one-broker)), every
+topic in this section starts with it.
 
 | Topic | Direction | Description |
 |-------|-----------|-------------|

@@ -14,6 +14,7 @@ from typing import Any
 
 from ..core import outbound
 from ..core.questions import QUESTIONS_LEAF
+from ..core.topics import AGENTS, NODES, SYSTEM, own_topic_parts
 from . import chat, cost, runtime
 from . import questions as question_ledger
 
@@ -211,12 +212,14 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
     except Exception:
         data = payload_str
 
-    parts = topic.split("/")
-    if parts[0] == "system" and len(parts) >= 2:
+    parts = own_topic_parts(topic)
+    if parts is None:
+        return None
+    if parts[0] == SYSTEM and len(parts) >= 2:
         return _on_system(parts[1], data)
-    if parts[0] == "agents" and len(parts) >= 3:
+    if parts[0] == AGENTS and len(parts) >= 3:
         return _on_agent(parts[1], parts[2], data, payload_str)
-    if parts[0] == "nodes" and len(parts) >= 3 and parts[2] == "heartbeat":
+    if parts[0] == NODES and len(parts) >= 3 and parts[2] == "heartbeat":
         return _on_node_heartbeat(parts[1], data)
     return None
 

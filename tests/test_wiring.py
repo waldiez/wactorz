@@ -28,14 +28,13 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawn_registry import SpawnRegistry
-from wactorz.agents.shadow_serving import SHADOW_TOPIC_PREFIX
 from wactorz.core import topic_bus
 from wactorz.core.actor import Actor, ActorState, Message, declared_topics
 from wactorz.core.artifacts import ArtifactStore
 from wactorz.core.manifests import AgentManifest
 from wactorz.core.paths import resolve_state_dir
 from wactorz.core.topic_bus import OUTSIDE_TOPICS_KEPT, TopicBus, TopicContract, TopicRegistry
-from wactorz.core.wiring import EXAMPLE_MAX_CHARS, SHADOW_ROOT, wiring
+from wactorz.core.wiring import EXAMPLE_MAX_CHARS, wiring
 from wactorz.web import questions, runtime
 from wactorz.web.app import build_app
 from wactorz.web.wiring import NO_REGISTRY, pointers_of
@@ -121,7 +120,6 @@ class TestTheGraph:
         assert _topic(graph, "shadow/anomalies/ahu-1")["shadow"] is True
         assert _topic(graph, "anomalies/ahu-1")["shadow"] is False
         assert ("unread", "shadow/anomalies/ahu-1") not in _kinds(graph)
-        assert SHADOW_ROOT == SHADOW_TOPIC_PREFIX
 
     def test_a_subscription_under_a_world_root_is_an_outside_source_not_a_warning(self) -> None:
         graph = _graph(scorer(), watch())

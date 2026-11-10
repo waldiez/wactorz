@@ -523,7 +523,7 @@ compose's <code>mqtt-certs</code>; the add-ons offer them as <code>node_topics</
 <tbody>
 <tr>
 <td><code>WACTORZ_NODE_TOPICS</code></td>
-<td>More data topics for every node, comma-separated: <code>zigbee2mqtt/#, read:weather/#</code>. A filter prefixed <code>read:</code> may be read and not written. One under <code>nodes/</code>, <code>agents/</code>, <code>main/</code>, <code>system/</code> or <code>$</code> is refused, with a message, because it would open for every node what the list exists to close.</td>
+<td>More data topics for every node, comma-separated: <code>zigbee2mqtt/#, read:weather/#</code>. A filter prefixed <code>read:</code> may be read and not written. One that reaches Wactorz's own topics (<code>agents/</code>, <code>nodes/</code>, <code>main/</code>, <code>system/</code>, <code>models/</code>, <code>pipelines/</code>, <code>shadow/</code>), bare or under another install's namespace (<code>other/agents/#</code>), or <code>#</code> or <code>$</code>, is refused, with a message, because it would open for every node what the list exists to close. Do not add another install's namespace as a data topic: <code>other/#</code> cannot be told from any other prefix.</td>
 </tr>
 <tr>
 <td><code>WACTORZ_BROKER_ACCOUNTS</code></td>
@@ -761,8 +761,41 @@ asking, and <code>never</code> refuses it.</p>
 heard from, such a spawn is refused, never quietly run on main. If it is, but the node is not running, the agent is
 sent all the same and starts when the node does; the chat says so.</p>
 <hr />
+<h2 id="two-installs-on-one-broker">Two installs on one broker</h2>
+<p>Two Wactorz installs that share a broker -- a dev instance pointed at the house
+broker, say -- share every control topic unless one of them has a namespace: each
+hears the other's agents and nodes, and either can drive them. Main says so in
+chat when it hears another install's health on its own topics.</p>
+<p>Set <code>WACTORZ_NAMESPACE</code> to one word on at least one of them (the add-ons offer it as
+<code>namespace</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="nv">WACTORZ_NAMESPACE</span><span class="o">=</span>dev
+</code></pre></div>
+
+<p>Wactorz's own topics then go under it -- <code>dev/agents/...</code>, <code>dev/nodes/...</code>,
+<code>dev/main/...</code>, <code>dev/system/...</code>, <code>dev/models/...</code>, <code>dev/pipelines/...</code>,
+<code>dev/shadow/...</code> -- and the node access list with them. The topics that describe the
+world (<code>sensors/</code>, <code>home/</code>, <code>custom/</code>, <code>schedule/</code>, <code>homeassistant/</code>) stay shared, so
+both installs read the same sensors. Agent programs, panels and the dashboard keep
+writing Wactorz's topics bare: the server and <code>AgentAPI</code> put the namespace on and take
+it off. A program that opens its own broker connection does not get that.</p>
+<p>The value is one topic level: no spaces, none of <code>/ + # $</code>, and not the name of a
+root. Main and a node refuse to start on one that cannot be used, and say why. Empty
+is no namespace.</p>
+<p><strong>Changing it is a deploy.</strong> After setting, renaming or clearing a namespace, run
+<code>/deploy</code> for every node: a node is told its namespace in its <code>.env</code>, and one on
+another namespace than main's publishes where main does not listen. Main says in chat
+when it hears one of its own nodes on another namespace. Retained topics from before
+are left on the broker, since another install may own what is under them; main logs
+once when it finds its own manifest there, and one can be cleared with
+<code>mosquitto_pub -r -n -t &lt;topic&gt;</code>.</p>
+<p><strong>It is enforced where Wactorz writes the access list:</strong> the compose broker and the
+add-ons' embedded broker. On a broker Wactorz does not run (the official Mosquitto
+add-on, an external one), nodes have no access list, and two installs sharing it are
+kept apart by their topics alone.</p>
 <h2 id="mqtt-topics">MQTT topics</h2>
-<p>The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.</p>
+<p>The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.
+Under a namespace (see <a href="#two-installs-on-one-broker">Two installs on one broker</a>), every
+topic in this section starts with it.</p>
 <table>
 <thead>
 <tr>

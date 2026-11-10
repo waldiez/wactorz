@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """What a node is told about itself: the settings in its ``.env``.
 
-A node learns its name, its broker, its signing key and its broker account from
-one file, written by whoever made it: ``/deploy`` over SSH, or, for the sandbox
+A node learns its name, its broker, its namespace, its signing key and its broker
+account from one file, written by whoever made it: ``/deploy`` over SSH, or, for the sandbox
 node in the compose stack, a one-shot container (see
 :mod:`wactorz.node.compose_env`). Both write it from here, so a node made either
 way is told the same things in the same form.
@@ -19,6 +19,7 @@ import shlex
 from ..config import CONFIG, NODE_SIGNING
 from . import broker_accounts
 from .node_signing import next_sequence, node_key
+from .topics import NAMESPACE
 
 
 class UnusableNodeAccountError(ValueError):
@@ -64,7 +65,9 @@ def node_env_text(
     The signing key goes with the sequence number main has reached and what to
     do with a control message not signed for it (``WACTORZ_NODE_SIGNING``); see
     :mod:`wactorz.core.node_signing`. ``extensions`` is the node's
-    ``WACTORZ_EXTENSIONS``; see :mod:`wactorz.installed`.
+    ``WACTORZ_EXTENSIONS``; see :mod:`wactorz.installed`. The namespace is main's
+    own, written only when one is set, so that a node of an install without one
+    is told nothing new.
     """
     lines = [
         f"WACTORZ_NODE={shlex.quote(node)}",
@@ -74,6 +77,8 @@ def node_env_text(
         f"WACTORZ_CONTROL_SINCE={next_sequence()}",
         f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
     ]
+    if NAMESPACE:
+        lines.append(f"WACTORZ_NAMESPACE={shlex.quote(NAMESPACE)}")
     if extensions:
         lines.append(f"WACTORZ_EXTENSIONS={shlex.quote(extensions)}")
     if tls_ca is not None:

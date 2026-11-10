@@ -21,6 +21,7 @@ from typing import Any, ClassVar
 
 import wactorz
 from wactorz import Message, MessageType
+from wactorz.core.topics import agent_topic
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +207,7 @@ class CameraWatcher(wactorz.Actor):
         """
         getattr(logger, level, logger.info)("[%s] %s", self.name, message)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": message, "timestamp": time.time()},
         )
 

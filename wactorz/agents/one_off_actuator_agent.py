@@ -17,6 +17,7 @@ from ..core.integrations.home_assistant.ha_helper import (
     normalize_ha_ws_url,
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
+from ..core.topics import agent_topic
 from .home_assistant_actuator_agent import ActuatorAction
 from .llm_agent import LLMProvider, accumulate_global_cost
 
@@ -443,14 +444,14 @@ class OneOffActuatorAgent(Actor):
             result = await self._execute_request()
             self.metrics.tasks_completed += 1
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
             await self._send_result(result)
         except Exception as exc:
             self.metrics.tasks_failed += 1
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
             logger.exception("[%s] One-shot actuation failed", self.name)
@@ -1061,7 +1062,7 @@ class OneOffActuatorAgent(Actor):
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 

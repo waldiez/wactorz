@@ -138,7 +138,7 @@ class TestEveryControlTopicReachesItsHandler:
         """
         source = Path("wactorz/node/runner.py").read_text(encoding="utf-8")
         for leaf, _handler in CONTROL_HANDLERS:
-            assert f'f"nodes/{{self.node_name}}/{leaf}"' in source, leaf
+            assert f'node_topic(self.node_name, "{leaf}")' in source, leaf
 
 
 class _Client:

@@ -31,6 +31,7 @@ from typing import Any, ClassVar
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
+from ..core.topics import agent_topic
 from ..data.files import DataError, check_source, clock_ahead, data_root, event_time_of
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -293,6 +294,6 @@ class RecorderAgent(Actor):
         """Say something on the dashboard feed, under this agent's name."""
         getattr(logger, level, logger.info)("[%s] %s", self.name, message)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": message, "timestamp": time.time()},
         )

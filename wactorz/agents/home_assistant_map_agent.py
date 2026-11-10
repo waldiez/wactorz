@@ -15,6 +15,7 @@ from ..core.integrations.home_assistant.ha_helper import (
     normalize_ha_ws_url,
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
+from ..core.topics import agent_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ class HomeAssistantMapAgent(Actor):
         latest = self.recall("latest_map_payload", None)
         self._latest_map_payload = latest if isinstance(latest, dict) else None
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/spawn",
+            agent_topic(self.actor_id, "spawn"),
             {
                 "agentId": self.actor_id,
                 "agentName": self.name,

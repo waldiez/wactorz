@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.blob_transfer import send_file
+from ..core.topics import node_topic
 from ..data.files import DATA_DIRNAME, data_root
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ class DataShipper:
         size = await asyncio.to_thread(lambda: path.stat().st_size)
         source = key.rsplit("/", 4)[0] if key.count("/") >= 4 else key
         await self._publish(
-            f"nodes/{self.node_name}/data_file",
+            node_topic(self.node_name, "data_file"),
             {
                 "source": source,
                 "path": key,
@@ -153,7 +154,7 @@ class DataShipper:
                 "timestamp": time.time(),
             },
         )
-        await send_file(path, f"nodes/{self.node_name}/blob_return/{sha}", self._publish)
+        await send_file(path, node_topic(self.node_name, "blob_return", sha), self._publish)
         record = self._load()
         record[key] = {"sha256": sha, "sent_at": time.time(), "acked": False}
         await asyncio.to_thread(self._save)

@@ -41,6 +41,7 @@ from . import installed, plugins
 from .agents.rule_agent import RuleConfig
 from .config import CONFIG
 from .core.topic_bus import topic_matches
+from .core.topics import pipeline_topic
 from .plugins import AgentPlugin
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class Pipeline:
     @property
     def tick_topic(self) -> str:
         """Where the schedule, if any, publishes its tick."""
-        return f"pipelines/{self.name}/tick"
+        return pipeline_topic(self.name, "tick")
 
     @property
     def schedule_name(self) -> str:

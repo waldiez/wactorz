@@ -155,6 +155,11 @@ options:
   node_topics: ""
   broker_accounts: ""
 
+  # One word that this add-on's own topics go under (house/agents/...), so that
+  # another Wactorz install on the same broker stays apart. Empty: none.
+  # Run /deploy for each node after changing it.
+  namespace: ""
+
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
   ha_connection: auto
@@ -230,6 +235,7 @@ schema:
   sandbox_node: bool?
   node_topics: str?
   broker_accounts: str?
+  namespace: str?
   deploy_targets:
     - name: str
       host: str?

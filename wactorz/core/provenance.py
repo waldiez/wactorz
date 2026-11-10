@@ -26,6 +26,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from .topics import model_topic
+
 if TYPE_CHECKING:
     import sqlite3
 
@@ -128,7 +130,7 @@ class ProvenanceError(ValueError):
 
 def model_source(name: str) -> str:
     """The graph's ``source`` for the model ``name``, as its topics are named."""
-    return f"models/{name}"
+    return model_topic(name)
 
 
 def statuses_of(kind: str) -> tuple[str, ...]:

@@ -57,8 +57,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..core.topics import wire_topic
 from .addresses import MAIN_NODE, Address, node_of
 from .labels import event_time
+from .topics import AGENTS, MAIN, NODES, SYSTEM, agent_topic, root_prefix
 
 if TYPE_CHECKING:
     from .mqtt_publisher import MQTTPublisher
@@ -239,11 +241,15 @@ class TopicContract:
 
     @classmethod
     def from_spawn_config(cls, config: dict[str, Any]) -> TopicContract:
-        """Extract a TopicContract from a spawn config dict."""
+        """Extract a TopicContract from a spawn config dict.
+
+        Its topics are taken as a program's are (`wire_topic`): a plan or a person
+        writes them bare, and the contract holds them as they travel.
+        """
         return cls(
             name=config.get("name", ""),
-            publishes=config.get("publishes", []),
-            subscribes=config.get("subscribes", []),
+            publishes=wired(config.get("publishes", [])),
+            subscribes=wired(config.get("subscribes", [])),
             triggers_when=config.get("triggers_when", {}),
             produces_schema=config.get("produces_schema", config.get("output_schema", {})),
             consumes_schema=config.get("consumes_schema", config.get("input_schema", {})),
@@ -252,8 +258,15 @@ class TopicContract:
         )
 
 
+def wired(topics: Any) -> Any:
+    """Each topic in a list of them as it travels (`wire_topic`); anything else as it is."""
+    if isinstance(topics, (list, tuple)):
+        return [wire_topic(t) if isinstance(t, str) else t for t in topics]
+    return topics
+
+
 #: Topics that are the system's own machinery, never data.
-_MACHINERY = ("nodes/", "system/", "main/", "$SYS/")
+_MACHINERY = (root_prefix(NODES), root_prefix(SYSTEM), root_prefix(MAIN), "$SYS/")
 
 
 def is_machinery(topic: str) -> bool:
@@ -263,7 +276,7 @@ def is_machinery(topic: str) -> bool:
     """
     if topic.startswith(_MACHINERY):
         return True
-    return topic.startswith("agents/") and "/data" not in topic
+    return topic.startswith(root_prefix(AGENTS)) and "/data" not in topic
 
 
 def sample_of(payload: dict[str, Any]) -> dict[str, Any]:
@@ -570,7 +583,6 @@ class SharedStateHub:
     PRESENCE_TOPIC = "home/presence/{zone}"
     ENERGY_TOPIC = "home/energy/current"
     HA_STATE_TOPIC = "home/state/{domain}/{entity_id}"
-    AGENT_DATA_TOPIC = "agents/{name}/data/{key}"
 
     def __init__(self, mqtt_client: MQTTPublisher | None) -> None:
         self._mqtt = mqtt_client
@@ -632,7 +644,7 @@ class SharedStateHub:
 
     async def publish_agent_data(self, agent_name: str, key: str, data: Any) -> None:
         """Publish a named piece of world state from an agent."""
-        topic = self.AGENT_DATA_TOPIC.format(name=agent_name, key=key)
+        topic = agent_topic(agent_name, "data", key)
         await self.publish_state(topic, data)
 
     def get_cached(self, topic: str) -> Any | None:

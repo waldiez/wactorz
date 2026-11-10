@@ -25,6 +25,7 @@ from typing import Any
 from ...core import topic_bus
 from ...core.actor import Actor, Message, MessageType
 from ...core.addresses import MAIN_NODE, Address
+from ...core.topics import agent_topic, display_topic
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
@@ -164,7 +165,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
             )
         try:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
         except Exception as exc:
@@ -653,13 +654,18 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 
 
 def _fmt_worker(w: dict[str, Any]) -> str:
-    """One prompt line per worker, plus whatever schema it declares."""
+    """One prompt line per worker, plus whatever schema it declares.
+
+    Its topics are shown bare (`display_topic`), as a program is to write them:
+    one the model copies with the namespace in front would keep it after the
+    namespace changed.
+    """
     location = f" on {w['node']}" if w.get("remote") and w.get("node") else ""
     lines = [f"  - {w['name']} ({w['type']}{location}): {w['description']}"]
     if w.get("capabilities"):
@@ -669,10 +675,12 @@ def _fmt_worker(w: dict[str, Any]) -> str:
     if w.get("output_schema"):
         lines.append(f"    output_schema: {w['output_schema']}")
     if w.get("publishes"):
-        lines.append(f"    publishes: {w['publishes']}")
+        lines.append(f"    publishes: {[display_topic(t) for t in w['publishes']]}")
     if w.get("observed_samples"):
         for topic, info in w["observed_samples"].items():
             fields = info.get("fields", {})
             example = info.get("example", {})
-            lines.append(f"    topic '{topic}' payload fields: {fields}  example: {example}")
+            lines.append(
+                f"    topic '{display_topic(topic)}' payload fields: {fields}  example: {example}"
+            )
     return "\n".join(lines)

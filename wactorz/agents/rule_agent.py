@@ -62,6 +62,7 @@ from ..core.actor import Actor, Message, MessageType
 from ..core.labels import LabelError, Labels, event_time
 from ..core.outbound import check_channel, check_options
 from ..core.persistence.stores import get_db
+from ..core.topics import agent_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -541,7 +542,7 @@ class RuleAgent(Actor):
                 logger.exception("[%s] %s action failed", self.name, action.type)
         self.metrics.tasks_completed += 1
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": f"fired: {self._describe()}", "timestamp": time.time()},
         )
         return True

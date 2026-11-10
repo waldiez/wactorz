@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any
 from ...core import topic_bus
 from ...core.manifests import AgentManifest
 from ...core.mqtt import mqtt_client
-from ...core.topic_bus import StreamWindow, TopicContract
+from ...core.topic_bus import StreamWindow, TopicContract, wired
 
 if TYPE_CHECKING:
     pass
 
+from ...core.topics import display_topic, wire_topic
 from .awaitable import AWAITABLE_NONE
 from .listener import hub_for
 
@@ -128,6 +129,8 @@ class StreamsMixin(_Host):
         """
         if callback is None or not callable(callback):
             raise TypeError(CALLBACK_REQUIRED.format(topic=topic, got=type(callback).__name__))
+        # Before the duplicate check and the contract: one topic, however it was written.
+        topic = wire_topic(topic)
 
         # Validate callback accepts exactly one argument (the payload)
 
@@ -219,6 +222,7 @@ class StreamsMixin(_Host):
             stats = await agent.mqtt_get('rpi-room/cpu')
             cpu = stats.get('cpu_percent') if stats else None
         """
+        topic = wire_topic(topic)
         actor = self._actor
         result = []
 
@@ -267,6 +271,7 @@ class StreamsMixin(_Host):
                 if w.absent_for(60):
                     await agent.alert('Sensor stopped publishing!')
         """
+        topic = wire_topic(topic)
         # One window per topic per agent. Generated code calls this from a
         # process loop as readily as from setup, and a fresh window each tick
         # opens a broker connection each tick and reads an empty buffer every
@@ -366,6 +371,9 @@ class StreamsMixin(_Host):
             publishes = [publishes]
         if isinstance(subscribes, str):
             subscribes = [subscribes]
+        # Held as they travel, so a bare topic and its namespaced form are one.
+        publishes = wired(publishes)
+        subscribes = wired(subscribes)
 
         # Each call adds to what is already known rather than replacing it, from
         # two sources: what the spawn config declared before any code ran, and
@@ -413,7 +421,7 @@ class StreamsMixin(_Host):
             return []
         pairs = bus.registry.find_wiring_opportunities()
         return [
-            {"producer": p.name, "consumer": c.name, "topic": t}
+            {"producer": p.name, "consumer": c.name, "topic": display_topic(t)}
             for p, c, t in pairs
             if p.name == self.name or c.name == self.name
         ]

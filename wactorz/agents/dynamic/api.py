@@ -20,6 +20,7 @@ from ..lookup import find_main_actor
 if TYPE_CHECKING:
     from .agent import DynamicAgent
 
+from ...core.topics import agent_topic
 from .awaitable import AWAITABLE_NONE
 from .messaging import MessagingMixin
 from .queries import QueriesMixin
@@ -61,7 +62,7 @@ class LLMInterface:
             if hasattr(self._actor, "total_input_tokens"):
                 self._actor._accrue_usage(usage)
                 await self._actor._mqtt_publish(
-                    f"agents/{self._actor.actor_id}/metrics",
+                    agent_topic(self._actor.actor_id, "metrics"),
                     self._actor._build_metrics(),
                 )
         except Exception as e:
@@ -79,7 +80,7 @@ class LLMInterface:
         if hasattr(self._actor, "total_input_tokens"):
             self._actor._accrue_usage(usage)
             await self._actor._mqtt_publish(
-                f"agents/{self._actor.actor_id}/metrics",
+                agent_topic(self._actor.actor_id, "metrics"),
                 self._actor._build_metrics(),
             )
         return response

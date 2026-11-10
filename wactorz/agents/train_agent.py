@@ -47,6 +47,7 @@ from ..core.labels import Labels
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.provenance import LED_TO, Provenance, ProvenanceError
+from ..core.topics import agent_topic
 from ..data import DEFAULT_LATENESS_S, data_root, now_of
 from ..monitoring import model_metrics
 from ..train.record import run_node_id
@@ -299,7 +300,7 @@ class TrainAgent(Actor):
     async def log(self, message: str, level: str = "info") -> None:
         """Say something on the dashboard feed, under this agent's name."""
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": message, "level": level, "timestamp": time.time()},
         )
 

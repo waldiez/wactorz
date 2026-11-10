@@ -31,6 +31,7 @@ from ..core.agent_reset import (
     reset_live,
 )
 from ..core.node_signing import signed_publish_kwargs
+from ..core.topics import node_topic
 from . import cost, db_writer, events, lifecycle, node_reset, runtime, ws
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -133,10 +134,10 @@ async def _delete_on_nodes(on: dict[str, set[str]]) -> None:
             payload = json.dumps({"name": name, "delete": True})
             sends.append(
                 client.publish(
-                    f"nodes/{node}/stop",
+                    node_topic(node, "stop"),
                     payload,
                     qos=1,
-                    **signed_publish_kwargs(f"nodes/{node}/stop", payload),
+                    **signed_publish_kwargs(node_topic(node, "stop"), payload),
                 )
             )
     await asyncio.gather(*sends, return_exceptions=True)

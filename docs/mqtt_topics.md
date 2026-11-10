@@ -2,6 +2,12 @@
 
 All topics use `localhost:1883` by default (configurable via `--mqtt-broker` and `--mqtt-port`).
 
+With `WACTORZ_NAMESPACE` set, Wactorz's own topics -- `agents/`, `nodes/`, `main/`,
+`system/`, `models/`, `pipelines/` and `shadow/` -- go under it (`house/agents/{id}/status`),
+and the world's (`home/`, `sensors/`, `custom/`, `schedule/`, `homeassistant/`) stay as
+they are. This page writes them bare, as agent programs and the dashboard do. See "Two
+installs on one broker" in `remote-nodes.md`.
+
 ---
 
 ## Agent Topics

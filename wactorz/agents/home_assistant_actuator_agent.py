@@ -31,6 +31,7 @@ from ..core.mqtt import (
     mqtt_client,
     session_kwargs,
 )
+from ..core.topics import agent_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -372,7 +373,7 @@ class HomeAssistantActuatorAgent(Actor):
         self.metrics.tasks_completed += 1
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/actuations",
+            agent_topic(self.actor_id, "actuations"),
             {
                 "automation_id": self.config.automation_id,
                 "actions": [a.to_dict() for a in self.config.actions],

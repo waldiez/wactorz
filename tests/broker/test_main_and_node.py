@@ -18,6 +18,7 @@ import wactorz
 from wactorz.agents.main.actor import MainActor
 from wactorz.core import compatibility, node_signing
 from wactorz.core.cancellation import cancel_until_done
+from wactorz.core.topics import agent_topic, node_topic
 from wactorz.web import node_reset
 
 from .conftest import WAIT_S, FastNode, until
@@ -67,7 +68,7 @@ class TestASignedCommandIsObeyed:
     async def test_main_stops_it_again(self, main: MainActor, node: FastNode) -> None:
         await _spawned(main, node)
 
-        await main._mqtt_publish(f"nodes/{node.node_name}/stop", {"name": "echo"}, qos=1)
+        await main._mqtt_publish(node_topic(node.node_name, "stop"), {"name": "echo"}, qos=1)
 
         await until(lambda: node.get("echo") is None, "the node stopping 'echo'")
         await until(lambda: "echo" not in _agents_main_sees(main, node), "main seeing 'echo' gone")
@@ -83,7 +84,7 @@ class TestAnUnsignedCommandIsRefused:
         host, port = broker
         async with aiomqtt.Client(host, port) as client:
             await client.publish(
-                f"nodes/{node.node_name}/spawn", json.dumps(_echo("intruder")), qos=1
+                node_topic(node.node_name, "spawn"), json.dumps(_echo("intruder")), qos=1
             )
         # A signed spawn sent after it, so there is something to wait for: once
         # the node has acted on this one, it has also read the one before it.
@@ -186,7 +187,7 @@ class TestAServerOnAnotherRelease:
                     refusals.append(said["message"])
 
         async with aiomqtt.Client(host, port) as client:
-            await client.subscribe(f"agents/{node.node_name}/logs", qos=1)
+            await client.subscribe(agent_topic(node.node_name, "logs"), qos=1)
             listening = asyncio.create_task(_listen(client))
             try:
                 # A spawn, and the desired state main writes after it: the node

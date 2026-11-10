@@ -15,6 +15,8 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from ..core.topics import agent_topic, model_topic, node_topic, system_topic
+
 if TYPE_CHECKING:
     import aiomqtt
 
@@ -27,11 +29,11 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 WS_PORT = 8888
 MQTT_TOPICS = [
-    "agents/#",
-    "system/#",
-    "nodes/#",
+    agent_topic("#"),
+    system_topic("#"),
+    node_topic("#"),
     # Where each model's pointers stand, retained by main: models/<name>/<pointer>.
-    "models/+/+",
+    model_topic("+", "+"),
     "homeassistant/state_changes/#",
 ]
 

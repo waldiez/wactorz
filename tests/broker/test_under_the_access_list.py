@@ -27,6 +27,7 @@ from wactorz.core import broker_accounts, node_signing
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.persistence import WactorzDB
 from wactorz.core.registry import ActorSystem
+from wactorz.core.topics import NAMESPACE
 
 from .acl_fixture import PASSWORD, SERVER
 from .conftest import until
@@ -101,6 +102,9 @@ def node_process_fixture(
         WACTORZ_NODE_KEY=node_signing.node_key(NODE),
         WACTORZ_NODE_SIGNING="enforce",
     )
+    # As `node_env_text` tells a node main's namespace: only when one is set.
+    if NAMESPACE:
+        env["WACTORZ_NAMESPACE"] = NAMESPACE
     process = subprocess.Popen(
         [
             sys.executable,

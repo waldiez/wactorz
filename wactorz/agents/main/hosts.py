@@ -89,8 +89,11 @@ class ManifestHost(ListenerHost, VoiceHost, Protocol):
     listening — but removing an agent belongs to the lifecycle, not to a table
     of capabilities, so it hands the name over rather than growing the reach to
     act on it. Where agents are is read so a manifest is taken only from the
-    node main places its agent on.
+    node main places its agent on. Main's own id names its own manifest, which
+    is looked for where it was retained before a namespace was set.
     """
+
+    actor_id: str
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:

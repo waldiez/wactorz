@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..monitoring.log_redaction import redact
+from .topics import agent_topic
 
 #: The persisted key holding the book: question id to its record.
 QUESTIONS_KEY = "_questions"
@@ -57,7 +58,7 @@ def context_text(raw: str) -> str:
 
 def questions_topic(agent_id: str) -> str:
     """The retained topic ``agent_id`` publishes its question book on."""
-    return f"agents/{agent_id}/{QUESTIONS_LEAF}"
+    return agent_topic(agent_id, QUESTIONS_LEAF)
 
 
 def book_frame(agent: str, questions: dict[str, Question]) -> dict[str, Any]:

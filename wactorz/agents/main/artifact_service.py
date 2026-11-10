@@ -59,6 +59,7 @@ from ...core.paths import resolve_state_dir
 from ...core.persistence.stores import get_db
 from ...core.pointer_moves import record_change, record_clear, record_move
 from ...core.provenance import Provenance
+from ...core.topics import NODES, agent_topic, model_topic, node_topic, own_topic_parts
 
 if TYPE_CHECKING:
     from ...core.persistence.db import WactorzDB
@@ -83,7 +84,7 @@ POINTER_POLL_S = 5.0
 
 def pointer_topic(name: str, which: str) -> str:
     """The retained topic that says where ``name``'s ``which`` pointer stands."""
-    return f"models/{name}/{which}"
+    return model_topic(name, which)
 
 
 def pointer_message(name: str, which: str, now: Pointer | None, was: Pointer | None) -> str:
@@ -235,8 +236,8 @@ class ArtifactService:
             data = json.loads(payload.decode())
         except (UnicodeDecodeError, ValueError):
             return
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "nodes" or not isinstance(data, dict):
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != NODES or not isinstance(data, dict):
             return
         node = parts[1]
         asked = data.get("sha256")
@@ -325,7 +326,7 @@ class ArtifactService:
             message = pointer_message(name, which, now, was)
             logger.info("[%s] %s", host.name, message)
             await host._mqtt_publish(
-                f"agents/{host.actor_id}/logs",
+                agent_topic(host.actor_id, "logs"),
                 {
                     "type": "model",
                     "message": message,
@@ -406,7 +407,7 @@ class ArtifactService:
                     identifier=client_id("srv", install_id(), "artifacts"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/artifact_request", qos=1)
+                    await client.subscribe(node_topic("+", "artifact_request"), qos=1)
                     last_error = None
                     async for message in client.messages:
                         await self.receive_request(str(message.topic), message.payload)

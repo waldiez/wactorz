@@ -30,12 +30,18 @@ from typing import Any
 import psutil
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import install_id
+from ..core.topics import agent_topic, system_topic
 from .lookup import find_main_actor
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 # How long a critical notification is suppressed before re-notifying (seconds)
 _NOTIFY_COOLDOWN = 120.0
+
+#: The field of the health message that names the install sending it, so that
+#: another install on the same topics can be told apart (`agents.main.installs`).
+HEALTH_INSTALL_FIELD = "install"
 
 
 class MonitorActor(Actor):
@@ -323,7 +329,7 @@ class MonitorActor(Actor):
             "severity": "warning" if gap < 120 else "critical",
         }
         logger.warning("[%s] ALERT: %s unresponsive for %.0fs", self.name, actor.name, gap)
-        await self._mqtt_publish(f"agents/{actor.actor_id}/alert", alert)
+        await self._mqtt_publish(agent_topic(actor.actor_id, "alert"), alert)
 
         _infra = {
             "monitor",
@@ -344,7 +350,7 @@ class MonitorActor(Actor):
 
     async def _fire_error_alert(self, event: dict[str, Any]) -> None:
         await self._mqtt_publish(
-            f"agents/{event.get('actor_id', 'unknown')}/alert",
+            agent_topic(event.get("actor_id", "unknown"), "alert"),
             {
                 "actor_id": event.get("actor_id"),
                 "name": event.get("name"),
@@ -370,6 +376,7 @@ class MonitorActor(Actor):
         now = time.time()
         actors = self._registry.all_actors()
         health = {
+            HEALTH_INSTALL_FIELD: install_id(),
             "timestamp": now,
             "total_actors": len(actors),
             "running": sum(1 for a in actors if a.state == ActorState.RUNNING),
@@ -388,7 +395,7 @@ class MonitorActor(Actor):
                 for a in actors
             ],
         }
-        await self._mqtt_publish("system/health", health)
+        await self._mqtt_publish(system_topic("health"), health)
 
     async def _publish_host_stats(self) -> None:
         proc = self._proc
@@ -412,6 +419,6 @@ class MonitorActor(Actor):
                 "mem_total_mb": mem_total_mb,
                 "timestamp": time.time(),
             }
-            await self._mqtt_publish("system/host", stats)
+            await self._mqtt_publish(system_topic("host"), stats)
         except Exception as e:
             logger.debug("[%s] host stats error: %s", self.name, e)

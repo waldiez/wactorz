@@ -57,6 +57,7 @@ from ...core.shadow_trial import (
     judgement_of_trial,
     record_outcome,
 )
+from ...core.topics import agent_topic
 from ...data.files import data_root
 from ...monitoring import model_metrics
 from ..shadow_serving import shadow_source
@@ -388,7 +389,7 @@ class ShadowServing:
             return
         logger.info("[%s] %s", host.name, message)
         await host._mqtt_publish(
-            f"agents/{host.actor_id}/logs",
+            agent_topic(host.actor_id, "logs"),
             {"type": "model", "message": message, "timestamp": time.time()},
         )
 

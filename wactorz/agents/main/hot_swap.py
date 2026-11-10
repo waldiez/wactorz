@@ -52,6 +52,7 @@ from ...core.mqtt import (
 from ...core.paths import resolve_state_dir
 from ...core.persistence.stores import get_db
 from ...core.provenance import Provenance
+from ...core.topics import NODES, agent_topic, node_topic, own_topic_parts
 
 if TYPE_CHECKING:
     from .artifact_service import Change
@@ -188,7 +189,7 @@ class HotSwap:
         # Signed on the way out, because it is a node control topic: see
         # `MainActor._publish_properties`.
         await host._mqtt_publish(
-            f"nodes/{node}/swap_model",
+            node_topic(node, "swap_model"),
             {
                 "agent": agent,
                 "key": key,
@@ -254,8 +255,8 @@ class HotSwap:
             data = json.loads(payload.decode())
         except (UnicodeDecodeError, ValueError):
             return
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "nodes" or not isinstance(data, dict):
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != NODES or not isinstance(data, dict):
             return
         node = parts[1]
         self._expire()
@@ -344,7 +345,7 @@ class HotSwap:
             return
         logger.info("[%s] %s", host.name, message)
         await host._mqtt_publish(
-            f"agents/{host.actor_id}/logs",
+            agent_topic(host.actor_id, "logs"),
             {"type": "model", "message": message, "timestamp": time.time()},
         )
 
@@ -364,7 +365,7 @@ class HotSwap:
                     identifier=client_id("srv", install_id(), "swaps"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/swap_ack", qos=1)
+                    await client.subscribe(node_topic("+", "swap_ack"), qos=1)
                     last_error = None
                     async for message in client.messages:
                         await self.receive_ack(str(message.topic), message.payload)

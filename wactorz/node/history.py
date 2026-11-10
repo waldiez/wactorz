@@ -17,13 +17,15 @@ warning in the log, never the pages that did arrive passed off as the whole.
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..core.topics import main_topic
+
 if TYPE_CHECKING:
     from .agent import NodeAgent
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where history reads are sent.
-HISTORY_TOPIC = "main/history_request"
+HISTORY_TOPIC = main_topic("history_request")
 
 #: How long one page waits for main. Generous: main reads the page from disk
 #: off its event loop, and a Pi's SD card under load is slow but not broken.
@@ -33,7 +35,7 @@ PAGE_TIMEOUT_S = 60.0
 UNANSWERED_HINT = (
     "main did not answer. A broker whose access list predates history reads "
     "drops them: restart main so it writes the list again, or add "
-    "`topic write main/history_request` to this node's account by hand."
+    f"`topic write {HISTORY_TOPIC}` to this node's account by hand."
 )
 
 

@@ -52,6 +52,7 @@ from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .task_text import TaskEnvelope
 from .topic_bus import StreamWindow
+from .topics import agent_topic
 from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
@@ -745,7 +746,7 @@ class Actor(ABC):
             final_metrics = self._build_metrics()
             final_metrics["final"] = True  # signals UI this is the last message
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 final_metrics,
             )
         except Exception:  # noqa: S110  # a last telemetry frame, sent on the way out
@@ -979,16 +980,18 @@ class Actor(ABC):
         # Publish immediately on start so monitor sees agent right away
         await asyncio.sleep(0.5)
         self.metrics.heartbeats += 1
-        await self._mqtt_publish(f"agents/{self.actor_id}/heartbeat", self._build_heartbeat())
-        await self._mqtt_publish(f"agents/{self.actor_id}/metrics", self._build_metrics())
+        await self._mqtt_publish(agent_topic(self.actor_id, "heartbeat"), self._build_heartbeat())
+        await self._mqtt_publish(agent_topic(self.actor_id, "metrics"), self._build_metrics())
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 await asyncio.sleep(interval)
                 hb = self._build_heartbeat()
                 self.metrics.heartbeats += 1
                 self.metrics.last_heartbeat = time.time()
-                await self._mqtt_publish(f"agents/{self.actor_id}/heartbeat", hb)
-                await self._mqtt_publish(f"agents/{self.actor_id}/metrics", self._build_metrics())
+                await self._mqtt_publish(agent_topic(self.actor_id, "heartbeat"), hb)
+                await self._mqtt_publish(
+                    agent_topic(self.actor_id, "metrics"), self._build_metrics()
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -1186,7 +1189,7 @@ class Actor(ABC):
             session_kwargs,
         )
 
-        topic = f"agents/{self.actor_id}/commands"
+        topic = agent_topic(self.actor_id, "commands")
         # Same rule the subscription hub follows: only an identity that
         # survives a restart can resume a session, so an anonymous actor
         # connects clean rather than leaving one behind per incarnation.
@@ -1465,17 +1468,17 @@ class Actor(ABC):
         # Immediately announce to monitor - don't wait for heartbeat loop
         await child._publish_status()
         await child._mqtt_publish(
-            f"agents/{child.actor_id}/heartbeat",
+            agent_topic(child.actor_id, "heartbeat"),
             child._build_heartbeat(),
         )
         await child._mqtt_publish(
-            f"agents/{child.actor_id}/metrics",
+            agent_topic(child.actor_id, "metrics"),
             child._build_metrics(),
         )
 
         # Notify parent's topic that it spawned a child
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/spawned",
+            agent_topic(self.actor_id, "spawned"),
             {"child_id": child.actor_id, "child_name": child.name, "timestamp": time.time()},
         )
         logger.info("[%s] Spawned: %s (%s)", self.name, child.name, child.actor_id[:8])
@@ -1965,7 +1968,7 @@ class Actor(ABC):
         return None
 
     async def _publish_status(self) -> None:
-        await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
+        await self._mqtt_publish(agent_topic(self.actor_id, "status"), self.get_status())
 
     async def notify_user(
         self,
@@ -2015,7 +2018,7 @@ class Actor(ABC):
         # publisher would leave this at 0 -- and a frame emitted while the
         # monitor is reconnecting would simply be gone. The agent said
         # something; the user never sees it.
-        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
+        await self._mqtt_publish(agent_topic(self.actor_id, "chat"), payload, qos=1)
         return payload["id"]
 
     # ─── Questions to a person ────────────────────────────────────────────────
@@ -2370,7 +2373,7 @@ class Actor(ABC):
             # The models it serves, by name: which version stands where is the store's to say.
             manifest = {**manifest, "models": models.served_models(self._artifacts)}
         self._published_manifest = manifest
-        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
+        await self._mqtt_publish(agent_topic(self.actor_id, "manifest"), manifest, retain=True)
 
     async def withdraw_manifest(self) -> None:
         """Withdraw the retained manifest, announcing that this actor is gone.
@@ -2386,7 +2389,7 @@ class Actor(ABC):
         QoS 1 because a lost withdrawal leaves the broker replaying the manifest
         to every subscriber that connects later.
         """
-        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", b"", retain=True, qos=1)
+        await self._mqtt_publish(agent_topic(self.actor_id, "manifest"), b"", retain=True, qos=1)
 
     async def on_stop(self) -> None:
         """Called when actor stops. Override for cleanup."""

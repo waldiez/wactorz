@@ -22,6 +22,7 @@ from ...core.addresses import MAIN_NODE, Address, parse
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
 from ...core.state_snapshot import FORCE_FLAG
+from ...core.topics import main_topic
 from ...core.turns import acting_as, begin_turn
 from ...orchestration import CLI
 
@@ -158,7 +159,7 @@ class CLIInterface:
         if refusal:
             return f"[error] {agent_name} was not asked: {refusal}"
 
-        reply_topic = f"main/reply/{main.actor_id}/{uuid.uuid4().hex[:8]}"
+        reply_topic = main_topic("reply", main.actor_id, uuid.uuid4().hex[:8])
         result_holder = []
 
         async def _listen_for_reply() -> None:

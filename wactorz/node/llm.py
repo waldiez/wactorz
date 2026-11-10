@@ -19,6 +19,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..agents.llm.base import LLMProvider
+from ..core.topics import main_topic, node_topic
 
 if TYPE_CHECKING:
     from .agent import NodeAgent
@@ -52,7 +53,7 @@ class BridgeProvider(LLMProvider):
         started = time.monotonic()
         try:
             reply = await self._agent.ask_main(
-                "main/llm_request",
+                main_topic("llm_request"),
                 {"messages": messages, "system": system},
                 timeout=timeout,
             )
@@ -84,7 +85,7 @@ async def request_over_mqtt(
     and the key is dropped either way, so a reply that arrives afterwards finds
     nothing waiting and is logged rather than resolving a call that gave up.
     """
-    reply_topic = f"nodes/{agent.node}/reply/{uuid.uuid4().hex[:8]}"
+    reply_topic = node_topic(agent.node, "reply", uuid.uuid4().hex[:8])
     future: asyncio.Future[Any] = asyncio.get_event_loop().create_future()
     agent._result_futures[reply_topic] = future
     try:

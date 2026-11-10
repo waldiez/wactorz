@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...core.addresses import MAIN_NODE, Address, Resolution, node_of
+from ...core.topics import node_topic
 from ..mixins import KeptHere, NotSpawned
 from .spawn_registry import address_of, placed_on
 
@@ -128,7 +129,7 @@ async def _stop_at(host: SpawnHost, source: Address) -> None:
             await host._stop_for_replace(existing, source.name)
         return
     await host._update_node_desired_state(source.node, remove_name=source.name)
-    await host._mqtt_publish(f"nodes/{source.node}/stop", {"name": source.name}, qos=1)
+    await host._mqtt_publish(node_topic(source.node, "stop"), {"name": source.name}, qos=1)
 
 
 async def put_back(host: SpawnHost, source: Address) -> None:

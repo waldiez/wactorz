@@ -416,8 +416,11 @@ test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...
 # A real main and a real node, in one process, joined only by a real mosquitto
 # started for the run: the contract between them, exercised rather than pinned.
 # The ordinary suite refuses every broker connection, so these are skipped there.
-test-broker: ## Run the main-and-node tests over a real mosquitto, started for the run (needs Docker)
+# Twice: as an install with no namespace, then with one, where every topic of
+# Wactorz's own and every node rule moves under it.
+test-broker: ## Run the main-and-node tests over a real mosquitto, without a namespace and with one (needs Docker)
 	scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q
+	WACTORZ_NAMESPACE=lab scripts/test-broker.sh "$(broker-image)" "$(PYTHON)" -q
 
 # The same main and node, kept busy for DURATION seconds: agents spawned, asked
 # and deleted over and over, with what is left behind compared after every

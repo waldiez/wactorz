@@ -25,6 +25,7 @@ from collections.abc import Iterable
 
 from ..core.artifacts import POINTERS
 from ..core.topic_bus import topic_matches
+from ..core.topics import AGENTS, MODELS, NODES, own_topic_parts, system_topic, wire_topic
 
 #: `agents/{id}/<leaf>` topics the dashboard acts on. `actuations` and `anomaly`
 #: are consumed not by `ServerEventRouter` but by the raw-fallback feed mappers
@@ -49,7 +50,7 @@ _AGENT_LEAVES = frozenset(
 )
 
 #: `system/*` topics, matched exactly — the subtree carries more than these.
-_SYSTEM_TOPICS = frozenset({"system/qa-flag", "system/spawn", "system/health", "system/host"})
+_SYSTEM_TOPICS = frozenset(system_topic(leaf) for leaf in ("qa-flag", "spawn", "health", "host"))
 
 #: The only `nodes/{id}/<leaf>` the dashboard reads.
 _NODE_LEAF = "heartbeat"
@@ -68,9 +69,12 @@ _followed: tuple[str, ...] = ()
 
 
 def follow(filters: Iterable[str]) -> None:
-    """Relay what ``filters`` match too, replacing what was followed before."""
+    """Relay what ``filters`` match too, replacing what was followed before.
+
+    A panel declares its filters bare; they are followed as they travel (`wire_topic`).
+    """
     global _followed
-    _followed = tuple(dict.fromkeys(filters))
+    _followed = tuple(dict.fromkeys(wire_topic(f) for f in filters))
 
 
 def followed() -> tuple[str, ...]:
@@ -86,14 +90,14 @@ def is_relayed(topic: str) -> bool:
         return True
     if topic == _HA_PREFIX or topic.startswith(f"{_HA_PREFIX}/"):
         return True
-    parts = topic.split("/")
-    if len(parts) != 3:
+    parts = own_topic_parts(topic)
+    if parts is None or len(parts) != 3:
         return False
     root, _, leaf = parts
-    if root == "agents":
+    if root == AGENTS:
         return leaf in _AGENT_LEAVES
-    if root == "nodes":
+    if root == NODES:
         return leaf == _NODE_LEAF
-    if root == "models":
+    if root == MODELS:
         return leaf in _MODEL_POINTERS
     return False

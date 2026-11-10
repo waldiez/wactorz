@@ -16,6 +16,7 @@ import { VERSION_KEY } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { buildSignOutButton } from "./signOut";
 import { DEVICES_TAB } from "../../config/hiddenTabs";
+import { inTabOrder } from "../../config/tabOrder";
 import { iconMarkup, type IconName } from "./icons";
 import { button, el, expanded, externalLink, focusables, iconButton, live, testId } from "../dom";
 
@@ -29,6 +30,8 @@ export interface HeaderOpts {
     extraViews: { key: View; label: string; icon: IconName }[];
     /** The tabs this browser hides (`config/hiddenTabs`), the Devices link's included; none when absent. */
     hidden?: ReadonlySet<string>;
+    /** The order this browser shows the view tabs in (`config/tabOrder`); the dashboard's own when absent. */
+    order?: readonly string[];
 }
 
 /** No tab hidden. */
@@ -272,6 +275,7 @@ function buildHeaderRight(
     haUrl: string | null,
     extraViews: { key: View; label: string; icon: IconName }[],
     hidden: ReadonlySet<string>,
+    order: readonly string[],
 ): HTMLElement {
     const right = el("div", "af-header-right");
 
@@ -279,7 +283,9 @@ function buildHeaderRight(
     const nav = el("nav", "af-view-nav");
     nav.setAttribute("aria-label", "Views");
     right.appendChild(nav);
-    const allViews = [...BUILTIN_VIEWS, ...extraViews, SETTINGS_VIEW].filter(v => !hidden.has(v.key));
+    const allViews = [...inTabOrder([...BUILTIN_VIEWS, ...extraViews], order), SETTINGS_VIEW].filter(
+        v => !hidden.has(v.key),
+    );
     allViews.forEach(({ key, label, icon }) => {
         const btn = button(`af-view-btn${key === view ? " active" : ""}`);
         btn.dataset["view"] = key;
@@ -318,7 +324,14 @@ export function buildHeader(opts: HeaderOpts): HTMLElement {
     header.append(
         buildHeaderLeft(opts.connState),
         center,
-        buildHeaderRight(opts.view, opts.onSetView, opts.haUrl, opts.extraViews, opts.hidden ?? NONE_HIDDEN),
+        buildHeaderRight(
+            opts.view,
+            opts.onSetView,
+            opts.haUrl,
+            opts.extraViews,
+            opts.hidden ?? NONE_HIDDEN,
+            opts.order ?? [],
+        ),
     );
     return header;
 }
@@ -395,10 +408,10 @@ function wireSecondaryBottomNav(
     extraViews: { key: View; label: string; icon: IconName }[],
     onSetView: (v: View) => void,
     hidden: ReadonlySet<string>,
+    order: readonly string[],
 ): void {
     const secondary: { key: View; icon: IconName; label: string }[] = [
-        ...BUILTIN_VIEWS.filter(v => !PHONE_BAR.includes(v.key)),
-        ...extraViews,
+        ...inTabOrder([...BUILTIN_VIEWS.filter(v => !PHONE_BAR.includes(v.key)), ...extraViews], order),
         { key: SETTINGS_VIEW.key, icon: SETTINGS_VIEW.icon, label: SETTINGS_VIEW.label },
     ].filter(v => !hidden.has(v.key));
     secondary.forEach(({ key, icon, label }) => {
@@ -420,6 +433,8 @@ export function buildBottomNav(opts: {
     extraViews: { key: View; label: string; icon: IconName }[];
     /** The tabs this browser hides, as for the header. */
     hidden?: ReadonlySet<string>;
+    /** The order of the view tabs, as for the header. */
+    order?: readonly string[];
 }): HTMLElement {
     const { view, onSetView, haUrl, extraViews } = opts;
     const hidden = opts.hidden ?? NONE_HIDDEN;
@@ -432,7 +447,7 @@ export function buildBottomNav(opts: {
     wireMoreSheet(sheet, moreBtn);
 
     wirePrimaryBottomNav(nav, sheet, view, onSetView);
-    wireSecondaryBottomNav(sheet, moreBtn, view, extraViews, onSetView, hidden);
+    wireSecondaryBottomNav(sheet, moreBtn, view, extraViews, onSetView, hidden, opts.order ?? []);
     // Devices links out to the HA UI (new tab) rather than switching views.
     if (!hidden.has(DEVICES_TAB)) {
         nav.appendChild(buildHaNavLink(haUrl, true));

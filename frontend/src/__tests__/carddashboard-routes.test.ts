@@ -168,6 +168,19 @@ describe("CardDashboard and the address", () => {
         expect(shownView()).toBe("feed");
     });
 
+    it("puts a tab moved in Settings where it was moved to, in the header at once", () => {
+        history.replaceState(null, "", "#/settings/tabs");
+        open();
+        const views = () =>
+            allByRole(allByRole(document, "navigation", "Views")[0]!, "button").map(b => b.textContent);
+        expect(views().slice(0, 2)).toEqual(["Overview", "Chat"]);
+
+        byRole(document, "button", "Move Chat up").click();
+
+        expect(views().slice(0, 2)).toEqual(["Chat", "Overview"]);
+        expect(views().at(-1)).toBe("Settings");
+    });
+
     describe("a spend figure arriving while Settings is open", () => {
         /** Hold the cost answer back until `arrive` is called, as a slow poll does. */
         function holdCost(): (info: object) => void {

@@ -76,6 +76,29 @@
 .af-settings-check input:disabled + .af-settings-check-label {
   color: rgba(255, 255, 255, 0.65);
 }
+/* A tab's switch on the left, its move buttons on the right. */
+.af-settings-tab-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+}
+.af-settings-moves {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.af-settings-move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+}
+.af-settings-move:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
 .af-settings-check-note,
 .af-settings-hint {
   font-size: 12px;

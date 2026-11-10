@@ -161,6 +161,8 @@ registerIcon(
     '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
 );
 registerIcon("volume-none", '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>');
+registerIcon("chevron-up", '<path d="m18 15-6-6-6 6"/>');
+registerIcon("chevron-down", '<path d="m6 9 6 6 6-6"/>');
 registerIcon("reset", '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>');
 registerIcon(
     "more",

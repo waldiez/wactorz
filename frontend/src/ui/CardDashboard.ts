@@ -62,7 +62,7 @@ import { InboxView } from "./inbox/InboxView";
 import { toast } from "./ToastManager";
 import type { SettingsView } from "./settings/SettingsView";
 import { dashboardSettings } from "./settings/dashboardSettings";
-import { hiddenTabs } from "../config/hiddenTabs";
+import { tabChoices } from "../config/tabOrder";
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -570,7 +570,7 @@ export class CardDashboard {
                 onSetView,
                 haUrl,
                 extraViews: this._extraViews,
-                hidden: hiddenTabs(),
+                ...tabChoices(),
             });
             oldHeader.replaceWith(newHeader);
             renderInboxCount(this.root, this._inbox.state.open.length);
@@ -583,7 +583,7 @@ export class CardDashboard {
                 onSetView,
                 haUrl,
                 extraViews: this._extraViews,
-                hidden: hiddenTabs(),
+                ...tabChoices(),
             });
             oldBottomNav.replaceWith(newNav);
             renderInboxCount(this.root, this._inbox.state.open.length);
@@ -600,7 +600,7 @@ export class CardDashboard {
         // The iobar is owned by the chat controller and appended in the constructor.
         const onSetView = (v: View) => this._setView(v);
         const haUrl = this.haUrl;
-        const hidden = hiddenTabs();
+        const tabs = tabChoices();
         root.append(
             buildHeader({
                 view: this.view,
@@ -608,10 +608,10 @@ export class CardDashboard {
                 onSetView,
                 haUrl,
                 extraViews: this._extraViews,
-                hidden,
+                ...tabs,
             }),
             body,
-            buildBottomNav({ view: this.view, onSetView, haUrl, extraViews: this._extraViews, hidden }),
+            buildBottomNav({ view: this.view, onSetView, haUrl, extraViews: this._extraViews, ...tabs }),
         );
         return root;
     }

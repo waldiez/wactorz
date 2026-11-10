@@ -34,6 +34,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   where its values are kept: in this browser, or on the server for everyone. **Tabs** chooses which tabs the header
   and the phone's bar show in this browser: Overview, Chat, Inbox and Settings always do, while Feed, Wiring, Models,
   Devices and extension tabs can be hidden. A hidden tab still opens from a link to it; hiding is not access control.
+  The view tabs can also be put in another order, by Move up and Move down buttons that work from the keyboard too, and
+  the order is kept in this browser; the More sheet on a phone follows it. Settings stays last and the Devices link
+  stays after the tabs, and "Default order" puts them back. That default now has Chat second, after Overview.
   **Sound** holds the beep, read-aloud, voice and ambient choices that were in the header's audio popover, and the voice
   list now says "Default voice" once the voices are in, rather than "loading voices…" for as long as none is chosen.
   The header's speaker is now a mute: one click silences the beep, read-aloud (a reply being read included) and the

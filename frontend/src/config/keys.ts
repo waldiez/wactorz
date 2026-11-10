@@ -18,5 +18,8 @@ export const BLOCKED_SEEN_KEY = "wactorz-blocked-seen";
 /** Where the tabs this browser hides from the header are kept, as a JSON list of view keys. */
 export const HIDDEN_TABS_KEY = "wactorz-hidden-tabs";
 
+/** Where the order this browser shows the view tabs in is kept, as a JSON list of view keys. */
+export const TAB_ORDER_KEY = "wactorz-tab-order";
+
 /** Where the seeded "there is a session to end" flag is kept. */
 export const SIGN_OUT_KEY = "wactorz-can-sign-out";

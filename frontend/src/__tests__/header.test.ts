@@ -372,7 +372,7 @@ describe("the tabs this browser hides", () => {
             hidden: new Set([...hidden, "panel-x"]),
         });
 
-        expect(shown(header)).toEqual(["overview", "wiring", "chat", "inbox", "settings"]);
+        expect(shown(header)).toEqual(["overview", "chat", "wiring", "inbox", "settings"]);
         expect(header.querySelector(".af-ha-nav-link")).toBeNull();
     });
 
@@ -387,6 +387,52 @@ describe("the tabs this browser hides", () => {
 
         expect(shown(nav)).toEqual(["overview", "chat", "inbox", "wiring", "settings"]);
         expect(nav.querySelector(".af-ha-nav-link")).toBeNull();
+    });
+});
+
+describe("the order this browser keeps", () => {
+    const shown = (root: ParentNode): string[] =>
+        [...root.querySelectorAll<HTMLElement>("[data-view]")].map(b => b.dataset["view"]!);
+    const order = ["models", "feed", "overview"];
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        releaseBottomNav();
+    });
+    afterEach(() => releaseHeaderPopovers());
+
+    it("sets the header's tabs, extension ones included, with Settings still last", () => {
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [{ key: "panel-x", label: "Panel X", icon: "grid" }],
+            order: ["panel-x", ...order],
+        });
+
+        expect(shown(header)).toEqual([
+            "panel-x",
+            "models",
+            "feed",
+            "overview",
+            "chat",
+            "wiring",
+            "inbox",
+            "settings",
+        ]);
+    });
+
+    it("sets the More sheet's, leaving the phone's bar as it is", () => {
+        const nav = buildBottomNav({
+            view: "overview",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+            order,
+        });
+
+        expect(shown(nav)).toEqual(["overview", "chat", "inbox", "models", "feed", "wiring", "settings"]);
     });
 });
 

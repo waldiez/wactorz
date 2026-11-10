@@ -16,7 +16,7 @@ export interface DashboardSettingsHost {
     extraViews(): { key: View; label: string; icon: IconName }[];
     /** Whether Home Assistant is set up, so the Devices link appears at all. */
     haConfigured(): boolean;
-    /** A tab was hidden or shown: draw the header again. */
+    /** A tab was hidden, shown or moved: draw the header again. */
     tabsChanged(): void;
     /** Settings → Budget, which reaches the server through the dashboard's metrics. */
     budget: SettingsSection;

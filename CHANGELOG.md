@@ -474,6 +474,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **On Windows, files are served whole.** Wactorz runs on the selector event loop there, whose `sendfile` falls back to a
+  copy that sends wrong bytes to a reader slower than the disk: the dashboard failed to load on some refreshes
+  (`Uncaught SyntaxError` in its bundle), and the docs, attachments and extension panels it serves as files could arrive
+  damaged the same way. aiohttp now sends files by its own writes there (`AIOHTTP_NOSENDFILE`, which a value of your
+  own still overrides). Other platforms are unchanged.
+
 - **An agent's card goes only when its withdrawal stands.** An empty payload on an agent's manifest topic took its card
   off the dashboard and its questions out of the Inbox, whoever sent it, so anything that could publish there could make
   a running agent, main included, disappear. The dashboard now follows main's decision: refused for an agent running in

@@ -3,6 +3,8 @@
 
 from typing import Any
 
+# Before the rest: the Windows fixups must run before anything below imports aiohttp.
+from . import _bootstrap  # pyright: ignore[reportUnusedImport]
 from ._version import __version__
 
 # Agents & LLM providers. Optional provider SDKs (anthropic/openai) are imported

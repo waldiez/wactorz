@@ -255,6 +255,9 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Each async fixture on a loop of its own test's, which is what they have always
+# had: said, so pytest-asyncio does not warn that its default will change.
+asyncio_default_fixture_loop_scope = "function"
 # Far above the slowest test (~1.2s). This is not a performance budget — it is
 # so a test that never returns is reported as itself, rather than as a run that
 # hangs. pytest-randomly prints the seed on every run; pass it back with

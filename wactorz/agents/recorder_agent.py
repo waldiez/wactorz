@@ -31,7 +31,7 @@ from typing import Any, ClassVar
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
-from ..core.topics import agent_topic
+from ..core.topics import agent_topic, display_topic
 from ..data.files import DataError, check_source, clock_ahead, data_root, event_time_of
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -189,14 +189,19 @@ class RecorderAgent(Actor):
         return on_message
 
     def source_of(self, payload: Any, topic: str) -> str:
-        """Where a reading is filed: the payload's named field, else the topic without its wildcards."""
+        """Where a reading is filed: the payload's named field, else the topic without its wildcards.
+
+        The topic without the namespace (`display_topic`), so a source keeps its
+        name and its history whatever the namespace, and is the one a person
+        names in ``/api/data/<source>`` and a drift or training config.
+        """
         if isinstance(payload, Mapping):
             fields = (self.source_field,) if self.source_field else DEFAULT_SOURCE_FIELDS
             for key in fields:
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip()
-        return source_from_topic(topic)
+        return source_from_topic(display_topic(topic))
 
     async def record(self, payload: Any, topic: str) -> bool:
         """File one reading; whether it was kept."""

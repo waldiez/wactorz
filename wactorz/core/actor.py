@@ -52,7 +52,7 @@ from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .task_text import TaskEnvelope
 from .topic_bus import StreamWindow
-from .topics import agent_topic
+from .topics import agent_topic, wire_topic
 from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
@@ -1848,10 +1848,12 @@ class Actor(ABC):
         order is then not kept, and the callback runs against itself.
 
         A callback that keeps raising marks the actor FAILED after a few
-        failures in a row, which is the supervisor's cue to restart it.
+        failures in a row, which is the supervisor's cue to restart it. A topic
+        of Wactorz's own may be written bare, as for `publish`.
         """
         if not callable(callback):
             raise NotCallableError(topic, callback)
+        topic = wire_topic(topic)
         if self._sub_hub is None:
             self._sub_hub = self._make_hub()
         task = self._sub_hub.bind(topic, _as_coroutine_callback(callback), concurrency=concurrency)
@@ -1869,8 +1871,10 @@ class Actor(ABC):
         asking again for the same topic returns the one that has been filling.
         ``event_time`` times entries by what each payload says happened and
         ends the window at the newest entry, for a replay or a source on its
-        own clock; off, the wall clock, as before.
+        own clock; off, the wall clock. A topic of Wactorz's own may be written
+        bare, as for `publish`.
         """
+        topic = wire_topic(topic)
         existing = self._windows.get(topic)
         if existing is not None:
             return existing
@@ -1908,7 +1912,11 @@ class Actor(ABC):
         registry, when main runs in this process, as what the agent was seen
         publishing on ``topic``: an agent often publishes topics it never
         declared, and the wiring shows what it really sends.
+
+        A topic of Wactorz's own may be written bare; it goes under the
+        install's namespace (`wactorz.core.topics.wire_topic`).
         """
+        topic = wire_topic(topic)
         await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
         if isinstance(payload, dict):
             self._note_published(topic, payload)
@@ -2332,8 +2340,9 @@ class Actor(ABC):
             "name": self.name,
             "actor_id": self.actor_id,
             "description": description,
-            "publishes": publishes or [],
-            "subscribes": subscribes or [],
+            # Held as they travel, as the agent publishes and subscribes to them.
+            "publishes": [wire_topic(t) for t in publishes or []],
+            "subscribes": [wire_topic(t) for t in subscribes or []],
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},

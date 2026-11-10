@@ -678,9 +678,10 @@ Wactorz's own topics then go under it -- `dev/agents/...`, `dev/nodes/...`,
 `dev/main/...`, `dev/system/...`, `dev/models/...`, `dev/pipelines/...`,
 `dev/shadow/...` -- and the node access list with them. The topics that describe the
 world (`sensors/`, `home/`, `custom/`, `schedule/`, `homeassistant/`) stay shared, so
-both installs read the same sensors. Agent programs, panels and the dashboard keep
-writing Wactorz's topics bare: the server and `AgentAPI` put the namespace on and take
-it off. A program that opens its own broker connection does not get that.
+both installs read the same sensors. Agent programs, library agents' configs, panels
+and the dashboard keep writing Wactorz's topics bare: the server, `AgentAPI` and
+`Actor` put the namespace on and take it off, and a recorder files what it records
+under the bare name. A program that opens its own broker connection does not get that.
 
 The value is one topic level: no spaces, none of `/ + # $`, and not the name of a
 root. Main and a node refuse to start on one that cannot be used, and say why. Empty

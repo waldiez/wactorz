@@ -775,9 +775,10 @@ chat when it hears another install's health on its own topics.</p>
 <code>dev/main/...</code>, <code>dev/system/...</code>, <code>dev/models/...</code>, <code>dev/pipelines/...</code>,
 <code>dev/shadow/...</code> -- and the node access list with them. The topics that describe the
 world (<code>sensors/</code>, <code>home/</code>, <code>custom/</code>, <code>schedule/</code>, <code>homeassistant/</code>) stay shared, so
-both installs read the same sensors. Agent programs, panels and the dashboard keep
-writing Wactorz's topics bare: the server and <code>AgentAPI</code> put the namespace on and take
-it off. A program that opens its own broker connection does not get that.</p>
+both installs read the same sensors. Agent programs, library agents' configs, panels
+and the dashboard keep writing Wactorz's topics bare: the server, <code>AgentAPI</code> and
+<code>Actor</code> put the namespace on and take it off, and a recorder files what it records
+under the bare name. A program that opens its own broker connection does not get that.</p>
 <p>The value is one topic level: no spaces, none of <code>/ + # $</code>, and not the name of a
 root. Main and a node refuse to start on one that cannot be used, and say why. Empty
 is no namespace.</p>

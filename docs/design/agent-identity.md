@@ -116,12 +116,15 @@ What follows from that:
   `wactorz/core/topics.py`, and read back by `own_topic_parts`; a test refuses a topic
   spelled or split by hand anywhere else. The namespace is read once at start, as every
   setting is.
-- **What comes from outside is translated at the edge.** An agent program, a spawn
-  config, a panel and the dashboard write Wactorz's topics bare. `wire_topic` puts the
-  namespace on a bare own topic on the way in, at every `AgentAPI` entry point (publish,
-  subscribe, a one-shot read, a window, a contract) and before anything is deduplicated or
-  recorded; `display_topic` takes it off on the way out, to the dashboard and the wiring
-  view. Only own topics change: `house/temperature` stays as it is when `house` is the
+- **What comes from outside is translated at the edge.** An agent program, a library
+  agent's class or config, a spawn config, a panel and the dashboard write Wactorz's
+  topics bare. `wire_topic` puts the namespace on a bare own topic on the way in, at every
+  `AgentAPI` entry point (publish, subscribe, a one-shot read, a window, a contract) and
+  `Actor`'s public ones (publish, subscribe, a window, a manifest), before anything is
+  deduplicated or recorded; `display_topic` takes it off on the way out, to the dashboard,
+  the wiring view and the model's prompt. What is filed under a topic's name -- a
+  recorder's source, a trial's pairs -- is named without it, so it keeps its history
+  whatever the namespace. Only own topics change: `house/temperature` stays as it is when `house` is the
   namespace. A program that opens its own broker connection is not translated.
 - **The access list follows.** A node's own-topic rules gain the prefix: its own
   `<ns>/nodes/<name>/#`, `<ns>/agents/#` except `<ns>/agents/+/commands`, writing to main,

@@ -488,6 +488,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A library agent works under a namespace.** A rule, a recorder, a drift agent or a function agent given one of
+  Wactorz's own topics bare -- `agents/<id>/data/...`, `models/<name>/drift` -- now publishes and subscribes under the
+  namespace, as an agent program does, and a recorder or a trial files what it records under the bare name, so its
+  data keeps its name and its history whatever the namespace.
 - **What an agent subscribes to shows in the Wiring view and reaches the planner**, for an agent that subscribes with
   `agent.subscribe()` and declares no contract. Its manifest now names its subscriptions as it names what it
   publishes, and is sent again for each new one. On main such an agent dropped out of the view now and then; on a node

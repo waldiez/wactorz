@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..core.paths import resolve_state_dir
-from ..core.topics import shadow_topic
+from ..core.topics import display_topic, shadow_topic
 from ..data.files import data_root, event_time_of
 
 if TYPE_CHECKING:
@@ -58,13 +58,16 @@ def input_sha256(payload: Any) -> str:
 
 
 def source_of(payload: Any, topic: str) -> str:
-    """What the input is a reading of: the payload's ``source`` or ``device`` when it says, else the topic."""
+    """What the input is a reading of: the payload's ``source`` or ``device`` when it says, else the topic.
+
+    The topic without the namespace (`display_topic`), as a recorder files it.
+    """
     if isinstance(payload, Mapping):
         for key in ("source", "device"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    return topic
+    return display_topic(topic)
 
 
 def output_text(result: Any) -> str | None:

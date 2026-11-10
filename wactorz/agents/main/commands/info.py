@@ -350,9 +350,13 @@ async def show_bus(ctx: CommandContext, _argument: str) -> str:
         for c in sorted(summary["agents"], key=lambda x: x["name"]):
             lines.append(f"  [{c['name']}]" + (f" on {c['node']}" if c.get("node") else ""))
             if c["publishes"]:
-                lines.append(f"    publishes : {', '.join(c['publishes'])}")
+                lines.append(
+                    f"    publishes : {', '.join(map(topics.display_topic, c['publishes']))}"
+                )
             if c["subscribes"]:
-                lines.append(f"    subscribes: {', '.join(c['subscribes'])}")
+                lines.append(
+                    f"    subscribes: {', '.join(map(topics.display_topic, c['subscribes']))}"
+                )
             if c.get("triggers_when"):
                 lines.append(f"    triggers  : {c['triggers_when']}")
         pairs = bus.registry.find_wiring_opportunities()
@@ -360,7 +364,8 @@ async def show_bus(ctx: CommandContext, _argument: str) -> str:
             lines.append("\nAuto-wiring opportunities:")
             for prod, cons, topic in pairs:
                 lines.append(
-                    f"  {bus.registry.label(prod)} → {bus.registry.label(cons)}  via {topic}"
+                    f"  {bus.registry.label(prod)} → {bus.registry.label(cons)}"
+                    f"  via {topics.display_topic(topic)}"
                 )
         return "\n".join(lines)
     except Exception as e:

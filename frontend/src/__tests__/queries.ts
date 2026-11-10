@@ -32,6 +32,8 @@ const INPUT_ROLES: Record<string, string> = {
     radio: "radio",
     checkbox: "checkbox",
     search: "searchbox",
+    number: "spinbutton",
+    range: "slider",
 };
 
 /** The element's role: its `role` attribute, else what its tag implies. */

@@ -17,7 +17,7 @@ import { safeStorage } from "../safeStorage";
 import { DEVICES_TAB, hiddenTabs } from "./hiddenTabs";
 import { TAB_ORDER_KEY } from "./keys";
 
-/** Whether the tab `key` takes part in the order: every view's, but Settings's. */
+/** Whether the tab `key` takes part in the order: every view's but Settings's, and not the Devices link. */
 export function canMove(key: string): boolean {
     return key !== "settings" && key !== DEVICES_TAB;
 }
@@ -51,16 +51,31 @@ export function inTabOrder<T extends { key: string }>(tabs: readonly T[], order:
  * Move the tab `key` one place in `shown`, the order the tabs are shown in
  * now: `-1` towards the start, `1` towards the end. Keeps the whole order, so
  * the tabs keep their places from then on; a move past either end changes nothing.
+ *
+ * A tab the stored order names but `shown` does not, an extension's that has
+ * not loaded this time, keeps its place in the order: only the two tabs that
+ * trade places move.
  */
 export function moveTab(shown: readonly string[], key: string, by: -1 | 1): void {
-    const order = shown.filter(canMove);
-    const from = order.indexOf(key);
+    const visible = shown.filter(canMove);
+    const from = visible.indexOf(key);
     const to = from + by;
-    if (from < 0 || to < 0 || to >= order.length) {
+    if (from < 0 || to < 0 || to >= visible.length) {
         return;
     }
-    [order[from], order[to]] = [order[to]!, order[from]!];
+    const stored = tabOrder();
+    const order = [...stored, ...visible.filter(k => !stored.includes(k))];
+    const a = order.indexOf(key);
+    const b = order.indexOf(visible[to]!);
+    [order[a], order[b]] = [order[b]!, order[a]!];
     safeStorage.set(TAB_ORDER_KEY, JSON.stringify(order));
+}
+
+/** Whether `shown`, the tabs in the order shown, is the dashboard's own order of `tabs`. */
+export function isDefaultOrder(shown: readonly string[], tabs: readonly string[]): boolean {
+    const own = tabs.filter(canMove);
+    const now = shown.filter(canMove);
+    return own.length === now.length && own.every((key, at) => now[at] === key);
 }
 
 /** Go back to the dashboard's own order. */

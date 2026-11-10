@@ -29,15 +29,28 @@ import { provideVoiceControls } from "../io/voiceControls";
 import { ambient } from "../io/AmbientManager";
 import { isMuted, setMuted } from "../io/soundMute";
 import { emit, listen } from "../events";
+import { allByRole, byRole } from "./queries";
 
-/** The section drawn as Settings draws it. */
-const draw = (): HTMLElement => soundSection().build();
+/** The section drawn as Settings draws it, on the page: a click on a control off it changes nothing. */
+const draw = (): HTMLElement => document.body.appendChild(soundSection().build());
 
-/** Press the beep or TTS toggle. */
-const toggle = (root: HTMLElement, label: string): void =>
-    [...root.querySelectorAll<HTMLButtonElement>(".af-audio-toggle")]
-        .find(b => b.textContent?.includes(label))!
-        .click();
+/** A switch, by its name. */
+const switchOf = (root: HTMLElement, name: string): HTMLInputElement =>
+    byRole(root, "switch", name) as HTMLInputElement;
+
+/** Turn a switch over, as a click on it does. */
+const flip = (root: HTMLElement, name: string): void => switchOf(root, name).click();
+
+/** The voice list. */
+const voiceList = (root: HTMLElement): HTMLSelectElement =>
+    byRole(root, "combobox", "Voice") as HTMLSelectElement;
+
+/** The row a control sits in, which is what hides. */
+const rowOf = (control: HTMLElement): HTMLElement => control.closest<HTMLElement>(".af-setting-row")!;
+
+/** Choose an ambient track by what it says. */
+const pressTrack = (root: HTMLElement, label: string): void =>
+    (byRole(root, "radio", label) as HTMLInputElement).click();
 
 describe("Settings → Sound", () => {
     beforeEach(() => {
@@ -46,18 +59,27 @@ describe("Settings → Sound", () => {
         vi.clearAllMocks();
     });
 
-    it("renders beep/TTS toggles and the voice list (names cleaned up)", () => {
-        const pop = draw();
-        expect(pop.querySelectorAll(".af-audio-toggle").length).toBe(2);
-        const opts = [...pop.querySelectorAll<HTMLOptionElement>(".af-audio-select option")];
+    it("has a switch for the beep and for reading aloud, and the voice list with names cleaned up", () => {
+        const root = draw();
+        expect(allByRole(root, "switch").map(b => b.getAttribute("aria-label"))).toEqual([
+            "Beep",
+            "Read replies aloud",
+        ]);
+        const opts = [...voiceList(root).options];
         // placeholder + 2 voices
         expect(opts.length).toBe(3);
         expect(opts.some(o => o.textContent === "Aria")).toBe(true); // "Microsoft …" and " Online…" stripped
     });
 
+    it("says what each switch does, read out with it", () => {
+        const root = draw();
+        const beep = switchOf(root, "Beep");
+        const hint = root.querySelector(`[id="${beep.getAttribute("aria-describedby")}"]`);
+        expect(hint!.textContent).toBe("A short tone when an agent's message arrives.");
+    });
+
     it("says the default voice is in use, not that voices are loading, once they are in", () => {
-        const pop = draw();
-        const sel = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        const sel = voiceList(draw());
         expect(sel.value).toBe("");
         expect(sel.selectedOptions[0]!.textContent).toBe("Default voice");
     });
@@ -65,9 +87,8 @@ describe("Settings → Sound", () => {
     it("says voices are loading while there are none yet, and stops saying it when they come", () => {
         const loaded = tts.voices;
         (tts as { voices: unknown[] }).voices = [];
-        const pop = draw();
-        const sel = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
-        expect(sel.selectedOptions[0]!.textContent).toBe("— loading voices… —");
+        const sel = voiceList(draw());
+        expect(sel.selectedOptions[0]!.textContent).toBe("Loading voices…");
 
         (tts as { voices: unknown[] }).voices = loaded;
         emit("tts-voices-loaded", { voices: loaded as never });
@@ -76,30 +97,31 @@ describe("Settings → Sound", () => {
         expect(sel.options).toHaveLength(3);
     });
 
-    it("beep toggle calls tts.toggleBeep", () => {
-        const pop = draw();
-        const beep = [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-toggle")].find(b =>
-            b.textContent?.includes("Beep"),
-        )!;
-        beep.click();
+    it("turns the beep over", () => {
+        const root = draw();
+        flip(root, "Beep");
         expect(tts.toggleBeep).toHaveBeenCalled();
+        expect(switchOf(root, "Beep").checked).toBe(true);
     });
 
-    it("TTS toggle reveals the voice row", () => {
-        const pop = draw();
-        const voiceRow = pop.querySelector<HTMLElement>(".af-audio-select")!.parentElement!;
-        expect(voiceRow.style.display).toBe("none"); // ttsEnabled=false initially
-        const ttsBtn = [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-toggle")].find(b =>
-            b.textContent?.includes("TTS"),
-        )!;
-        ttsBtn.click();
+    it("shows what the voice answers, which is off with nothing installed that speaks", () => {
+        vi.mocked(tts.toggleBeep).mockReturnValueOnce(false);
+        const root = draw();
+        flip(root, "Beep");
+        expect(switchOf(root, "Beep").checked).toBe(false);
+    });
+
+    it("shows the voice only while replies are read aloud", () => {
+        const root = draw();
+        const row = rowOf(voiceList(root));
+        expect(row.hidden).toBe(true); // ttsEnabled=false initially
+        flip(root, "Read replies aloud");
         expect(tts.toggleTTS).toHaveBeenCalled();
-        expect(voiceRow.style.display).toBe(""); // shown (toggleTTS → true)
+        expect(row.hidden).toBe(false); // shown (toggleTTS → true)
     });
 
     it("voice select change sets the voice", () => {
-        const pop = draw();
-        const sel = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        const sel = voiceList(draw());
         sel.value = "Google US";
         sel.dispatchEvent(new Event("change"));
         expect(tts.setVoice).toHaveBeenCalledWith("Google US");
@@ -107,8 +129,7 @@ describe("Settings → Sound", () => {
 
     it("re-populates the voice list on tts-voices-loaded and applies the saved voice", () => {
         (tts as { selectedVoice: string }).selectedVoice = "Google US";
-        const pop = draw();
-        const sel = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        const sel = voiceList(draw());
         // Browser fires this once its async voice list resolves; populateVoices
         // re-runs, clearing + rebuilding the options and applying the saved voice.
         document.dispatchEvent(new Event("tts-voices-loaded"));
@@ -117,21 +138,21 @@ describe("Settings → Sound", () => {
         (tts as { selectedVoice: string }).selectedVoice = "";
     });
 
-    it("selecting an ambient track sets it and reveals the volume row", () => {
-        const pop = draw();
-        const volRow = pop.querySelector<HTMLElement>(".af-audio-vol-row")!;
-        expect(volRow.style.display).toBe("none"); // track is "none"
-        const rain = [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-track-btn")].find(
-            b => b.textContent === "Rain",
-        )!;
-        rain.click();
+    it("offers the ambient tracks as one choice, and shows the volume once one plays", () => {
+        const root = draw();
+        const group = byRole(root, "radiogroup", "Ambient track");
+        expect(allByRole(group, "radio").map(r => (r as HTMLInputElement).checked)).toEqual([true, false]);
+        const volume = rowOf(byRole(root, "slider", "Ambient volume"));
+        expect(volume.hidden).toBe(true); // track is "none"
+
+        pressTrack(root, "Rain");
+
         expect(ambient.setTrack).toHaveBeenCalledWith("rain");
-        expect(volRow.style.display).toBe("");
+        expect(volume.hidden).toBe(false);
     });
 
     it("volume slider sets ambient volume", () => {
-        const pop = draw();
-        const slider = pop.querySelector<HTMLInputElement>(".af-audio-slider")!;
+        const slider = byRole(draw(), "slider", "Ambient volume") as HTMLInputElement;
         slider.value = "0.8";
         slider.dispatchEvent(new Event("input"));
         expect(ambient.setVolume).toHaveBeenCalledWith(0.8);
@@ -170,11 +191,6 @@ describe("Settings → Sound and the mute", () => {
         vi.clearAllMocks();
     });
 
-    const pressTrack = (root: HTMLElement, label: string): void =>
-        [...root.querySelectorAll<HTMLButtonElement>(".af-audio-track-btn")]
-            .find(b => b.textContent === label)!
-            .click();
-
     it("ends a mute when a sound is turned on: that is asking to hear it", () => {
         setMuted(true);
         const root = draw();
@@ -190,8 +206,10 @@ describe("Settings → Sound and the mute", () => {
         vi.mocked(tts.toggleBeep).mockReturnValueOnce(false);
         const root = draw();
 
+        pressTrack(root, "Rain");
+        setMuted(true);
         pressTrack(root, "Off");
-        toggle(root, "Beep");
+        flip(root, "Beep");
 
         expect(isMuted()).toBe(true);
     });
@@ -201,8 +219,8 @@ describe("Settings → Sound and the mute", () => {
         const stop = listen("af-sound-changed", heard);
         const root = draw();
 
-        toggle(root, "TTS");
-        pressTrack(root, "Off");
+        flip(root, "Read replies aloud");
+        pressTrack(root, "Rain");
 
         expect(heard).toHaveBeenCalledTimes(2);
         stop();

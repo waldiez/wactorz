@@ -1,11 +1,16 @@
 /**
  * SPDX-License-Identifier: Apache-2.0
  */
-/** What a part of Settings is, for the view that lists and opens it. */
+/**
+ * What a part of Settings is, for the view that lists and opens it.
+ *
+ * Kept apart from the view so the event an extension adds a section by
+ * (`af-register-settings`) can name it: the event bus imports no view.
+ */
 
 /**
- * Where a section's values are kept. The section says so at its top: a
- * preference changed on a phone does not follow the person to their laptop,
+ * Where a section's values are kept. The section says so beside its heading:
+ * a preference changed on a phone does not follow the person to their laptop,
  * and a server value changed here changes it for everyone.
  */
 export type SettingsScope = "browser" | "server";
@@ -20,14 +25,10 @@ export interface SettingsSection {
     line: string;
     /** Where what it changes is kept. */
     scope: SettingsScope;
+    /** The icon beside its name in the list, by its name in `ui/shell/icons`. */
+    icon?: string;
     /** Draw it from the values as they are now. */
     build(): HTMLElement;
     /** Stop whatever the drawn section follows; called before it is drawn again or left. */
     release?(): void;
 }
-
-/** What each scope says at the top of its sections. */
-export const SCOPE_NOTE: Record<SettingsScope, string> = {
-    browser: "Kept in this browser only.",
-    server: "Kept on the server, for everyone using this Wactorz.",
-};

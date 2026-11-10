@@ -8,8 +8,8 @@
  */
 import { apiUrl } from "../../io/api";
 import { readCostLimit, type CostLimitInfo } from "../../io/costApi";
-import { buildBudgetSection } from "../settings/budget";
-import type { SettingsSection } from "../settings/section";
+import type { SettingsSection } from "../../types/settings";
+import { buildBudgetSection, type BudgetSection } from "../settings/budget";
 import { postOrWarn } from "../shell/mutate";
 import { hostBarValues } from "./cards";
 import type { View } from "../shell/types";
@@ -20,7 +20,7 @@ export interface MetricsHost {
     getView(): View;
     /** Re-render the overview stat cards (caller decides if visible). */
     renderStats(): void;
-    /** The spend limit or the spend changed: draw Settings → Budget again, if it is open. */
+    /** The limit was saved or the spend reset: draw Settings → Budget again, if it is open. */
     budgetChanged(): void;
 }
 
@@ -32,6 +32,8 @@ export class MetricsController {
     private _hostMemTotalMb: number | null = null;
     private _costLimitInfo: CostLimitInfo | null = null;
     private _pollTimer: ReturnType<typeof setInterval> | null = null;
+    /** Settings → Budget while it is drawn, to show each spend read on it. */
+    private _budget: BudgetSection | null = null;
 
     constructor(private host: MetricsHost) {}
 
@@ -110,12 +112,16 @@ export class MetricsController {
             label: "Budget",
             line: "The language-model spend limit",
             scope: "server",
+            icon: "wallet",
             build: () => this._buildBudget(),
+            release: () => {
+                this._budget = null;
+            },
         };
     }
 
     private _buildBudget(): HTMLElement {
-        return buildBudgetSection(this._costLimitInfo, {
+        this._budget = buildBudgetSection(this._costLimitInfo, {
             onSaveLimit: async (limit, period) => {
                 await this._saveCostLimit(limit, period);
                 this.host.budgetChanged();
@@ -125,6 +131,7 @@ export class MetricsController {
                 this.host.budgetChanged();
             },
         });
+        return this._budget.body;
     }
 
     private async _fetchCostInfo(): Promise<void> {
@@ -135,9 +142,9 @@ export class MetricsController {
         this._costLimitInfo = info;
         if (this.host.getView() === "overview") {
             this.host.renderStats();
-        } else {
-            this.host.budgetChanged();
         }
+        // Only the spend: the fields are left as they are, someone may be typing in one.
+        this._budget?.showSpend(info);
     }
 
     /** POST a spend change, then refetch either way — on success to pick up the

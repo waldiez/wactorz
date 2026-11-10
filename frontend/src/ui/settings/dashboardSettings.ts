@@ -3,9 +3,9 @@
  */
 /** The dashboard's Settings: which sections it has, in their order, and what each needs from it. */
 import { DEVICES_TAB } from "../../config/hiddenTabs";
+import type { SettingsSection } from "../../types/settings";
 import type { IconName } from "../shell/icons";
 import { BUILTIN_VIEWS, SETTINGS_VIEW, type View } from "../shell/types";
-import type { SettingsSection } from "./section";
 import { SettingsView } from "./SettingsView";
 import { soundSection } from "./sound";
 import { tabsSection, type TabEntry } from "./tabs";
@@ -23,10 +23,13 @@ export interface DashboardSettingsHost {
 }
 
 /** Every tab the header can show, in its order. */
-function tabEntries(extraViews: { key: View; label: string }[]): TabEntry[] {
-    return [...BUILTIN_VIEWS, ...extraViews, { key: DEVICES_TAB, label: "Devices" }, SETTINGS_VIEW].map(
-        ({ key, label }) => ({ key, label }),
-    );
+function tabEntries(extraViews: { key: View; label: string; icon: IconName }[]): TabEntry[] {
+    return [
+        ...BUILTIN_VIEWS,
+        ...extraViews,
+        { key: DEVICES_TAB, label: "Devices", icon: "home" },
+        SETTINGS_VIEW,
+    ].map(({ key, label, icon }) => ({ key, label, icon }));
 }
 
 /** Settings as the dashboard has it: the spend limit first, where `#/settings` has always opened, then this browser's own. */

@@ -108,6 +108,36 @@ describe("MetricsController", () => {
         expect(m.budgetSection().build()).toBeInstanceOf(HTMLElement);
     });
 
+    it("shows each spend the poll reads on Budget without drawing it again, and stops once it is released", async () => {
+        vi.useFakeTimers();
+        let spent = 1;
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ limit_usd: 10, spend_usd: spent, period: "monthly" }),
+        })) as unknown as typeof fetch;
+        const host = makeHost("settings");
+        const m = new MetricsController(host);
+        const section = m.budgetSection();
+        const view = section.build();
+        const field = view.querySelector("input")!;
+        m.startPolling();
+        await vi.waitFor(() => expect(view.textContent).toContain("$1.0000 of $10.00"));
+
+        spent = 2;
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(view.textContent).toContain("$2.0000 of $10.00");
+        expect(view.querySelector("input")).toBe(field);
+        expect(host.budgetChanged).not.toHaveBeenCalled();
+
+        section.release!();
+        spent = 3;
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(view.textContent).toContain("$2.0000 of $10.00");
+        m.stopPolling();
+        vi.useRealTimers();
+    });
+
     /** Say yes in the dialog Reset spend opens. */
     const confirmReset = (): void => document.querySelector<HTMLButtonElement>(".af-confirm-ok")!.click();
 

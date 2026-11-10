@@ -6,7 +6,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { canHide, DEVICES_TAB, hiddenTabs, setTabHidden } from "../config/hiddenTabs";
 import { HIDDEN_TABS_KEY, TAB_ORDER_KEY } from "../config/keys";
-import { canMove, inTabOrder, moveTab, resetTabOrder, tabChoices, tabOrder } from "../config/tabOrder";
+import {
+    canMove,
+    inTabOrder,
+    isDefaultOrder,
+    moveTab,
+    resetTabOrder,
+    tabChoices,
+    tabOrder,
+} from "../config/tabOrder";
 import { buildTabsSection, tabsSection, type TabsSectionHost } from "../ui/settings/tabs";
 import { allByRole, byRole } from "./queries";
 
@@ -23,7 +31,13 @@ function host(over: Partial<TabsSectionHost> = {}): TabsSectionHost {
 }
 
 function box(root: HTMLElement, label: string): HTMLInputElement {
-    return byRole(root, "checkbox", `Show the ${label} tab`) as HTMLInputElement;
+    return byRole(root, "switch", `Show the ${label} tab`) as HTMLInputElement;
+}
+
+/** What is read out with a control as its description. */
+function hintOf(root: HTMLElement, control: HTMLElement): string {
+    const id = control.getAttribute("aria-describedby");
+    return id ? (root.querySelector(`[id="${id}"]`)?.textContent ?? "") : "";
 }
 
 describe("the hidden tabs", () => {
@@ -76,7 +90,7 @@ describe("Settings → Tabs", () => {
         expect(box(root, "Overview").disabled).toBe(true);
         expect(box(root, "Settings").disabled).toBe(true);
         expect(box(root, "Feed").disabled).toBe(false);
-        expect(root.textContent).toContain("always shown");
+        expect(hintOf(root, box(root, "Overview"))).toBe("Always shown.");
     });
 
     it("hides a tab when it is unticked, and says the header changed", () => {
@@ -97,11 +111,9 @@ describe("Settings → Tabs", () => {
 
     it("says when the Devices link shows, where Home Assistant is not set up", () => {
         const root = buildTabsSection(host({ haConfigured: () => false }));
-        expect(box(root, "Devices").closest("label")!.textContent).toContain(
-            "after the tabs, once Home Assistant is set up",
-        );
+        expect(hintOf(root, box(root, "Devices"))).toBe("After the tabs, once Home Assistant is set up.");
         const configured = buildTabsSection(host());
-        expect(box(configured, "Devices").closest("label")!.textContent).not.toContain("Home Assistant");
+        expect(hintOf(configured, box(configured, "Devices"))).toBe("After the tabs.");
     });
 
     it("says hiding a tab does not take it away", () => {
@@ -162,6 +174,21 @@ describe("the tab order", () => {
         expect(tabOrder()).toEqual(["feed"]);
     });
 
+    it("keeps the place of a tab it names that is not shown this time, an extension's not loaded yet", () => {
+        localStorage.setItem(TAB_ORDER_KEY, JSON.stringify(["feed", "panels", "overview", "models"]));
+
+        moveTab(["feed", "overview", "models"], "overview", -1);
+
+        expect(tabOrder()).toEqual(["overview", "panels", "feed", "models"]);
+    });
+
+    it("tells the dashboard's own order from another, leaving out the tabs that never move", () => {
+        const own = ["overview", "feed", "settings"];
+        expect(isDefaultOrder(["overview", "feed"], own)).toBe(true);
+        expect(isDefaultOrder(["feed", "overview"], own)).toBe(false);
+        expect(isDefaultOrder(["overview"], own)).toBe(false);
+    });
+
     it("reads a broken store as no order at all", () => {
         localStorage.setItem(TAB_ORDER_KEY, "{not json");
         expect(tabOrder()).toEqual([]);
@@ -185,7 +212,9 @@ describe("Settings → Tabs, the order", () => {
     });
 
     const rowNames = (root: HTMLElement): string[] =>
-        [...root.querySelectorAll(".af-settings-check-label")].map(n => n.textContent ?? "");
+        allByRole(root, "switch").map(n =>
+            (n.getAttribute("aria-label") ?? "").replace(/^Show the (.*) tab$/, "$1"),
+        );
     const moveButton = (root: HTMLElement, name: string): HTMLButtonElement =>
         byRole(root, "button", name) as HTMLButtonElement;
 
@@ -196,7 +225,8 @@ describe("Settings → Tabs, the order", () => {
         expect(rowNames(root)).toEqual(["Models", "Overview", "Feed", "Devices", "Settings"]);
         expect(allByRole(root, "button", "Move Settings up")).toHaveLength(0);
         expect(allByRole(root, "button", "Move Devices down")).toHaveLength(0);
-        expect(root.textContent).toContain("always shown, always last");
+        expect(hintOf(root, box(root, "Settings"))).toBe("Always shown, always last.");
+        expect(byRole(root, "heading", "In their own place")).toBeTruthy();
     });
 
     it("cannot move the first tab up or the last one down", () => {
@@ -221,6 +251,18 @@ describe("Settings → Tabs, the order", () => {
         moveButton(root, "Move Feed down").click();
         expect(rowNames(root).slice(0, 3)).toEqual(["Overview", "Feed", "Models"]);
         expect(document.activeElement).toBe(moveButton(root, "Move Feed down"));
+    });
+
+    it("offers the default order only while the order is another", () => {
+        const root = buildTabsSection(host());
+        const reset = byRole(root, "button", "Default order");
+
+        moveButton(root, "Move Feed up").click();
+        expect(reset.hidden).toBe(false);
+        moveButton(root, "Move Feed down").click();
+
+        expect(tabOrder()).not.toEqual([]);
+        expect(reset.hidden).toBe(true);
     });
 
     it("offers the default order once the order is changed, and goes back to it", () => {

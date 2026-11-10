@@ -31,7 +31,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Settings has sections, each at its own address, and the speaker in the header mutes.** `#/settings/budget`,
   `#/settings/tabs` and `#/settings/sound`; `#/settings` opens Budget, the spend limit, as it did. Each section says
-  where its values are kept: in this browser, or on the server for everyone. **Tabs** chooses which tabs the header
+  where its values are kept, beside its heading: in this browser, or on the server for everyone. Every setting is a
+  row with its name, a line on what it does (read out with its control) and the control, on/off ones as switches.
+  **Budget** shows the spend as a bar against the limit, amber from four fifths of it and red at it; the spend it
+  shows is read again every half minute without redrawing the fields, so a limit being typed is no longer wiped
+  out. An extension can add a section of its own (`af-register-settings`), and a link to it opens it once the
+  extension has loaded. **Tabs** chooses which tabs the header
   and the phone's bar show in this browser: Overview, Chat, Inbox and Settings always do, while Feed, Wiring, Models,
   Devices and extension tabs can be hidden. A hidden tab still opens from a link to it; hiding is not access control.
   The view tabs can also be put in another order, by Move up and Move down buttons that work from the keyboard too, and

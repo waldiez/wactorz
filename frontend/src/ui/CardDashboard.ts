@@ -362,6 +362,7 @@ export class CardDashboard {
         this._listeners.on("af-mute-changed", () => renderMuteButton(this.root));
         this._listeners.on("af-sound-changed", () => renderMuteButton(this.root));
         this._listeners.on("af-register-view", v => this.registerView(v.key, v.icon, v.label, v.build));
+        this._listeners.on("af-register-settings", section => this._settings.register(section));
         this._listeners.on("af-model-pointer", d => {
             this._models.moved(d.name);
             this._wiringData.changed();

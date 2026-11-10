@@ -144,13 +144,30 @@ describe("CardDashboard and the address", () => {
         expect(changes.at(-1)).toEqual({ view: "settings", path: ["sound"] });
     });
 
-    it("opens the first section of Settings for an address naming none, or one there is not", () => {
+    it("opens the first section of Settings for a section there is not, the address still asking for it", () => {
         history.replaceState(null, "", "#/settings/nowhere");
 
         open();
 
         expect(byRole(document, "region", "Budget")).toBeTruthy();
-        expect(changes.at(-1)).toEqual({ view: "settings", path: [] });
+        // An extension's section may register after the address was read; it opens then.
+        expect(changes.at(-1)).toEqual({ view: "settings", path: ["nowhere"] });
+    });
+
+    it("opens a section an extension adds after its address was read", () => {
+        history.replaceState(null, "", "#/settings/avatars");
+        open();
+
+        emit("af-register-settings", {
+            key: "avatars",
+            label: "Avatars",
+            line: "How agents look",
+            scope: "browser",
+            build: () => document.createElement("p"),
+        });
+
+        expect(byRole(document, "region", "Avatars")).toBeTruthy();
+        expect(allByRole(byRole(document, "navigation", "Settings sections"), "link")).toHaveLength(4);
     });
 
     it("takes a tab hidden in Settings out of the header at once, and it still opens by its address", () => {
@@ -159,7 +176,7 @@ describe("CardDashboard and the address", () => {
         const views = () => allByRole(document, "navigation", "Views")[0]!;
         expect(allByRole(views(), "button", "Feed")).toHaveLength(1);
 
-        const feed = byRole(document, "checkbox", "Show the Feed tab") as HTMLInputElement;
+        const feed = byRole(document, "switch", "Show the Feed tab") as HTMLInputElement;
         feed.checked = false;
         feed.dispatchEvent(new Event("change"));
 
@@ -208,7 +225,7 @@ describe("CardDashboard and the address", () => {
             const arrive = holdCost();
             history.replaceState(null, "", "#/settings/tabs");
             open();
-            const feed = byRole(document, "checkbox", "Show the Feed tab");
+            const feed = byRole(document, "switch", "Show the Feed tab");
             feed.focus();
 
             arrive(SPEND);
@@ -219,16 +236,21 @@ describe("CardDashboard and the address", () => {
             expect(document.activeElement).toBe(feed);
         });
 
-        it("draws Budget again with it, when Budget is open", async () => {
+        it("shows it on Budget, leaving the limit being typed and its focus as they were", async () => {
             const arrive = holdCost();
             history.replaceState(null, "", "#/settings/budget");
             open();
+            const limit = byRole(document, "spinbutton", "Spend limit (USD)") as HTMLInputElement;
+            limit.focus();
+            limit.value = "12";
 
             arrive(SPEND);
 
             await vi.waitFor(() =>
-                expect(byRole(document, "region", "Budget").textContent).toContain("$1.0000 / $5.00"),
+                expect(byRole(document, "region", "Budget").textContent).toContain("$1.0000 of $5.00 spent"),
             );
+            expect(limit.isConnected).toBe(true);
+            expect([limit.value, document.activeElement]).toEqual(["12", limit]);
         });
     });
 

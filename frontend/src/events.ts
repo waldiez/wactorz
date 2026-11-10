@@ -13,6 +13,7 @@
 import type { QuestionLedger } from "./io/openQuestions";
 import type { Attachment, ChatMessage, QuestionBook } from "./types/agent";
 import type { FeedItem } from "./types/feed";
+import type { SettingsSection } from "./types/settings";
 import type { TTSVoice } from "./types/tts";
 import type { ConnState } from "./types/ws";
 import type { Route } from "./router";
@@ -93,6 +94,9 @@ export interface AppEventMap {
     /** An extension adds a view: a nav button showing `icon` and `label`, and `build` for its
      *  content, opened at `#/<key>`. Sent once, during startup. */
     "af-register-view": { key: string; icon: string; label: string; build: () => HTMLElement };
+    /** An extension adds a section to Settings, opened at `#/settings/<key>`; one with a key
+     *  already there takes its place. Sent once, during startup. */
+    "af-register-settings": SettingsSection;
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;

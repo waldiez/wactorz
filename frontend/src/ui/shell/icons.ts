@@ -163,6 +163,14 @@ registerIcon(
 registerIcon("volume-none", '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>');
 registerIcon("chevron-up", '<path d="m18 15-6-6-6 6"/>');
 registerIcon("chevron-down", '<path d="m6 9 6 6 6-6"/>');
+registerIcon(
+    "wallet",
+    '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
+);
+registerIcon(
+    "panels",
+    '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+);
 registerIcon("reset", '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>');
 registerIcon(
     "more",

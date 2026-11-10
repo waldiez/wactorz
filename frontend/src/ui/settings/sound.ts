@@ -13,8 +13,9 @@ import { emit, listen } from "../../events";
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { setMuted } from "../../io/soundMute";
 import { voiceControls } from "../../io/voiceControls";
-import { button, el, named, option } from "../dom";
-import type { SettingsSection } from "./section";
+import type { SettingsSection } from "../../types/settings";
+import { el, named, option } from "../dom";
+import { choiceGroup, settingGroup, settingRow, settingSwitch } from "./layout";
 
 /** A sound choice changed: say so, and end a mute when it turned a sound on. */
 function chose(turnedOn: boolean): void {
@@ -24,120 +25,107 @@ function chose(turnedOn: boolean): void {
     emit("af-sound-changed");
 }
 
-/** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
-function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
-    const toggleRow = el("div", "af-audio-row");
-
-    const beepBtn = button(`af-audio-toggle${voiceControls().beepEnabled ? " on" : ""}`, "🔔 Beep");
-    beepBtn.title = "Notification beep";
-    beepBtn.addEventListener("click", () => {
-        const on = voiceControls().toggleBeep();
-        beepBtn.classList.toggle("on", on);
-        chose(on);
+/**
+ * A switch over one of the voice's toggles. The switch shows what the toggle
+ * answers, which is not always what was asked: with nothing that speaks
+ * installed, there is nothing to turn on.
+ */
+function toggleSwitch(name: string, label: string, on: boolean, toggle: () => boolean): HTMLInputElement {
+    const box: HTMLInputElement = settingSwitch(name, label, on, () => {
+        const now = toggle();
+        box.checked = now;
+        chose(now);
     });
-
-    const ttsBtn = button(`af-audio-toggle${voiceControls().ttsEnabled ? " on" : ""}`, "🗣 TTS");
-    ttsBtn.title = "Read replies aloud";
-    ttsBtn.addEventListener("click", () => {
-        const on = voiceControls().toggleTTS();
-        ttsBtn.classList.toggle("on", on);
-        voiceRow.style.display = on ? "" : "none";
-        chose(on);
-    });
-
-    toggleRow.append(beepBtn, ttsBtn);
-    return toggleRow;
+    return box;
 }
 
-/** Voice-select row, repopulated when the voice list loads. Returns the row plus
- *  a `release` that unhooks the `tts-voices-loaded` listener, so a section drawn
- *  again does not leave one behind mutating a detached select. */
-function buildVoiceRow(): { row: HTMLElement; release: () => void } {
-    const voiceRow = el("div", "af-audio-row");
-    voiceRow.style.display = voiceControls().ttsEnabled ? "" : "none";
-
-    const voiceSel = named(el("select", "af-audio-select"), "tts-voice", "TTS voice", "af-tts-voice");
-    voiceSel.title = "TTS voice";
+/** The voice list, filled again when the voices load, and the way to stop following them. */
+function buildVoiceSelect(): { select: HTMLSelectElement; release: () => void } {
+    const select = named(el("select", "af-cfg-input"), "tts-voice", "Voice", "af-tts-voice");
     // The empty value is also "no voice chosen", so it shows for as long as none
     // is: once the voices are in, it names what it then means.
-    const unchosen = option("", "— loading voices… —");
-    voiceSel.appendChild(unchosen);
+    const unchosen = option("", "Loading voices…");
+    select.appendChild(unchosen);
 
-    const populateVoices = (): void => {
+    const populate = (): void => {
         const voices = voiceControls().voices;
         if (!voices.length) {
             return;
         }
         unchosen.textContent = "Default voice";
-        while (voiceSel.options.length > 1) {
-            voiceSel.remove(1);
+        while (select.options.length > 1) {
+            select.remove(1);
         }
         voices.forEach(v => {
-            voiceSel.appendChild(
+            select.appendChild(
                 option(v.name, v.name.replace(/^Microsoft\s+/, "").replace(/\s+Online.*$/i, "")),
             );
         });
         const saved = voiceControls().selectedVoice;
         if (saved) {
-            voiceSel.value = saved;
+            select.value = saved;
         }
     };
 
-    populateVoices();
-    const stopFollowing = listen("tts-voices-loaded", () => populateVoices());
-    voiceSel.addEventListener("change", () => voiceControls().setVoice(voiceSel.value));
-
-    voiceRow.appendChild(voiceSel);
-    return { row: voiceRow, release: stopFollowing };
+    populate();
+    const release = listen("tts-voices-loaded", () => populate());
+    select.addEventListener("change", () => voiceControls().setVoice(select.value));
+    return { select, release };
 }
 
-/** Ambient volume slider row (visibility toggled by the track buttons). */
-function buildVolumeRow(): HTMLElement {
-    const volRow = el("div", "af-audio-row af-audio-vol-row");
-    volRow.style.display = ambient.track === "none" ? "none" : "";
+/** Beep, reading aloud, and the voice, which shows only while replies are read. */
+function buildReplies(): { group: HTMLElement; release: () => void } {
+    const voices = buildVoiceSelect();
+    const voiceRow = settingRow("Voice", "Which voice reads the replies.", voices.select);
+    voiceRow.hidden = !voiceControls().ttsEnabled;
 
-    const volIcon = el("span", "", "🔉");
-    volIcon.style.fontSize = "14px";
-
-    const volSlider = named(el("input", "af-audio-slider"), "ambient-volume", "Ambient volume");
-    volSlider.type = "range";
-    volSlider.min = "0";
-    volSlider.max = "1";
-    volSlider.step = "0.05";
-    volSlider.value = String(ambient.volume);
-    volSlider.addEventListener("input", () => ambient.setVolume(parseFloat(volSlider.value)));
-
-    volRow.append(volIcon, volSlider);
-    return volRow;
-}
-
-/** Ambient track buttons; selecting one updates the volume row's visibility. */
-function buildAmbientTracks(volRow: HTMLElement): HTMLElement {
-    const trackRow = el("div", "af-audio-tracks");
-
-    AMBIENT_TRACKS.forEach(({ id, label }) => {
-        const btn = button(`af-audio-track-btn${ambient.track === id ? " on" : ""}`, label);
-        btn.addEventListener("click", () => {
-            trackRow.querySelectorAll(".af-audio-track-btn").forEach(b => b.classList.remove("on"));
-            btn.classList.add("on");
-            // The track first: unmuting then starts it, rather than the one it replaces.
-            ambient.setTrack(id);
-            volRow.style.display = id === "none" ? "none" : "";
-            chose(id !== "none");
-        });
-        trackRow.appendChild(btn);
+    const beep = toggleSwitch("beep", "Beep", voiceControls().beepEnabled, () =>
+        voiceControls().toggleBeep(),
+    );
+    const speak = toggleSwitch("tts", "Read replies aloud", voiceControls().ttsEnabled, () => {
+        const on = voiceControls().toggleTTS();
+        voiceRow.hidden = !on;
+        return on;
     });
-    return trackRow;
+    const group = settingGroup(
+        "Replies",
+        settingRow("Beep", "A short tone when an agent's message arrives.", beep),
+        settingRow("Read replies aloud", "Each reply is spoken as it arrives.", speak),
+        voiceRow,
+    );
+    return { group, release: voices.release };
 }
 
-/** Ambient track buttons + volume slider (volume hidden when track is "none"). */
-function buildAmbientRows(): DocumentFragment {
-    const frag = document.createDocumentFragment();
-    frag.appendChild(el("div", "af-audio-label", "Ambient"));
-    const volRow = buildVolumeRow();
-    frag.appendChild(buildAmbientTracks(volRow));
-    frag.appendChild(volRow);
-    return frag;
+/** The ambient track, and its volume while one plays. */
+function buildAmbient(): HTMLElement {
+    const slider = named(el("input", "af-setting-slider"), "ambient-volume", "Ambient volume");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "1";
+    slider.step = "0.05";
+    slider.value = String(ambient.volume);
+    slider.addEventListener("input", () => ambient.setVolume(parseFloat(slider.value)));
+    const volumeRow = settingRow("Volume", "Lowered by itself while a reply is read.", slider);
+    volumeRow.hidden = ambient.track === "none";
+
+    const tracks = choiceGroup(
+        "ambient-track",
+        "Ambient track",
+        AMBIENT_TRACKS.map(({ id, label }) => ({ value: id, label })),
+        ambient.track,
+        id => {
+            const track = AMBIENT_TRACKS.find(t => t.id === id)?.id ?? "none";
+            // The track first: unmuting then starts it, rather than the one it replaces.
+            ambient.setTrack(track);
+            volumeRow.hidden = track === "none";
+            chose(track !== "none");
+        },
+    );
+    return settingGroup(
+        "Ambient",
+        settingRow("Track", "Plays quietly in the background.", tracks),
+        volumeRow,
+    );
 }
 
 /** The Sound section, which follows the voice list while it is drawn. */
@@ -148,17 +136,13 @@ export function soundSection(): SettingsSection {
         label: "Sound",
         line: "Beep, replies read aloud, ambient",
         scope: "browser",
+        icon: "volume",
         build(): HTMLElement {
             release();
-            const body = el("div", "af-settings-body af-settings-sound");
-            const voice = buildVoiceRow();
-            release = voice.release;
-            body.append(
-                buildAudioToggles(voice.row),
-                voice.row,
-                el("div", "af-audio-divider"),
-                buildAmbientRows(),
-            );
+            const body = el("div", "af-settings-body");
+            const replies = buildReplies();
+            release = replies.release;
+            body.append(replies.group, buildAmbient());
             return body;
         },
         release(): void {

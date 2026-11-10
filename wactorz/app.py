@@ -58,6 +58,7 @@ from wactorz.core.persistence import (
 from wactorz.core.registry import ActorRegistry, ActorSystem
 from wactorz.core.state_lock import StateInUseError, StateLock
 from wactorz.core.topic_bus import init_topic_bus
+from wactorz.core.topics import NAMESPACE_REFUSAL
 from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
 from wactorz.llm_factory import provider_for
@@ -969,9 +970,20 @@ def loop_refusal(loop: asyncio.AbstractEventLoop) -> str:
     )
 
 
+def namespace_refusal() -> str:
+    """Why the configured namespace cannot be used, or an empty string.
+
+    Refused rather than dropped: without it this install would run on the topics
+    every install without one shares, which is what a namespace is set to avoid.
+    """
+    if NAMESPACE_REFUSAL is None:
+        return ""
+    return f"{NAMESPACE_REFUSAL}. Set it to one plain word, such as `house`, or leave it empty."
+
+
 def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
     """What is settled before anything is built; see :func:`app`."""
-    refused = loop_refusal(asyncio.get_running_loop())
+    refused = loop_refusal(asyncio.get_running_loop()) or namespace_refusal()
     if refused:
         raise StartupError(refused)
     # Before anything reads the state directory: a second process on it would

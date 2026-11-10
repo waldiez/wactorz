@@ -336,6 +336,14 @@ def _node_signing_mode() -> str:
 
 NODE_SIGNING = _node_signing_mode()
 
+#: This install's namespace as set: the one topic level Wactorz's own topics go
+#: under (`wactorz.core.topics`), so that installs sharing a broker do not see
+#: each other's control traffic. "" for none, which is also what a value of only
+#: whitespace or quotes comes to. Kept as written: whether it can be used is
+#: `wactorz.core.topics.NAMESPACE_REFUSAL`, and main and a node refuse to start
+#: with one that cannot. Written into a node's ``.env`` by ``/deploy``.
+NAMESPACE = _unquote(os.getenv("WACTORZ_NAMESPACE", "") or "")
+
 #: How many model calls a minute main's bridge answers for one node, after a
 #: burst of as many. Past it a call is refused at once, saying why, rather than
 #: queued: an agent on a node -- often code the model wrote -- that calls in a

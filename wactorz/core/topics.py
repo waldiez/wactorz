@@ -13,9 +13,20 @@ here and read back by `own_topic_parts` or `owner_of`, never spelled out or
 split by position where it is used, so that how a root is spelled is decided in
 one place (`_root`). ``tests/test_own_topics.py`` refuses either elsewhere.
 
-No imports, so both the publisher and the spawn code can use it without
-reaching into ``core.mqtt``, which the publisher imports late to avoid a cycle.
+That spelling is where the install's namespace goes (``WACTORZ_NAMESPACE``):
+with one set, ``agents/a1/status`` is ``<ns>/agents/a1/status``, and the world's
+topics are untouched. Code given a topic from outside -- an agent program, the
+dashboard -- goes through `wire_topic` on the way in and `display_topic` on the
+way out, so that it may keep writing the bare form.
+
+The namespace is read once, at import, as every setting is; many topics here
+and elsewhere are constants. Its only import is `wactorz.config`, which imports
+nothing of Wactorz, so the publisher and the spawn code can use this module
+without reaching into ``core.mqtt``, which the publisher imports late to avoid a
+cycle.
 """
+
+from ..config import NAMESPACE as _CONFIGURED_NAMESPACE
 
 #: What paho refuses in a topic it is asked to publish: the two wildcards,
 #: which only a subscription may use, and NUL, which MQTT forbids in any string.
@@ -81,22 +92,62 @@ def topic_name_error(name: str) -> str | None:
 
 #: The roots of the topics Wactorz itself owns. Every topic under them is built
 #: by the helpers below and read back by `own_topic_parts`, so that the one place
-#: that spells a root (`_root`) decides what every such topic looks like. The
-#: topics that describe the world (``sensors/``, ``home/``, ``custom/``,
-#: ``schedule/``, ``homeassistant/``) and the broker's ``$SYS`` are not here:
-#: they are shared, and spelled by whoever publishes them.
+#: that spells a root (`_root`) decides what every such topic looks like.
+#: ``shadow`` carries what a model on trial answers, in front of the topic the
+#: served model publishes on (`shadow_topic`).
 AGENTS = "agents"
 NODES = "nodes"
 MAIN = "main"
 SYSTEM = "system"
 MODELS = "models"
 PIPELINES = "pipelines"
-OWN_ROOTS = (AGENTS, NODES, MAIN, SYSTEM, MODELS, PIPELINES)
+SHADOW = "shadow"
+OWN_ROOTS = (AGENTS, NODES, MAIN, SYSTEM, MODELS, PIPELINES, SHADOW)
+
+#: The roots of the topics that describe the world. They are shared by every
+#: install on a broker and spelled by whoever publishes them, so a namespace
+#: never goes in front of them. The broker's ``$SYS`` is not a root anyone may
+#: name either.
+WORLD_ROOTS = ("sensors", "home", "custom", "schedule", "homeassistant")
+
+#: What a namespace may not contain: a level separator, the two wildcards, and
+#: ``$``, which starts the broker's own topics.
+FORBIDDEN_IN_NAMESPACE = ("/", "+", "#", "$")
+
+
+def namespace_error(namespace: str) -> str | None:
+    """Why ``namespace`` cannot be this install's namespace, or None if it can; "" is none.
+
+    Stricter than an agent name: it is written into the broker's access list as
+    it stands, one rule per line, so whitespace anywhere would break the rule.
+    A root's own name is refused too, as it would read as that root.
+    """
+    if not namespace:
+        return None
+    if any(c.isspace() or not c.isprintable() for c in namespace):
+        return f"WACTORZ_NAMESPACE={namespace!r} contains whitespace or a control character"
+    bad = [repr(c) for c in FORBIDDEN_IN_NAMESPACE if c in namespace]
+    if bad:
+        return (
+            f"WACTORZ_NAMESPACE={namespace!r} contains {' and '.join(bad)}; it is one topic level"
+        )
+    if namespace in OWN_ROOTS or namespace in WORLD_ROOTS:
+        return f"WACTORZ_NAMESPACE={namespace!r} is the name of a topic root; choose another"
+    return None
+
+
+#: Why the configured namespace cannot be used, or None. Main and a node refuse
+#: to start on it; until then the topics are built with no namespace, so that
+#: importing a module never fails on a setting.
+NAMESPACE_REFUSAL = namespace_error(_CONFIGURED_NAMESPACE)
+
+#: This install's namespace, or "" for none.
+NAMESPACE = "" if NAMESPACE_REFUSAL else _CONFIGURED_NAMESPACE
 
 
 def _root(root: str) -> str:
-    """The first levels of every topic under ``root``."""
-    return root
+    """The first levels of every topic under ``root``: the namespace, then the root."""
+    return f"{NAMESPACE}/{root}" if NAMESPACE else root
 
 
 def _topic(root: str, levels: tuple[str, ...]) -> str:
@@ -133,6 +184,14 @@ def pipeline_topic(name: str, *leaves: str) -> str:
     return _topic(PIPELINES, (name, *leaves))
 
 
+def shadow_topic(topic: str) -> str:
+    """``shadow/<topic>``: where a model on trial answers what the served one publishes on ``topic``.
+
+    The topic inside stays bare, so a trial's answers read the same whatever the namespace.
+    """
+    return _topic(SHADOW, (display_topic(topic),))
+
+
 def root_prefix(root: str) -> str:
     """What every topic under ``root`` starts with, slash included, for a prefix match."""
     return f"{_root(root)}/"
@@ -161,6 +220,61 @@ def owner_of(topic: str, root: str) -> str:
     if parts is None or parts[0] != root or len(parts) < 2:
         return ""
     return parts[1]
+
+
+def every_namespace(root: str, *leaves: str) -> tuple[str, str]:
+    """Two filters for ``<root>/<leaves...>`` under no namespace and under any one.
+
+    The bare form and ``+/<root>/<leaves...>``. Between them they match the topic
+    whatever namespace it was sent under, this install's included, and never
+    the same message twice: they differ in depth. For hearing what is on the
+    wrong namespace (main's heartbeat check); everything else listens under
+    its own.
+    """
+    return ("/".join((root, *leaves)), "/".join(("+", root, *leaves)))
+
+
+def namespace_of(topic: str, root: str) -> tuple[str, str] | None:
+    """The namespace ``topic`` under ``root`` was sent under ("" for none), and whose it is.
+
+    ``("lab", "rpi")`` for ``lab/nodes/rpi/heartbeat``, ``("", "rpi")`` for the bare
+    form; None for a topic under ``root`` at neither depth. The reading side of
+    `every_namespace`.
+    """
+    levels = topic.split("/")
+    if len(levels) > 1 and levels[0] == root:
+        return ("", levels[1])
+    if len(levels) > 2 and levels[1] == root:
+        return (levels[0], levels[2])
+    return None
+
+
+def wire_topic(topic: str) -> str:
+    """``topic`` as it travels: a bare ``<own root>/...`` gains the namespace; anything else stays.
+
+    For a topic given from outside, where whoever wrote it need not know the
+    namespace: an agent program's publish, subscribe or contract, a topic the
+    dashboard asks to follow. A world topic, a topic already prefixed and a
+    filter that starts with a wildcard are left as they are; so is every topic
+    when no namespace is set. Applying it twice changes nothing, since a
+    namespace is never a root's name.
+    """
+    if not NAMESPACE:
+        return topic
+    head = topic.split("/", 1)[0]
+    return f"{NAMESPACE}/{topic}" if head in OWN_ROOTS and "/" in topic else topic
+
+
+def display_topic(topic: str) -> str:
+    """``topic`` as shown to whoever gave it bare: ``<ns>/<own root>/...`` loses the namespace.
+
+    The reverse of `wire_topic`, and only for Wactorz's own topics: a world topic
+    whose first level happens to be the namespace (``house/temperature`` with
+    ``house`` set) is somebody else's and stays as it is.
+    """
+    if NAMESPACE and own_topic_parts(topic) is not None:
+        return topic[len(NAMESPACE) + 1 :]
+    return topic
 
 
 #: Where a task for an agent on a node goes: ``agents/at/<node>/<name>/task``.

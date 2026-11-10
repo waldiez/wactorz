@@ -57,6 +57,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..core.topics import wire_topic
 from .addresses import MAIN_NODE, Address, node_of
 from .labels import event_time
 from .topics import AGENTS, MAIN, NODES, SYSTEM, agent_topic, root_prefix
@@ -240,17 +241,28 @@ class TopicContract:
 
     @classmethod
     def from_spawn_config(cls, config: dict[str, Any]) -> TopicContract:
-        """Extract a TopicContract from a spawn config dict."""
+        """Extract a TopicContract from a spawn config dict.
+
+        Its topics are taken as a program's are (`wire_topic`): a plan or a person
+        writes them bare, and the contract holds them as they travel.
+        """
         return cls(
             name=config.get("name", ""),
-            publishes=config.get("publishes", []),
-            subscribes=config.get("subscribes", []),
+            publishes=wired(config.get("publishes", [])),
+            subscribes=wired(config.get("subscribes", [])),
             triggers_when=config.get("triggers_when", {}),
             produces_schema=config.get("produces_schema", config.get("output_schema", {})),
             consumes_schema=config.get("consumes_schema", config.get("input_schema", {})),
             node=config.get("node"),
             actor_id=config.get("actor_id"),
         )
+
+
+def wired(topics: Any) -> Any:
+    """Each topic in a list of them as it travels (`wire_topic`); anything else as it is."""
+    if isinstance(topics, (list, tuple)):
+        return [wire_topic(t) if isinstance(t, str) else t for t in topics]
+    return topics
 
 
 #: Topics that are the system's own machinery, never data.

@@ -77,6 +77,7 @@ from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
 from ..core.topics import (
     AGENTS,
+    NAMESPACE,
     NODES,
     RETAINED_AGENT_LEAVES,
     agent_topic,
@@ -866,6 +867,8 @@ class NodeRunner:
                         # Main says so in chat: the supervisor's own notices
                         # reach only a main in the same process.
                         "slow_retry": self.supervisor.slow_retrying(),
+                        # Which install's topics this node is on; see `NodeHeartbeat`.
+                        "namespace": NAMESPACE,
                     },
                 )
                 await self.publish(node_topic(self.node_name, "heartbeat"), heartbeat)

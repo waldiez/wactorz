@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..core.paths import resolve_state_dir
+from ..core.topics import shadow_topic
 from ..data.files import data_root, event_time_of
 
 if TYPE_CHECKING:
@@ -36,9 +37,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where a model's pairs are filed, under the data directory.
 SHADOW_PREFIX = "shadow"
-
-#: What a shadow pass publishes under, in front of the function's own topic.
-SHADOW_TOPIC_PREFIX = "shadow"
 
 #: How long pairs wait in memory before they are written, when the batch has
 #: not filled: a slow source still has its pairs on disk within this.
@@ -51,11 +49,6 @@ DATA_EXTRA = "wactorz[data]"
 def shadow_source(model: str) -> str:
     """The source a model's pairs are filed under."""
     return f"{SHADOW_PREFIX}/{model}"
-
-
-def shadow_topic(topic: str) -> str:
-    """The topic a shadow pass publishes on instead of ``topic``."""
-    return f"{SHADOW_TOPIC_PREFIX}/{topic}"
 
 
 def input_sha256(payload: Any) -> str:

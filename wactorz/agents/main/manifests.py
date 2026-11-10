@@ -43,10 +43,12 @@ from ...core.topic_bus import TopicContract
 from ...core.topics import (
     AGENTS,
     MAIN,
+    NAMESPACE,
     NODES,
     TASK_BY_NAME,
     TASK_BY_NODE,
     agent_topic,
+    every_namespace,
     owner_of,
     root_prefix,
 )
@@ -69,6 +71,12 @@ INTERNAL_TOPIC_PREFIXES = (
     root_prefix(NODES),
     root_prefix(MAIN),
 )
+
+
+def leftover_manifest_topic(actor_id: str) -> str:
+    """Where main's own manifest was retained before a namespace was set; "" with none set."""
+    return every_namespace(AGENTS, actor_id, "manifest")[0] if NAMESPACE else ""
+
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
@@ -127,6 +135,27 @@ class ManifestRegistry:
         self.manifests: dict[str, AgentManifest] = {}
         #: topic -> the manifests of the agents publishing it.
         self.topic_registry: dict[str, list[AgentManifest]] = {}
+        #: Whether main's own manifest from before the namespace was set has been said.
+        self.leftover_said: bool = False
+
+    def say_leftover(self, topic: str, payload: Any) -> None:
+        """Log once that main's own manifest from before the namespace is still retained.
+
+        A sign that the install ran without its namespace, or under another, and
+        has left retained topics behind there. Nothing is cleared: another
+        install may own what is under the bare topics.
+        """
+        if self.leftover_said or not payload:
+            return
+        self.leftover_said = True
+        logger.warning(
+            "[main] Main's own manifest from before WACTORZ_NAMESPACE=%r is still retained on "
+            "%s. Retained topics of this install's from then are left there; nodes deployed "
+            "before the change need deploying again. To clear one: "
+            "mosquitto_pub -r -n -t <topic>",
+            NAMESPACE,
+            topic,
+        )
 
     async def manifest_listener(self) -> None:
         """Follow `agents/+/manifest` and keep the manifest tables current.
@@ -152,9 +181,16 @@ class ManifestRegistry:
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     await client.subscribe(agent_topic("+", "manifest"), qos=1)
+                    # Main's id is read only when there is a namespace to have changed.
+                    leftover = leftover_manifest_topic(host.actor_id) if NAMESPACE else ""
+                    if leftover:
+                        await client.subscribe(leftover, qos=1)
                     logger.info("[main] Subscribed to agent manifests.")
                     last_error = None
                     async for message in client.messages:
+                        if leftover and str(message.topic) == leftover:
+                            self.say_leftover(leftover, message.payload)
+                            continue
                         await self.receive_manifest(
                             str(message.topic), message.payload, user_properties(message)
                         )

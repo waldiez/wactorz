@@ -113,9 +113,9 @@ NODE_TOPICS = CONTROL_TOPICS | REPORT_TOPICS | {REPLY_TOPIC} | UNUSED_TOPICS
 
 # ── Payloads ───────────────────────────────────────────────────────────────────
 
-#: Fields main reads off a node heartbeat. `version`, `runtime`, `signing` and
-#: `signing_failures` are the ones a node may omit -- an older runner does -- and
-#: main fills in for it.
+#: Fields main reads off a node heartbeat. `version`, `runtime`, `signing`,
+#: `signing_failures` and `namespace` are the ones a node may omit -- an older
+#: runner does -- and main fills in for it.
 HEARTBEAT_FIELDS = frozenset(
     {
         "node",
@@ -140,6 +140,7 @@ HEARTBEAT_FIELDS = frozenset(
         "signing_failures",
         "tls",
         "slow_retry",
+        "namespace",
     }
 )
 

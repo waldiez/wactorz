@@ -30,6 +30,7 @@ from typing import Any
 import psutil
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.mqtt import install_id
 from ..core.topics import agent_topic, system_topic
 from .lookup import find_main_actor
 
@@ -37,6 +38,10 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 # How long a critical notification is suppressed before re-notifying (seconds)
 _NOTIFY_COOLDOWN = 120.0
+
+#: The field of the health message that names the install sending it, so that
+#: another install on the same topics can be told apart (`agents.main.installs`).
+HEALTH_INSTALL_FIELD = "install"
 
 
 class MonitorActor(Actor):
@@ -371,6 +376,7 @@ class MonitorActor(Actor):
         now = time.time()
         actors = self._registry.all_actors()
         health = {
+            HEALTH_INSTALL_FIELD: install_id(),
             "timestamp": now,
             "total_actors": len(actors),
             "running": sum(1 for a in actors if a.state == ActorState.RUNNING),

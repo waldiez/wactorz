@@ -16,7 +16,7 @@ from ...core.agent_directory import AgentDirectory
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
 from ...core.topic_bus import TopicContract
-from ...core.topics import agent_topic, reply_topic, task_by_name_topic, task_topic
+from ...core.topics import agent_topic, reply_topic, task_by_name_topic, task_topic, wire_topic
 from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -107,7 +107,10 @@ class MessagingMixin(_Host):
         and TopicBus contract so the agent is discoverable without explicit declare_contract().
         On every publish, captures the actual payload schema (field names + types)
         so the planner and other agents know the real field names — not guesses.
+        A topic of Wactorz's own may be written bare; it goes under the install's
+        namespace (`wire_topic`).
         """
+        topic = wire_topic(topic)
         await self._actor._mqtt_publish(topic, data)
 
         is_new_topic = topic not in self._published_topics

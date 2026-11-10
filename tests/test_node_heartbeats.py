@@ -27,6 +27,7 @@ from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD, NodeManager
 from wactorz.agents.main.placement import Placement
 from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.core import topics
 from wactorz.core.actor import ActorState
 from wactorz.core.mqtt import publish_properties
 from wactorz.core.node_publications import PublicationSigner
@@ -271,7 +272,15 @@ class TestTheNodeTable:
         # Subscribing to only heartbeats would leave migrations unreported.
         run = await run_heartbeats(monkeypatch, [])
 
-        assert run.subscribed == ["nodes/+/heartbeat", "nodes/+/migrate_result", "nodes/+/manifest"]
+        assert run.subscribed == [
+            "nodes/+/heartbeat",
+            # Heartbeats under any other namespace, to say so (`TestANodeOnAnotherNamespace`).
+            "+/nodes/+/heartbeat",
+            # Main's own health, where another install's would show (`agents.main.installs`).
+            "system/health",
+            "nodes/+/migrate_result",
+            "nodes/+/manifest",
+        ]
 
 
 def manifest(node: str = "rpi", payload: bytes | None = None, **over: Any) -> SignedMessage:
@@ -748,3 +757,63 @@ class TestWithdrawingANotice:
             "pc does not sign",
             "something else",
         ]
+
+
+def heartbeat_on(topic: str, node: str = "rpi") -> SignedMessage:
+    """A heartbeat sent on ``topic``, as a node on some namespace sends it."""
+    return SignedMessage(topic, json.dumps({"agents": [], "node_id": f"{node}-id"}).encode(), node)
+
+
+class TestANodeOnAnotherNamespace:
+    """Heard only to be told about: once, and only for a node of this install's."""
+
+    async def test_heartbeats_are_heard_under_every_namespace_without_overlap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_heartbeats(monkeypatch, [])
+
+        assert "nodes/+/heartbeat" in run.subscribed
+        assert "+/nodes/+/heartbeat" in run.subscribed
+
+    async def test_one_of_ours_is_said_once_and_not_taken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_heartbeats(
+            monkeypatch,
+            [heartbeat_on("lab/nodes/rpi/heartbeat"), heartbeat_on("lab/nodes/rpi/heartbeat")],
+            spawn_registry={"collector": {"node": "rpi"}},
+        )
+
+        (notice,) = run.notifications
+        assert "namespace 'lab'" in notice["message"] and "no namespace" in notice["message"]
+        assert "/deploy rpi" in notice["message"]
+        assert "rpi" not in run.nodes
+
+    async def test_another_installs_node_is_not_said(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Two installs sharing a broker is what a namespace is for.
+        run = await run_heartbeats(
+            monkeypatch, [heartbeat_on("other/nodes/garage/heartbeat", "garage")]
+        )
+
+        assert not run.notifications
+        assert "garage" not in run.nodes
+
+    async def test_under_a_namespace_its_own_are_taken_and_bare_ones_said(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(topics, "NAMESPACE", "lab")
+        monkeypatch.setattr("wactorz.agents.main.nodes.NAMESPACE", "lab")
+
+        run = await run_heartbeats(
+            monkeypatch,
+            [
+                heartbeat_on("lab/nodes/rpi/heartbeat"),
+                heartbeat_on("nodes/kitchen/heartbeat", "kitchen"),
+            ],
+            spawn_registry={"a": {"node": "rpi"}, "b": {"node": "kitchen"}},
+        )
+
+        assert "rpi" in run.nodes and "kitchen" not in run.nodes
+        (notice,) = run.notifications
+        assert "Node 'kitchen' is on no namespace" in notice["message"]
+        assert "this install is on namespace 'lab'" in notice["message"]

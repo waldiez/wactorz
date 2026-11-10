@@ -23,7 +23,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from ..._version import __version__
-from ...config import NODE_SIGNING
+from ...config import CONFIG, MODEL_CODE_NODE, NODE_SIGNING
 from ...core import topic_bus
 from ...core.actor import derive_actor_id
 from ...core.compatibility import compatible
@@ -40,8 +40,16 @@ from ...core.mqtt import (
 )
 from ...core.node_publications import Stamp, admit, signed_stamp
 from ...core.topic_bus import TopicContract
-from ...core.topics import NODES, node_topic, own_topic_parts
+from ...core.topics import (
+    NAMESPACE,
+    NODES,
+    every_namespace,
+    namespace_of,
+    node_topic,
+    own_topic_parts,
+)
 from .hosts import NodeHost
+from .installs import HEALTH_TOPIC, OtherInstalls
 from .manifests import ManifestRegistry
 from .spawn_registry import SpawnRegistry
 from .voices import speaks_for
@@ -206,6 +214,10 @@ class NodeManager:
         self.unsigned_reported: set[str] = set()
         #: Nodes already said in chat to run agents under ids other than theirs.
         self.ids_reported: set[str] = set()
+        #: (namespace, node) pairs already said in chat to be on another namespace.
+        self.namespaces_reported: set[tuple[str, str]] = set()
+        #: Another install heard on this one's topics, from its health.
+        self.installs: OtherInstalls = OtherInstalls(host)
         #: Told of every heartbeat taken, as main took it: the dashboard shows a
         #: node from this, never from the broker, where anyone may publish one.
         self.watchers: list[HeartbeatWatcher] = []
@@ -375,12 +387,20 @@ class NodeManager:
                     # them at QoS 0 for the same reason; asking for more here
                     # would only be misleading, since delivery is the lower of
                     # the two.
-                    await client.subscribe(node_topic("+", "heartbeat"), qos=0)
+                    # Under every namespace, this one's included, so that a node on
+                    # the wrong one is heard of rather than missing in silence.
+                    for heartbeats in every_namespace(NODES, "+", "heartbeat"):
+                        await client.subscribe(heartbeats, qos=0)
+                    # Main's own health, from its monitor: another install's tells it apart.
+                    await client.subscribe(HEALTH_TOPIC, qos=0)
                     await client.subscribe(node_topic("+", "migrate_result"), qos=1)
                     await client.subscribe(node_topic("+", "manifest"), qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
+                        if str(message.topic) == HEALTH_TOPIC:
+                            self.installs.receive(message.payload)
+                            continue
                         await self.receive_node_message(
                             str(message.topic), message.payload, user_properties(message)
                         )
@@ -413,6 +433,12 @@ class NodeManager:
         node's signature; None for a message that did not come off the broker,
         which has nothing to check.
         """
+        if topic.endswith("/heartbeat"):
+            sent_under = namespace_of(topic, NODES)
+            if sent_under is not None and sent_under[0] != NAMESPACE:
+                # Heard only to say so: never taken as the node's word.
+                self._say_other_namespace(*sent_under)
+                return
         if topic.endswith("/manifest") and not payload:
             # The retained manifest cleared: the node was removed.
             parts = own_topic_parts(topic)
@@ -727,6 +753,41 @@ class NodeManager:
             }
         )
         self.known[node_name] = record
+
+    def _say_other_namespace(self, namespace: str, node_name: str) -> None:
+        """Say in chat, once per node and namespace, that one of this install's nodes is on another.
+
+        Its heartbeats arrive under a namespace that is not this install's, so
+        nothing else it says reaches main. Only a node this install deploys or
+        places agents on is said: another install's nodes on the same broker are
+        what a namespace is for, and are logged at debug. Best effort: a broker's
+        access list may keep such a node's heartbeats from main altogether.
+        """
+        host = self.host
+        if host is None or (namespace, node_name) in self.namespaces_reported:
+            return
+        ours = {target.name for target in CONFIG.deploy_targets} | {MODEL_CODE_NODE}
+        ours |= {str(cfg.get("node")) for cfg in host._get_spawn_registry() if cfg.get("node")}
+        if node_name not in ours:
+            logger.debug(
+                "[main] Heard node %r on namespace %r, not this install's", node_name, namespace
+            )
+            return
+        self.namespaces_reported.add((namespace, node_name))
+        theirs = f"namespace '{namespace}'" if namespace else "no namespace"
+        mine = f"namespace '{NAMESPACE}'" if NAMESPACE else "no namespace"
+        logger.warning("[main] Node %r is on %s; this install is on %s", node_name, theirs, mine)
+        host._queue_notification(
+            {
+                "severity": "warning",
+                "about": f"other-namespace:{node_name}",
+                "message": (
+                    f"Node '{node_name}' is on {theirs}, and this install is on {mine}, so "
+                    f"main hears nothing else from it. It was deployed before the namespace "
+                    f"changed. Deploy it again: /deploy {node_name}"
+                ),
+            }
+        )
 
     def _say_unsigned(self, node_name: str) -> None:
         """Say in chat, once per node, that its heartbeats are unsigned and what main does about it."""

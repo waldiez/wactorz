@@ -26,7 +26,7 @@ from ..core.mqtt import (
 )
 from ..core.outbound import numbered
 from ..core.persistence.db import ChatRow
-from ..core.topics import NODES, node_topic, own_topic_parts
+from ..core.topics import NODES, display_topic, node_topic, own_topic_parts
 from ..monitoring.log_redaction import redact
 from . import cost, db_writer, events, relay, runtime, withdrawals, ws
 from . import questions as question_ledger
@@ -47,7 +47,12 @@ async def broadcast_mqtt_msg(topic: str, payload: str, thread_id: str = "") -> N
     except Exception:  # noqa: S110  # non-JSON payloads are passed through as text
         # non-JSON: pass the string through
         pass
-    frame: dict[str, Any] = {"type": "server_event", "topic": topic, "payload": parsed}
+    # The page knows no namespace: it reads Wactorz's own topics bare.
+    frame: dict[str, Any] = {
+        "type": "server_event",
+        "topic": display_topic(topic),
+        "payload": parsed,
+    }
     if thread_id:
         frame["thread_id"] = thread_id
     await ws.broadcast(frame)

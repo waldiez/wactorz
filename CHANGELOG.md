@@ -11,6 +11,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **A node's agents may use a pipeline's tick, a model's drift alarm and a trial's answers** under the node access
+  list (`pipelines/#`, `models/+/drift`, `shadow/#`). A pipeline step or a drift agent placed on a node with its own
+  broker account went unheard until now. `WACTORZ_NODE_TOPICS` now also refuses a filter that reaches `models/`,
+  `pipelines/` or `shadow/`, or another install's tree (`other/agents/#`); `zigbee2mqtt/#` and the like are taken as
+  before.
+
 - **A wrong API key in a header is throttled like one on the sign-in form.** `X-API-Key` and `Authorization: Bearer` now spend
   the form's allowance per address: a growing wait, then 15 minutes locked out, answered `429` with `Retry-After`. While it
   lasts, the right key from that address is refused too, so check scripts holding an old key. `GET /login` no longer tests a
@@ -28,6 +34,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and run `/deploy` again.
 
 ### Added
+
+- **Two installs can share a broker.** `WACTORZ_NAMESPACE=dev` (the add-ons' `namespace` option) moves an install's
+  own topics under one word of its own -- `dev/agents/...`, `dev/nodes/...` and the rest -- and the node access list
+  with them, so another install on the same broker neither hears nor drives its agents and nodes. The world's topics
+  (`sensors/`, `home/`, `custom/`, `schedule/`, `homeassistant/`) stay shared. Agent programs, panels and the dashboard
+  keep writing topics bare. Main says in chat when another install shares its topics, and when one of its own nodes is
+  on another namespace. Empty, the default, changes nothing. **After setting or changing it,** run `/deploy` for each
+  node; retained topics from before are left on the broker.
 
 - **wactorz is typed for the code that uses it.** The package ships `py.typed`, so a type checker reads its
   annotations: every function in it says what it takes and returns, and `make verifytypes` scores the types it

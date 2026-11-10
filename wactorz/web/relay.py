@@ -25,7 +25,7 @@ from collections.abc import Iterable
 
 from ..core.artifacts import POINTERS
 from ..core.topic_bus import topic_matches
-from ..core.topics import AGENTS, MODELS, NODES, own_topic_parts, system_topic
+from ..core.topics import AGENTS, MODELS, NODES, own_topic_parts, system_topic, wire_topic
 
 #: `agents/{id}/<leaf>` topics the dashboard acts on. `actuations` and `anomaly`
 #: are consumed not by `ServerEventRouter` but by the raw-fallback feed mappers
@@ -69,9 +69,12 @@ _followed: tuple[str, ...] = ()
 
 
 def follow(filters: Iterable[str]) -> None:
-    """Relay what ``filters`` match too, replacing what was followed before."""
+    """Relay what ``filters`` match too, replacing what was followed before.
+
+    A panel declares its filters bare; they are followed as they travel (`wire_topic`).
+    """
     global _followed
-    _followed = tuple(dict.fromkeys(filters))
+    _followed = tuple(dict.fromkeys(wire_topic(f) for f in filters))
 
 
 def followed() -> tuple[str, ...]:

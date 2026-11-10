@@ -332,6 +332,10 @@ WACTORZ_NODE_TOPICS=$(get_config_safe 'node_topics' '')
 export WACTORZ_NODE_TOPICS
 WACTORZ_BROKER_ACCOUNTS=$(get_config_safe 'broker_accounts' '')
 export WACTORZ_BROKER_ACCOUNTS
+# The namespace this add-on's own topics go under. Empty, as an options file
+# written before the option has it, is none, and changes nothing.
+WACTORZ_NAMESPACE=$(get_config_safe 'namespace' '')
+export WACTORZ_NAMESPACE
 
 # ── Broker TLS certificate ────────────────────────────────────────────────────
 # Issued from a CA generated once and kept in the state directory, which /deploy

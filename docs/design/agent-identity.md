@@ -96,11 +96,14 @@ every address that names it.
 
 ### Each install's control topics live under its namespace
 
-An install may set a namespace, `WACTORZ_NAMESPACE`. It is a single topic level,
-checked by the same rule as an agent name, and chosen by a person: `house`, `lab`,
-`dev`. When it is set, Wactorz's own control topics move under it:
-`<ns>/agents/…`, `<ns>/nodes/…`, `<ns>/main/…`, `<ns>/system/…`, `<ns>/models/…`. When
-it is unset, the topics are the ones in use today.
+An install may set a namespace, `WACTORZ_NAMESPACE`. It is a single topic level chosen by
+a person: `house`, `lab`, `dev`. It is stricter than an agent name, since it is written
+into the broker's access list as it stands: no whitespace or control character, none of
+`/ + # $`, and not the name of a root. Empty, or only whitespace or quotes, is none; a
+value that cannot be one stops main and a node from starting, with the reason. When it is
+set, Wactorz's own topics move under it: `<ns>/agents/…`, `<ns>/nodes/…`, `<ns>/main/…`,
+`<ns>/system/…`, `<ns>/models/…`, `<ns>/pipelines/…` and `<ns>/shadow/…`. When it is
+unset, the topics are the ones in use today.
 
 Only the topics Wactorz owns move. The topics that describe the world, `sensors/`,
 `home/`, `custom/`, `schedule/` and `homeassistant/`, stay shared and unprefixed. Two
@@ -110,21 +113,41 @@ prefixed.
 What follows from that:
 
 - **One place builds topics.** The namespace is applied by the topic helpers in
-  `wactorz/core/topics.py`. Topics spelled out with f-strings in the modules move onto
-  those helpers first, so that no topic misses the prefix.
-- **The access list follows.** A node's rules gain the prefix: its own
-  `<ns>/nodes/<name>/#`, plus `<ns>/agents/#` except `<ns>/agents/+/commands`. A node
-  account belongs to one install and cannot read another install's agents. The fence on
-  data topics (`_FENCED`) fences the prefixed forms as well as the bare ones.
+  `wactorz/core/topics.py`, and read back by `own_topic_parts`; a test refuses a topic
+  spelled or split by hand anywhere else. The namespace is read once at start, as every
+  setting is.
+- **What comes from outside is translated at the edge.** An agent program, a spawn
+  config, a panel and the dashboard write Wactorz's topics bare. `wire_topic` puts the
+  namespace on a bare own topic on the way in, at every `AgentAPI` entry point (publish,
+  subscribe, a one-shot read, a window, a contract) and before anything is deduplicated or
+  recorded; `display_topic` takes it off on the way out, to the dashboard and the wiring
+  view. Only own topics change: `house/temperature` stays as it is when `house` is the
+  namespace. A program that opens its own broker connection is not translated.
+- **The access list follows.** A node's own-topic rules gain the prefix: its own
+  `<ns>/nodes/<name>/#`, `<ns>/agents/#` except `<ns>/agents/+/commands`, writing to main,
+  and what library agents on a node publish and read about themselves (a pipeline's tick,
+  a model's drift alarm, a trial's answers). World rules stay bare. A configured data
+  topic may not reach an own root, bare or under any first level but a world root, so
+  `other/agents/#` cannot reopen another install's agents.
 - **A node is told its namespace when it is deployed**, in its environment, beside the
-  broker address. A node whose namespace differs from main's sees nothing, so main
-  checks the namespace in the node's first heartbeat and reports a mismatch.
+  broker address, and says it in its heartbeat. A node on another namespace publishes
+  where main does not listen, so main also hears heartbeats under every namespace, on
+  filters that never overlap its own, only to report one of its own nodes there, once.
+  Another install's nodes are what a namespace is for, and are not reported. Best effort:
+  an access list may keep such a node from main altogether.
 - **Main notices a second install on its namespace.** `system/health` carries
   `install_id()`. A health message on main's own namespace from a different install is
-  reported once on the feed, with what to set. That is the dev instance on the house
-  broker, caught on the first day.
+  reported once in chat, with what to set. That is the dev instance on the house broker,
+  caught on the first day.
+- **Changing a namespace is a deploy.** Setting, renaming or clearing one needs every node
+  deployed again, and leaves the retained topics from before on the broker; main logs
+  once when it finds its own manifest there. Nothing is cleared for it: another install
+  may own what is under those topics.
+- **It is enforced only where Wactorz writes the access list.** On a broker Wactorz does
+  not run (the official Mosquitto add-on, an external one) there is no node access list,
+  and installs sharing it are kept apart by their topics alone.
 - **The dashboard and the REST API do not change.** They talk to their own server, which
-  already knows its namespace.
+  knows its namespace.
 
 A namespace taken from `install_id()` by default was considered and is listed below.
 The id stays what it already is: the part of every client id that tells installs apart.
@@ -224,5 +247,6 @@ Each step is a branch of its own, in this order:
    own agent by address, and offers the addresses of an ambiguous mention as buttons
    that send the message again to the one pressed. `#/chat/<name>@<node>` opens one
    conversation; a shared name alone opens neither and links both.
-5. **Namespaces.** Topics built in one place, then the prefix, the access list, the
-   node's deploy environment, the heartbeat check and the second-install notice.
+5. **Namespaces.** Two branches. Topics built in one place is built. The prefix, the
+   translation at the edges, the access list, the node's deploy environment, the
+   heartbeat check and the second-install notice are built.

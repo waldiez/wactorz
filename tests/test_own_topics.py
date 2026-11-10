@@ -103,6 +103,26 @@ class TestReading:
     def test_no_owner_outside_its_root(self, topic: str, root: str) -> None:
         assert owner_of(topic, root) == ""
 
+    def test_every_namespace_gives_two_filters_that_never_meet(self) -> None:
+        assert topics.every_namespace(topics.NODES, "+", "heartbeat") == (
+            "nodes/+/heartbeat",
+            "+/nodes/+/heartbeat",
+        )
+
+    @pytest.mark.parametrize(
+        ("topic", "sent_under"),
+        [
+            ("nodes/rpi/heartbeat", ("", "rpi")),
+            ("lab/nodes/rpi/heartbeat", ("lab", "rpi")),
+            ("sensors/rpi/heartbeat", None),
+            ("nodes", None),
+        ],
+    )
+    def test_which_namespace_a_topic_came_under(
+        self, topic: str, sent_under: tuple[str, str] | None
+    ) -> None:
+        assert topics.namespace_of(topic, topics.NODES) == sent_under
+
     def test_what_is_built_reads_back(self) -> None:
         assert own_topic_parts(node_topic("rpi", "stop")) == ["nodes", "rpi", "stop"]
 
@@ -164,6 +184,8 @@ _GENERIC_READERS = {
     ("wactorz/agents/recorder_agent.py", "source_from_topic"),
     # Words in a user's task that look like topics, not topics that arrived.
     ("wactorz/agents/planner/context.py", "topics_named_in"),
+    # A filter a person configured for nodes, checked level by level against the fences.
+    ("wactorz/core/broker_accounts.py", "_reaches_a_fence"),
 }
 
 
@@ -278,4 +300,12 @@ class TestNothingElseSpellsThem:
         assert found == [], "read these with own_topic_parts or owner_of:\n" + "\n".join(found)
 
     def test_the_roots_are_spelled_once(self) -> None:
-        assert topics.OWN_ROOTS == ("agents", "nodes", "main", "system", "models", "pipelines")
+        assert topics.OWN_ROOTS == (
+            "agents",
+            "nodes",
+            "main",
+            "system",
+            "models",
+            "pipelines",
+            "shadow",
+        )

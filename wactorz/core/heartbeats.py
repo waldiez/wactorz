@@ -16,7 +16,7 @@ class NodeHeartbeat(TypedDict, total=False):
 
     `node.runner._node_heartbeat_loop` writes every key each time it runs; a
     runner too old to know a key simply never sends it (`version`, `runtime`,
-    `signing`, `slow_retry`), which is why this is `total=False` rather than
+    `signing`, `slow_retry`, `namespace`), which is why this is `total=False` rather than
     the resource readings needing it -- those are individually `| None`
     instead: `node.resources.read` always includes the key, with `None` for
     a reading this platform cannot take (never a guessed zero).
@@ -54,6 +54,10 @@ class NodeHeartbeat(TypedDict, total=False):
     signing_failures: int
     tls: bool
     slow_retry: list[str]
+    #: The namespace the node runs under, "" for none. A node on another
+    #: namespace than main's publishes where main does not listen, so main reads
+    #: this only off the heartbeats it watches for that (`agents.main.nodes`).
+    namespace: str
 
 
 class AgentHeartbeat(TypedDict):

@@ -98,6 +98,10 @@ export interface AppEventMap {
     "tts-audio-end": void;
     /** Someone stopped the turn: stop saying it, in either voice. */
     "tts-stop": void;
+    /** This browser was muted or unmuted: whatever makes sound stops, or may play again. */
+    "af-mute-changed": { muted: boolean };
+    /** A choice in Settings → Sound changed: what shows the sound's state draws it again. */
+    "af-sound-changed": void;
 }
 
 /** Dispatch an application event; the detail argument is required iff the map entry isn't `void`. */

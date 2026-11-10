@@ -32,10 +32,11 @@ import {
     renderInboxCount,
 } from "./shell/header";
 import { setSignOutVisible } from "./shell/signOut";
+import { renderMuteButton } from "./shell/muteButton";
 import { setAttachVisible } from "./chat/chatIobar";
 import { stateLabel, sortAgents } from "./overview/agentState";
 import type { ConnState } from "../types/ws";
-import type { View } from "./shell/types";
+import { SETTINGS_VIEW, type View } from "./shell/types";
 import { IconName } from "./shell/icons";
 import { ActivityFeed } from "./feed/activityFeed";
 import { Heartbeats } from "./overview/heartbeats";
@@ -59,6 +60,9 @@ import { QuestionsApi } from "../io/openQuestions";
 import { QuestionInbox } from "../questions/QuestionInbox";
 import { InboxView } from "./inbox/InboxView";
 import { toast } from "./ToastManager";
+import type { SettingsView } from "./settings/SettingsView";
+import { dashboardSettings } from "./settings/dashboardSettings";
+import { hiddenTabs } from "../config/hiddenTabs";
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -94,6 +98,8 @@ export class CardDashboard {
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
     private _metrics: MetricsController;
+    /** Settings, a section per concern, each at `#/settings/<key>`. */
+    private _settings: SettingsView;
 
     /** Extension-registered view builders (name → element factory). */
     private _viewBuilders = new Map<string, () => HTMLElement>();
@@ -133,8 +139,10 @@ export class CardDashboard {
             root: this.root,
             getView: () => this.view,
             renderStats: () => this._overview.renderStats(),
-            renderView: () => this._renderView(),
+            // Only Budget, and only while it is drawn: Settings left is released.
+            budgetChanged: () => this._settings.redraw("budget"),
         });
+        this._settings = this._buildSettings();
         this._routes = new ViewRoutes({
             view: () => this.view,
             setView: v => this._setView(v),
@@ -146,6 +154,8 @@ export class CardDashboard {
             setModel: name => this._models.show(name),
             inboxTab: () => this._inboxView.tab,
             setInboxTab: tab => this._inboxView.show(tab),
+            settingsSection: () => this._settings.section,
+            setSettingsSection: key => this._settings.show(key),
         });
         this._overview = new OverviewView({
             root: this.root,
@@ -224,6 +234,7 @@ export class CardDashboard {
         this._models.destroy();
         this._wiring.destroy();
         this._inboxView.destroy();
+        this._settings.release();
         this._unsubscribeInbox();
         releaseHeaderPopovers();
         releaseBottomNav();
@@ -348,6 +359,8 @@ export class CardDashboard {
             this._renderHealth();
         });
         this._listeners.on("af-route", route => this._routes.open(route));
+        this._listeners.on("af-mute-changed", () => renderMuteButton(this.root));
+        this._listeners.on("af-sound-changed", () => renderMuteButton(this.root));
         this._listeners.on("af-register-view", v => this.registerView(v.key, v.icon, v.label, v.build));
         this._listeners.on("af-model-pointer", d => {
             this._models.moved(d.name);
@@ -478,6 +491,10 @@ export class CardDashboard {
             // pushed records are still taken in meanwhile.
             this._activity.pause();
         }
+        if (this.view === SETTINGS_VIEW.key && v !== SETTINGS_VIEW.key) {
+            // Leaving Settings: the section drawn stops following what it showed.
+            this._settings.release();
+        }
         this.view = v;
         this._closeQuestionToasts();
         this._routes.moved();
@@ -553,6 +570,7 @@ export class CardDashboard {
                 onSetView,
                 haUrl,
                 extraViews: this._extraViews,
+                hidden: hiddenTabs(),
             });
             oldHeader.replaceWith(newHeader);
             renderInboxCount(this.root, this._inbox.state.open.length);
@@ -565,6 +583,7 @@ export class CardDashboard {
                 onSetView,
                 haUrl,
                 extraViews: this._extraViews,
+                hidden: hiddenTabs(),
             });
             oldBottomNav.replaceWith(newNav);
             renderInboxCount(this.root, this._inbox.state.open.length);
@@ -581,6 +600,7 @@ export class CardDashboard {
         // The iobar is owned by the chat controller and appended in the constructor.
         const onSetView = (v: View) => this._setView(v);
         const haUrl = this.haUrl;
+        const hidden = hiddenTabs();
         root.append(
             buildHeader({
                 view: this.view,
@@ -588,14 +608,25 @@ export class CardDashboard {
                 onSetView,
                 haUrl,
                 extraViews: this._extraViews,
+                hidden,
             }),
             body,
-            buildBottomNav({ view: this.view, onSetView, haUrl, extraViews: this._extraViews }),
+            buildBottomNav({ view: this.view, onSetView, haUrl, extraViews: this._extraViews, hidden }),
         );
         return root;
     }
 
+    /** Settings, its Budget reaching the server through the metrics, its Tabs redrawing the header. */
+    private _buildSettings(): SettingsView {
+        return dashboardSettings({
+            extraViews: () => this._extraViews,
+            haConfigured: () => this.haUrl !== null,
+            tabsChanged: () => this._rebuildNav(),
+            budget: this._metrics.budgetSection(),
+        });
+    }
+
     private _buildSettingsView(): HTMLElement {
-        return this._metrics.buildSettingsView();
+        return this._settings.build();
     }
 }

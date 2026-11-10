@@ -5,14 +5,19 @@
  * The dashboard opens what the address names, follows it when it changes, and
  * says where it is whenever the user moves, through the event bus only.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import type { CardDashboard } from "../ui/CardDashboard";
 import { emit, listen } from "../events";
 import { VIEW_KEY, type Route } from "../router";
+import { setMuted } from "../io/soundMute";
+import { provideVoiceControls, voiceControls } from "../io/voiceControls";
+
+/** The voice controls the dashboard has with no extension to speak. */
+const silent = voiceControls();
 import type { AgentStore } from "../agents/AgentStore";
 import { addressee, agent, openDashboard, pressView, settled, shownView } from "./dashboard";
-import { byRole, byTestId } from "./queries";
+import { allByRole, byRole, byTestId } from "./queries";
 
 const AGENTS = [agent("main"), agent("weather")];
 
@@ -127,6 +132,103 @@ describe("CardDashboard and the address", () => {
         pressView("Settings");
 
         expect(changes.at(-1)).toEqual({ view: "settings", path: [] });
+    });
+
+    it("opens the section of Settings the address names, and says so", () => {
+        history.replaceState(null, "", "#/settings/sound");
+
+        open();
+
+        expect(shownView()).toBe("settings");
+        expect(byRole(document, "region", "Sound")).toBeTruthy();
+        expect(changes.at(-1)).toEqual({ view: "settings", path: ["sound"] });
+    });
+
+    it("opens the first section of Settings for an address naming none, or one there is not", () => {
+        history.replaceState(null, "", "#/settings/nowhere");
+
+        open();
+
+        expect(byRole(document, "region", "Budget")).toBeTruthy();
+        expect(changes.at(-1)).toEqual({ view: "settings", path: [] });
+    });
+
+    it("takes a tab hidden in Settings out of the header at once, and it still opens by its address", () => {
+        history.replaceState(null, "", "#/settings/tabs");
+        open();
+        const views = () => allByRole(document, "navigation", "Views")[0]!;
+        expect(allByRole(views(), "button", "Feed")).toHaveLength(1);
+
+        const feed = byRole(document, "checkbox", "Show the Feed tab") as HTMLInputElement;
+        feed.checked = false;
+        feed.dispatchEvent(new Event("change"));
+
+        expect(allByRole(views(), "button", "Feed")).toHaveLength(0);
+        emit("af-route", { view: "feed", path: [] });
+        expect(shownView()).toBe("feed");
+    });
+
+    describe("a spend figure arriving while Settings is open", () => {
+        /** Hold the cost answer back until `arrive` is called, as a slow poll does. */
+        function holdCost(): (info: object) => void {
+            let arrive: (r: Response) => void = () => {};
+            vi.spyOn(globalThis, "fetch").mockImplementation(url =>
+                String(url).includes("/api/cost")
+                    ? new Promise<Response>(resolve => {
+                          arrive = resolve;
+                      })
+                    : Promise.resolve(new Response("{}", { status: 200 })),
+            );
+            return info =>
+                arrive(
+                    new Response(JSON.stringify(info), {
+                        status: 200,
+                        headers: { "Content-Type": "application/json" },
+                    }),
+                );
+        }
+        const SPEND = { limit_usd: 5, period: "monthly", spend_usd: 1 };
+
+        afterEach(() => vi.restoreAllMocks());
+
+        it("leaves another section's control, and its focus, as they were", async () => {
+            const arrive = holdCost();
+            history.replaceState(null, "", "#/settings/tabs");
+            open();
+            const feed = byRole(document, "checkbox", "Show the Feed tab");
+            feed.focus();
+
+            arrive(SPEND);
+            await settled();
+            await new Promise(resolve => setTimeout(resolve, 0));
+
+            expect(feed.isConnected).toBe(true);
+            expect(document.activeElement).toBe(feed);
+        });
+
+        it("draws Budget again with it, when Budget is open", async () => {
+            const arrive = holdCost();
+            history.replaceState(null, "", "#/settings/budget");
+            open();
+
+            arrive(SPEND);
+
+            await vi.waitFor(() =>
+                expect(byRole(document, "region", "Budget").textContent).toContain("$1.0000 / $5.00"),
+            );
+        });
+    });
+
+    it("shows on the speaker a mute made anywhere", () => {
+        // A beep chosen, so there is something to mute.
+        provideVoiceControls({ ...voiceControls(), beepEnabled: true });
+        open();
+
+        setMuted(true);
+        expect(allByRole(document, "button", "Unmute sound")).toHaveLength(1);
+        setMuted(false);
+        expect(allByRole(document, "button", "Mute sound")).toHaveLength(1);
+        provideVoiceControls(silent);
     });
 
     it("says which conversation the user picks while the chat is open", () => {

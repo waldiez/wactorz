@@ -608,6 +608,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
     const app = buildServices(parts, ws, router);
     wireAll(app);
     const stopDucking = ambient.followSpeech();
+    const stopMuting = ambient.followMute();
 
     function start(): void {
         ws.connect(socketUrl());
@@ -633,6 +634,7 @@ export function createApp(replaced: Partial<AppParts> = {}): App {
         running.stopVoice?.();
         running.stopPanels?.();
         stopDucking();
+        stopMuting();
         stopWatching();
         aborting.abort();
     }

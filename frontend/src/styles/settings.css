@@ -3,22 +3,37 @@
  */
 /* ── Settings view ────────────────────────────────────────────── */
 .af-settings {
-  padding: 24px 28px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 14px;
   overflow-y: auto;
   height: 100%;
-}
-.af-settings > * {
   box-sizing: border-box;
-  max-width: 680px;
 }
 .af-settings-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.9);
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
   margin: 0;
+}
+/* The section list beside the section open, as the Inbox lays out its lists. */
+.af-settings-columns {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 720px);
+  gap: 16px;
+  align-items: start;
+}
+.af-settings-side {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+}
+.af-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .af-settings-section {
   display: flex;
@@ -30,10 +45,72 @@
   padding: 18px 20px;
 }
 .af-settings-section-heading {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(255, 255, 255, 0.88);
   margin: 0;
+}
+/* Where the section's values are kept: said before anything is changed. */
+.af-settings-scope {
+  margin: -8px 0 0;
+  font-size: 12px;
+  color: var(--af-text-dim);
+}
+.af-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.af-settings-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.af-settings-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-settings-check input:disabled + .af-settings-check-label {
+  color: rgba(255, 255, 255, 0.65);
+}
+.af-settings-check-note,
+.af-settings-hint {
+  font-size: 12px;
+  color: var(--af-text-dim);
+  margin: 0;
+}
+.af-settings-sound {
+  max-width: 360px;
+}
+/* A phone: the list is one short row above the section. */
+@media (max-width: 639px) {
+  .af-settings {
+    padding: 8px;
+    gap: 8px;
+  }
+  .af-settings-title {
+    display: none;
+  }
+  .af-settings-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .af-settings-side {
+    padding: 8px;
+  }
+  .af-settings-nav {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  }
+  .af-settings-nav .af-model-row-line {
+    display: none;
+  }
+  .af-settings-section {
+    padding: 14px;
+  }
 }
 .af-settings-grid {
   display: flex;

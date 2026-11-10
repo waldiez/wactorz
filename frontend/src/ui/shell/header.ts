@@ -3,17 +3,19 @@
  */
 /**
  * Dashboard chrome: the top header (logo, connection badge, health, view tabs,
- * audio + reset popovers) and the mobile bottom nav. View switching is routed
+ * the speaker that mutes, the reset popover) and the mobile bottom nav. View switching is routed
  * back via `onSetView`; the active-view highlight is maintained by the caller.
  */
 import type { ConnState } from "../../types/ws";
 import type { View } from "./types";
 import { BUILTIN_VIEWS, SETTINGS_VIEW } from "./types";
 import { uid } from "../../ids";
-import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
+import { buildResetPopover, type ResetPopover } from "./popovers";
+import { buildMuteButton } from "./muteButton";
 import { VERSION_KEY } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { buildSignOutButton } from "./signOut";
+import { DEVICES_TAB } from "../../config/hiddenTabs";
 import { iconMarkup, type IconName } from "./icons";
 import { button, el, expanded, externalLink, focusables, iconButton, live, testId } from "../dom";
 
@@ -25,7 +27,12 @@ export interface HeaderOpts {
     haUrl: string | null;
     /** Extension-registered extra nav buttons. */
     extraViews: { key: View; label: string; icon: IconName }[];
+    /** The tabs this browser hides (`config/hiddenTabs`), the Devices link's included; none when absent. */
+    hidden?: ReadonlySet<string>;
 }
+
+/** No tab hidden. */
+const NONE_HIDDEN: ReadonlySet<string> = new Set();
 
 /** Only http(s) links are safe in an href — `javascript:`/`data:` carry no HTML
  *  metacharacters so escaping won't neutralise them; collapse anything else. */
@@ -116,7 +123,7 @@ export function setHaNavUrl(root: HTMLElement, haUrl: string | null): void {
 const openPopovers: { el: HTMLElement; outsideClick: EventListener; keydown: EventListener }[] = [];
 
 /** A popover with extra teardown beyond its outside-click listener (e.g. the
- *  audio popover's `tts-voices-loaded` subscription). Same `_`-prefixed hook
+ *  reset popover's route listeners). Same `_`-prefixed hook
  *  convention as `ResetPopover._resetArmed`. */
 export interface ReleasablePopover extends HTMLElement {
     release?: () => void;
@@ -264,6 +271,7 @@ function buildHeaderRight(
     onSetView: (v: View) => void,
     haUrl: string | null,
     extraViews: { key: View; label: string; icon: IconName }[],
+    hidden: ReadonlySet<string>,
 ): HTMLElement {
     const right = el("div", "af-header-right");
 
@@ -271,7 +279,7 @@ function buildHeaderRight(
     const nav = el("nav", "af-view-nav");
     nav.setAttribute("aria-label", "Views");
     right.appendChild(nav);
-    const allViews = [...BUILTIN_VIEWS, ...extraViews, SETTINGS_VIEW];
+    const allViews = [...BUILTIN_VIEWS, ...extraViews, SETTINGS_VIEW].filter(v => !hidden.has(v.key));
     allViews.forEach(({ key, label, icon }) => {
         const btn = button(`af-view-btn${key === view ? " active" : ""}`);
         btn.dataset["view"] = key;
@@ -283,11 +291,11 @@ function buildHeaderRight(
         nav.appendChild(btn);
     });
     // Devices links out to the HA UI rather than embedding a controllable view.
-    right.appendChild(buildHaNavLink(haUrl, false));
+    if (!hidden.has(DEVICES_TAB)) {
+        right.appendChild(buildHaNavLink(haUrl, false));
+    }
 
-    const audioBtn = headerIconButton("Audio settings", "volume");
-    right.appendChild(audioBtn);
-    wirePopover(audioBtn, buildAudioPopover());
+    right.appendChild(buildMuteButton());
 
     const resetBtn = headerIconButton("Clear stored state", "reset");
     right.appendChild(resetBtn);
@@ -300,7 +308,7 @@ function buildHeaderRight(
     return right;
 }
 
-/** Build the top header (logo, connection badge, health, view tabs, audio + reset popovers). */
+/** Build the top header (logo, connection badge, health, view tabs, speaker, reset popover). */
 export function buildHeader(opts: HeaderOpts): HTMLElement {
     const header = el("div", "af-header");
 
@@ -310,7 +318,7 @@ export function buildHeader(opts: HeaderOpts): HTMLElement {
     header.append(
         buildHeaderLeft(opts.connState),
         center,
-        buildHeaderRight(opts.view, opts.onSetView, opts.haUrl, opts.extraViews),
+        buildHeaderRight(opts.view, opts.onSetView, opts.haUrl, opts.extraViews, opts.hidden ?? NONE_HIDDEN),
     );
     return header;
 }
@@ -386,12 +394,13 @@ function wireSecondaryBottomNav(
     view: View,
     extraViews: { key: View; label: string; icon: IconName }[],
     onSetView: (v: View) => void,
+    hidden: ReadonlySet<string>,
 ): void {
     const secondary: { key: View; icon: IconName; label: string }[] = [
         ...BUILTIN_VIEWS.filter(v => !PHONE_BAR.includes(v.key)),
         ...extraViews,
         { key: SETTINGS_VIEW.key, icon: SETTINGS_VIEW.icon, label: SETTINGS_VIEW.label },
-    ];
+    ].filter(v => !hidden.has(v.key));
     secondary.forEach(({ key, icon, label }) => {
         const btn = bottomTab(key, icon, label, view, " af-bottom-sheet-btn");
         btn.addEventListener("click", () => {
@@ -409,8 +418,11 @@ export function buildBottomNav(opts: {
     onSetView: (v: View) => void;
     haUrl: string | null;
     extraViews: { key: View; label: string; icon: IconName }[];
+    /** The tabs this browser hides, as for the header. */
+    hidden?: ReadonlySet<string>;
 }): HTMLElement {
     const { view, onSetView, haUrl, extraViews } = opts;
+    const hidden = opts.hidden ?? NONE_HIDDEN;
     const nav = el("nav", "af-bottom-nav");
     nav.setAttribute("aria-label", "Views");
 
@@ -420,9 +432,11 @@ export function buildBottomNav(opts: {
     wireMoreSheet(sheet, moreBtn);
 
     wirePrimaryBottomNav(nav, sheet, view, onSetView);
-    wireSecondaryBottomNav(sheet, moreBtn, view, extraViews, onSetView);
+    wireSecondaryBottomNav(sheet, moreBtn, view, extraViews, onSetView, hidden);
     // Devices links out to the HA UI (new tab) rather than switching views.
-    nav.appendChild(buildHaNavLink(haUrl, true));
+    if (!hidden.has(DEVICES_TAB)) {
+        nav.appendChild(buildHaNavLink(haUrl, true));
+    }
 
     nav.append(moreBtn, sheet);
 

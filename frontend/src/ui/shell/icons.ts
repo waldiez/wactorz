@@ -156,6 +156,11 @@ registerIcon(
     "volume",
     '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
 );
+registerIcon(
+    "volume-off",
+    '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/>',
+);
+registerIcon("volume-none", '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>');
 registerIcon("reset", '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>');
 registerIcon(
     "more",

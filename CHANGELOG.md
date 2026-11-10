@@ -29,6 +29,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Settings has sections, each at its own address, and the speaker in the header mutes.** `#/settings/budget`,
+  `#/settings/tabs` and `#/settings/sound`; `#/settings` opens Budget, the spend limit, as it did. Each section says
+  where its values are kept: in this browser, or on the server for everyone. **Tabs** chooses which tabs the header
+  and the phone's bar show in this browser: Overview, Chat, Inbox and Settings always do, while Feed, Wiring, Models,
+  Devices and extension tabs can be hidden. A hidden tab still opens from a link to it; hiding is not access control.
+  **Sound** holds the beep, read-aloud, voice and ambient choices that were in the header's audio popover, and the voice
+  list now says "Default voice" once the voices are in, rather than "loading voices…" for as long as none is chosen.
+  The header's speaker is now a mute: one click silences the beep, read-aloud (a reply being read included) and the
+  ambient track, and another brings back what Settings → Sound has chosen, without having changed it. It stays muted
+  across a reload, turning a sound on in Settings → Sound ends it, and with no sound chosen at all the speaker opens
+  Settings → Sound. Reset spend now asks in the dashboard's own dialog.
+
 - **wactorz is typed for the code that uses it.** The package ships `py.typed`, so a type checker reads its
   annotations: every function in it says what it takes and returns, and `make verifytypes` scores the types it
   exports as a user's type checker reads them (100% complete; CI fails below that, or without the marker).

@@ -117,6 +117,22 @@ describe("what the extension does for the page", () => {
         expect(notify).toHaveBeenCalledWith("hello", "main");
     });
 
+    it("stops reading aloud when the browser is muted, until it is stopped", async () => {
+        vi.resetModules();
+        const mod = await import("../../../ext/tts");
+        const { emit } = await import("../../../events");
+        const halt = vi.spyOn(mod.tts, "stopSpeaking").mockImplementation(() => {});
+
+        const stop = mod.register({ apiBase: "", configRead: true });
+        emit("af-mute-changed", { muted: false });
+        expect(halt).not.toHaveBeenCalled();
+        emit("af-mute-changed", { muted: true });
+        expect(halt).toHaveBeenCalledOnce();
+        stop();
+        emit("af-mute-changed", { muted: true });
+        expect(halt).toHaveBeenCalledOnce();
+    });
+
     it("offers itself to the audio settings", async () => {
         vi.resetModules();
         const mod = await import("../../../ext/tts");

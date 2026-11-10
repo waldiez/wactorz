@@ -21,8 +21,8 @@ function hostBarMarkup(): HTMLElement {
 
 function makeHost(view: View, root = hostBarMarkup()) {
     const renderStats = vi.fn<() => void>();
-    const renderView = vi.fn<() => void>();
-    return { root, getView: () => view, renderStats, renderView } satisfies MetricsHost;
+    const budgetChanged = vi.fn<() => void>();
+    return { root, getView: () => view, renderStats, budgetChanged } satisfies MetricsHost;
 }
 
 describe("MetricsController", () => {
@@ -103,10 +103,13 @@ describe("MetricsController", () => {
         vi.useRealTimers();
     });
 
-    it("builds a settings view element", () => {
+    it("builds the Budget section of Settings", () => {
         const m = new MetricsController(makeHost("settings"));
-        expect(m.buildSettingsView()).toBeInstanceOf(HTMLElement);
+        expect(m.budgetSection().build()).toBeInstanceOf(HTMLElement);
     });
+
+    /** Say yes in the dialog Reset spend opens. */
+    const confirmReset = (): void => document.querySelector<HTMLButtonElement>(".af-confirm-ok")!.click();
 
     const byText = (root: HTMLElement, text: string): HTMLButtonElement =>
         [...root.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === text)!;
@@ -118,12 +121,12 @@ describe("MetricsController", () => {
         })) as unknown as typeof fetch;
         const host = makeHost("settings");
         const m = new MetricsController(host);
-        const view = m.buildSettingsView();
+        const view = m.budgetSection().build();
         view.querySelector<HTMLInputElement>('input[type="number"]')!.value = "7";
         view.querySelector<HTMLSelectElement>("select")!.value = "weekly";
         byText(view, "Save limit").click();
 
-        await vi.waitFor(() => expect(host.renderView).toHaveBeenCalled()); // last step of the chain
+        await vi.waitFor(() => expect(host.budgetChanged).toHaveBeenCalled()); // last step of the chain
         expect(fetch).toHaveBeenCalledWith(
             "/api/cost/limit",
             expect.objectContaining({
@@ -139,10 +142,10 @@ describe("MetricsController", () => {
             ok: true,
             json: async () => ({}),
         })) as unknown as typeof fetch;
-        window.confirm = vi.fn(() => true);
         const m = new MetricsController(makeHost("settings"));
-        const view = m.buildSettingsView();
+        const view = m.budgetSection().build();
         byText(view, "Reset spend").click();
+        confirmReset();
 
         await vi.waitFor(() =>
             expect(fetch).toHaveBeenCalledWith(
@@ -162,7 +165,7 @@ describe("MetricsController", () => {
                     : { ok: true, json: async () => ({}) },
             ) as unknown as typeof fetch;
             const m = new MetricsController(makeHost("settings"));
-            const view = m.buildSettingsView();
+            const view = m.budgetSection().build();
             view.querySelector<HTMLInputElement>('input[type="number"]')!.value = "7";
             byText(view, "Save limit").click();
 
@@ -176,7 +179,7 @@ describe("MetricsController", () => {
                 throw new Error("network down");
             }) as unknown as typeof fetch;
             const m = new MetricsController(makeHost("settings"));
-            const view = m.buildSettingsView();
+            const view = m.budgetSection().build();
             byText(view, "Save limit").click();
 
             await vi.waitFor(() =>
@@ -190,10 +193,10 @@ describe("MetricsController", () => {
                     ? { ok: false, status: 503, json: async () => ({}) }
                     : { ok: true, json: async () => ({}) },
             ) as unknown as typeof fetch;
-            window.confirm = vi.fn(() => true);
             const m = new MetricsController(makeHost("settings"));
-            const view = m.buildSettingsView();
+            const view = m.budgetSection().build();
             byText(view, "Reset spend").click();
+            confirmReset();
 
             await vi.waitFor(() =>
                 expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
@@ -207,10 +210,10 @@ describe("MetricsController", () => {
             })) as unknown as typeof fetch;
             const host = makeHost("settings");
             const m = new MetricsController(host);
-            const view = m.buildSettingsView();
+            const view = m.budgetSection().build();
             byText(view, "Save limit").click();
 
-            await vi.waitFor(() => expect(host.renderView).toHaveBeenCalled());
+            await vi.waitFor(() => expect(host.budgetChanged).toHaveBeenCalled());
             expect(toast.show).not.toHaveBeenCalled();
         });
     });
@@ -250,12 +253,12 @@ describe("MetricsController", () => {
         expect(memFill.style.width).toBe("50.0%");
     });
 
-    it("re-renders the settings view after saving a limit from it", async () => {
+    it("says the budget changed after saving a limit from it", async () => {
         const host = makeHost("settings");
         const m = new MetricsController(host);
         vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
 
-        const view = m.buildSettingsView();
+        const view = m.budgetSection().build();
         document.body.appendChild(view);
         const save = [...view.querySelectorAll("button")].find(b => b.textContent === "Save limit")!;
         const limit = view.querySelector<HTMLInputElement>("input")!;
@@ -263,6 +266,6 @@ describe("MetricsController", () => {
 
         save.click();
 
-        await vi.waitFor(() => expect(host.renderView).toHaveBeenCalled());
+        await vi.waitFor(() => expect(host.budgetChanged).toHaveBeenCalled());
     });
 });

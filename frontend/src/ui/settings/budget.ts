@@ -2,18 +2,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 /**
- * Settings view: the LLM spend-limit panel. The panel delegates save/reset to
- * the dashboard via callbacks so it can hit the backend and re-render.
+ * Settings → Budget: the language-model spend limit. The section hands save and
+ * reset to its owner through callbacks, which reach the server and draw it again.
  */
 
 import type { CostLimitInfo } from "../../io/costApi";
 import { button, el, named, option } from "../dom";
+import { confirmDialog } from "../shell/confirmDialog";
 
+/** What the Budget section asks its owner to do. */
 export interface CostLimitCallbacks {
+    /** Save `limitUsd` for `period` on the server. */
     onSaveLimit: (limitUsd: number, period: string) => Promise<void> | void;
+    /** Zero the current period's spend counter on the server. */
     onResetSpend: () => Promise<void> | void;
 }
 
+/** `control` beside its visible label. */
 function labelledField(labelText: string, control: HTMLElement): HTMLLabelElement {
     const lbl = el("label", "af-settings-field");
     lbl.append(el("span", "af-settings-label", labelText), control);
@@ -85,26 +90,24 @@ function buildCostActions(
         "Clears the period budget counter only. The lifetime " +
         "“Cost” total is separate and is not affected (use wactorz-reset --metrics for that).";
     withBusy(resetBtn, async () => {
-        if (
-            !window.confirm(
-                "Reset the period budget counter?\n\n" +
-                    "This only zeroes spend for the current period. The lifetime " +
-                    "“Cost” total stays unchanged.",
-            )
-        ) {
-            return;
+        const confirmed = await confirmDialog({
+            title: "Reset the period budget counter?",
+            message:
+                "This only zeroes spend for the current period. The lifetime “Cost” total stays unchanged.",
+            confirmLabel: "Reset spend",
+        });
+        if (confirmed) {
+            await cb.onResetSpend();
         }
-        await cb.onResetSpend();
     });
     actions.appendChild(resetBtn);
 
     return actions;
 }
 
-/** The  LLM Spend Limit panel. */
-function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
-    const section = el("div", "af-settings-section");
-    section.appendChild(el("h3", "af-settings-section-heading", "🪙 LLM Spend Limit"));
+/** The Budget section's content: the limit, its period, what was spent, and the actions. */
+export function buildBudgetSection(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
+    const section = el("div", "af-settings-body");
 
     const currentLimit = info?.limit_usd ?? 0;
     const currentPeriod = info?.period ?? "monthly";
@@ -119,14 +122,4 @@ function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallback
     section.appendChild(buildCostStatus(info, currentLimit, currentPeriod));
     section.appendChild(buildCostActions(limitInput, periodSelect, cb));
     return section;
-}
-
-/** Assemble the settings view (LLM spend-limit panel). */
-export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
-    const view = el("div", "af-settings");
-    view.appendChild(el("h2", "af-settings-title", "Settings"));
-    view.appendChild(buildCostLimitSection(info, cb));
-    // No Home Assistant fields: the HA URL comes from /api/config and the Devices
-    // nav button links straight to HA — the browser never holds a token.
-    return view;
 }

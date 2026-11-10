@@ -8,7 +8,8 @@
  */
 import { apiUrl } from "../../io/api";
 import { readCostLimit, type CostLimitInfo } from "../../io/costApi";
-import { buildSettingsView } from "../shell/settings";
+import { buildBudgetSection } from "../settings/budget";
+import type { SettingsSection } from "../settings/section";
 import { postOrWarn } from "../shell/mutate";
 import { hostBarValues } from "./cards";
 import type { View } from "../shell/types";
@@ -19,8 +20,8 @@ export interface MetricsHost {
     getView(): View;
     /** Re-render the overview stat cards (caller decides if visible). */
     renderStats(): void;
-    /** Full re-render of the active view (used after settings mutations). */
-    renderView(): void;
+    /** The spend limit or the spend changed: draw Settings → Budget again, if it is open. */
+    budgetChanged(): void;
 }
 
 export class MetricsController {
@@ -102,20 +103,26 @@ export class MetricsController {
         }
     }
 
-    /** Build the settings view, wiring its save-limit / reset-spend actions. */
-    buildSettingsView(): HTMLElement {
-        return buildSettingsView(this._costLimitInfo, {
+    /** Settings → Budget, drawn from the limit last read, its save and reset wired to the server. */
+    budgetSection(): SettingsSection {
+        return {
+            key: "budget",
+            label: "Budget",
+            line: "The language-model spend limit",
+            scope: "server",
+            build: () => this._buildBudget(),
+        };
+    }
+
+    private _buildBudget(): HTMLElement {
+        return buildBudgetSection(this._costLimitInfo, {
             onSaveLimit: async (limit, period) => {
                 await this._saveCostLimit(limit, period);
-                if (this.host.getView() === "settings") {
-                    this.host.renderView();
-                }
+                this.host.budgetChanged();
             },
             onResetSpend: async () => {
                 await this._resetCost();
-                if (this.host.getView() === "settings") {
-                    this.host.renderView();
-                }
+                this.host.budgetChanged();
             },
         });
     }
@@ -128,8 +135,8 @@ export class MetricsController {
         this._costLimitInfo = info;
         if (this.host.getView() === "overview") {
             this.host.renderStats();
-        } else if (this.host.getView() === "settings") {
-            this.host.renderView();
+        } else {
+            this.host.budgetChanged();
         }
     }
 

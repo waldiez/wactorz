@@ -22,6 +22,7 @@
 import { safeStorage } from "../../safeStorage";
 import { emit } from "../../events";
 import { posting, requestBytes, requestJson } from "../../io/api";
+import { isMuted } from "../../io/soundMute";
 import type { TTSVoice } from "./types";
 
 /** How long synthesis may take: the server waits on a remote voice service. */
@@ -195,8 +196,11 @@ export class TTSManager {
         }
     }
 
-    /** Call on incoming agent message. Beeps and/or speaks depending on settings. */
+    /** Call on incoming agent message. Beeps and/or speaks depending on settings, and neither while muted. */
     notify(text: string, _from?: string): void {
+        if (isMuted()) {
+            return;
+        }
         if (this._beepEnabled) {
             this._beep();
         }

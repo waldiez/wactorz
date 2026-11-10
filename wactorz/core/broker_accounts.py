@@ -55,6 +55,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .node_signing import derive
+from .topics import AGENTS, MAIN, NODES, SYSTEM, agent_topic, main_topic, node_topic, root_prefix
 
 #: The generated files, beside the certificates a broker of ours also reads.
 PASSWORD_FILE = "node_passwd"  # noqa: S105  # a file name, not a password
@@ -92,7 +93,7 @@ NODE_TOPICS: tuple[tuple[str, str], ...] = (
 
 #: Where a configured data topic may not start: these are the fences themselves,
 #: and a filter under one of them would take a fence down for every node.
-_FENCED = ("nodes/", "agents/", "main/", "system/", "$")
+_FENCED = (*(root_prefix(root) for root in (NODES, AGENTS, MAIN, SYSTEM)), "$")
 
 #: What a topic filter in a setting may not contain: it is written into the
 #: access list as it is, one rule per line.
@@ -243,14 +244,14 @@ def acl_text(
         blocks.append(
             f"\nuser {node}\n"
             "# Its own control topics and reports.\n"
-            f"topic readwrite nodes/{node}/#\n"
+            f"topic readwrite {node_topic(node, '#')}\n"
             "# What every host's agents share, except the commands that stop the server's.\n"
-            "topic readwrite agents/#\n"
-            "topic deny agents/+/commands\n"
+            f"topic readwrite {agent_topic('#')}\n"
+            f"topic deny {agent_topic('+', 'commands')}\n"
             "# Asking main's model and history, and answering main's tasks: written, never read.\n"
-            "topic write main/llm_request\n"
-            "topic write main/history_request\n"
-            "topic write main/reply/#\n"
+            f"topic write {main_topic('llm_request')}\n"
+            f"topic write {main_topic('history_request')}\n"
+            f"topic write {main_topic('reply', '#')}\n"
             "# Data its agents publish and read.\n"
             f"{data}"
         )

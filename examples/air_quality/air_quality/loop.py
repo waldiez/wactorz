@@ -27,7 +27,7 @@ otherwise: ``@catalog spawn air-drift {"check_s": 60}``.
 
 from typing import Any
 
-from wactorz.agents.drift_agent import DriftAgent
+from wactorz.agents.drift_agent import DriftAgent, drift_topic
 from wactorz.agents.recorder_agent import RecorderAgent
 from wactorz.agents.rule_agent import RuleAgent, RuleConfig
 from wactorz.agents.train_agent import TrainAgent
@@ -46,7 +46,7 @@ CHECK_S = 10.0
 
 #: The baseline rule: an alarm on the scores retrains once a day, cut where the alarm says.
 RETRAIN_RULE: dict[str, Any] = {
-    "triggers": [f"models/{MODEL_NAME}/drift"],
+    "triggers": [drift_topic(MODEL_NAME)],
     "conditions": [{"field": "column", "op": "eq", "value": "score"}],
     "actions": [
         {

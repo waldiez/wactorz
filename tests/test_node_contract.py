@@ -15,6 +15,7 @@ Each constant below is the contract as it stands. A change to one is a change
 both sides have to make together, which is the point of failing here first.
 """
 
+import ast
 import asyncio
 import json
 import re
@@ -227,11 +228,29 @@ STATE_FILE_SUFFIX = "_state.json"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+_LEAF = re.compile(r"[a-z_]+")
 _NODE_TOPIC = re.compile(r"nodes/(?:\{[^}]+\}|\+)/([a-z_]+)")
 
 
+def _helper_leaves(source: str) -> set[str]:
+    """The leaves named in ``node_topic(<node>, "<leaf>", ...)`` calls; a wildcard is no leaf."""
+    leaves: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and len(node.args) >= 2):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        leaf = node.args[1]
+        if name != "node_topic" or not isinstance(leaf, ast.Constant):
+            continue
+        if isinstance(leaf.value, str) and _LEAF.fullmatch(leaf.value):
+            leaves.add(leaf.value)
+    return leaves
+
+
 def _topic_segments(source: str) -> set[str]:
-    return set(_NODE_TOPIC.findall(source))
+    """The node topic leaves ``source`` names, spelled out or through `node_topic`."""
+    return set(_NODE_TOPIC.findall(source)) | _helper_leaves(source)
 
 
 def _node_source() -> str:
@@ -266,7 +285,9 @@ def _runner_with_capture(tmp_path: Path) -> tuple[NodeRunner, list[tuple[str, An
 
 class TestTopics:
     def test_the_runner_speaks_exactly_the_contract_topics(self) -> None:
-        found = _topic_segments(_node_source())
+        found: set[str] = set()
+        for path in sorted(NODE_PACKAGE.rglob("*.py")):
+            found |= _topic_segments(path.read_text(encoding="utf-8"))
         assert found == NODE_TOPICS
 
     def test_main_speaks_only_contract_topics(self) -> None:
@@ -291,7 +312,7 @@ class TestTopics:
         # The runner mints reply topics under its own name; main publishes to
         # whatever `_reply_topic` the request carried. Neither side may spell
         # the other's half.
-        assert f'f"nodes/{{agent.node}}/{REPLY_TOPIC}/' in _node_source()
+        assert f'node_topic(agent.node, "{REPLY_TOPIC}", ' in _node_source()
         bridge = (PACKAGE / "agents" / "main" / "llm_bridge.py").read_text(encoding="utf-8")
         assert 'data.get("_reply_topic")' in bridge
 
@@ -426,7 +447,7 @@ class TestPayloadShapes:
         # and a running agent, and the shape is what is being pinned.
         source = _node_source()
         pattern = re.compile(
-            r'f"nodes/\{self\.node_name\}/' + topic + r'",\s*\{(.*?)\n\s*\}', re.DOTALL
+            r'node_topic\(self\.node_name, "' + topic + r'"\),\s*\{(.*?)\n\s*\}', re.DOTALL
         )
         bodies = pattern.findall(source)
         assert bodies, f"no literal payload published on {topic}"

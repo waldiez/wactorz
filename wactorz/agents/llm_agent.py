@@ -10,6 +10,7 @@ from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import chat_turn_recorded, get_db
+from ..core.topics import agent_topic
 from ..monitoring.log_redaction import redact
 from .llm.attachments import HISTORY_TEXT_LIMIT, flatten
 from .llm.base import LLMProvider, ToolCall, ToolCompletion
@@ -376,7 +377,7 @@ class LLMAgent(Actor):
 
             # Publish completion
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/completed",
+                agent_topic(self.actor_id, "completed"),
                 {
                     "result_preview": response[:200],
                     "duration": duration,
@@ -440,7 +441,7 @@ class LLMAgent(Actor):
         self._persist_cost()
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/metrics",
+            agent_topic(self.actor_id, "metrics"),
             self._build_metrics(),
         )
         return response
@@ -537,7 +538,7 @@ class LLMAgent(Actor):
         self._persist_cost()
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/metrics",
+            agent_topic(self.actor_id, "metrics"),
             self._build_metrics(),
         )
 

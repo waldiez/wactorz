@@ -25,6 +25,7 @@ from typing import Any
 from ...core import topic_bus
 from ...core.actor import Actor, Message, MessageType
 from ...core.addresses import MAIN_NODE, Address
+from ...core.topics import agent_topic
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
@@ -164,7 +165,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
             )
         try:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics(),
             )
         except Exception as exc:
@@ -653,7 +654,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 

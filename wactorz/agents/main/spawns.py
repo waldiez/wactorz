@@ -35,7 +35,7 @@ from ...core.packages import (
     allowed_by_env,
     unlisted,
 )
-from ...core.topics import topic_name_error
+from ...core.topics import agent_topic, node_topic, topic_name_error
 from ...plugins import MODULE_TYPE, for_target, is_module_config
 from ..catalog_agent import current_recipe_config
 from ..mixins import KeptHere, NotSpawned, PlacedOnNode, agent_type, installed_packages
@@ -967,7 +967,7 @@ class SpawnService:
         name = config.get("name")
         logger.error("[%s] Cannot spawn %r on %s: %s", self.host.name, name, node, reason)
         await self.host._mqtt_publish(
-            f"agents/{self.host.actor_id}/logs",
+            agent_topic(self.host.actor_id, "logs"),
             {
                 "type": "error",
                 "message": f"Cannot spawn '{name}' on '{node}': {reason}",
@@ -986,7 +986,7 @@ class SpawnService:
             # and must not be told to keep running it after a reboot.
             logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
             await self.host._mqtt_publish(
-                f"agents/{self.host.actor_id}/logs",
+                agent_topic(self.host.actor_id, "logs"),
                 {
                     "type": "error",
                     "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
@@ -1094,10 +1094,10 @@ class SpawnService:
         # last part is Mosquitto queueing per client in order and the runner
         # draining one message at a time -- MQTT only promises ordering within a
         # single topic, so it is the deployment that makes it true, not the spec.
-        await self.host._mqtt_publish(f"nodes/{node}/spawn", wire_config, retain=False, qos=1)
+        await self.host._mqtt_publish(node_topic(node, "spawn"), wire_config, retain=False, qos=1)
         await self.host._update_node_desired_state(node, wire_config)
         await self.host._mqtt_publish(
-            f"agents/{self.host.actor_id}/logs",
+            agent_topic(self.host.actor_id, "logs"),
             {
                 "type": "spawned",
                 "message": f"Spawned '{name}' on node '{node}'",

@@ -52,6 +52,7 @@ from ..core.artifacts import ArtifactError, ArtifactStore
 from ..core.paths import resolve_state_dir
 from ..core.persistence.stores import get_db
 from ..core.provenance import Provenance
+from ..core.topics import agent_topic, model_topic
 from ..data import DEFAULT_LATENESS_S, data_root, now_of
 from ..drift import (
     DEFAULT_SCORE_COLUMN,
@@ -83,7 +84,7 @@ DATA_EXTRA = "wactorz[data]"
 
 def drift_topic(model: str) -> str:
     """The topic an alarm on ``model`` is published on."""
-    return f"models/{model}/drift"
+    return model_topic(model, "drift")
 
 
 class DriftError(ValueError):
@@ -497,7 +498,7 @@ class DriftAgent(Actor):
         """Say something on the dashboard feed, under this agent's name."""
         getattr(logger, level, logger.info)("[%s] %s", self.name, message)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": message, "level": level, "timestamp": time.time()},
         )
 

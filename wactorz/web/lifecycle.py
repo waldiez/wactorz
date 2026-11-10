@@ -16,7 +16,7 @@ from typing import Any
 from ..agents.lookup import find_main_actor
 from ..agents.main.spawn_registry import SpawnRegistry, placed_on
 from ..core.node_signing import signed_publish_kwargs
-from ..core.topics import RETAINED_AGENT_LEAVES
+from ..core.topics import RETAINED_AGENT_LEAVES, agent_topic, node_topic
 from . import events, runtime
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
         return ""
     try:
         await runtime.mqtt_client_ref.publish(
-            f"agents/{agent_id}/commands",
+            agent_topic(agent_id, "commands"),
             json.dumps({"command": command, "sender": sender, "timestamp": time.time()}),
             # This is the monitor's own client, which applies none of
             # MQTTPublisher's topic classification, so the QoS has to be said
@@ -138,7 +138,7 @@ async def purge_agent_retained(agent_id: str) -> None:
     if not runtime.mqtt_client_ref:
         return
     for metric in RETAINED_AGENT_LEAVES:
-        topic = f"agents/{agent_id}/{metric}"
+        topic = agent_topic(agent_id, metric)
         try:
             # QoS 1: a lost purge leaves a stale retained message behind, and a
             # stale retained spawn brings the agent back on the node's next
@@ -157,7 +157,7 @@ async def purge_node_desired_state(node: str) -> None:
     """
     if not runtime.mqtt_client_ref or not node:
         return
-    topic = f"nodes/{node}/desired_state"
+    topic = node_topic(node, "desired_state")
     try:
         await runtime.mqtt_client_ref.publish(topic, b"", retain=True, qos=1)
     except Exception as e:
@@ -232,7 +232,7 @@ async def purge_spawn_reconcile(agent: str | None = None, actor_id: str | None =
     if main_actor is not None:
         await asyncio.gather(
             *[
-                main_actor._mqtt_publish(f"nodes/{node}/stop", {"name": name}, qos=1)
+                main_actor._mqtt_publish(node_topic(node, "stop"), {"name": name}, qos=1)
                 for name, node in _withdrawn_on_offline_nodes(main_actor, withdrawn)
             ],
             return_exceptions=True,
@@ -325,22 +325,22 @@ async def delete_agent(agent_id: str) -> str:
                 # not there to publish it.
                 stop_payload = json.dumps({"name": name})
                 await runtime.mqtt_client_ref.publish(
-                    f"nodes/{node}/stop",
+                    node_topic(node, "stop"),
                     stop_payload,
                     qos=1,
-                    **signed_publish_kwargs(f"nodes/{node}/stop", stop_payload),
+                    **signed_publish_kwargs(node_topic(node, "stop"), stop_payload),
                 )
-                routed = f"via nodes/{node}/stop"
+                routed = f"via {node_topic(node, 'stop')}"
             except Exception as e:
-                logger.warning("[delete] nodes/%s/stop publish failed: %s", node, e)
+                logger.warning("[delete] %s publish failed: %s", node_topic(node, "stop"), e)
         else:
             try:
                 await runtime.mqtt_client_ref.publish(
-                    f"agents/{agent_id}/commands",
+                    agent_topic(agent_id, "commands"),
                     json.dumps({"command": "stop", "sender": "monitor", "timestamp": time.time()}),
                     qos=1,
                 )
-                routed = f"via agents/{agent_id}/commands"
+                routed = f"via {agent_topic(agent_id, 'commands')}"
             except Exception as e:
                 logger.warning("[delete] commands publish failed: %s", e)
 

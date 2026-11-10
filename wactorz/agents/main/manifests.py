@@ -40,6 +40,16 @@ from ...core.mqtt import (
 )
 from ...core.node_publications import admit, signed_stamp
 from ...core.topic_bus import TopicContract
+from ...core.topics import (
+    AGENTS,
+    MAIN,
+    NODES,
+    TASK_BY_NAME,
+    TASK_BY_NODE,
+    agent_topic,
+    owner_of,
+    root_prefix,
+)
 from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
@@ -49,11 +59,16 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 #: Where a remote agent's data might turn up. Broad on purpose: an agent picks
 #: its own topics, and the point is to learn what it actually publishes.
-OBSERVED_TOPIC_PATTERNS = ("agents/+/data/#", "custom/#", "sensors/#")
+OBSERVED_TOPIC_PATTERNS = (agent_topic("+", "data", "#"), "custom/#", "sensors/#")
 
 #: Traffic that is machinery rather than data. Recording it would teach the
 #: planner that an agent publishes spawn commands.
-INTERNAL_TOPIC_PREFIXES = ("agents/by-name/", "agents/at/", "nodes/", "main/")
+INTERNAL_TOPIC_PREFIXES = (
+    f"{TASK_BY_NAME}/",
+    f"{TASK_BY_NODE}/",
+    root_prefix(NODES),
+    root_prefix(MAIN),
+)
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
@@ -136,7 +151,7 @@ class ManifestRegistry:
                     identifier=client_id("srv", install_id(), "manifests"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("agents/+/manifest", qos=1)
+                    await client.subscribe(agent_topic("+", "manifest"), qos=1)
                     logger.info("[main] Subscribed to agent manifests.")
                     last_error = None
                     async for message in client.messages:
@@ -247,8 +262,7 @@ class ManifestRegistry:
     @staticmethod
     def _actor_id_from(topic: str) -> str:
         """The actor id in `agents/{actor_id}/manifest`, or "" if malformed."""
-        parts = topic.split("/")
-        return parts[1] if len(parts) > 1 else ""
+        return owner_of(topic, AGENTS)
 
     async def _forget_agent(self, target_id: str) -> None:
         """Drop an agent from every table it appears in, once its loss is accepted.

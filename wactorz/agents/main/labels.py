@@ -44,6 +44,7 @@ from ...core.node_publications import admit
 from ...core.persistence.stores import get_db
 from ...core.provenance import ProvenanceError
 from ...core.questions import QUESTIONS_LEAF, Question, book_frame, questions_in_frame
+from ...core.topics import AGENTS, agent_topic, own_topic_parts
 from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 #: What this listener subscribes to: every agent's question book.
-BOOKS_TOPIC = f"agents/+/{QUESTIONS_LEAF}"
+BOOKS_TOPIC = agent_topic("+", QUESTIONS_LEAF)
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
@@ -326,8 +327,8 @@ def _record(db: Any, questions: list[Question], actor_id: str, name: str, node: 
 
 def _actor_id_from(topic: str) -> str:
     """The actor id in ``agents/<id>/questions``, or "" when the topic is not one."""
-    parts = topic.split("/")
-    return parts[1] if len(parts) == 3 and parts[0] == "agents" else ""
+    parts = own_topic_parts(topic)
+    return parts[1] if parts is not None and len(parts) == 3 and parts[0] == AGENTS else ""
 
 
 def _listing_node(known_nodes: dict[str, dict[str, Any]], name: str) -> str:

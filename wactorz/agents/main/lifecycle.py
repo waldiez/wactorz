@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import derive_actor_id
-from ...core.topics import RETAINED_AGENT_LEAVES
+from ...core.topics import RETAINED_AGENT_LEAVES, agent_topic, node_topic
 from .addresses import registered_agent
 from .manifests import is_agent
 from .spawn_registry import placed_on
@@ -330,7 +330,7 @@ class LifecycleService:
                 self.host._topic_registry.pop(topic, None)
         # Publish empty retained payload to clear the broker-side retained manifest.
         if actor_id:
-            await self.host._mqtt_publish(f"agents/{actor_id}/manifest", b"", retain=True)
+            await self.host._mqtt_publish(agent_topic(actor_id, "manifest"), b"", retain=True)
             logger.debug("[%s] Cleared retained manifest for %r", self.host.name, name)
 
     async def _purge_agent_retained_topics(self, actor_id: str | None) -> None:
@@ -345,7 +345,7 @@ class LifecycleService:
             return
         for metric in RETAINED_AGENT_LEAVES:
             try:
-                await self.host._mqtt_publish(f"agents/{actor_id}/{metric}", b"", retain=True)
+                await self.host._mqtt_publish(agent_topic(actor_id, metric), b"", retain=True)
             except Exception as e:
                 logger.debug(
                     "[%s] Failed to clear retained agents/%s/%s: %s",
@@ -450,7 +450,7 @@ class LifecycleService:
         if node:
             await self.host._update_node_desired_state(node, remove_name=name)
             await self.host._mqtt_publish(
-                f"nodes/{node}/stop",
+                node_topic(node, "stop"),
                 {"name": name, "delete": True},
                 qos=1,
             )

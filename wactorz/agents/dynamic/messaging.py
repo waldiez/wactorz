@@ -16,7 +16,7 @@ from ...core.agent_directory import AgentDirectory
 from ...core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ...core.node_publications import admit
 from ...core.topic_bus import TopicContract
-from ...core.topics import reply_topic, task_by_name_topic, task_topic
+from ...core.topics import agent_topic, reply_topic, task_by_name_topic, task_topic
 from ..lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -166,11 +166,11 @@ class MessagingMixin(_Host):
 
     async def publish_detection(self, data: Any) -> None:
         """Convenience: publish to agents/{id}/detections"""
-        await self._actor._mqtt_publish(f"agents/{self._actor.actor_id}/detections", data)
+        await self._actor._mqtt_publish(agent_topic(self._actor.actor_id, "detections"), data)
 
     async def publish_result(self, data: Any) -> None:
         """Convenience: publish to agents/{id}/result"""
-        await self._actor._mqtt_publish(f"agents/{self._actor.actor_id}/result", data)
+        await self._actor._mqtt_publish(agent_topic(self._actor.actor_id, "result"), data)
 
     async def log(self, message: str, level: str = "info") -> None:
         """Add a message to the event log visible in the dashboard."""
@@ -178,14 +178,14 @@ class MessagingMixin(_Host):
         safe_msg = message.encode("ascii", errors="replace").decode("ascii")
         getattr(logger, level, logger.info)(f"[{self.name}] {safe_msg}")
         await self._actor._mqtt_publish(
-            f"agents/{self._actor.actor_id}/logs",
+            agent_topic(self._actor.actor_id, "logs"),
             {"type": "log", "message": message, "timestamp": time.time()},
         )
 
     async def alert(self, message: str, severity: str = "warning") -> None:
         """Trigger an alert visible in the dashboard."""
         await self._actor._mqtt_publish(
-            f"agents/{self._actor.actor_id}/alert",
+            agent_topic(self._actor.actor_id, "alert"),
             {
                 "actor_id": self._actor.actor_id,
                 "name": self.name,

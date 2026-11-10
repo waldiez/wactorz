@@ -40,6 +40,7 @@ from ...core.mqtt import (
 )
 from ...core.node_publications import Stamp, admit, signed_stamp
 from ...core.topic_bus import TopicContract
+from ...core.topics import NODES, node_topic, own_topic_parts
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
 from .spawn_registry import SpawnRegistry
@@ -374,9 +375,9 @@ class NodeManager:
                     # them at QoS 0 for the same reason; asking for more here
                     # would only be misleading, since delivery is the lower of
                     # the two.
-                    await client.subscribe("nodes/+/heartbeat", qos=0)
-                    await client.subscribe("nodes/+/migrate_result", qos=1)
-                    await client.subscribe("nodes/+/manifest", qos=1)
+                    await client.subscribe(node_topic("+", "heartbeat"), qos=0)
+                    await client.subscribe(node_topic("+", "migrate_result"), qos=1)
+                    await client.subscribe(node_topic("+", "manifest"), qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
@@ -414,8 +415,8 @@ class NodeManager:
         """
         if topic.endswith("/manifest") and not payload:
             # The retained manifest cleared: the node was removed.
-            parts = topic.split("/")
-            if len(parts) == 3:
+            parts = own_topic_parts(topic)
+            if parts is not None and len(parts) == 3 and parts[0] == NODES:
                 self.node_manifests.pop(parts[1], None)
             return
         try:
@@ -424,8 +425,8 @@ class NodeManager:
             return
         if not isinstance(data, dict):
             return
-        parts = topic.split("/")
-        if len(parts) < 3:
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) < 3 or parts[0] != NODES:
             return
         await self._route(parts[1], topic, payload or b"", properties, data)
 
@@ -1069,7 +1070,7 @@ class NodeManager:
                 # Queued in the node's session while it is away, behind
                 # anything already waiting there, so on its return it
                 # stops this agent rather than starting a withdrawn spawn.
-                await host._mqtt_publish(f"nodes/{node_name}/stop", {"name": agent_name}, qos=1)
+                await host._mqtt_publish(node_topic(node_name, "stop"), {"name": agent_name}, qos=1)
                 await host._clear_agent_manifest(agent_name)
                 host._record_agent_deletion(
                     agent_name,

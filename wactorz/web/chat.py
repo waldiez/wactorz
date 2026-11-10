@@ -29,6 +29,7 @@ from ..core.identity import derive_actor_id, given_actor_id
 from ..core.mqtt import mqtt_client, user_properties, v5_kwargs
 from ..core.node_publications import admit
 from ..core.task_text import reply_text, task_payload
+from ..core.topics import main_topic
 from ..core.turns import acting_as, turn_scope
 from ..monitoring import chat_metrics
 from ..orchestration import DASHBOARD
@@ -714,7 +715,7 @@ async def _ask_node(main_actor: Any, name: str, node: str, text: str, channels: 
         # and shipping them means megabytes of base64 through the
         # broker and into its outbox. The broker is the wrong pipe.
         await channels.files_not_sent(f"@{name} runs on {node}")
-    reply_topic = f"main/reply/io-gateway/{uuid.uuid4().hex[:8]}"
+    reply_topic = main_topic("reply", "io-gateway", uuid.uuid4().hex[:8])
     payload = {"text": text, "payload": text, "_reply_topic": reply_topic, "_remote_task": True}
     try:
         async with mqtt_client(

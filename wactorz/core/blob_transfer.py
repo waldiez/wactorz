@@ -43,6 +43,7 @@ from typing import Any
 
 from .blobs import BLOB_MARK, encoder_for, encoder_named
 from .state_codec import NotJson, json_form
+from .topics import node_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ INBOX_DIRNAME = "..incoming-blobs"
 
 def to_node_topic(node: str, sha256: str) -> str:
     """Where main sends ``node`` a blob."""
-    return f"nodes/{node}/blob/{sha256}"
+    return node_topic(node, "blob", sha256)
 
 
 def sha256_of_topic(topic: str) -> str | None:

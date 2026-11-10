@@ -25,6 +25,7 @@ from ...core.manifests import AgentManifest
 from ...core.node_signing import node_control_properties
 from ...core.outbound import Answer
 from ...core.persistence import chat_turn_recorded
+from ...core.topics import agent_topic
 from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
@@ -910,7 +911,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._replace_latest_interface_reply(raw_llm_response, clean)
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "user_interaction", "input": text[:100], "response": clean[:200]},
         )
 
@@ -1209,7 +1210,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             yield extra
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "user_interaction", "input": text[:100], "response": full_response[:200]},
         )
         # Before the dict: a consumer may stop reading at it.

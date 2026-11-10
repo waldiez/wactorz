@@ -39,6 +39,7 @@ from ..core.addresses import Address
 from ..core.manifests import AgentManifest
 from ..core.paths import resolve_state_dir
 from ..core.pip import missing_requirements, pending_restart
+from ..core.topics import agent_topic
 from .dependency_install import InstallOutcome, install_for_agent
 from .dynamic import DynamicAgent
 from .lookup import find_main_actor
@@ -787,7 +788,7 @@ class CatalogAgent(Actor):
         names = list(self._catalog.keys())
         logger.info("[%s] Catalog ready — %s recipe(s): %s", self.name, len(names), names)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Catalog ready: {', '.join(names)}",
@@ -1101,7 +1102,7 @@ class CatalogAgent(Actor):
         beta_warning = (recipe.get("warning") or "") if recipe.get("experimental") else ""
         if beta_warning:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/alert",
+                agent_topic(self.actor_id, "alert"),
                 {
                     "severity": "warning",
                     "message": f"{resolved} is Experimental/Beta. {beta_warning}",
@@ -1111,7 +1112,7 @@ class CatalogAgent(Actor):
 
         logger.info("[%s] Spawning '%s'...", self.name, resolved)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": f"Spawning '{resolved}'...", "timestamp": time.time()},
         )
 
@@ -1151,7 +1152,7 @@ class CatalogAgent(Actor):
                     )
                     logger.info("[%s] %s", self.name, msg)
                     await self._mqtt_publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {"type": "log", "message": msg, "timestamp": time.time()},
                     )
                     return {"ok": True, "message": msg, "agent": resolved}
@@ -1320,7 +1321,7 @@ class CatalogAgent(Actor):
         msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
         return {"ok": True, "message": msg, "agent": name}

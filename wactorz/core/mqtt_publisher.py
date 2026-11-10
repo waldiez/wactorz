@@ -26,7 +26,7 @@ from typing import Any
 
 from .cancellation import cancel_until_done
 from .mqtt import publish_properties
-from .topics import publish_topic_error
+from .topics import NODES, TASK_BY_NAME, TASK_BY_NODE, publish_topic_error, root_prefix
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -85,9 +85,9 @@ class MQTTPublisher:
 
     # Topics that must use QoS 1 regardless of caller setting
     _CRITICAL_TOPIC_PREFIXES = (
-        "nodes/",  # spawn, stop, desired_state
-        "agents/by-name/",  # tasks by name, and replies to them
-        "agents/at/",  # tasks by node, and replies to them
+        root_prefix(NODES),  # spawn, stop, desired_state
+        f"{TASK_BY_NAME}/",  # tasks by name, and replies to them
+        f"{TASK_BY_NODE}/",  # tasks by node, and replies to them
     )
     # Topics that are purely telemetry — always QoS 0 to avoid queue bloat
     _TELEMETRY_TOPIC_SUFFIXES = (
@@ -348,16 +348,18 @@ class MQTTPublisher:
         """
         now = time.time()
         # Commands: non-retained messages on the control plane, the prefixes in
-        # `_CRITICAL_TOPIC_PREFIXES`. `_` is a LIKE wildcard, and none appears in them.
-        rules: list[tuple[str, str, float, str]] = [
+        # `_CRITICAL_TOPIC_PREFIXES`, compared exactly rather than with LIKE, whose
+        # `_` and `%` would be wildcards inside a prefix.
+        prefixes = self._CRITICAL_TOPIC_PREFIXES
+        on_control_plane = " OR ".join("substr(topic, 1, ?) = ?" for _ in prefixes)
+        prefix_params = tuple(value for p in prefixes for value in (len(p), p))
+        # S608 below: the fragment is literal, and every value is bound.
+        rules: list[tuple[str, str, tuple[float | int | str, ...], str]] = [
             (
-                "SELECT topic, COUNT(*) FROM outbox WHERE retain = 0 AND ts < ?"
-                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%'"
-                " OR topic LIKE 'agents/at/%') GROUP BY topic",
-                "DELETE FROM outbox WHERE retain = 0 AND ts < ?"
-                " AND (topic LIKE 'nodes/%' OR topic LIKE 'agents/by-name/%'"
-                " OR topic LIKE 'agents/at/%')",
-                now - self.COMMAND_EXPIRY_S,
+                "SELECT topic, COUNT(*) FROM outbox WHERE retain = 0 AND ts < ?"  # noqa: S608
+                f" AND ({on_control_plane}) GROUP BY topic",
+                f"DELETE FROM outbox WHERE retain = 0 AND ts < ? AND ({on_control_plane})",  # noqa: S608
+                (now - self.COMMAND_EXPIRY_S, *prefix_params),
                 f"{self.COMMAND_EXPIRY_S / 60:g} minutes",
             )
         ]
@@ -366,7 +368,7 @@ class MQTTPublisher:
                 (
                     "SELECT topic, COUNT(*) FROM outbox WHERE ts < ? GROUP BY topic",
                     "DELETE FROM outbox WHERE ts < ?",
-                    now - self._dead_letter_days * 86400,
+                    (now - self._dead_letter_days * 86400,),
                     f"{self._dead_letter_days:g} days",
                 )
             )
@@ -374,10 +376,10 @@ class MQTTPublisher:
         try:
             with self._db_lock:
                 db = self._connect()
-                for select, delete, cutoff, age in rules:
-                    rows = db.execute(select, (cutoff,)).fetchall()
+                for select, delete, params, age in rules:
+                    rows = db.execute(select, params).fetchall()
                     if rows:
-                        db.execute(delete, (cutoff,))
+                        db.execute(delete, params)
                         expired.extend((topic, count, age) for topic, count in rows)
                 if expired:
                     db.commit()

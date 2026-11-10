@@ -83,6 +83,7 @@ from typing import Any
 from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import WactorzDB, get_db
+from wactorz.core.topics import agent_topic
 from wactorz.data.files import clock_ahead, event_time_of
 
 logger: logging.Logger = logging.getLogger("timeseries-collector")
@@ -180,7 +181,7 @@ def _route_detections(buffer: Rows, now: float, topic: str, payload: dict[str, A
     detections = payload.get("detections", [])
     if not detections and "class" in payload:
         detections = [payload]
-    src_agent = payload.get("agent", topic.split("/")[-1] if "/" in topic else "")
+    src_agent = payload.get("agent", topic.rsplit("/", 1)[-1] if "/" in topic else "")
     for det in detections:
         buffer.append(
             (
@@ -496,7 +497,7 @@ def _storage_report(agent: AgentAPI) -> dict[str, Any]:
 async def _publish_storage_report(agent: AgentAPI) -> dict[str, Any]:
     report = _storage_report(agent)
     if "error" not in report:
-        await agent.publish(f"agents/{agent.actor_id}/storage", report)
+        await agent.publish(agent_topic(agent.actor_id, "storage"), report)
     return report
 
 
@@ -532,7 +533,7 @@ async def setup(agent: AgentAPI) -> None:
 
     # Declare TopicBus contract — publishes only the hourly storage report
     agent.declare_contract(
-        publishes=[f"agents/{agent.actor_id}/storage"],
+        publishes=[agent_topic(agent.actor_id, "storage")],
         subscribes=topics,
     )
 

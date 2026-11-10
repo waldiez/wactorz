@@ -15,6 +15,7 @@ from model import STATE_DIR
 from triage import triage
 
 import wactorz
+from wactorz.core.topics import pipeline_topic
 
 #: `report` counts on one thread per topic, anomalies and ticks; the lock keeps
 #: a tick from reading the count while an anomaly is adding to it.
@@ -28,7 +29,7 @@ async def notify(anomaly: dict, me: wactorz.FunctionAgent) -> None:
 
 
 @wactorz.agent(
-    subscribes=["anomalies/imu", "pipelines/imu-watch/tick"],
+    subscribes=["anomalies/imu", pipeline_topic("imu-watch", "tick")],
     publishes="reports/imu",
     description="A count of anomalies since the last tick.",
 )

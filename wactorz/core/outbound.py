@@ -24,6 +24,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from .topics import agent_topic
+
 #: The channel a message goes to when none is named: the dashboard shows every
 #: ``agents/<id>/chat`` frame, so a message for it needs no delivery of its own.
 DASHBOARD = "dashboard"
@@ -130,7 +132,7 @@ def check_channel(channel: str) -> str:
 
 def answer_topic(agent_id: str) -> str:
     """The topic a channel publishes the person's pick on, for the agent that asked."""
-    return f"agents/{agent_id}/{ANSWER_LEAF}"
+    return agent_topic(agent_id, ANSWER_LEAF)
 
 
 @dataclass(frozen=True)

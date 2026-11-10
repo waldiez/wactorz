@@ -26,6 +26,7 @@ from ..core.mqtt import (
 )
 from ..core.outbound import numbered
 from ..core.persistence.db import ChatRow
+from ..core.topics import NODES, node_topic, own_topic_parts
 from ..monitoring.log_redaction import redact
 from . import cost, db_writer, events, relay, runtime, withdrawals, ws
 from . import questions as question_ledger
@@ -130,8 +131,8 @@ async def system_started(*, with_main: bool) -> None:
 
 
 def _is_node_heartbeat(topic: str) -> bool:
-    parts = topic.split("/")
-    return len(parts) == 3 and parts[0] == "nodes" and parts[2] == "heartbeat"
+    parts = own_topic_parts(topic)
+    return parts is not None and len(parts) == 3 and parts[0] == NODES and parts[2] == "heartbeat"
 
 
 async def _watch_main_nodes() -> bool:
@@ -158,7 +159,7 @@ async def _watch_main_nodes() -> bool:
 
 async def _show_node_heartbeat(node: str, taken: dict[str, Any]) -> None:
     """Show the browsers a heartbeat as main took it."""
-    await _dispatch(f"nodes/{node}/heartbeat", json.dumps(taken))
+    await _dispatch(node_topic(node, "heartbeat"), json.dumps(taken))
 
 
 async def _dispatch(topic: str, payload: str) -> None:

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from wactorz.llm_factory import provider_for
 
+from ...core.topics import agent_topic
 from ..mixins import agent_type
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
@@ -530,7 +531,7 @@ class PlanningMixin(_Host):
         )
 
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Complex task detected — spawning planner ({mode})...",

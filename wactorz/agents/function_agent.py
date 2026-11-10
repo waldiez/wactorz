@@ -52,6 +52,7 @@ from ..core import models
 from ..core.actor import Actor, Message, MessageType, run_callable
 from ..core.paths import resolve_state_dir
 from ..core.subscriptions import ConcurrencyError
+from ..core.topics import agent_topic
 from .shadow_serving import PairRecorder, ShadowView, flush_every, now_ms, pair_row, shadow_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -541,7 +542,7 @@ class FunctionAgent(Actor):
         """Say something on the dashboard feed, under this agent's name."""
         getattr(logger, level, logger.info)("[%s] %s", self.name, message)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": message, "timestamp": time.time()},
         )
 

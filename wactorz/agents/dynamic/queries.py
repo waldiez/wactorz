@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from ...core import topic_bus
 from ...core.persistence import get_db
+from ...core.topics import agent_topic
 from .awaitable import AwaitableDict, AwaitableList, awaitable_frame
 
 if TYPE_CHECKING:
@@ -55,7 +56,7 @@ class QueriesMixin(_Host):
         if bus:
             await bus.state_hub.publish_agent_data(self.name, key, data)
         else:
-            topic = f"agents/{self.name}/data/{key}"
+            topic = agent_topic(self.name, "data", key)
             await self.publish(topic, data)
 
     async def read_world_state(self, topic: str, timeout: float = 2.0) -> Any | None:

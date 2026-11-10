@@ -25,6 +25,7 @@ from typing import Any
 
 from ..agents.lookup import find_main_actor
 from ..agents.main.lifecycle import STANDS
+from ..core.topics import AGENTS, agent_topic, own_topic_parts
 from . import cost, events, runtime, ws
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -41,8 +42,8 @@ MANIFEST_LEAF = "manifest"
 
 def withdrawn_agent(topic: str, payload: str) -> str:
     """The agent id ``topic`` and ``payload`` withdraw, or "" when they are not a withdrawal."""
-    parts = topic.split("/")
-    if len(parts) == 3 and parts[0] == "agents" and parts[2] == MANIFEST_LEAF:
+    parts = own_topic_parts(topic)
+    if parts is not None and len(parts) == 3 and parts[0] == AGENTS and parts[2] == MANIFEST_LEAF:
         return parts[1] if parts[1] and not payload.strip() else ""
     return ""
 
@@ -105,7 +106,7 @@ async def release() -> None:
     _held.clear()
     for agent_id in held:
         try:
-            await main.manifests.receive_manifest(f"agents/{agent_id}/{MANIFEST_LEAF}", b"")
+            await main.manifests.receive_manifest(agent_topic(agent_id, MANIFEST_LEAF), b"")
         except Exception:
             logger.exception("[withdrawals] Main could not take %s's withdrawal", agent_id[:8])
 

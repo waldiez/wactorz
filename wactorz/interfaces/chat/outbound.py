@@ -35,11 +35,12 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.outbound import Answer, OutboundMessage, check_options, pick_option
+from ...core.topics import AGENTS, agent_topic, own_topic_parts
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 #: Every agent's chat frames, whichever machine the agent is on.
-CHAT_FRAMES = "agents/+/chat"
+CHAT_FRAMES = agent_topic("+", "chat")
 
 #: How long the outbox waits before dialling the broker again after losing it.
 RECONNECT_SECONDS = 5.0
@@ -254,8 +255,8 @@ class Outbox:
 
     async def handle_frame(self, topic: str, payload: str) -> bool:
         """Deliver the message in one broker frame, if it is one. True when delivered."""
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "agents" or parts[2] != "chat":
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != AGENTS or parts[2] != "chat":
             return False
         try:
             data = json.loads(payload)

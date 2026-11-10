@@ -478,6 +478,31 @@ class TestWhoSigns:
         assert unsigned == []
 
 
+def _control_leaf(topic: ast.expr) -> str | None:
+    """The leaf of a node topic written in place, ``f"nodes/{x}/<leaf>"`` or
+    ``node_topic(x, "<leaf>")``; None for any other expression."""
+    if isinstance(topic, ast.JoinedStr):
+        head, tail = topic.values[0], topic.values[-1]
+        if (
+            isinstance(head, ast.Constant)
+            and str(head.value).startswith("nodes/")
+            and isinstance(tail, ast.Constant)
+            and str(tail.value).count("/") == 1
+        ):
+            return str(tail.value).lstrip("/")
+        return None
+    if (
+        isinstance(topic, ast.Call)
+        and isinstance(topic.func, ast.Name)
+        and topic.func.id == "node_topic"
+        and len(topic.args) == 2
+        and isinstance(topic.args[1], ast.Constant)
+        and isinstance(topic.args[1].value, str)
+    ):
+        return topic.args[1].value
+    return None
+
+
 def _control_publishes() -> tuple[int, list[str]]:
     found = 0
     unsigned: list[str] = []
@@ -489,17 +514,7 @@ def _control_publishes() -> tuple[int, list[str]]:
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "publish"
                 and node.args
-                and isinstance(node.args[0], ast.JoinedStr)
-            ):
-                continue
-            parts = node.args[0].values
-            head, tail = parts[0], parts[-1]
-            if not (
-                isinstance(head, ast.Constant)
-                and str(head.value).startswith("nodes/")
-                and isinstance(tail, ast.Constant)
-                and str(tail.value).count("/") == 1
-                and str(tail.value).lstrip("/") in node_signing.CONTROL_LEAVES
+                and _control_leaf(node.args[0]) in node_signing.CONTROL_LEAVES
             ):
                 continue
             payload = node.args[1] if len(node.args) > 1 else None

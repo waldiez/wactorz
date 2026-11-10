@@ -59,6 +59,7 @@ from typing import TYPE_CHECKING, Any
 
 from .addresses import MAIN_NODE, Address, node_of
 from .labels import event_time
+from .topics import AGENTS, MAIN, NODES, SYSTEM, agent_topic, root_prefix
 
 if TYPE_CHECKING:
     from .mqtt_publisher import MQTTPublisher
@@ -253,7 +254,7 @@ class TopicContract:
 
 
 #: Topics that are the system's own machinery, never data.
-_MACHINERY = ("nodes/", "system/", "main/", "$SYS/")
+_MACHINERY = (root_prefix(NODES), root_prefix(SYSTEM), root_prefix(MAIN), "$SYS/")
 
 
 def is_machinery(topic: str) -> bool:
@@ -263,7 +264,7 @@ def is_machinery(topic: str) -> bool:
     """
     if topic.startswith(_MACHINERY):
         return True
-    return topic.startswith("agents/") and "/data" not in topic
+    return topic.startswith(root_prefix(AGENTS)) and "/data" not in topic
 
 
 def sample_of(payload: dict[str, Any]) -> dict[str, Any]:
@@ -570,7 +571,6 @@ class SharedStateHub:
     PRESENCE_TOPIC = "home/presence/{zone}"
     ENERGY_TOPIC = "home/energy/current"
     HA_STATE_TOPIC = "home/state/{domain}/{entity_id}"
-    AGENT_DATA_TOPIC = "agents/{name}/data/{key}"
 
     def __init__(self, mqtt_client: MQTTPublisher | None) -> None:
         self._mqtt = mqtt_client
@@ -632,7 +632,7 @@ class SharedStateHub:
 
     async def publish_agent_data(self, agent_name: str, key: str, data: Any) -> None:
         """Publish a named piece of world state from an agent."""
-        topic = self.AGENT_DATA_TOPIC.format(name=agent_name, key=key)
+        topic = agent_topic(agent_name, "data", key)
         await self.publish_state(topic, data)
 
     def get_cached(self, topic: str) -> Any | None:

@@ -16,9 +16,10 @@ import json
 from typing import Any, NamedTuple
 
 from .addresses import Address, Resolution, node_of, resolve
+from .topics import AGENTS, agent_topic, own_topic_parts
 
 #: What a node subscribes to for the directory.
-MANIFESTS = "agents/+/manifest"
+MANIFESTS = agent_topic("+", "manifest")
 
 
 class _Entry(NamedTuple):
@@ -39,8 +40,8 @@ class AgentDirectory:
         An agent's manifest names its node; one that names none is main's own.
         A manifest this cannot read is ignored, as main ignores one.
         """
-        parts = topic.split("/")
-        if len(parts) != 3 or parts[0] != "agents" or parts[2] != "manifest":
+        parts = own_topic_parts(topic)
+        if parts is None or len(parts) != 3 or parts[0] != AGENTS or parts[2] != "manifest":
             return
         actor_id = parts[1]
         if not payload:

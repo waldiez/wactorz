@@ -40,6 +40,7 @@ from ...core.mqtt import (
     user_properties,
 )
 from ...core.node_publications import admit
+from ...core.topics import main_topic
 
 if TYPE_CHECKING:
     from .hosts import DelegationHost
@@ -152,7 +153,7 @@ class DelegationManager:
         losing the answer is worse than losing the work. The reason is logged, so
         a timeout that follows is explained rather than mysterious.
         """
-        topic = f"main/reply/{self.host.actor_id}/{uuid.uuid4().hex[:8]}"
+        topic = main_topic("reply", self.host.actor_id, uuid.uuid4().hex[:8])
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self.host._result_futures[topic] = future
         subscribed = asyncio.Event()

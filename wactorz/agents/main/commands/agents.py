@@ -11,6 +11,7 @@ import logging
 from ....core.actor import ActorState
 from ....core.addresses import MAIN_NODE, node_of
 from ....core.state_snapshot import FORCE_FLAG
+from ....core.topics import node_topic
 from ..addresses import Registered, registered_agent
 from ..turn_actions import TurnActions
 from .dispatch import CommandContext, command
@@ -84,7 +85,9 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
     if not agent_name:
         return "Usage: /agents restart <agent-name>"
     if node:
-        await ctx.actor._mqtt_publish(f"nodes/{node}/restart_agent", {"name": agent_name}, qos=1)
+        await ctx.actor._mqtt_publish(
+            node_topic(node, "restart_agent"), {"name": agent_name}, qos=1
+        )
         return (
             f"Restart signal sent to '{agent_name}' on node '{node}'. "
             f"State is preserved — the agent will resume from its last saved state."
@@ -251,7 +254,7 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
     if node:
         # Remote agent — plain stop (no delete flag), keep registry
         # so /agents restart can resume it cleanly later.
-        await ctx.actor._mqtt_publish(f"nodes/{node}/stop", {"name": agent_name}, qos=1)
+        await ctx.actor._mqtt_publish(node_topic(node, "stop"), {"name": agent_name}, qos=1)
         ctx.actor._record_agent_deletion(
             agent_name, reason=f"manually {past} via /agents on node '{node}'"
         )

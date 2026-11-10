@@ -50,8 +50,10 @@ from pathlib import Path
 from typing import Any
 
 from .._version import __version__
+from ..core.topics import owner_of
 from .mqtt import publish_properties
 from .paths import ensure_state_dir
+from .topics import NODES, own_topic_parts
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -117,8 +119,14 @@ class UnreadableSigningKeyError(ValueError):
 
 def control_leaf(topic: str) -> str | None:
     """The control command ``topic`` names, or None if it is not a node's control topic."""
-    parts = topic.split("/")
-    if len(parts) == 3 and parts[0] == "nodes" and parts[1] and parts[2] in CONTROL_LEAVES:
+    parts = own_topic_parts(topic)
+    if (
+        parts is not None
+        and len(parts) == 3
+        and parts[0] == NODES
+        and parts[1]
+        and parts[2] in CONTROL_LEAVES
+    ):
         return parts[2]
     return None
 
@@ -216,7 +224,7 @@ def node_control_properties(topic: str, payload: Any) -> list[tuple[str, str]] |
         return None
     version = (VERSION_PROPERTY, __version__)
     try:
-        key = bytes.fromhex(node_key(topic.split("/")[1]))
+        key = bytes.fromhex(node_key(owner_of(topic, NODES)))
         sequence = next_sequence()
     except (OSError, ValueError):
         # Sent rather than dropped: a node deployed before signing still acts on

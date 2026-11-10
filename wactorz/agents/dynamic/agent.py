@@ -35,6 +35,7 @@ from ...core.heartbeats import DynamicAgentHeartbeat
 from ...core.paths import resolve_state_dir
 from ...core.questions import Question
 from ...core.state_versions import StateUpgradeError
+from ...core.topics import agent_topic
 from ...core.turns import current_turn, outside_any_turn
 from ...monitoring import agent_metrics
 from ..llm_agent import accumulate_global_cost
@@ -262,7 +263,7 @@ class DynamicAgent(Actor):
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(fixed)
                     await self._mqtt_publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {
                             "type": "log",
                             "message": f"Syntax error fixed by LLM after {attempt} attempt(s).",
@@ -444,7 +445,7 @@ class DynamicAgent(Actor):
         """The last metrics before the heartbeat loop stops, flagged final."""
         try:
             await self._mqtt_publish(
-                f"agents/{self.actor_id}/metrics",
+                agent_topic(self.actor_id, "metrics"),
                 self._build_metrics()
                 if hasattr(self, "_build_metrics")
                 else {
@@ -671,7 +672,7 @@ class DynamicAgent(Actor):
         )
         logger.warning("[%s] %s", self.name, reason)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": reason, "timestamp": time.time()},
         )
         return reason
@@ -701,7 +702,7 @@ class DynamicAgent(Actor):
         )
         logger.info("[%s] Asking LLM to fix syntax error: %s", self.name, error_msg[:120])
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Syntax error — asking LLM to fix: {error_msg[:120]}",
@@ -752,7 +753,7 @@ class DynamicAgent(Actor):
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(self._code)
                     await self._mqtt_publish(
-                        f"agents/{self.actor_id}/logs",
+                        agent_topic(self.actor_id, "logs"),
                         {
                             "type": "log",
                             "message": f"setup() runtime error fixed by LLM after {attempt} attempt(s).",
@@ -955,7 +956,7 @@ class DynamicAgent(Actor):
         )
         logger.info("[%s] Asking LLM to fix runtime error: %s", self.name, error_msg[:120])
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"Runtime error — asking LLM to fix: {error_msg[:120]}",
@@ -1064,7 +1065,7 @@ class DynamicAgent(Actor):
             phase,
         )
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {
                 "type": "log",
                 "message": f"{phase} runtime error fixed by LLM in-place.",
@@ -1433,7 +1434,7 @@ class DynamicAgent(Actor):
             event["turn"] = turn
         # QoS 1, for the same reason as chat: an error frame lost during a
         # monitor reconnect is the one an operator most wants to have seen.
-        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event, qos=1)
+        await self._mqtt_publish(agent_topic(self.actor_id, "errors"), event, qos=1)
         # Direct actor message to monitor (works without MQTT broker)
         if self._registry:
             monitor = self._registry.find_by_name("monitor")
@@ -1453,7 +1454,7 @@ class DynamicAgent(Actor):
                     )
         # Mirror to /alert so the dashboard picks it up immediately
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/alert",
+            agent_topic(self.actor_id, "alert"),
             {
                 "actor_id": self.actor_id,
                 "name": self.name,

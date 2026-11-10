@@ -69,6 +69,7 @@ from ...core.mqtt import (
 )
 from ...core.paths import resolve_state_dir
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
+from ...core.topics import NODES, node_topic, own_topic_parts
 from ...plugins import MODULE_TYPE, is_module_config
 from ..mixins import installed_packages
 from .addresses import registered_agent
@@ -274,9 +275,9 @@ class Migration:
                     identifier=client_id("srv", install_id(), "migration"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/state_return", qos=1)
-                    await client.subscribe("nodes/+/spawn_ack", qos=1)
-                    await client.subscribe("nodes/+/blob_return/+", qos=1)
+                    await client.subscribe(node_topic("+", "state_return"), qos=1)
+                    await client.subscribe(node_topic("+", "spawn_ack"), qos=1)
+                    await client.subscribe(node_topic("+", "blob_return", "+"), qos=1)
                     logger.info("[main] Subscribed to state_return topics.")
                     last_error = None
                     async for message in client.messages:
@@ -848,7 +849,7 @@ class Migration:
         if self.host is None or not from_node or from_node == LOCAL_SOURCE:
             return
         await self.host._mqtt_publish(
-            f"nodes/{from_node}/stop",
+            node_topic(from_node, "stop"),
             {"name": agent_name, "delete": True},
             qos=1,
         )
@@ -930,7 +931,7 @@ class Migration:
         # manifest reads as that copy withdrawing, and the registry forgets
         # the agent this rollback exists to keep.
         await self.host._mqtt_publish(
-            f"nodes/{target_node}/stop",
+            node_topic(target_node, "stop"),
             {"name": agent_name, "delete": True, "keep_topics": True},
             qos=1,
         )
@@ -1362,7 +1363,7 @@ class Migration:
         }
         self._save_pending()
         await host._mqtt_publish(
-            f"nodes/{from_node}/migrate",
+            node_topic(from_node, "migrate"),
             self._hand_back_request(agent_name, return_token, force),
             qos=1,
         )
@@ -1591,7 +1592,7 @@ class Migration:
         wire_agents = [self.host._inject_llm_bridge_code(cfg) for cfg in agents.values()]
 
         await self.host._mqtt_publish(
-            f"nodes/{node}/desired_state",
+            node_topic(node, "desired_state"),
             {"node": node, "agents": wire_agents, "timestamp": time.time()},
             retain=True,
             qos=1,
@@ -1619,13 +1620,13 @@ def _misaddressed(topic: str, data: Mapping[str, Any], agent: str, node: str) ->
     migration: the real answer, a moment later, would find nothing waiting.
     Dropped without spending, the migration stands and the right answer lands.
     """
-    parts = topic.split("/")
-    sender = parts[1] if len(parts) > 2 and parts[0] == "nodes" else ""
+    parts = own_topic_parts(topic) or []
+    sender = parts[1] if len(parts) > 2 and parts[0] == NODES else ""
     if data.get("agent") == agent and sender == node:
         return False
     logger.warning(
         "[main] %s quotes the token for %r on %r but names %r on %r — ignoring",
-        parts[-1],
+        topic.rsplit("/", 1)[-1],
         agent,
         node,
         data.get("agent"),

@@ -32,11 +32,12 @@ import time
 from typing import Any
 
 from ...core.persistence import get_db
+from ...core.topics import main_topic
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 #: The topic agents on nodes publish their history reads to.
-HISTORY_TOPIC = "main/history_request"
+HISTORY_TOPIC = main_topic("history_request")
 
 #: What one reply's rows may take, encoded. Under the broker's packet limit with
 #: room for the reply's own fields and the topic.

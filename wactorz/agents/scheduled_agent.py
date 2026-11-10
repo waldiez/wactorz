@@ -70,6 +70,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..core.actor import Actor, Message, MessageType
+from ..core.topics import agent_topic
 from .lookup import find_main_actor
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -678,7 +679,7 @@ class ScheduledAgent(Actor):
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
+            agent_topic(self.actor_id, "logs"),
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
 

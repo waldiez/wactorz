@@ -38,6 +38,7 @@ from ..agents.lookup import find_main_actor
 from ..agents.main.labels import admit_book
 from ..core.outbound import Answer, numbered
 from ..core.questions import ANSWERED_KEPT, QUESTIONS_LEAF, Question, questions_in_frame
+from ..core.topics import AGENTS, own_topic_parts, owner_of
 from ..monitoring.log_redaction import redact
 from . import runtime
 
@@ -93,8 +94,10 @@ class NotAnOptionError(AnswerRefusedError):
 
 def is_book_topic(topic: str) -> bool:
     """Whether ``topic`` is an agent's question book, ``agents/<id>/questions``."""
-    parts = topic.split("/")
-    return len(parts) == 3 and parts[0] == "agents" and parts[2] == QUESTIONS_LEAF
+    parts = own_topic_parts(topic)
+    return (
+        parts is not None and len(parts) == 3 and parts[0] == AGENTS and parts[2] == QUESTIONS_LEAF
+    )
 
 
 def receive(topic: str, payload: bytes, properties: Mapping[str, str]) -> tuple[str, str] | None:
@@ -136,7 +139,7 @@ def release() -> list[tuple[str, str]]:
 
 
 def _hold(topic: str, payload: bytes, properties: dict[str, str]) -> None:
-    agent_id = topic.split("/")[1]
+    agent_id = owner_of(topic, AGENTS)
     _held.pop(agent_id, None)
     _held[agent_id] = (topic, payload, properties)
     while len(_held) > HELD_KEPT:

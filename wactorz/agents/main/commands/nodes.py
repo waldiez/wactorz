@@ -7,6 +7,7 @@ opposite afterwards, which is why each says what it is about to affect.
 """
 
 from ....core.node_operations import COMMAND_TIMEOUT_S
+from ....core.topics import node_topic
 from .dispatch import CommandContext, command
 from .groups import NODES
 
@@ -46,11 +47,11 @@ async def remove_node(ctx: CommandContext, argument: str) -> str:
     # Clear the retained desired state, which is what would otherwise bring the
     # node's agents back when it next reconciles. The spawn message is not
     # retained, so there is nothing of it left to clear.
-    await ctx.actor._mqtt_publish(f"nodes/{node_name}/desired_state", b"", retain=True)
+    await ctx.actor._mqtt_publish(node_topic(node_name, "desired_state"), b"", retain=True)
     # And the retained manifest, which would otherwise describe the machine to
     # every main that connects, for a node no longer there.
-    await ctx.actor._mqtt_publish(f"nodes/{node_name}/manifest", b"", retain=True)
-    await ctx.actor._mqtt_publish(f"nodes/{node_name}/stop_all", {"reason": "removed"}, qos=1)
+    await ctx.actor._mqtt_publish(node_topic(node_name, "manifest"), b"", retain=True)
+    await ctx.actor._mqtt_publish(node_topic(node_name, "stop_all"), {"reason": "removed"}, qos=1)
     # Remove all agents for this node from spawn registry
     placed = ctx.actor._get_spawn_registry().on_node(node_name)
     removed = [c["name"] for c in placed]
@@ -110,7 +111,9 @@ async def restart_node(ctx: CommandContext, argument: str) -> str:
     info = ctx.actor._known_nodes.get(node_name)
     if not info:
         return f"Node '{node_name}' is not known. Check /nodes for online nodes."
-    await ctx.actor._mqtt_publish(f"nodes/{node_name}/restart", {"reason": "user request"}, qos=1)
+    await ctx.actor._mqtt_publish(
+        node_topic(node_name, "restart"), {"reason": "user request"}, qos=1
+    )
     return (
         f"Restart signal sent to node '{node_name}'. "
         f"It will briefly drop offline then reappear within ~15s."
@@ -129,7 +132,9 @@ async def shutdown_node(ctx: CommandContext, argument: str) -> str:
     node_name = argument
     if not node_name:
         return "Usage: /nodes shutdown <node-name>"
-    await ctx.actor._mqtt_publish(f"nodes/{node_name}/stop_all", {"reason": "user request"}, qos=1)
+    await ctx.actor._mqtt_publish(
+        node_topic(node_name, "stop_all"), {"reason": "user request"}, qos=1
+    )
     return (
         f"Shutdown signal sent to node '{node_name}'. "
         f"All agents will stop. The node will disappear from /nodes within 30s. "

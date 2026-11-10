@@ -400,6 +400,7 @@ class DynamicAgent(Actor):
                     len(still_running),
                 )
         self._program_tasks = [task for task in self._program_tasks if not task.done()]
+        subscribed = bool(self._subscribed_topics)
         self._subscribed_topics.clear()
         # The subscription connection is shared and outlives any one program, so
         # cancelling tasks above does not stop its callbacks. Unbind explicitly.
@@ -407,6 +408,12 @@ class DynamicAgent(Actor):
         if hub is not None:
             await hub.clear()
         release_open_resources(self._api, self._ns, self.name)
+        if subscribed and self.state not in (ActorState.STOPPED, ActorState.FAILED):
+            # The manifest names what the program subscribes to, and that is now
+            # nothing: say so, or main goes on listing the old program's topics
+            # if the repaired one subscribes to none. Not on a stop, which
+            # withdraws the manifest instead.
+            await self._api._publish_manifest()
 
     async def _replace_program(self, fixed: str) -> str | None:
         """Swap the running program for repaired code and start it from setup().

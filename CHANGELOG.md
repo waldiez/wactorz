@@ -488,6 +488,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **What an agent subscribes to shows in the Wiring view and reaches the planner**, for an agent that subscribes with
+  `agent.subscribe()` and declares no contract. Its manifest now names its subscriptions as it names what it
+  publishes, and is sent again for each new one. On main such an agent dropped out of the view now and then; on a node
+  its subscriptions never reached main at all.
 - **On Windows, files are served whole.** Wactorz runs on the selector event loop there, whose `sendfile` falls back to a
   copy that sends wrong bytes to a reader slower than the disk: the dashboard failed to load on some refreshes
   (`Uncaught SyntaxError` in its bundle), and the docs, attachments and extension panels it serves as files could arrive

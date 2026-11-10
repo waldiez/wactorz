@@ -32,6 +32,11 @@ else:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _subscribed(actor: Any) -> set[str]:
+    """The topics ``actor``'s program subscribes to now, each once."""
+    return {topic for topic, _callback in getattr(actor, "_subscribed_topics", {})}
+
+
 def _union(*groups: Any) -> list[str]:
     """Every topic in ``groups``, once each, in a stable order.
 
@@ -162,6 +167,7 @@ class StreamsMixin(_Host):
         if sub_key in actor._subscribed_topics:
             logger.debug("[%s] Already subscribed to %s — skipping duplicate", actor.name, topic)
             return AWAITABLE_NONE
+        is_new_topic = topic not in _subscribed(actor)
         actor._subscribed_topics[sub_key] = callback
 
         # One connection per actor carries every subscription, so this may or may
@@ -176,6 +182,11 @@ class StreamsMixin(_Host):
         # namespace's callbacks being reached.
 
         _register_with_topic_bus(self, actor, topic)
+        if is_new_topic:
+            # The manifest is how main and every other host learn what this agent
+            # reads, as a new publish is for what it writes: main mirrors it into
+            # its registry, and for an agent on a node it is the only route.
+            actor.run_detached(self._publish_manifest(), name="manifest")
 
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         # LLMs frequently add `await` because setup() is async — this makes it safe.
@@ -203,8 +214,8 @@ class StreamsMixin(_Host):
             # before the first of them — so the planner can see a topic this
             # agent exists to produce before it has produced one.
             "publishes": _union(self._published_topics, contract.publishes if contract else []),
-            # TopicContract fields — populated via declare_contract()
-            "subscribes": contract.subscribes if contract else [],
+            # What the program subscribes to, and anything the contract names.
+            "subscribes": _union(_subscribed(actor), contract.subscribes if contract else []),
             "triggers_when": contract.triggers_when if contract else {},
             "produces_schema": contract.produces_schema if contract else {},
             "consumes_schema": contract.consumes_schema if contract else {},

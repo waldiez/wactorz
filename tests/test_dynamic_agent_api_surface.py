@@ -377,7 +377,7 @@ class TestSubscribeBookkeeping:
         assert inspect.isawaitable(result)
         assert getattr(api._actor, "_sub_hub", None) is None, "no second listener was bound"
 
-    def test_a_callback_that_cannot_be_inspected_is_allowed_through(
+    async def test_a_callback_that_cannot_be_inspected_is_allowed_through(
         self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         bound: list[str] = []

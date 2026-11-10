@@ -91,7 +91,7 @@ class TestPublishing:
 
 
 class TestReading:
-    def test_a_subscription_is_bound_once_under_the_namespace(
+    async def test_a_subscription_is_bound_once_under_the_namespace(
         self, api: AgentAPI, bus: TopicBus
     ) -> None:
         api.subscribe("agents/a1/answer", _ignore)

@@ -208,8 +208,11 @@ def api_fixture(tmp_path: Path) -> AgentAPI:
 
 
 def _hub_task(api: AgentAPI) -> Any:
-    """The one connection every subscription on this agent shares."""
-    (task,) = [t for t in api._actor._tasks if not t.done()]
+    """The one connection every subscription on this agent shares.
+
+    Not the manifest a first subscription republishes, which runs beside it.
+    """
+    (task,) = [t for t in api._actor._tasks if not t.done() and t.get_name() != "manifest"]
     return task
 
 

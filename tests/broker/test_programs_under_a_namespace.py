@@ -3,7 +3,7 @@
 
 Run by `make test-broker` twice: with no namespace, and with ``WACTORZ_NAMESPACE``
 set. One program publishes on ``agents/<id>/data/level`` and declares it; another
-subscribes to ``agents/+/data/level`` and declares that. Both are written the way a model writes
+subscribes to ``agents/+/data/level``, declaring nothing. Both are written the way a model writes
 them, bare. What travels is the namespaced topic, the reader hears the writer,
 the wiring the dashboard is sent pairs them and shows them bare, and so does the
 frame the dashboard is sent for a message on it.
@@ -27,7 +27,7 @@ from wactorz.core.wiring import wiring
 from wactorz.web import mqtt as web_mqtt
 from wactorz.web.wiring import displayed
 
-from .conftest import WAIT_S, until
+from .conftest import WAIT_S, FastNode, until
 
 pytestmark = [pytest.mark.real_mqtt_client, pytest.mark.timeout(180)]
 
@@ -46,7 +46,6 @@ async def setup(agent):
         agent.state["heard"] = agent.state.get("heard", 0) + 1
 
     agent.subscribe("agents/+/data/level", on_level)
-    agent.declare_contract(subscribes=["agents/+/data/level"])
 """
 
 
@@ -113,3 +112,21 @@ async def test_a_program_written_bare_works_under_the_namespace(
         await web_mqtt.broadcast_mqtt_msg(arrived, json.dumps({"level": 3}))
     frame: dict[str, Any] = broadcast.call_args.args[0]
     assert frame["topic"] == written
+
+
+async def test_what_a_program_on_a_node_subscribes_to_reaches_main(
+    main: MainActor, node: FastNode
+) -> None:
+    # For an agent on a node the manifest is the only route its topics take to
+    # main; what main took off the broker is what is checked.
+    name = f"reader-{uuid.uuid4().hex[:6]}"
+    await main._spawn_remote(  # pyright: ignore[reportPrivateUsage]
+        {"name": name, "type": "dynamic", "code": READER}, node.node_name, save=False
+    )
+
+    def _subscribes() -> list[str]:
+        held = main.manifests.manifests.get(name) or {}
+        return list(held.get("subscribes", []) or [])
+
+    await until(lambda: _subscribes(), f"main holding what {name} on the node subscribes to")
+    assert _subscribes() == [wire_topic("agents/+/data/level")]

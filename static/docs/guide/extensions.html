@@ -358,9 +358,13 @@ called when another view opens; the tab is mounted again when it is opened again
 <td><code>chart(series, options)</code></td>
 <td>The dashboard's line chart, to place in <code>root</code>; returns <code>{element, update(series, options?), destroy()}</code> (below)</td>
 </tr>
+<tr>
+<td><code>setting(key)</code>, <code>onSetting(key, fn)</code></td>
+<td>What this browser chose for a setting the panel declared, and being told when it changes (below)</td>
+</tr>
 </tbody>
 </table>
-<p>What <code>onRoute</code>, <code>subscribe</code> and <code>chart</code> start ends with the panel, and each returns a function
+<p>What <code>onRoute</code>, <code>subscribe</code>, <code>onSetting</code> and <code>chart</code> start ends with the panel, and each returns a function
 (for <code>chart</code>, its <code>destroy</code>) that ends it sooner. A panel styles itself, inside <code>root</code>: it inherits the dashboard's
 text colour and font, and can read its CSS variables (<code>--af-text-dim</code>, <code>--af-focus</code>). A script that fails
 to load, exports no <code>mount</code>, was written for another <code>apiVersion</code> or throws says so in
@@ -424,6 +428,66 @@ chart of its own ends with the function <code>mount</code> returns, as anything 
 <span class="nx">root</span><span class="p">.</span><span class="nx">append</span><span class="p">(</span><span class="nx">chart</span><span class="p">.</span><span class="nx">element</span><span class="p">);</span>
 </code></pre></div>
 
+<p><strong>Its settings.</strong> A panel that has something for each person to choose declares it, and
+the dashboard draws it: a section of Settings named after the tab, at
+<code>#/settings/panel-&lt;name&gt;</code>, with a row per setting, laid out as the dashboard's own.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.ext</span><span class="w"> </span><span class="kn">import</span> <span class="n">Panel</span><span class="p">,</span> <span class="n">PanelSetting</span>
+
+<span class="n">Panel</span><span class="p">(</span>
+    <span class="n">title</span><span class="o">=</span><span class="s2">"Air"</span><span class="p">,</span>
+    <span class="n">script</span><span class="o">=</span><span class="n">HERE</span> <span class="o">/</span> <span class="s2">"panel.js"</span><span class="p">,</span>
+    <span class="n">settings</span><span class="o">=</span><span class="p">(</span>
+        <span class="n">PanelSetting</span><span class="p">(</span><span class="s2">"temperature"</span><span class="p">,</span> <span class="s2">"Temperature"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"choice"</span><span class="p">,</span>
+                     <span class="n">choices</span><span class="o">=</span><span class="p">((</span><span class="s2">"c"</span><span class="p">,</span> <span class="s2">"°C"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"f"</span><span class="p">,</span> <span class="s2">"°F"</span><span class="p">)),</span> <span class="n">default</span><span class="o">=</span><span class="s2">"c"</span><span class="p">,</span>
+                     <span class="n">hint</span><span class="o">=</span><span class="s2">"The unit the rooms' temperatures read in."</span><span class="p">),</span>
+        <span class="n">PanelSetting</span><span class="p">(</span><span class="s2">"compact"</span><span class="p">,</span> <span class="s2">"Compact cards"</span><span class="p">),</span>                      <span class="c1"># a switch, off</span>
+        <span class="n">PanelSetting</span><span class="p">(</span><span class="s2">"keep"</span><span class="p">,</span> <span class="s2">"Points kept"</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">"number"</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span> <span class="n">minimum</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">maximum</span><span class="o">=</span><span class="mi">2000</span><span class="p">),</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Drawn as</th>
+<th><code>default</code></th>
+<th>Also</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>switch</code> (when left out)</td>
+<td>An on/off switch</td>
+<td><code>True</code> or <code>False</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>choice</code></td>
+<td>A few choices side by side</td>
+<td>One of the values</td>
+<td><code>choices</code>: <code>(value, label)</code> pairs, in order</td>
+</tr>
+<tr>
+<td><code>number</code></td>
+<td>A number field</td>
+<td>A number</td>
+<td><code>minimum</code>, <code>maximum</code>, <code>step</code>, each optional</td>
+</tr>
+</tbody>
+</table>
+<p>A setting's <code>key</code> is lowercase letters, digits and <code>-</code>, and its <code>hint</code> is one line under
+its name. A setting that cannot be drawn (a default that is not among the choices or is
+out of range, a key used twice) is left out, the others stay, and the log says why.</p>
+<p>The values are each browser's own: the server describes the settings and never holds
+what was chosen. <code>host.setting("temperature")</code> answers with what this browser chose, the
+default until it has, and <code>undefined</code> for a key the panel did not declare. Settings is
+another view, so a panel reads its settings when it mounts; <code>host.onSetting(key, fn)</code>
+tells it of a change made meanwhile in another window of the same browser. A setting
+changes how the panel shows things, so keep what is published and stored as it is: the
+air-quality example converts to °F on display and its readings stay in °C. Both came
+within version 1, so a panel that may meet an older dashboard checks
+<code>typeof host.setting === "function"</code> first.</p>
 <p><strong>What a panel is trusted with.</strong> It runs in the page with the signed-in session, so
 it can do whatever the dashboard can: as much as the package's code already can on
 the server. So a tab is offered only for an extension whose <code>setup()</code> succeeded,
@@ -596,7 +660,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 <li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
 <li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
 <li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>
-<li>[ ] Optional <code>panel()</code> names a <code>.js</code> module exporting <code>apiVersion</code> and <code>mount(root, host)</code>, and an icon by name or an <code>.svg</code> on a 24 by 24 grid</li>
+<li>[ ] Optional <code>panel()</code> names a <code>.js</code> module exporting <code>apiVersion</code> and <code>mount(root, host)</code>, an icon by name or an <code>.svg</code> on a 24 by 24 grid, and any <code>settings</code> a person chooses per browser</li>
 <li>[ ] Config is read from <code>os.getenv(…)</code>, not <code>wactorz.config.CONFIG</code></li>
 <li>[ ] Extension no-ops gracefully when its env var / dependency is absent</li>
 <li>[ ] Frontend barrel exports a <code>register(config)</code> function; wires via the event bus</li>

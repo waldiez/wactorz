@@ -369,6 +369,49 @@ what they publish, is listed as such, and a plan that needs it says so instead.<
 <p><strong>ℹ replace flag</strong> — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass <code>"replace": true</code> in the config to stop the old instance and spawn fresh. If the name runs on another host instead, <code>"replace": true</code> moves it to this node and <code>"alongside": true</code> runs a second one here (see <em>Two agents of one name</em> in the agents guide); with neither, nothing is spawned.</p>
 </blockquote>
 <hr />
+<h2 id="stopping-and-starting-an-agent-on-a-node">Stopping and starting an agent on a node</h2>
+<p>An agent on a node is stopped and started the way one on the server is: the
+buttons on its card, <code>POST /api/actors/&lt;id&gt;/stop</code> and <code>/start</code>, or in chat
+<code>/agents stop &lt;agent&gt;</code>, <code>/start &lt;agent&gt;</code> and <code>/agents restart &lt;agent&gt;</code> (with
+<code>&lt;agent&gt;@&lt;node&gt;</code> where a name runs in more than one place).</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stop</strong></td>
+<td>The node stops the agent and keeps its state file. The server keeps the agent's config, remembers that it is stopped, and takes it out of the list the node starts from.</td>
+</tr>
+<tr>
+<td><strong>While stopped</strong></td>
+<td>It stays stopped through a reboot of the node and a restart of the server, and is not taken for an agent that crashed. Its card stays, as stopped. It cannot be moved until it is started.</td>
+</tr>
+<tr>
+<td><strong>Start</strong></td>
+<td>The server sends the agent to its node again from the config it kept, and the agent resumes from the state file there.</td>
+</tr>
+<tr>
+<td><strong>Restart</strong></td>
+<td>A running agent is stopped and started in place by its node; a stopped one is started.</td>
+</tr>
+<tr>
+<td><strong>Delete</strong></td>
+<td>Removes the config, the state file and the stop with them.</td>
+</tr>
+</tbody>
+</table>
+<p>The server sends a stop or a start and does not wait for the node, so what it
+answers is that the command was sent. It says so when it was not: the node is
+not online, runs another release, or the agent is one the server did not spawn
+and so keeps no config for (such an agent can be stopped, and not started
+again from here). The dashboard shows that as a line in chat. If the node then
+fails to start the agent, the feed says why, as for any spawn.</p>
+<p>All of it goes through the node's own control topics, which a node deployed by
+an earlier release already understands, so nothing needs deploying again.</p>
 <h2 id="automated-deploy-from-chat">Automated deploy from chat</h2>
 <p>MainActor can deploy a node to a new machine over SSH, but only to a machine you have configured as a <strong>deploy target</strong>. Add the node to your environment first:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">DEPLOY_TARGETS</span><span class="o">=</span>rpi-bedroom

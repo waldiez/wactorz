@@ -347,14 +347,14 @@ class TestDispatch:
     async def test_a_remote_command_needs_a_broker_that_accepts_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        assert await lifecycle.dispatch_command("r1", "stop", "rest") == ""
+        assert (await lifecycle.dispatch_command("r1", "stop", "rest")).route == ""
 
         monkeypatch.setattr(runtime, "mqtt_client_ref", _Broker(fail=True))
-        assert await lifecycle.dispatch_command("r1", "stop", "rest") == ""
+        assert (await lifecycle.dispatch_command("r1", "stop", "rest")).route == ""
 
         broker = _Broker()
         monkeypatch.setattr(runtime, "mqtt_client_ref", broker)
-        assert await lifecycle.dispatch_command("r1", "stop", "rest") == "broker"
+        assert (await lifecycle.dispatch_command("r1", "stop", "rest")).route == "broker"
         assert broker.published[0][0] == "agents/r1/commands"
 
 

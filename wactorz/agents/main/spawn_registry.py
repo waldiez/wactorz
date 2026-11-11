@@ -8,6 +8,13 @@ node, are two entries. Reading the registry is therefore asking for an agent
 in one of a few ways -- by id, by name on a node, or by a name that is meant
 to find exactly one -- and never indexing it by name.
 
+An agent on a node that was stopped keeps its entry: the config is what
+starts it again. That it is stopped is kept beside the entries, by id, under
+`STOPPED_AGENTS_KEY`, and never inside one: an entry is handed to a node as it
+is, in a spawn and in the node's desired state, and a mark in it would travel
+with it. Whatever acts on "the agents that should be running on a node" asks
+for `running_on`; `on_node` is every agent main keeps there.
+
 The registry is persisted under `SPAWN_REGISTRY_KEY`. A store written before
 entries were kept by id holds them by name under `NAME_KEYED_REGISTRY_KEY`;
 it is read once, when the new key has nothing, and left as it was, so a
@@ -16,7 +23,7 @@ release from before finds the registry as it stood at the upgrade.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from ...core.actor import derive_actor_id
@@ -28,6 +35,10 @@ from ...core.identity import given_actor_id
 #: Public because it is the restart contract: the spawn service writes it and
 #: startup, the dashboard, migration and `/agents restart` all read it.
 SPAWN_REGISTRY_KEY = "_spawned_agents_by_id"
+
+#: Persistence key for the ids of the agents on nodes that were stopped and
+#: are kept to be started again.
+STOPPED_AGENTS_KEY = "_stopped_agents"
 
 #: Where a store from before entries were kept by id holds them, by name.
 NAME_KEYED_REGISTRY_KEY = "_spawned_agents"
@@ -96,8 +107,12 @@ class SpawnRegistry:
     they are read, and the next write stores the cleaned form.
     """
 
-    def __init__(self, entries: Mapping[str, dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self, entries: Mapping[str, dict[str, Any]] | None = None, stopped: Iterable[str] = ()
+    ) -> None:
         self._entries: dict[str, dict[str, Any]] = dict(entries or {})
+        #: The ids of the entries whose agent was stopped; an id with no entry says nothing.
+        self._stopped: frozenset[str] = frozenset(stopped) & self._entries.keys()
 
     @classmethod
     def from_names(cls, by_name: Any) -> SpawnRegistry:
@@ -128,11 +143,18 @@ class SpawnRegistry:
         return cls(entries)
 
     @classmethod
-    def stored(cls, by_id: Any, by_name: Any = None) -> SpawnRegistry:
-        """The registry a store holds: under the id-keyed key, or else the name-keyed one."""
-        if isinstance(by_id, Mapping):
-            return cls.from_ids(by_id)
-        return cls.from_names(by_name)
+    def stored(cls, by_id: Any, by_name: Any = None, stopped: Any = None) -> SpawnRegistry:
+        """The registry a store holds: under the id-keyed key, or else the name-keyed one.
+
+        ``stopped`` is what `STOPPED_AGENTS_KEY` holds: the ids of the stopped.
+        """
+        found = cls.from_ids(by_id) if isinstance(by_id, Mapping) else cls.from_names(by_name)
+        ids = [i for i in stopped if isinstance(i, str)] if isinstance(stopped, list) else []
+        return cls(found._entries, ids)
+
+    def stopped_form(self) -> list[str]:
+        """What is persisted under `STOPPED_AGENTS_KEY`."""
+        return sorted(self._stopped)
 
     def stored_form(self) -> dict[str, dict[str, Any]]:
         """What is persisted under `SPAWN_REGISTRY_KEY`."""
@@ -180,10 +202,25 @@ class SpawnRegistry:
         wanted = placed_on({"node": node})
         return [dict(e) for e in self._entries.values() if placed_on(e) == wanted]
 
+    def running_on(self, node: str) -> list[dict[str, Any]]:
+        """The entries placed on ``node`` whose agent should be running: all but the stopped."""
+        return [e for e in self.on_node(node) if e["actor_id"] not in self._stopped]
+
+    def is_stopped(self, actor_id: str | None) -> bool:
+        """Whether the agent ``actor_id`` is kept stopped."""
+        return (actor_id or "") in self._stopped
+
     def with_entry(self, entry: dict[str, Any]) -> SpawnRegistry:
         """This registry with ``entry`` kept under its id."""
-        return SpawnRegistry({**self._entries, entry["actor_id"]: dict(entry)})
+        return SpawnRegistry({**self._entries, entry["actor_id"]: dict(entry)}, self._stopped)
 
     def without(self, actor_id: str) -> SpawnRegistry:
-        """This registry without the entry ``actor_id``."""
-        return SpawnRegistry({k: v for k, v in self._entries.items() if k != actor_id})
+        """This registry without the entry ``actor_id``, stopped or not."""
+        return SpawnRegistry(
+            {k: v for k, v in self._entries.items() if k != actor_id}, self._stopped
+        )
+
+    def with_stopped(self, actor_id: str, stopped: bool) -> SpawnRegistry:
+        """This registry with the agent ``actor_id`` kept stopped, or no longer."""
+        ids = self._stopped | {actor_id} if stopped else self._stopped - {actor_id}
+        return SpawnRegistry(self._entries, ids)

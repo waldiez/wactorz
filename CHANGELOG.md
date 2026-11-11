@@ -514,6 +514,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent on a node can be stopped and started again.** A stop used to be a slow delete: the node forgot the agent,
+  and a few heartbeats later the server took it for crashed and removed its config, so neither `/start` (which refused
+  agents on nodes) nor `/agents restart` (which the node answered "not running here") could bring it back, and a node
+  reboot in between started it again. With node accounts on, the dashboard's and the API's Stop and Start for such an
+  agent did nothing at all and reported success. Now the server remembers the stop: the agent keeps its config, stays
+  stopped through a node reboot and a server restart, and `/start`, `/agents restart`, the card's Start button and
+  `POST /api/actors/<id>/start` send it to its node again, where it resumes from the state it kept. A start that cannot
+  be sent (the node is away, or cannot take the agent) says why and leaves it stopped: the API answers 409 with the
+  reason, and the dashboard shows it as a line in chat. Nodes need no redeploy.
+
 - **A topic the broker refuses a node's agent is said.** With node accounts on, an agent on a node whose code picked a
   topic outside the access list ran, looked healthy, and nothing it published arrived: a broker answers nothing to a
   refused publish. The server now reads each such agent's topics from its manifest and says in chat and in the log, once

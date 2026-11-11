@@ -942,13 +942,14 @@ class NodeManager:
         appeared yet is never started on — a freshly spawned one is absent
         because its first heartbeat is still coming, not because it died. An
         agent the registry now places elsewhere has migrated, and is not this
-        node's to lose.
+        node's to lose. One kept stopped is absent because it was stopped, and
+        its entry is what starts it again.
         """
         host = self.host
         if host is None or node_name in self.redeploying:
             return []
         to_prune: list[str] = []
-        for cfg in host._get_spawn_registry().on_node(node_name):
+        for cfg in host._get_spawn_registry().running_on(node_name):
             agent_name = cfg["name"]
             key = (node_name, agent_name)
             if agent_name in current:
@@ -1120,8 +1121,9 @@ class NodeManager:
             )
             # Find all agents that belong to this node according to the
             # spawn registry (the heartbeat's last-known agent list may
-            # be stale).
-            lost = [cfg["name"] for cfg in reg.on_node(node_name)]
+            # be stale). An agent kept stopped is not running there to be
+            # lost: its entry stays, to be started when the node is back.
+            lost = [cfg["name"] for cfg in reg.running_on(node_name)]
             for agent_name in lost:
                 host._remove_from_spawn_registry(agent_name, node_name)
                 # As in _prune_vanished: the retained desired_state has

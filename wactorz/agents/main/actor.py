@@ -58,6 +58,7 @@ from .routing import RoutingMixin
 from .shadow_serving import ShadowServing
 from .spawn_registry import SpawnRegistry
 from .spawns import SpawnService
+from .stop_start import Outcome, StopStartService
 from .turn_actions import TurnActions
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -239,6 +240,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.placement: Placement = Placement(self)
         self.delegation: DelegationManager = DelegationManager(self)
         self.lifecycle: LifecycleService = LifecycleService(self)
+        self.stop_start: StopStartService = StopStartService(self)
 
     async def dashboard_answer(self, answer: Answer) -> None:
         """A press on the dashboard for a question main asked, handed over in this process.
@@ -1295,9 +1297,36 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return self.spawns._inject_llm_bridge_code(config)
 
     async def _spawn_remote(
-        self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+        self,
+        config: dict[str, Any],
+        node: str,
+        save: bool,
+        *,
+        restoring: bool = False,
+        kept: bool = False,
     ) -> bool:
-        return await self.spawns._spawn_remote(config, node, save, restoring=restoring)
+        return await self.spawns._spawn_remote(config, node, save, restoring=restoring, kept=kept)
+
+    def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
+        self.spawns._keep_stopped(actor_id, stopped)
+
+    async def stop_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        """Stop the agent ``name`` on ``node``, kept to be started again; see `stop_start`."""
+        return await self.stop_start.stop(name, node, actor_id)
+
+    async def start_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        """Start the agent ``name`` again on ``node``, where it was stopped."""
+        return await self.stop_start.start(name, node, actor_id)
+
+    async def restart_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        """Restart the agent ``name`` on ``node``, starting it if it was stopped."""
+        return await self.stop_start.restart(name, node, actor_id)
 
     def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
         """Sign whatever main addresses to a node's control topics.

@@ -204,6 +204,10 @@ def reset_memory(agent_name: str | None = None, db_path: str | None = None) -> N
 #: reset clears both, or a cleared registry would come back from the older one.
 _SPAWN_REGISTRY_KV_KEYS = ("_spawned_agents_by_id", "_spawned_agents")
 
+#: Where main keeps which of its agents on nodes are stopped, by id. It says
+#: nothing without the registry's entries, and goes when the registry is cleared.
+_STOPPED_AGENTS_KV_KEY = "_stopped_agents"
+
 
 def _without_agent(
     registry: dict[str, Any], agent_name: str, actor_id: str | None = None
@@ -255,6 +259,8 @@ def reset_spawns(
                     else:
                         db.kv_delete(owner, key)
                         cleared.add(owner)
+                if not agent_name:
+                    db.kv_delete(owner, _STOPPED_AGENTS_KV_KEY)
     logger.info(
         "[reset] kv spawn registry cleared for %d owner(s)%s",
         len(cleared),

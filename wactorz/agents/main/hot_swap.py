@@ -175,6 +175,10 @@ class HotSwap:
         # The registry is what says a node may have a version, and the
         # desired state what a reboot runs: both before the node is asked.
         host._save_to_spawn_registry(updated)
+        if host._get_spawn_registry().is_stopped(str(config.get("actor_id") or "")):
+            # Nothing runs there to be given the version: the record is what it
+            # starts from when it is started again.
+            return
         await host._update_node_desired_state(node, updated)
         token = secrets.token_hex(8)
         self.pending[token] = {

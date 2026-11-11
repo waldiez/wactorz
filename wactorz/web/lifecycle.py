@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from typing import Any
 
 from ..agents.lookup import find_main_actor
@@ -22,30 +23,84 @@ from . import events, runtime
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
-    """Run a lifecycle command against an agent. Returns how it was routed.
+@dataclass(frozen=True)
+class Dispatched:
+    """How a lifecycle command went: the way it took, and what to tell whoever asked.
 
-    Local actors are driven in process. Publishing to the broker so an object we
-    already hold can rediscover itself over the network is left over from when the
-    dashboard ran as a separate process, and it meant the command was silently
-    dropped whenever the broker was down while the caller still reported success.
+    ``route`` is ``"local"`` for an actor driven in this process, ``"node"`` for
+    one main asked its node about, ``"broker"`` for one reached on its own
+    commands topic, ``"refused"`` when it was declined, and ``""`` when it could
+    not be delivered at all. ``detail`` says why, where there is more to say
+    than the route.
+    """
 
-    MQTT remains the route to agents on remote nodes, which have no local object.
-    Returns ``""`` when the command could not be delivered at all, and
-    ``"refused"`` when the actor declined it.
+    route: str
+    detail: str = ""
+
+    @property
+    def done(self) -> bool:
+        """Whether the command was carried out, or sent to where it is."""
+        return self.route not in ("", "refused")
+
+
+def _on_node(main_actor: Any, agent_id: str) -> tuple[str, str] | None:
+    """The name and node of the agent ``agent_id``, when it runs on a node; else None.
+
+    From main's spawn registry by the agent's id, which says which agent of a
+    name is meant; for one main did not spawn, from what its heartbeats report.
+    """
+    entry = main_actor._get_spawn_registry().by_id(agent_id) if main_actor is not None else None
+    if entry is not None:
+        node = placed_on(entry)
+        return (str(entry["name"]), node) if node else None
+    record = runtime.state["agents"].get(agent_id) or {}
+    node = placed_on({"node": str(record.get("node") or "").strip()})
+    name = str(record.get("name") or "")
+    return (name, node) if node and name else None
+
+
+async def _through_main(
+    main_actor: Any, agent_id: str, name: str, node: str, command: str
+) -> Dispatched:
+    """Ask main to stop or start ``name`` on ``node``, which is how an agent there is reached."""
+    if main_actor is None:
+        return Dispatched(
+            "",
+            f"'{name}' runs on node '{node}', where it is stopped and started through main, "
+            "and main is not running in this process.",
+        )
+    ask = main_actor.stop_agent_on_node if command == "stop" else main_actor.start_agent_on_node
+    outcome = await ask(name, node, agent_id)
+    return Dispatched("node" if outcome.sent else "refused", outcome.message)
+
+
+async def dispatch_command(agent_id: str, command: str, sender: str) -> Dispatched:
+    """Run a lifecycle command against an agent, and say how it went.
+
+    An actor in this process is driven directly. One on a node is stopped and
+    started by main, which asks the node and remembers the stop: the agent's own
+    commands topic is not a way to it, since a node's agents do not listen
+    there. Any other agent, one that connects to the broker for itself from
+    another process, is sent the command on that topic.
     """
     actor = None
+    main_actor = None
     if runtime.registry is not None:
         actor = runtime.registry.get(agent_id) or runtime.registry.find_by_name(agent_id)
+        main_actor = find_main_actor(runtime.registry)
 
     if actor is not None:
         # apply_command, not stop() directly: it releases the actor from
         # supervision first, without which the watchdog restarts it ~35s later.
-        return "local" if await actor.apply_command(command) else "refused"
+        return Dispatched("local" if await actor.apply_command(command) else "refused")
+
+    placed = _on_node(main_actor, agent_id)
+    if placed is not None and command in ("stop", "start"):
+        return await _through_main(main_actor, agent_id, *placed, command)
 
     if runtime.mqtt_client_ref is None:
         logger.warning("[cmd] %s is not local and no broker is available", agent_id[:8])
-        return ""
+        return Dispatched("")
     try:
         await runtime.mqtt_client_ref.publish(
             agent_topic(agent_id, "commands"),
@@ -58,8 +113,8 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
         )
     except Exception as exc:
         logger.warning("[cmd] publish to %s failed: %s", agent_id[:8], exc)
-        return ""
-    return "broker"
+        return Dispatched("")
+    return Dispatched("broker")
 
 
 #: What the dashboard should show once a command has been accepted. `start`
@@ -67,8 +122,8 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
 _REPORTED_STATE = {"stop": "stopped"}
 
 
-async def run_command(agent_id: str, command: str, sender: str) -> str:
-    """Run a lifecycle command *and* tell everyone watching. Returns the routing.
+async def run_command(agent_id: str, command: str, sender: str) -> Dispatched:
+    """Run a lifecycle command *and* tell everyone watching. Returns how it went.
 
     The bookkeeping around a command used to live only in the WebSocket handler,
     so a command given over REST executed and then said nothing: no feed entry,
@@ -90,7 +145,7 @@ async def run_command(agent_id: str, command: str, sender: str) -> str:
     from .ws import broadcast
 
     routed = await dispatch_command(agent_id, command, sender)
-    if not routed or routed == "refused":
+    if not routed.done:
         return routed
 
     events.add_log(

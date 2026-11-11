@@ -564,9 +564,12 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
             with self._db(tmp) as db:
                 db.kv_set("main", "_spawned_agents", {"a": {"node": ""}})
                 db.kv_set("main", "_spawned_agents_by_id", {"id-a": {"name": "a", "node": ""}})
+                db.kv_set("main", "_stopped_agents", ["id-a"])
                 reset_spawns(db_path=db_path)
                 self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
                 self.assertIsNone(db.kv_get("main", "_spawned_agents_by_id", None))
+                # Which were stopped goes with the entries it speaks of.
+                self.assertIsNone(db.kv_get("main", "_stopped_agents", None))
 
     def test_single_agent_pops_every_entry_of_that_name_by_id(self) -> None:
         from wactorz.reset import reset_spawns

@@ -244,6 +244,31 @@ An agent on a node runs under the id main keeps for it, which it keeps across re
 
 ---
 
+## Stopping and starting an agent on a node
+
+An agent on a node is stopped and started the way one on the server is: the
+buttons on its card, `POST /api/actors/<id>/stop` and `/start`, or in chat
+`/agents stop <agent>`, `/start <agent>` and `/agents restart <agent>` (with
+`<agent>@<node>` where a name runs in more than one place).
+
+| | What happens |
+|---|---|
+| **Stop** | The node stops the agent and keeps its state file. The server keeps the agent's config, remembers that it is stopped, and takes it out of the list the node starts from. |
+| **While stopped** | It stays stopped through a reboot of the node and a restart of the server, and is not taken for an agent that crashed. Its card stays, as stopped. It cannot be moved until it is started. |
+| **Start** | The server sends the agent to its node again from the config it kept, and the agent resumes from the state file there. |
+| **Restart** | A running agent is stopped and started in place by its node; a stopped one is started. |
+| **Delete** | Removes the config, the state file and the stop with them. |
+
+The server sends a stop or a start and does not wait for the node, so what it
+answers is that the command was sent. It says so when it was not: the node is
+not online, runs another release, or the agent is one the server did not spawn
+and so keeps no config for (such an agent can be stopped, and not started
+again from here). The dashboard shows that as a line in chat. If the node then
+fails to start the agent, the feed says why, as for any spawn.
+
+All of it goes through the node's own control topics, which a node deployed by
+an earlier release already understands, so nothing needs deploying again.
+
 ## Automated deploy from chat
 
 MainActor can deploy a node to a new machine over SSH, but only to a machine you have configured as a **deploy target**. Add the node to your environment first:

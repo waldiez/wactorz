@@ -25,6 +25,9 @@ SQLITE_KEYS = {
     # were kept holds it by name, read once on the way up.
     "_spawned_agents_by_id",
     "_spawned_agents",
+    # Which of main's agents on nodes are stopped, by id: as durable as the
+    # registry it is read with, or a restart would start them again.
+    "_stopped_agents",
     # Migrations waiting on a node to confirm. Declared rather than left to fall
     # through to pickle: this has to survive the restart it exists to survive,
     # and a per-key SQLite write is the fast path. The live actor object a local

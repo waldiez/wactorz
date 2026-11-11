@@ -19,8 +19,11 @@ from typing import Any, cast
 import pytest
 from aiohttp import web
 
+from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.agents.main.stop_start import Outcome
 from wactorz.core.actor import Actor, ActorState, Message, MessageType
 from wactorz.core.registry import ActorRegistry
+from wactorz.core.topics import agent_topic
 from wactorz.web import api_actors, lifecycle, runtime, ws
 
 
@@ -228,7 +231,7 @@ class TestDispatchCommand:
         runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
 
-        assert await lifecycle.dispatch_command(actor.actor_id, "stop", "test") == "local"
+        assert (await lifecycle.dispatch_command(actor.actor_id, "stop", "test")).route == "local"
         assert actor.calls == ["stop"]
 
     async def test_a_local_actor_is_not_routed_through_the_broker(self) -> None:
@@ -245,21 +248,21 @@ class TestDispatchCommand:
         runtime.registry = cast(ActorRegistry, _Registry(None))
         runtime.mqtt_client_ref = broker = _Broker()
 
-        assert await lifecycle.dispatch_command("remote-1", "stop", "test") == "broker"
+        assert (await lifecycle.dispatch_command("remote-1", "stop", "test")).route == "broker"
         assert broker.published[0][0] == "agents/remote-1/commands"
 
     async def test_an_undeliverable_command_reports_failure(self) -> None:
         runtime.registry = cast(ActorRegistry, _Registry(None))
         runtime.mqtt_client_ref = None
 
-        assert await lifecycle.dispatch_command("remote-1", "stop", "test") == ""
+        assert (await lifecycle.dispatch_command("remote-1", "stop", "test")).route == ""
 
     async def test_a_refusal_is_distinguished_from_a_failure(self) -> None:
         actor = _Recorder(essential=True)
         runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
 
-        assert await lifecycle.dispatch_command(actor.actor_id, "stop", "test") == "refused"
+        assert (await lifecycle.dispatch_command(actor.actor_id, "stop", "test")).route == "refused"
 
 
 class TestStart:
@@ -524,3 +527,148 @@ class TestCommandListener:
 
         assert await actor.apply_command("stop") is False
         assert actor.state != ActorState.STOPPED
+
+
+class _MainWithNodes:
+    """Main, as far as stopping and starting an agent on a node goes."""
+
+    def __init__(self, entries: dict[str, dict[str, Any]], answer: Outcome) -> None:
+        self._entries = entries
+        self.answer = answer
+        self.asked: list[tuple[str, str, str, str | None]] = []
+
+    def _get_spawn_registry(self) -> SpawnRegistry:
+        return SpawnRegistry(self._entries)
+
+    async def stop_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        self.asked.append(("stop", name, node, actor_id))
+        return self.answer
+
+    async def start_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        self.asked.append(("start", name, node, actor_id))
+        return self.answer
+
+
+class TestAnAgentOnANode:
+    """It is stopped and started through main: its own commands topic is not a way to it."""
+
+    @pytest.fixture(name="broker")
+    def broker_fixture(self) -> Iterator[_Broker]:
+        saved = dict(runtime.state["agents"])
+        runtime.state["agents"].clear()
+        runtime.registry = cast(ActorRegistry, _Registry(None))
+        runtime.mqtt_client_ref = broker = _Broker()
+        yield broker
+        runtime.state["agents"].clear()
+        runtime.state["agents"].update(saved)
+
+    def _main(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        answer: Outcome,
+        entries: dict[str, dict[str, Any]] | None = None,
+    ) -> _MainWithNodes:
+        main = _MainWithNodes(entries or {}, answer)
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _registry: main)
+        return main
+
+    @pytest.mark.parametrize("command", ["stop", "start"])
+    async def test_one_main_keeps_is_found_by_its_id(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch, command: str
+    ) -> None:
+        # Two agents of a name: the id says which, where a name could not.
+        entries = {
+            "id-pi": {"name": "cam", "node": "rpi", "actor_id": "id-pi"},
+            "id-pc": {"name": "cam", "node": "pc", "actor_id": "id-pc"},
+        }
+        main = self._main(monkeypatch, Outcome(True, "sent"), entries)
+
+        routed = await lifecycle.dispatch_command("id-pc", command, "test")
+
+        assert (routed.route, routed.detail, routed.done) == ("node", "sent", True)
+        assert main.asked == [(command, "cam", "pc", "id-pc")]
+        assert broker.published == []
+
+    async def test_one_main_did_not_spawn_is_found_by_what_it_reports(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = self._main(monkeypatch, Outcome(True, "sent"))
+        runtime.state["agents"]["r1"] = {"name": "its-own", "node": "rpi"}
+
+        routed = await lifecycle.dispatch_command("r1", "stop", "test")
+
+        assert routed.route == "node"
+        assert main.asked == [("stop", "its-own", "rpi", "r1")]
+        assert broker.published == []
+
+    async def test_what_main_refuses_is_refused_with_its_reason(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        why = "'cam' was not started: node 'rpi' is not online. It stays stopped."
+        entries = {"id-pi": {"name": "cam", "node": "rpi", "actor_id": "id-pi"}}
+        self._main(monkeypatch, Outcome(False, why), entries)
+
+        routed = await lifecycle.dispatch_command("id-pi", "start", "test")
+
+        assert (routed.route, routed.detail, routed.done) == ("refused", why, False)
+
+    async def test_without_main_it_is_not_delivered_and_says_so(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(lifecycle, "find_main_actor", lambda _registry: None)
+        runtime.state["agents"]["r1"] = {"name": "cam", "node": "rpi"}
+
+        routed = await lifecycle.dispatch_command("r1", "stop", "test")
+
+        assert routed.route == ""
+        assert "through main, and main is not running in this process" in routed.detail
+        # Not sent where the agent does not listen, to be reported as delivered.
+        assert broker.published == []
+
+    @pytest.mark.parametrize("node", ["", "main", "local"])
+    async def test_an_agent_on_no_node_is_sent_the_command_itself(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch, node: str
+    ) -> None:
+        main = self._main(monkeypatch, Outcome(True, "sent"))
+        runtime.state["agents"]["r1"] = {"name": "apart", "node": node}
+
+        routed = await lifecycle.dispatch_command("r1", "stop", "test")
+
+        assert routed.route == "broker"
+        assert main.asked == []
+        assert broker.published[0][0] == agent_topic("r1", "commands")
+
+    async def test_a_command_main_carried_out_is_shown_to_every_dashboard(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entries = {"id-pi": {"name": "cam", "node": "rpi", "actor_id": "id-pi"}}
+        self._main(monkeypatch, Outcome(True, "sent"), entries)
+        runtime.state["agents"]["id-pi"] = {"name": "cam", "node": "rpi", "state": "running"}
+        frames: list[dict[str, Any]] = []
+
+        async def _broadcast(frame: dict[str, Any]) -> None:
+            frames.append(frame)
+
+        monkeypatch.setattr(ws, "broadcast", _broadcast)
+
+        routed = await lifecycle.run_command("id-pi", "stop", "test")
+
+        assert routed.done
+        assert runtime.state["agents"]["id-pi"]["state"] == "stopped"
+        assert [frame["type"] for frame in frames] == ["patch"]
+
+    async def test_one_main_refused_leaves_every_dashboard_as_it_was(
+        self, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entries = {"id-pi": {"name": "cam", "node": "rpi", "actor_id": "id-pi"}}
+        self._main(monkeypatch, Outcome(False, "'cam' on node 'rpi' is not stopped."), entries)
+        runtime.state["agents"]["id-pi"] = {"name": "cam", "node": "rpi", "state": "running"}
+
+        routed = await lifecycle.run_command("id-pi", "start", "test")
+
+        assert not routed.done
+        assert runtime.state["agents"]["id-pi"]["state"] == "running"

@@ -213,13 +213,23 @@ class NodeHosted(_Base):
             return True
         return False
 
-    # ── Commands, which main may send straight to the agent ───────────────────
+    # ── Commands, which reach an agent here through its node ──────────────────
+
+    async def _command_listener(self) -> None:
+        """Listen for nothing: an agent on a node is stopped and started by the node.
+
+        Main asks the node (`nodes/<node>/stop`, a spawn), which owns the
+        bookkeeping a stop needs here: the node's registry, its heartbeat, the
+        state file. A connection of the agent's own for commands would be one
+        more per agent on the broker, on a topic a node's broker account is not
+        let read.
+        """
 
     async def apply_command(self, command: str) -> bool:
         """Carry out a command, through the node that is running this agent.
 
-        A stop or a delete may arrive on `agents/<id>/commands` without passing
-        through the node's control plane. Done by the agent alone, a stop would
+        A stop or a delete asked of the agent itself does not pass through the
+        node's control plane. Done by the agent alone, a stop would
         leave it in the node's registry -- still in its heartbeat, still refusing
         a respawn without `replace` -- and a delete would leave its state file
         and retained topics behind, which is what makes a deleted agent come

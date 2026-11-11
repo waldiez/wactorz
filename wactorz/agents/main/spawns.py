@@ -43,6 +43,7 @@ from .alongside import Settled, put_back, settle
 from .spawn_registry import (
     NAME_KEYED_REGISTRY_KEY,
     SPAWN_REGISTRY_KEY,
+    STOPPED_AGENTS_KEY,
     SpawnRegistry,
     address_of,
     placed_on,
@@ -384,8 +385,21 @@ class SpawnService:
     def _get_spawn_registry(self) -> SpawnRegistry:
         """What main remembers about the agents it spawned: see `SpawnRegistry`."""
         return SpawnRegistry.stored(
-            self.host.recall(SPAWN_REGISTRY_KEY), self.host.recall(NAME_KEYED_REGISTRY_KEY)
+            self.host.recall(SPAWN_REGISTRY_KEY),
+            self.host.recall(NAME_KEYED_REGISTRY_KEY),
+            self.host.recall(STOPPED_AGENTS_KEY),
         )
+
+    def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
+        """Keep the agent ``actor_id`` on a node as stopped, or as one that should run again.
+
+        A stopped agent keeps its entry and is left out of everything that
+        starts agents or tidies away those that are gone: its node's desired
+        state, the restore at startup, and the removals that follow a node no
+        longer reporting it.
+        """
+        reg = self._get_spawn_registry().with_stopped(actor_id, stopped)
+        self.host.persist(STOPPED_AGENTS_KEY, reg.stopped_form())
 
     def _registered_actor_id(self, name: str, node: str | None = None) -> str | None:
         """The id the registry keeps for ``name`` -- on ``node``, or its only entry -- or None."""
@@ -436,6 +450,11 @@ class SpawnService:
             # A new entry under another agent's id would overwrite that agent's:
             # a second agent of the name, with no id of its own yet, gets one.
             actor_id = str(uuid.uuid4())
+        if reg.is_stopped(actor_id) and not placed_on(config):
+            # Stopped is something an agent on a node is: one saved as main's own
+            # has been brought here, and runs.
+            reg = reg.with_stopped(actor_id, False)
+            self.host.persist(STOPPED_AGENTS_KEY, reg.stopped_form())
         reg = reg.with_entry({**without_transient_keys(config), "actor_id": actor_id})
         self.host.persist(SPAWN_REGISTRY_KEY, reg.stored_form())
         logger.info("[%s] Spawn registry: %s", self.host.name, sorted(reg.names()))
@@ -461,12 +480,16 @@ class SpawnService:
                     ", ".join(str(address_of(e)) for e in reg.named(name)),
                 )
             return
-        self.host.persist(SPAWN_REGISTRY_KEY, reg.without(entry["actor_id"]).stored_form())
+        reduced = reg.without(entry["actor_id"])
+        self.host.persist(SPAWN_REGISTRY_KEY, reduced.stored_form())
+        if reg.is_stopped(entry["actor_id"]):
+            self.host.persist(STOPPED_AGENTS_KEY, reduced.stopped_form())
         logger.info("[%s] Removed %s from spawn registry.", self.host.name, address_of(entry))
 
     def _clear_spawn_registry(self) -> None:
         """Forget every agent main spawned."""
         self.host.persist(SPAWN_REGISTRY_KEY, {})
+        self.host.persist(STOPPED_AGENTS_KEY, [])
 
     def _supervised_names(self) -> set[str]:
         """The agents the Supervisor has already brought up.
@@ -524,7 +547,16 @@ class SpawnService:
                 skipped,
             )
 
-        pending = [e for e in registry if placed_on(e) or e["name"] not in supervised]
+        # An agent stopped on a node stays stopped: it is started when asked.
+        stopped = [str(address_of(e)) for e in registry if registry.is_stopped(e["actor_id"])]
+        if stopped:
+            logger.info("[%s] Left stopped, as they were: %s", self.host.name, stopped)
+        pending = [
+            e
+            for e in registry
+            if (placed_on(e) or e["name"] not in supervised)
+            and not registry.is_stopped(e["actor_id"])
+        ]
         if not pending:
             return
 
@@ -1013,7 +1045,13 @@ class SpawnService:
         return False
 
     async def _spawn_remote(
-        self, config: dict[str, Any], node: str, save: bool, *, restoring: bool = False
+        self,
+        config: dict[str, Any],
+        node: str,
+        save: bool,
+        *,
+        restoring: bool = False,
+        kept: bool = False,
     ) -> bool:
         """Publish a spawn command to a node, which runs the agent there; False if refused.
 
@@ -1028,8 +1066,14 @@ class SpawnService:
         The node's desired state is retained, so a node that reboots reconciles
         itself back to running this agent without being told again. The spawn
         message deliberately is not: see the note on the publish itself.
+
+        ``kept`` says the agent is one main already keeps under this name, being
+        started again where it was stopped: its name is held to what a kept name
+        must be, as with ``restoring``, while the node is asked whether it can
+        take it now, as for a new spawn.
         """
-        name_check = topic_name_error if restoring or config.get("replace") else agent_name_error
+        lenient = restoring or kept or config.get("replace")
+        name_check = topic_name_error if lenient else agent_name_error
         problem = name_check(str(config.get("name", "remote-agent")))
         if problem:
             # As for a local spawn: the name is a level of the agent's topics,
@@ -1095,6 +1139,12 @@ class SpawnService:
         # draining one message at a time -- MQTT only promises ordering within a
         # single topic, so it is the deployment that makes it true, not the spec.
         await self.host._mqtt_publish(node_topic(node, "spawn"), wire_config, retain=False, qos=1)
+        if self._get_spawn_registry().is_stopped(actor_id):
+            # Sent to run, by whatever asked: it is no longer one kept stopped.
+            # Before the desired state, which lists what is not stopped: should
+            # that fail to leave, the node still has the spawn and runs the
+            # agent, and what main remembers has to say the same.
+            self._keep_stopped(actor_id, False)
         await self.host._update_node_desired_state(node, wire_config)
         await self.host._mqtt_publish(
             agent_topic(self.host.actor_id, "logs"),

@@ -145,13 +145,15 @@ async def _lifecycle_handler(request: web.Request, command: str, status: str) ->
         return web.json_response({"error": f"{command} is not allowed for this actor"}, status=403)
 
     routed = await lifecycle.run_command(target, command, "rest-api")
-    if routed == "refused":
-        return web.json_response({"error": f"{command} was refused"}, status=409)
-    if not routed:
-        # Reached only for a remote agent with no broker to reach it through.
+    if routed.route == "refused":
+        return web.json_response({"error": routed.detail or f"{command} was refused"}, status=409)
+    if not routed.done:
+        # Reached only for an agent elsewhere with nothing to reach it through.
         # 503 rather than 200: the command went nowhere, and a caller that was
         # told otherwise would have no way to find that out.
-        return web.json_response({"error": f"{command} could not be delivered"}, status=503)
+        return web.json_response(
+            {"error": routed.detail or f"{command} could not be delivered"}, status=503
+        )
     return web.json_response({"status": status})
 
 

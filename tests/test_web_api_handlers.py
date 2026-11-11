@@ -26,6 +26,7 @@ from wactorz.core.persistence import PickleStore, WactorzDB
 from wactorz.core.persistence.stores import install_stores
 from wactorz.web import api_actors, chat, cost, lifecycle, questions, runtime, ws
 from wactorz.web.app import build_app
+from wactorz.web.lifecycle import Dispatched
 
 
 class _Metrics:
@@ -492,9 +493,9 @@ class TestLifecycle:
         runtime.state["agents"]["r1"] = {"name": "cam"}
         commands: list[tuple[str, str]] = []
 
-        async def _run(agent_id: str, command: str, sender: str) -> str:
+        async def _run(agent_id: str, command: str, sender: str) -> Dispatched:
             commands.append((agent_id, command))
-            return {"start": "mqtt", "stop": ""}[command]
+            return Dispatched({"start": "node", "stop": ""}[command])
 
         monkeypatch.setattr(lifecycle, "run_command", _run)
 
@@ -512,13 +513,16 @@ class TestLifecycle:
 
         monkeypatch.setattr(runtime, "registry", _Registry(_Actor("a1", "weather")))
 
-        async def _refused(*_args: Any) -> str:
-            return "refused"
+        async def _refused(*_args: Any) -> Dispatched:
+            return Dispatched("refused", "'weather' on node 'rpi' is not stopped.")
 
         monkeypatch.setattr(lifecycle, "run_command", _refused)
 
         assert (await client.post("/api/actors/ghost/start")).status == 404
-        assert (await client.post("/api/actors/a1/start")).status == 409
+        refused = await client.post("/api/actors/a1/start")
+        assert refused.status == 409
+        # The reason, where there is one: a caller reads why, not only that.
+        assert await refused.json() == {"error": "'weather' on node 'rpi' is not stopped."}
 
 
 class TestReads:

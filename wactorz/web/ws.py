@@ -433,7 +433,11 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                         await ws.send_str(json.dumps({"type": "pong"}))
 
                     elif msg_type == "command":
-                        await handle_command(data)
+                        problem = await handle_command(data)
+                        if problem:
+                            # Said to whoever asked: the cards show no change,
+                            # which alone reads as a button that does nothing.
+                            await replies.outside_the_turn().reply(f"[error] {problem}")
 
                     elif msg_type == "answer":
                         problem = await answers.answer_from_dashboard(data)
@@ -505,14 +509,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 # ── Browser commands ───────────────────────────────────────────────────────
 
 
-async def handle_command(cmd: dict[str, Any]) -> None:
-    """Handle a command message."""
+async def handle_command(cmd: dict[str, Any]) -> str | None:
+    """Carry out a command from the dashboard; why it was not carried out, or None."""
     command = cmd.get("command")
     agent_id = cmd.get("agent_id")
     if not command or not agent_id:
-        return
+        return None
     if command not in {"start", "stop", "delete"}:
-        return
+        return None
 
     logger.info("[cmd] %s -> %s", command.upper(), agent_id[:8])
     try:
@@ -523,7 +527,7 @@ async def handle_command(cmd: dict[str, Any]) -> None:
                 # Broadcasting anyway would remove the agent from every open
                 # dashboard while it is still running, with nothing to correct
                 # the view until the next heartbeat.
-                return
+                return None
             events.add_log(
                 {
                     "type": "command",
@@ -540,10 +544,13 @@ async def handle_command(cmd: dict[str, Any]) -> None:
                     "state": events.snapshot(),
                 }
             )
-            return
+            return None
 
         # Dispatch, feed entry, reported state and the patch to every open
         # dashboard all happen in `run_command`, which REST goes through too.
-        await lifecycle.run_command(agent_id, command, "monitor-dashboard")
+        routed = await lifecycle.run_command(agent_id, command, "monitor-dashboard")
+        if not routed.done:
+            return routed.detail or f"The {command} was not carried out."
     except Exception:
         logger.exception("[cmd] %s failed", command)
+    return None

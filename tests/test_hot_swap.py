@@ -28,7 +28,7 @@ from wactorz.agents.main.artifact_service import ArtifactService, Change
 from wactorz.agents.main.hosts import ArtifactHost, SwapHost
 from wactorz.agents.main.hot_swap import MAIN, TOKEN_TTL_S, HotSwap
 from wactorz.agents.main.spawn_registry import SpawnRegistry
-from wactorz.core.actor import Actor, ActorState, Message, UnnamedModelError
+from wactorz.core.actor import Actor, ActorState, Message, UnnamedModelError, derive_actor_id
 from wactorz.core.artifacts import ArtifactStore, Pointer, pinned
 from wactorz.core.model_swaps import SWAP, move_id, record_swap, swap_id, swaps_of
 from wactorz.core.node_signing import CONTROL_LEAVES
@@ -293,11 +293,14 @@ class _Host:
         self._mqtt_port = 1883
         self._registry = _Registry()
         self.spawns: dict[str, dict[str, Any]] = {}
+        #: The ids of the agents on nodes main keeps stopped.
+        self.stopped: list[str] = []
         self.desired: list[tuple[str, dict[str, Any] | None]] = []
         self.published: list[tuple[str, Any, int]] = []
 
     def _get_spawn_registry(self) -> SpawnRegistry:
-        return SpawnRegistry.from_names({name: dict(cfg) for name, cfg in self.spawns.items()})
+        by_name = {name: dict(cfg) for name, cfg in self.spawns.items()}
+        return SpawnRegistry.stored(None, by_name, self.stopped)
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         self.spawns[config["name"]] = dict(config)
@@ -522,6 +525,20 @@ class TestAgentsOnNodesFollow:
         # Nothing landed yet: no feed line, nothing in the graph.
         assert host.feed() == []
         assert swaps_of(graph, "imu") == []
+
+    async def test_one_kept_stopped_has_its_record_moved_and_its_node_told_nothing(
+        self, host: _Host, swap: HotSwap, store: ArtifactStore, graph: Provenance
+    ) -> None:
+        # Nothing runs there to swap, and a desired state naming it would start it.
+        _spawned(host, "detector", store, node="rpi", follows="active")
+        host.stopped = [derive_actor_id("detector")]
+
+        await swap.follow([_move(store, graph, "imu:2")])
+
+        assert host.spawns["detector"]["artifacts"]["model"]["version"] == 2
+        assert host.commands("rpi") == []
+        assert host.desired == []
+        assert swap.pending == {}
 
     async def test_the_command_is_a_signed_control_topic(self) -> None:
         assert "swap_model" in CONTROL_LEAVES

@@ -1233,6 +1233,14 @@ class Migration:
             )
         if found.node == move[2]:
             return f"Agent '{found.name}' is already on '{found.node or 'local'}'."
+        kept = (found.config or {}).get("actor_id")
+        if self.host is not None and self.host._get_spawn_registry().is_stopped(kept):
+            # Its node hands over a running agent's state; a stopped one is not
+            # there to hand anything over.
+            return (
+                f"'{found.name}' is stopped on '{found.node}'. Start it there first "
+                f"(/start {found.name}@{found.node}), then move it."
+            )
         return None
 
     def _refusal_of_target(
@@ -1567,11 +1575,15 @@ class Migration:
         the node, which is read from storage when asked for rather than loaded
         after startup; anything that ever publishes it another way has to be
         just as complete.
+
+        An agent kept stopped is left out, which is what keeps it stopped
+        through the node's next reboot. ``new_config`` is listed whatever the
+        registry says of it: it is the agent being started now.
         """
         if self.host is None:
             return
         # Build desired state from spawn registry filtered to this node
-        agents = {cfg["name"]: cfg for cfg in self.host._get_spawn_registry().on_node(node)}
+        agents = {cfg["name"]: cfg for cfg in self.host._get_spawn_registry().running_on(node)}
 
         # Apply pending change before publishing. Stripped, because this message
         # is retained: the runner reconciles from it on every reboot, and a

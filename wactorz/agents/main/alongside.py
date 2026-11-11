@@ -145,4 +145,7 @@ async def put_back(host: SpawnHost, source: Address) -> None:
     if source.node == MAIN_NODE:
         await host._spawn_local_from_config(entry, register=False, from_registry=True)
         return
+    if host._get_spawn_registry().is_stopped(entry["actor_id"]):
+        # It was stopped there before the move was asked: back as it was is stopped.
+        return
     await host._update_node_desired_state(source.node, entry)

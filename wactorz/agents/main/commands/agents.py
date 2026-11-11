@@ -11,7 +11,6 @@ import logging
 from ....core.actor import ActorState
 from ....core.addresses import MAIN_NODE, node_of
 from ....core.state_snapshot import FORCE_FLAG
-from ....core.topics import node_topic
 from ..addresses import Registered, registered_agent
 from ..turn_actions import TurnActions
 from .dispatch import CommandContext, command
@@ -85,13 +84,10 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
     if not agent_name:
         return "Usage: /agents restart <agent-name>"
     if node:
-        await ctx.actor._mqtt_publish(
-            node_topic(node, "restart_agent"), {"name": agent_name}, qos=1
-        )
-        return (
-            f"Restart signal sent to '{agent_name}' on node '{node}'. "
-            f"State is preserved — the agent will resume from its last saved state."
-        )
+        # Through main, which starts one that was stopped and has a running one
+        # replaced in place by its node.
+        outcome = await ctx.actor.restart_agent_on_node(agent_name, node, _kept_id(named))
+        return outcome.message
     # Local agent — stop and re-spawn using config from spawn registry
     config = named.entry
     if not config:
@@ -181,8 +177,13 @@ async def copy_agent(ctx: CommandContext, argument: str) -> str:
     return TurnActions((result,)).summary("")
 
 
+def _kept_id(named: Registered) -> str | None:
+    """The id main keeps the agent ``named`` under, when it keeps it: which of its name is meant."""
+    return (named.entry or {}).get("actor_id")
+
+
 async def _start_agent(ctx: CommandContext, agent_name: str) -> str:
-    """Start a stopped local agent."""
+    """Start a stopped agent, here or on its node."""
     if not agent_name:
         return "Usage: /start <agent-name>"
     named, refusal = _named(ctx, agent_name)
@@ -190,15 +191,11 @@ async def _start_agent(ctx: CommandContext, agent_name: str) -> str:
         return refusal
     agent_name, node = named.name, named.node
 
-    # Checked before anything else: a node runner accepts stop and restart and
-    # nothing else, so there is no start to send and the agent would be reported
-    # as started while it stayed down.
+    # An agent on a node is started by main spawning it there again, from the
+    # config it kept when the agent was stopped.
     if node:
-        return (
-            f"'{agent_name}' is running on remote node '{node}'. "
-            f"Starting is only supported for local agents. "
-            f"Use /agents restart {agent_name} to bring it back there."
-        )
+        outcome = await ctx.actor.start_agent_on_node(agent_name, node, _kept_id(named))
+        return outcome.message
 
     if not ctx.actor._registry:
         return "No actor registry available."
@@ -252,16 +249,14 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
     past = "stopped"
 
     if node:
-        # Remote agent — plain stop (no delete flag), keep registry
-        # so /agents restart can resume it cleanly later.
-        await ctx.actor._mqtt_publish(node_topic(node, "stop"), {"name": agent_name}, qos=1)
-        ctx.actor._record_agent_deletion(
-            agent_name, reason=f"manually {past} via /agents on node '{node}'"
-        )
-        return (
-            f"Stop signal sent to '{agent_name}' on node '{node}'. "
-            f"State is preserved — use /agents restart {agent_name} to resume."
-        )
+        # Through main, which remembers the stop: the agent keeps its entry, and
+        # neither its node's reboot nor main's restart starts it again.
+        outcome = await ctx.actor.stop_agent_on_node(agent_name, node, _kept_id(named))
+        if outcome.sent:
+            ctx.actor._record_agent_deletion(
+                agent_name, reason=f"manually {past} via /agents on node '{node}'"
+            )
+        return outcome.message
     # Local agent
     if ctx.actor._registry:
         target = ctx.actor._registry.find_by_name(agent_name)

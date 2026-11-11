@@ -355,6 +355,42 @@ class LifecycleHost(Protocol):
     ) -> None: ...
 
 
+class StopStartHost(Protocol):
+    """What stopping an agent on a node, and starting it again, needs from the actor.
+
+    The spawn registry, where a stop is remembered; the node's desired state and
+    its control topics, which carry it out; and the spawn a start is.
+    """
+
+    name: str
+
+    def _get_spawn_registry(self) -> SpawnRegistry: ...
+
+    def _keep_stopped(self, actor_id: str, stopped: bool) -> None:
+        """Remember the agent as stopped, or as one that should run again."""
+        ...
+
+    def _online_node_names(self) -> list[str]: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
+
+    async def _spawn_remote(
+        self,
+        config: dict[str, Any],
+        node: str,
+        save: bool,
+        *,
+        restoring: bool = ...,
+        kept: bool = ...,
+    ) -> bool: ...
+
+
 class CodeRefreshHost(ListenerHost, Protocol):
     """What filing a node's repaired program needs from the actor.
 

@@ -25,6 +25,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from wactorz.core.identity import derive_actor_id
 from wactorz.core.persistence.db import ChatRow
 from wactorz.web import db_writer, events, runtime, ws
+from wactorz.web.lifecycle import Dispatched
 
 
 class _Registry:
@@ -432,7 +433,9 @@ def commands_fixture(db: _Db) -> Iterator[list[dict[str, Any]]]:
     with (
         patch.object(ws, "broadcast", new=_record),
         patch.object(ws.lifecycle, "delete_agent", new=AsyncMock(return_value="deleted")),
-        patch.object(ws.lifecycle, "dispatch_command", new=AsyncMock(return_value=True)),
+        patch.object(
+            ws.lifecycle, "dispatch_command", new=AsyncMock(return_value=Dispatched("local"))
+        ),
     ):
         yield sent
     runtime.state["agents"].clear()
@@ -478,12 +481,30 @@ class TestHandleCommand:
         # while it is still running, with nothing to correct that until the next
         # heartbeat. The verb has to be one the allow-list accepts, or the refusal
         # under test is never reached.
-        ws.lifecycle.dispatch_command.return_value = False
+        ws.lifecycle.dispatch_command.return_value = Dispatched("refused")
 
-        await ws.handle_command({"command": "stop", "agent_id": "a1"})
+        problem = await ws.handle_command({"command": "stop", "agent_id": "a1"})
 
         assert runtime.state["agents"]["a1"]["state"] == "running"
         assert not commands
+        assert problem == "The stop was not carried out."
+
+    async def test_whoever_asked_is_told_why_a_command_was_not_carried_out(
+        self, commands: list[dict[str, Any]]
+    ) -> None:
+        ws.lifecycle.dispatch_command.return_value = Dispatched(
+            "refused", "'cam' was not started: node 'rpi' is not online. It stays stopped."
+        )
+
+        problem = await ws.handle_command({"command": "start", "agent_id": "a1"})
+
+        assert problem == "'cam' was not started: node 'rpi' is not online. It stays stopped."
+        assert not commands
+
+    async def test_a_command_carried_out_has_nothing_to_report(
+        self, commands: list[dict[str, Any]]
+    ) -> None:
+        assert await ws.handle_command({"command": "stop", "agent_id": "a1"}) is None
 
     async def test_deleting_a_protected_agent_does_not_remove_it_from_the_dashboard(
         self, commands: list[dict[str, Any]]

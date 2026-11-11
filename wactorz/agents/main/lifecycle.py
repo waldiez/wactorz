@@ -65,8 +65,10 @@ PROTECTED_AGENTS = frozenset(
 )
 
 
-#: What a withdrawal comes to: it stands, it is refused, or it waits on a node's next heartbeat.
-STANDS, REFUSED, HELD = "stands", "refused", "held"
+#: What a withdrawal comes to: it stands, it is refused, it waits on a node's
+#: next heartbeat, or it is that of an agent kept stopped on its node, which
+#: goes quiet and is not gone.
+STANDS, REFUSED, HELD, KEPT = "stands", "refused", "held", "kept"
 
 #: Told the id of every agent whose withdrawal stands, once it does.
 WithdrawalWatcher = Callable[[str], Awaitable[None]]
@@ -205,6 +207,17 @@ class LifecycleService:
                 decision.node,
             )
             return False
+        if decision.verdict == KEPT:
+            # Its manifest is forgotten, as that of any agent not running; its
+            # entry stays and no watcher is told, so whatever shows the agent
+            # goes on showing it, stopped, with a way to start it.
+            logger.info(
+                "[%s] %r withdrew its manifest: it is stopped on %r and kept.",
+                self.host.name,
+                decision.name,
+                decision.node,
+            )
+            return True
         if decision.spawned and not self._withdrawals_suppressed:
             await self._withdraw(decision.name, decision.node)
         await self._tell_watchers(actor_id)
@@ -218,7 +231,9 @@ class LifecycleService:
         included, which the spawn registry does not keep -- is refused; one the
         spawn registry does not keep stands, as there is nothing of it to
         protect; one running here under the registry's name is refused; one
-        whose node's latest heartbeat still lists it is held; the rest stand.
+        kept stopped on its node is kept, whatever that node last listed, since
+        stopping is what made it withdraw; one whose node's latest heartbeat
+        still lists it is held; the rest stand.
         """
         if self._withdrawals_suppressed:
             return WithdrawalDecision(STANDS, name)
@@ -239,6 +254,8 @@ class LifecycleService:
         node = placed_on(config)
         if not node and live is not None and live.find_by_name(name):
             return WithdrawalDecision(REFUSED, name, node, spawned=True)
+        if node and registry.is_stopped(config["actor_id"]):
+            return WithdrawalDecision(KEPT, name, node, spawned=True)
         if node and self.host._node_last_listing(name) == node:
             return WithdrawalDecision(HELD, name, node, spawned=True)
         return WithdrawalDecision(STANDS, name, node, spawned=True)
@@ -287,12 +304,31 @@ class LifecycleService:
                 )
                 continue
             await self._clear_agent_manifest(name, actor_id)
-            if self.host._get_spawn_registry().at(name, node) is not None:
+            registry = self.host._get_spawn_registry()
+            entry = registry.at(name, node)
+            if entry is not None and registry.is_stopped(entry["actor_id"]):
+                # Stopped while its withdrawal waited: kept, and shown as it is.
+                continue
+            if entry is not None:
                 await self._withdraw(name, node)
             await self._tell_watchers(actor_id)
 
     async def _withdraw(self, name: str, node: str) -> None:
-        """Take a withdrawn agent out of the spawn registry and its node's desired state."""
+        """Take a withdrawn agent out of the spawn registry and its node's desired state.
+
+        One kept stopped is left where it is: an agent that was stopped is
+        expected to go quiet, and its entry is what starts it again.
+        """
+        registry = self.host._get_spawn_registry()
+        entry = registry.at(name, node)
+        if entry is not None and registry.is_stopped(entry["actor_id"]):
+            logger.info(
+                "[%s] %r withdrew its manifest; it is stopped on %r and kept.",
+                self.host.name,
+                name,
+                node,
+            )
+            return
         self.host._remove_from_spawn_registry(name, node)
         if node:
             await self.host._update_node_desired_state(node, remove_name=name)

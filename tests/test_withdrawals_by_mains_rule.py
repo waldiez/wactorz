@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 import pytest
 
-from wactorz.agents.main.lifecycle import LifecycleService
+from wactorz.agents.main.lifecycle import KEPT, LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.spawn_registry import SpawnRegistry, with_actor_id
 from wactorz.core.actor import derive_actor_id
@@ -67,6 +67,8 @@ class _Host:
         self.name = "main"
         self._registry = live
         self._spawn_registry = spawned
+        #: The ids of the agents on nodes main keeps stopped.
+        self.stopped: list[str] = []
         self.listing: dict[str, str] = {}
         self._conversation_history: list[dict[str, Any]] = []
         self._agent_manifests: dict[str, dict[str, Any]] = {}
@@ -74,9 +76,8 @@ class _Host:
         self.published: list[tuple[str, Any]] = []
 
     def _get_spawn_registry(self) -> SpawnRegistry:
-        return SpawnRegistry.from_names(
-            {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
-        )
+        by_name = {name: with_actor_id(name, cfg) for name, cfg in self._spawn_registry.items()}
+        return SpawnRegistry.stored(None, by_name, self.stopped)
 
     def _remove_from_spawn_registry(
         self, name: str, node: str | None = None, *, actor_id: str | None = None
@@ -233,6 +234,51 @@ class TestAnAgentOnANode:
 
         assert cam_id not in runtime.state["agents"]
         assert web.deleted() == [cam_id]
+
+    @pytest.mark.parametrize("listing", [{}, {"cam": "rpi"}])
+    async def test_one_kept_stopped_keeps_its_card_and_its_entry(
+        self, web: _Setup, listing: dict[str, str]
+    ) -> None:
+        # Stopping is what made it withdraw: it went quiet, and is not gone.
+        # Whether or not its node's last heartbeat still listed it.
+        cam_id = web.card("cam")
+        assert web.main is not None
+        web.host.stopped = [cam_id]
+        web.host.listing = listing
+        told: list[str] = []
+
+        async def _watcher(actor_id: str) -> None:
+            told.append(actor_id)
+
+        web.main.lifecycle.watchers.append(_watcher)
+
+        await _forged(cam_id)
+        await web.main.hears(cam_id)
+        await web.main.lifecycle.settle_withdrawals("rpi", set())
+
+        assert web.main.lifecycle.withdrawal_decision(cam_id).verdict == KEPT
+        assert told == []
+        assert web.deleted() == []
+        assert cam_id in runtime.state["agents"]
+        assert "cam" in web.host._spawn_registry
+
+    async def test_one_stopped_while_its_withdrawal_waited_keeps_its_card(
+        self, web: _Setup
+    ) -> None:
+        cam_id = web.card("cam")
+        assert web.main is not None
+        web.host.listing = {"cam": "rpi"}
+        await _forged(cam_id)
+        await web.main.hears(cam_id)
+        # Held for the node's next heartbeat; stopped before it comes.
+        web.host.stopped = [cam_id]
+
+        await web.main.lifecycle.settle_withdrawals("rpi", set())
+        await web.main.hears(cam_id)
+
+        assert web.deleted() == []
+        assert cam_id in runtime.state["agents"]
+        assert "cam" in web.host._spawn_registry
 
     async def test_another_servers_agent_goes(self, web: _Setup) -> None:
         neighbour_id = web.card("neighbour")

@@ -27,9 +27,10 @@ from wactorz.agents.main.commands import packages as package_cmds
 from wactorz.agents.main.commands.dispatch import CommandContext
 from wactorz.agents.main.planning import PENDING_PLANS_KEY
 from wactorz.agents.main.spawn_registry import SpawnRegistry
+from wactorz.agents.main.stop_start import Outcome
 from wactorz.config import CONFIG
 from wactorz.core import topic_bus
-from wactorz.core.actor import Actor, ActorState
+from wactorz.core.actor import Actor, ActorState, derive_actor_id
 from wactorz.core.topic_bus import TopicBus, TopicContract
 
 
@@ -111,6 +112,8 @@ class _Main:
         self.published: list[tuple[str, Any]] = []
         self.migrate_result: Any = {"success": True, "message": "moved"}
         self.delete_error: Exception | None = None
+        #: What main answers a stop, start or restart of an agent on a node.
+        self.on_node: Outcome = Outcome(True, "sent")
         self.installer_result: Any = {"success": True, "output": "up 3 days", "exit_code": 0}
 
     # memory
@@ -184,6 +187,24 @@ class _Main:
 
     def _record_agent_deletion(self, name: str, reason: str = "") -> None:
         self.calls.append(("record", (name, reason)))
+
+    async def stop_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        self.calls.append(("stop on node", (name, node, actor_id)))
+        return self.on_node
+
+    async def start_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        self.calls.append(("start on node", (name, node, actor_id)))
+        return self.on_node
+
+    async def restart_agent_on_node(
+        self, name: str, node: str, actor_id: str | None = None
+    ) -> Outcome:
+        self.calls.append(("restart on node", (name, node, actor_id)))
+        return self.on_node
 
     async def delegate_to_installer(self, payload: dict[str, Any], timeout: float = 0) -> Any:
         self.calls.append(("installer", payload))
@@ -697,20 +718,23 @@ class TestRestart:
             await agent_cmds.restart_agent(_ctx(main), "") == "Usage: /agents restart <agent-name>"
         )
 
-    async def test_a_remote_agent_is_restarted_by_its_node(self, main: _Main) -> None:
+    async def test_an_agent_on_a_node_is_restarted_through_main(self, main: _Main) -> None:
         main.spawn_registry = {"cam": {"node": "rpi"}}
+        main.on_node = Outcome(True, "Restart sent to 'cam' on node 'rpi'.")
 
         text = await agent_cmds.restart_agent(_ctx(main), "cam")
 
-        assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
-        assert "on node 'rpi'" in text
+        # By the id main keeps it under, which says which agent of the name is meant.
+        assert main.calls == [("restart on node", ("cam", "rpi", derive_actor_id("cam")))]
+        assert text == "Restart sent to 'cam' on node 'rpi'."
+        assert main.published == []
 
     async def test_the_full_address_restarts_the_agent_on_that_node(self, main: _Main) -> None:
         main.spawn_registry = {"cam": {"node": "rpi"}}
 
         await agent_cmds.restart_agent(_ctx(main), "cam@rpi")
 
-        assert main.published == [("nodes/rpi/restart_agent", {"name": "cam"})]
+        assert main.calls == [("restart on node", ("cam", "rpi", derive_actor_id("cam")))]
 
     async def test_an_address_naming_another_node_acts_on_nothing(self, main: _Main) -> None:
         # Typed for an agent on the PC, it must not restart the Pi's.
@@ -856,10 +880,15 @@ class TestStart:
     async def test_a_name_is_required(self, main: _Main) -> None:
         assert await agent_cmds.start_agent(_ctx(main), "") == "Usage: /start <agent-name>"
 
-    async def test_a_remote_agent_is_pointed_at_restart(self, main: _Main) -> None:
+    async def test_an_agent_on_a_node_is_started_through_main(self, main: _Main) -> None:
         main.spawn_registry = {"cam": {"node": "rpi"}}
+        main.on_node = Outcome(False, "'cam' was not started: node 'rpi' is not online.")
 
-        assert "Use /agents restart cam" in await agent_cmds.start_agent(_ctx(main), "cam")
+        text = await agent_cmds.start_agent(_ctx(main), "cam")
+
+        assert main.calls == [("start on node", ("cam", "rpi", derive_actor_id("cam")))]
+        # What main answered, a refusal included: nothing is claimed beyond it.
+        assert text == "'cam' was not started: node 'rpi' is not online."
 
     async def test_without_a_registry_or_agent_it_says_so(self, main: _Main) -> None:
         assert await agent_cmds.start_agent(_ctx(main), "x") == "Agent 'x' not found locally."
@@ -913,13 +942,27 @@ class TestStopAndDelete:
 
         assert text == "Delete of 'weather' failed: locked"
 
-    async def test_a_remote_agent_is_stopped_by_its_node(self, main: _Main) -> None:
+    async def test_an_agent_on_a_node_is_stopped_through_main(self, main: _Main) -> None:
         main.spawn_registry = {"cam": {"node": "rpi"}}
+        main.on_node = Outcome(True, "Stop sent to 'cam' on node 'rpi'.")
 
         text = await agent_cmds.stop_agent(_ctx(main), "cam")
 
-        assert main.published == [("nodes/rpi/stop", {"name": "cam"})]
-        assert text.startswith("Stop signal sent to 'cam' on node 'rpi'.")
+        assert main.calls == [
+            ("stop on node", ("cam", "rpi", derive_actor_id("cam"))),
+            ("record", ("cam", "manually stopped via /agents on node 'rpi'")),
+        ]
+        assert text == "Stop sent to 'cam' on node 'rpi'."
+        assert main.published == []
+
+    async def test_a_stop_that_was_not_sent_is_not_recorded_as_one(self, main: _Main) -> None:
+        main.spawn_registry = {"cam": {"node": "rpi"}}
+        main.on_node = Outcome(False, "'cam' on node 'rpi' was not stopped: no broker")
+
+        text = await agent_cmds.stop_agent(_ctx(main), "cam")
+
+        assert [call for call, _ in main.calls] == ["stop on node"]
+        assert text == "'cam' on node 'rpi' was not stopped: no broker"
 
     async def test_a_local_agent_is_stopped_and_recorded(self, main: _Main) -> None:
         running = _Agent("weather")

@@ -27,6 +27,7 @@ import pytest
 from wactorz import cli
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
+from wactorz.core import mqtt as core_mqtt
 from wactorz.core.actor import derive_actor_id
 from wactorz.core.node_signing import REQUEST_SIGNATURE_FIELD, node_key, request_signed_for
 from wactorz.node import cli as node_cli
@@ -401,13 +402,27 @@ class TestReachingAnAgentElsewhere:
 
 
 class TestCommandsSentStraightToTheAgent:
-    """`stop` and `delete` can arrive on `agents/<id>/commands`, bypassing the
-    node's control plane — its agents hold a command listener of their own.
+    """`stop` and `delete` asked of the agent itself bypass the node's control plane.
 
     The base class handles only half of it here, which is why the node agent
     overrides it: the node's own bookkeeping is what makes a stop a stop and a
     delete irreversible.
     """
+
+    async def test_it_holds_no_connection_for_commands(
+        self, runner: NodeRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Main stops and starts it through its node, and a node's broker account
+        # may not read the topic such a connection would subscribe to.
+        def _no_connection(*_args: Any, **_kwargs: Any) -> None:
+            pytest.fail("an agent on a node opened a connection for commands")
+
+        monkeypatch.setattr(core_mqtt, "mqtt_client", _no_connection)
+        await runner.spawn_agent({"name": "edge-agent", "code": ""})
+        agent = runner.get("edge-agent")
+        assert agent is not None
+
+        assert await asyncio.wait_for(agent._command_listener(), timeout=5) is None
 
     async def test_a_stop_takes_the_agent_off_the_node(self, runner: NodeRunner) -> None:
         await runner.spawn_agent({"name": "edge-agent", "code": ""})

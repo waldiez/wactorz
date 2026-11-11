@@ -191,8 +191,9 @@ called when another view opens; the tab is mounted again when it is opened again
 | `subscribe(filter, fn)` | Messages on a topic the page is sent: the dashboard's own, and the panel's `topics` |
 | `toast({title, message, type?})` | A notice; `type` is `info`, `warning` or `error` |
 | `chart(series, options)` | The dashboard's line chart, to place in `root`; returns `{element, update(series, options?), destroy()}` (below) |
+| `setting(key)`, `onSetting(key, fn)` | What this browser chose for a setting the panel declared, and being told when it changes (below) |
 
-What `onRoute`, `subscribe` and `chart` start ends with the panel, and each returns a function
+What `onRoute`, `subscribe`, `onSetting` and `chart` start ends with the panel, and each returns a function
 (for `chart`, its `destroy`) that ends it sooner. A panel styles itself, inside `root`: it inherits the dashboard's
 text colour and font, and can read its CSS variables (`--af-text-dim`, `--af-focus`). A script that fails
 to load, exports no `mount`, was written for another `apiVersion` or throws says so in
@@ -232,6 +233,46 @@ const chart = host.chart(
 );
 root.append(chart.element);
 ```
+
+**Its settings.** A panel that has something for each person to choose declares it, and
+the dashboard draws it: a section of Settings named after the tab, at
+`#/settings/panel-<name>`, with a row per setting, laid out as the dashboard's own.
+
+```python
+from wactorz.ext import Panel, PanelSetting
+
+Panel(
+    title="Air",
+    script=HERE / "panel.js",
+    settings=(
+        PanelSetting("temperature", "Temperature", kind="choice",
+                     choices=(("c", "°C"), ("f", "°F")), default="c",
+                     hint="The unit the rooms' temperatures read in."),
+        PanelSetting("compact", "Compact cards"),                      # a switch, off
+        PanelSetting("keep", "Points kept", kind="number", default=400, minimum=50, maximum=2000),
+    ),
+)
+```
+
+| Kind | Drawn as | `default` | Also |
+|------|----------|-----------|------|
+| `switch` (when left out) | An on/off switch | `True` or `False` | |
+| `choice` | A few choices side by side | One of the values | `choices`: `(value, label)` pairs, in order |
+| `number` | A number field | A number | `minimum`, `maximum`, `step`, each optional |
+
+A setting's `key` is lowercase letters, digits and `-`, and its `hint` is one line under
+its name. A setting that cannot be drawn (a default that is not among the choices or is
+out of range, a key used twice) is left out, the others stay, and the log says why.
+
+The values are each browser's own: the server describes the settings and never holds
+what was chosen. `host.setting("temperature")` answers with what this browser chose, the
+default until it has, and `undefined` for a key the panel did not declare. Settings is
+another view, so a panel reads its settings when it mounts; `host.onSetting(key, fn)`
+tells it of a change made meanwhile in another window of the same browser. A setting
+changes how the panel shows things, so keep what is published and stored as it is: the
+air-quality example converts to °F on display and its readings stay in °C. Both came
+within version 1, so a panel that may meet an older dashboard checks
+`typeof host.setting === "function"` first.
 
 **What a panel is trusted with.** It runs in the page with the signed-in session, so
 it can do whatever the dashboard can: as much as the package's code already can on
@@ -401,7 +442,7 @@ the base stack stays lean and the infrastructure is purely opt-in — the same
 - [ ] Optional `public_config()` returns only non-secret keys (never tokens)
 - [ ] Optional `on_ready()` handles cross-extension ordering via `__deps__`
 - [ ] Optional `actor_decorator()` enriches the `/api/actors` payload
-- [ ] Optional `panel()` names a `.js` module exporting `apiVersion` and `mount(root, host)`, and an icon by name or an `.svg` on a 24 by 24 grid
+- [ ] Optional `panel()` names a `.js` module exporting `apiVersion` and `mount(root, host)`, an icon by name or an `.svg` on a 24 by 24 grid, and any `settings` a person chooses per browser
 - [ ] Config is read from `os.getenv(…)`, not `wactorz.config.CONFIG`
 - [ ] Extension no-ops gracefully when its env var / dependency is absent
 - [ ] Frontend barrel exports a `register(config)` function; wires via the event bus

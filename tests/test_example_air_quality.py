@@ -26,7 +26,7 @@ from wactorz.core.actor import Message
 from wactorz.core.artifacts import ArtifactStore
 from wactorz.core.paths import resolve_state_dir
 from wactorz.data import data_root, sources
-from wactorz.ext._panel import icon_file_text
+from wactorz.ext._panel import icon_file_text, setting_entry, usable_settings
 
 pytest.importorskip("numpy")
 
@@ -287,6 +287,27 @@ class TestThePackage:
         assert "innerHTML" not in script
         icon = icon_file_text(panel)
         assert icon is not None and 'viewBox="0 0 24 24"' in icon
+
+    def test_its_tab_lets_a_browser_choose_the_temperature_unit(
+        self, aq: types.SimpleNamespace
+    ) -> None:
+        panel = aq.tab.panel(None)
+        script = Path(panel.script).read_text(encoding="utf-8")
+
+        assert usable_settings(panel) == (panel.settings, [])
+        assert [setting_entry(s) for s in panel.settings] == [
+            {
+                "key": "temperature",
+                "label": "Temperature",
+                "hint": "The unit the rooms' temperatures read in.",
+                "kind": "choice",
+                "default": "c",
+                "choices": [{"value": "c", "label": "°C"}, {"value": "f", "label": "°F"}],
+            }
+        ]
+        # Asked for by the key it declares, and only of a dashboard that has settings.
+        assert 'host.setting("temperature")' in script
+        assert 'typeof host.setting === "function"' in script
 
     def test_training_stores_the_threshold_with_the_version(
         self, aq: types.SimpleNamespace, tmp_path: Path

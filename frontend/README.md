@@ -183,7 +183,9 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
    know your icon names
 6. **Adds its settings as a section of Settings**, if it has any — `af-register-settings` with a
    `SettingsSection` (`types/settings.ts`), built from the rows in `ui/settings/layout.ts` so it
-   looks like the dashboard's own, and saying where its values are kept (`scope`)
+   looks like the dashboard's own, and saying where its values are kept (`scope`). A package's
+   tab does not do this itself: it declares its settings on the server, and `ext/panels` draws
+   the section and keeps the values (`docs/extensions.md`)
 7. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide: style/JSDoc rules, the

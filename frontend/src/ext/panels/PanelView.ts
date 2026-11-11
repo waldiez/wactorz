@@ -13,6 +13,7 @@
 import { emit, listen } from "../../events";
 import { apiUrl, requestJson } from "../../io/api";
 import { LineChart, SERIES_COLORS, type ChartOptions, type Series } from "../../ui/charts";
+import { PanelSettings, readSettings } from "./settings";
 import {
     PANEL_API_VERSION,
     type PanelChart,
@@ -93,6 +94,8 @@ export class PanelView {
     constructor(
         private readonly entry: PanelEntry,
         private readonly services: PanelServices,
+        /** The panel's settings: the ones Settings changes, when the caller shares them. */
+        private readonly settings = new PanelSettings(entry.name, readSettings(entry.settings)),
     ) {
         this.root.className = "af-ext-panel";
     }
@@ -232,6 +235,8 @@ export class PanelView {
                 ),
             toast: notice => this.services.toast(notice),
             chart: (series, options) => this._chart(visit, series, options),
+            setting: key => this.settings.get(key),
+            onSetting: (key, handler) => this._keep(visit, this.settings.follow(key, handler)),
         };
     }
 

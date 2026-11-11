@@ -80,6 +80,11 @@ stored in the state directory Wactorz runs with (`WACTORZ_STATE_DIR`, else
 3. **The labels.** Each answer is now a label on its room over exactly that
    window: `GET /api/labels?source=kitchen`, or the room's history. "Normal" is
    a label too, so a false alarm can be counted as one.
+4. **Settings → Air.** The tab has one setting, the unit its temperatures read
+   in: `tab.py` declares it, the dashboard draws it, and each browser keeps its
+   own choice. The readings, the model and the questions stay in °C.
+
+![Settings, the Air section open: one row, Temperature, with °C and °F side by side](air-settings.png)
 
 ## A stricter version, on trial
 

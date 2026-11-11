@@ -69,12 +69,17 @@ export function settingRow(
     return row;
 }
 
+/** Rows drawn as one card: a section with a single group needs no heading over it. */
+export function settingRows(...rows: HTMLElement[]): HTMLElement {
+    const card = el("div", "af-setting-rows");
+    card.append(...rows);
+    return card;
+}
+
 /** Rows under a heading of their own, drawn as one card. */
 export function settingGroup(title: string, ...rows: HTMLElement[]): HTMLElement {
     const group = el("div", "af-setting-group");
-    const card = el("div", "af-setting-rows");
-    card.append(...rows);
-    group.append(el("h3", "af-setting-group-title", title), card);
+    group.append(el("h3", "af-setting-group-title", title), settingRows(...rows));
     return group;
 }
 

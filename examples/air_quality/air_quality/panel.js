@@ -3,7 +3,8 @@
  */
 // The Air tab: a card per room with its latest readings, and its score over the
 // simulated day, with the threshold, each episode shaded and each answer marked.
-// Live only: it shows what arrives while it is open.
+// Live only: it shows what arrives while it is open. Temperatures read in the
+// unit chosen in Settings → Air; the readings themselves stay in °C.
 export const apiVersion = 1;
 
 const ROOMS = { "meeting-room": "Meeting room", "open-office": "Open office", kitchen: "Kitchen" };
@@ -36,6 +37,13 @@ function el(tag, className, text) {
     return node;
 }
 
+// A reading's text in the unit chosen: only the temperature has another.
+function shown(key, name, unit, digits, value, fahrenheit) {
+    if (!Number.isFinite(value)) return `${name} –`;
+    if (key === "temperature" && fahrenheit) return `${name} ${((value * 9) / 5 + 32).toFixed(digits)} °F`;
+    return `${name} ${value.toFixed(digits)} ${unit}`;
+}
+
 function clock(ts) {
     return new Date(ts * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 }
@@ -51,6 +59,15 @@ export function mount(root, host) {
 
     const cards = new Map();
     const timers = new Set();
+    // A dashboard from before panels had settings has no `setting`: °C then.
+    const canChoose = typeof host.setting === "function";
+    let fahrenheit = canChoose && host.setting("temperature") === "f";
+
+    function write(c) {
+        for (const [key, name, unit, digits] of QUANTITIES) {
+            c.cells[key].textContent = shown(key, name, unit, digits, Number(c.reading?.[key]), fahrenheit);
+        }
+    }
 
     function card(room) {
         let c = cards.get(room);
@@ -68,7 +85,7 @@ export function mount(root, host) {
         }
         const note = el("div", "aq-note aq-dim");
         box.append(top, values);
-        c = { box, badge, cells, note, points: [], threshold: null, bands: [], marks: [], chart: null, due: false };
+        c = { box, badge, cells, note, reading: null, points: [], threshold: null, bands: [], marks: [], chart: null, due: false };
         if (typeof host.chart === "function") {
             c.chart = host.chart([], { title: `${ROOMS[room] ?? room}: score`, yLabel: "spreads from usual", mode: "line" });
             box.append(c.chart.element);
@@ -102,10 +119,8 @@ export function mount(root, host) {
         host.subscribe("sensors/air/+", (_topic, reading) => {
             if (!reading || !ROOMS[reading.device]) return;
             const c = card(reading.device);
-            for (const [key, name, unit, digits] of QUANTITIES) {
-                const value = Number(reading[key]);
-                c.cells[key].textContent = Number.isFinite(value) ? `${name} ${value.toFixed(digits)} ${unit}` : `${name} –`;
-            }
+            c.reading = reading;
+            write(c);
             now.textContent = `Tuesday ${clock(reading.ts)} UTC (simulated)`;
         }),
         host.subscribe("air/+/score", (_topic, scored) => {
@@ -138,6 +153,15 @@ export function mount(root, host) {
             redraw(c);
         }),
     ];
+    if (canChoose) {
+        // Changed in another window while this one shows the tab.
+        stops.push(
+            host.onSetting("temperature", unit => {
+                fahrenheit = unit === "f";
+                for (const c of cards.values()) write(c);
+            }),
+        );
+    }
 
     return () => {
         for (const stop of stops) stop();

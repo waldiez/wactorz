@@ -12,11 +12,20 @@ import { emit } from "../../events";
 import { safeStorage } from "../../safeStorage";
 import { iconMarkup, registerIconFile } from "../../ui/shell/icons";
 import { PanelView, type PanelServices } from "./PanelView";
+import { PanelSettings, readSettings, settingsSection } from "./settings";
 import type { ToastOptions } from "../../ui/ToastManager";
 import type { PanelEntry, PanelStop, PanelToast } from "./types";
 
 export { PANEL_API_VERSION } from "./types";
-export type { PanelEntry, PanelHost, PanelModule, PanelStop, PanelToast } from "./types";
+export type {
+    PanelEntry,
+    PanelHost,
+    PanelModule,
+    PanelSetting,
+    PanelSettingValue,
+    PanelStop,
+    PanelToast,
+} from "./types";
 
 /** Where the list of panels is kept. */
 export const PANELS_KEY = "wactorz-panels";
@@ -74,22 +83,23 @@ export function panelIcon(entry: PanelEntry): string {
 const loadScript: PanelServices["load"] = url => import(/* @vite-ignore */ url);
 
 /**
- * Add a tab for each panel the server lists. Called once from app.ts, after
- * `/api/config` was read.
+ * Add a tab for each panel the server lists, and a section of Settings for each
+ * that has settings. Called once from app.ts, after `/api/config` was read.
  *
  * @returns the way to stop them.
  */
 export function register(services: Omit<PanelServices, "load"> & Partial<PanelServices>): PanelStop {
-    const stops = parsePanels(safeStorage.get(PANELS_KEY)).map(entry => {
-        const view = new PanelView(entry, { load: loadScript, ...services });
-        const stop = view.start();
-        emit("af-register-view", {
-            key: entry.name,
-            icon: panelIcon(entry),
-            label: entry.title,
-            build: () => view.build(),
-        });
-        return stop;
+    const stops = parsePanels(safeStorage.get(PANELS_KEY)).flatMap(entry => {
+        const settings = new PanelSettings(entry.name, readSettings(entry.settings));
+        const view = new PanelView(entry, { load: loadScript, ...services }, settings);
+        const icon = panelIcon(entry);
+        const started = [view.start()];
+        emit("af-register-view", { key: entry.name, icon, label: entry.title, build: () => view.build() });
+        if (settings.settings.length > 0) {
+            started.push(settings.start());
+            emit("af-register-settings", settingsSection(entry, icon, settings));
+        }
+        return started;
     });
     return () => stops.forEach(stop => stop());
 }

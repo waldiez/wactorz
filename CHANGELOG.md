@@ -35,6 +35,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **A package's tab can have settings.** Its `Panel` declares them (`settings=(PanelSetting("temperature",
+  "Temperature", kind="choice", choices=(("c", "°C"), ("f", "°F")), default="c"),)`: a switch, a choice among a few, or a
+  number), and the dashboard draws them as a section of Settings named after the tab, at `#/settings/panel-<name>`. Each
+  browser keeps its own values; the panel's script reads one with `host.setting(key)` and hears a change from another
+  window with `host.onSetting(key, fn)`, both added within panel API version 1. A setting that cannot be drawn is left
+  out and logged. The air-quality example uses one to show temperatures in °C or °F.
+
 - **Two installs can share a broker.** `WACTORZ_NAMESPACE=dev` (the add-ons' `namespace` option) moves an install's
   own topics under one word of its own -- `dev/agents/...`, `dev/nodes/...` and the rest -- and the node access list
   with them, so another install on the same broker neither hears nor drives its agents and nodes. The world's topics

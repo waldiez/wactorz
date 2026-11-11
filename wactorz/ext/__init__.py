@@ -55,6 +55,7 @@ FUTURE: if an extension might need a teardown ordering or prerequisite like
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import logging
 import pkgutil
@@ -63,12 +64,21 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .. import installed
-from ._panel import PANEL_ICONS, PANELS, Panel, PanelIconError, icon_file_text, panel_problem
+from ._panel import (
+    PANEL_ICONS,
+    PANELS,
+    Panel,
+    PanelIconError,
+    PanelSetting,
+    icon_file_text,
+    panel_problem,
+    usable_settings,
+)
 
 if TYPE_CHECKING:
     from aiohttp.web import Application
 
-__all__ = ["PANELS", "PANEL_ICONS", "Panel"]
+__all__ = ["PANELS", "PANEL_ICONS", "Panel", "PanelSetting"]
 
 log: logging.Logger = logging.getLogger(__name__)
 
@@ -243,6 +253,11 @@ def _add_panel(
     if problem:
         log.warning("[ext] %s has no dashboard tab: %s", name, problem)
         return
+    settings, left_out = usable_settings(panel)
+    for line in left_out:
+        log.warning("[ext] %s's tab is without a setting: %s", name, line)
+    if left_out:
+        panel = dataclasses.replace(panel, settings=settings)
     panels[name] = panel
     try:
         text = icon_file_text(panel)

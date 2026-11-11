@@ -13,6 +13,39 @@ import type { ChartOptions, Format, Series } from "../../ui/charts";
 /** The version of {@link PanelHost} this dashboard offers. */
 export const PANEL_API_VERSION = 1;
 
+/** What a panel's setting can hold: a switch's state, a choice's value, or a number. */
+export type PanelSettingValue = boolean | string | number;
+
+/** What every setting of a panel says of itself. */
+interface PanelSettingBase {
+    /** What the panel asks for it by. */
+    key: string;
+    /** The row's name. */
+    label: string;
+    /** One line under the name, on what it does; may be empty. */
+    hint: string;
+}
+
+/** One value a panel lets each browser choose, as the server describes it. */
+export type PanelSetting =
+    | (PanelSettingBase & { kind: "switch"; default: boolean })
+    | (PanelSettingBase & {
+          kind: "choice";
+          default: string;
+          /** Each value and what it says, in the order drawn. */
+          choices: { value: string; label: string }[];
+      })
+    | (PanelSettingBase & {
+          kind: "number";
+          default: number;
+          /** The least it may be, when there is one. */
+          min?: number;
+          /** The most it may be, when there is one. */
+          max?: number;
+          /** The distance between the values offered, when it matters. */
+          step?: number;
+      });
+
 /** A panel's tab, as `/api/config` lists it. */
 export interface PanelEntry {
     /** The extension's short name: the view's key and address. */
@@ -23,6 +56,8 @@ export interface PanelEntry {
     icon: string;
     /** The text of the package's own icon file, when it ships one: drawn instead of `icon`. */
     icon_svg?: string;
+    /** What each browser may choose for the panel. Read with `readSettings`, which keeps the well-formed. */
+    settings?: unknown;
 }
 
 /** A notice a panel shows. */
@@ -79,6 +114,18 @@ export interface PanelHost {
      * dashboard checks `typeof host.chart === "function"` first.
      */
     chart(series: PanelSeries[], options: PanelChartOptions): PanelChart;
+    /**
+     * What this browser chose for the setting `key` the panel declared on the
+     * server, its default while nothing was chosen, and `undefined` for a key it
+     * did not declare. Added within version 1, so a panel that may meet an older
+     * dashboard checks `typeof host.setting === "function"` first.
+     */
+    setting(key: string): PanelSettingValue | undefined;
+    /**
+     * Be told when the setting `key` changes while the panel is open, which is
+     * when it is changed in another window of this browser. Added with `setting`.
+     */
+    onSetting(key: string, handler: (value: PanelSettingValue) => void): PanelStop;
 }
 
 /** What a panel's script exports. */

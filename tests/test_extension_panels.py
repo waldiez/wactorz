@@ -18,8 +18,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz import config, ext
-from wactorz.ext import PANEL_ICONS, PANELS, Panel
-from wactorz.ext._panel import ICON_MAX_BYTES
+from wactorz.ext import PANEL_ICONS, PANELS, Panel, PanelSetting
+from wactorz.ext._panel import ICON_MAX_BYTES, setting_entry, setting_problem
 from wactorz.web import relay, runtime
 from wactorz.web.app import build_app
 
@@ -181,6 +181,98 @@ class TestIconFiles:
         assert said in caplog.text
 
 
+UNITS = PanelSetting(
+    "temperature", "Temperature", kind="choice", choices=(("c", "°C"), ("f", "°F")), default="c"
+)
+COMPACT = PanelSetting("compact", "Compact cards", hint="A row per room.")
+KEEP = PanelSetting("keep", "Points kept", kind="number", default=400, minimum=50, maximum=2000)
+
+
+class TestSettings:
+    def test_settings_that_can_be_drawn_are_kept_as_declared(
+        self, monkeypatch: pytest.MonkeyPatch, script: Path
+    ) -> None:
+        panel = Panel(title="Air", script=script, settings=(UNITS, COMPACT, KEEP))
+
+        assert _panels(monkeypatch, _module("air", panel=lambda _app: panel)) == {"air": panel}
+
+    @pytest.mark.parametrize(
+        ("setting", "said"),
+        [
+            (PanelSetting("Units", "Units"), "its key is not lower-case"),
+            (PanelSetting("units", " "), "it has no label"),
+            (PanelSetting("units", "Units", default="on"), "its default is not True or False"),
+            (PanelSetting("units", "Units", kind="choice", default="c"), "it has no choices"),
+            (
+                dataclasses.replace(UNITS, choices=(("c", "°C"), ("c", "Celsius"))),
+                "two of its choices have the same value",
+            ),
+            (dataclasses.replace(UNITS, choices=(("c", ""),)), "a (value, label) pair"),
+            (dataclasses.replace(UNITS, default="k"), "its default is not one of its choices"),
+            (dataclasses.replace(KEEP, default="many"), "its default is not a number"),
+            (dataclasses.replace(KEEP, default=True), "its default is not a number"),
+            (dataclasses.replace(KEEP, default=float("nan")), "its default is not a number"),
+            (dataclasses.replace(KEEP, default=10), "outside its minimum and maximum"),
+            (dataclasses.replace(KEEP, minimum=5000), "its minimum is above its maximum"),
+            (dataclasses.replace(KEEP, maximum=float("inf")), "its maximum is not a number"),
+            (dataclasses.replace(KEEP, step=0), "its step is not a number above zero"),
+            (
+                PanelSetting("units", "Units", kind="slider"),  # pyright: ignore[reportArgumentType]
+                "its kind is none of switch, choice, number",
+            ),
+        ],
+    )
+    def test_a_setting_that_cannot_be_drawn_says_why(
+        self, setting: PanelSetting, said: str
+    ) -> None:
+        assert said in (setting_problem(setting) or "")
+
+    def test_a_bad_setting_is_left_out_with_a_reason_and_the_others_stay(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, script: Path
+    ) -> None:
+        bad = dataclasses.replace(UNITS, key="scale", default="k")
+        twice = dataclasses.replace(COMPACT, key="temperature")
+        stray: Any = "temperature"
+        panel = Panel(title="Air", script=script, settings=(UNITS, bad, twice, stray, KEEP))
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.ext"):
+            taken = _panels(monkeypatch, _module("air", panel=lambda _app: panel))
+
+        assert taken["air"].settings == (UNITS, KEEP)
+        assert taken["air"].title == "Air"
+        assert "air's tab is without a setting" in caplog.text
+        assert "setting 'scale': its default is not one of its choices" in caplog.text
+        assert "setting 'temperature': another setting has its key" in caplog.text
+        assert "'temperature' is not a PanelSetting" in caplog.text
+
+    def test_the_page_is_sent_what_each_kind_uses(self) -> None:
+        assert setting_entry(UNITS) == {
+            "key": "temperature",
+            "label": "Temperature",
+            "hint": "",
+            "kind": "choice",
+            "default": "c",
+            "choices": [{"value": "c", "label": "°C"}, {"value": "f", "label": "°F"}],
+        }
+        assert setting_entry(COMPACT) == {
+            "key": "compact",
+            "label": "Compact cards",
+            "hint": "A row per room.",
+            "kind": "switch",
+            "default": False,
+        }
+        assert setting_entry(dataclasses.replace(KEEP, step=50)) == {
+            "key": "keep",
+            "label": "Points kept",
+            "hint": "",
+            "kind": "number",
+            "default": 400,
+            "min": 50,
+            "max": 2000,
+            "step": 50,
+        }
+
+
 class TestTopics:
     def test_followed_topics_are_relayed(self) -> None:
         relay.follow(["mlops/+/state", "mlops/+/state"])
@@ -205,7 +297,7 @@ async def client_fixture(
     panel = Panel(title="MLOps", script=script, icon="models", topics=("mlops/#",))
     icon = script.with_name("energy.svg")
     icon.write_bytes(ICON.encode())
-    energy = Panel(title="Energy", script=script, icon=icon)
+    energy = Panel(title="Energy", script=script, icon=icon, settings=(COMPACT,))
     _use(
         monkeypatch,
         _module("mlops", panel=lambda _app: panel),
@@ -232,7 +324,13 @@ class TestTheServer:
         assert listed == [
             {"name": "mlops", "title": "MLOps", "icon": "models"},
             # A page that does not read the file still has an icon to show.
-            {"name": "energy", "title": "Energy", "icon": "grid", "icon_svg": ICON},
+            {
+                "name": "energy",
+                "title": "Energy",
+                "icon": "grid",
+                "icon_svg": ICON,
+                "settings": [setting_entry(COMPACT)],
+            },
         ]
 
     async def test_serves_the_script_as_a_module_that_is_checked_each_time(

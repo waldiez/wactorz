@@ -11,9 +11,9 @@ export type View = string;
 /** Built-in views that are always present. Settings always renders last. */
 export const BUILTIN_VIEWS: { key: View; label: string; icon: IconName }[] = [
     { key: "overview", label: "Overview", icon: "grid" },
+    { key: "chat", label: "Chat", icon: "chat" },
     { key: "wiring", label: "Wiring", icon: "wiring" },
     { key: "feed", label: "Feed", icon: "list" },
-    { key: "chat", label: "Chat", icon: "chat" },
     { key: "models", label: "Models", icon: "models" },
     { key: "inbox", label: "Inbox", icon: "inbox" },
 ];

@@ -134,7 +134,10 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-route`             | router → CardDashboard                                         | `{ view, path }` (the address changed)                                 |
 | `af-view-changed`      | CardDashboard / viewRoutes → router                            | `{ view, path }` (the dashboard moved)                                 |
 | `af-register-view`     | an extension → CardDashboard                                   | `{ key, icon, label, build }` (a view of its own)                      |
-| `tts-voices-loaded`    | TTSManager → popovers                                          | `{ voices }`                                                           |
+| `af-register-settings` | an extension → CardDashboard (Settings)                        | a `SettingsSection` (`types/settings.ts`), at `#/settings/<key>`       |
+| `af-mute-changed`      | soundMute → AmbientManager, TTS, CardDashboard (the speaker)   | `{ muted }`                                                            |
+| `af-sound-changed`     | Settings → Sound → CardDashboard (the speaker)                 | _(none)_                                                               |
+| `tts-voices-loaded`    | TTSManager → Settings → Sound                                  | `{ voices }`                                                           |
 | `tts-audio-start`      | TTSManager → AmbientManager                                    | _(none)_                                                               |
 | `tts-audio-end`        | TTSManager → AmbientManager                                    | _(none)_                                                               |
 | `tts-stop`             | DashboardChat → TTSManager                                     | _(none)_ (the turn was stopped)                                        |
@@ -178,7 +181,10 @@ TTS (`src/ext/tts/`) is the reference implementation. An extension:
 5. **Registers custom icons** via `registerIcon(name, svgPaths)` from
    `ui/shell/icons.ts` before asking for its view with `af-register-view` — core never needs to
    know your icon names
-6. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
+6. **Adds its settings as a section of Settings**, if it has any — `af-register-settings` with a
+   `SettingsSection` (`types/settings.ts`), built from the rows in `ui/settings/layout.ts` so it
+   looks like the dashboard's own, and saying where its values are kept (`scope`)
+7. **Tests mirror the layout** — `src/__tests__/ext/<name>/`
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide: style/JSDoc rules, the
 PR checklist, and the branch target (`dev`).

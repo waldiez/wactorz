@@ -56,6 +56,13 @@ describe("the dashboard passes axe", () => {
         expect(await blockingFindings(document.body)).toEqual([]);
     });
 
+    it.each(["tabs", "sound", "budget"])("on the %s section of Settings", async section => {
+        goTo("settings", section);
+
+        expect(document.querySelector('[data-testid="view-settings"] [aria-current="page"]')).not.toBeNull();
+        expect(await blockingFindings(document.body)).toEqual([]);
+    });
+
     it("on the models view, a model open", async () => {
         const version = (n: number) => ({
             name: "hvac",

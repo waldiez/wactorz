@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { emit } from "../events";
 import type { CardDashboard } from "../ui/CardDashboard";
-import { buildAudioPopover, buildResetPopover } from "../ui/shell/popovers";
+import { buildResetPopover } from "../ui/shell/popovers";
 import { agent, buildDashboard, cardOf, goTo, openDashboard, pressView, shownView } from "./dashboard";
 import { allByRole, byRole, byTestId } from "./queries";
 
@@ -75,10 +75,7 @@ describe("CardDashboard render", () => {
         expect(byRole(document, "log", "Conversation").querySelector("strong")?.textContent).toBe("bold");
     });
 
-    it("builds the audio and reset popovers without throwing", () => {
-        const audio = buildAudioPopover();
-        expect(audio.classList.contains("af-audio-popover")).toBe(true);
-        expect(audio.querySelector(".af-audio-tracks")).toBeTruthy();
+    it("builds the reset popover without throwing", () => {
         expect(() => buildResetPopover()).not.toThrow();
     });
 

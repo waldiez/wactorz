@@ -2,151 +2,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 /**
- * Settings popovers for the dashboard bottom bar.
+ * The header's reset popover: clearing stored state, by scope.
  *
- * Both builders are self-contained (they only touch the audio/TTS singletons
- * and the reset REST endpoint), so they live outside the CardDashboard class.
+ * Self-contained (it only touches the reset REST endpoint), so it lives
+ * outside the CardDashboard class.
  */
-import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
-import { voiceControls } from "../../io/voiceControls";
 import { requestReset } from "../../io/resetApi";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
 import { parseRoute, type Route } from "../../router";
-import { button, el, named, option } from "../dom";
+import { button, el } from "../dom";
 import { sayRefusal } from "./mutate";
 import { AGENT_SCOPES, buildScopeSwitch, nodesSay, openAgent } from "./resetScope";
-
-/** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
-function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
-    const toggleRow = el("div", "af-audio-row");
-
-    const beepBtn = button(`af-audio-toggle${voiceControls().beepEnabled ? " on" : ""}`, "🔔 Beep");
-    beepBtn.title = "Notification beep";
-    beepBtn.addEventListener("click", () => {
-        beepBtn.classList.toggle("on", voiceControls().toggleBeep());
-    });
-
-    const ttsBtn = button(`af-audio-toggle${voiceControls().ttsEnabled ? " on" : ""}`, "🗣 TTS");
-    ttsBtn.title = "Read replies aloud";
-    ttsBtn.addEventListener("click", () => {
-        const on = voiceControls().toggleTTS();
-        ttsBtn.classList.toggle("on", on);
-        voiceRow.style.display = on ? "" : "none";
-    });
-
-    toggleRow.append(beepBtn, ttsBtn);
-    return toggleRow;
-}
-
-/** Voice-select row, repopulated when the browser's voice list loads.
- *  Returns the row plus a `release` that unhooks the `tts-voices-loaded`
- *  listener — the audio popover is rebuilt on every nav rebuild, and without
- *  this each rebuild would stack another listener mutating a detached select. */
-function buildVoiceRow(): { row: HTMLElement; release: () => void } {
-    const voiceRow = el("div", "af-audio-row");
-    voiceRow.style.display = voiceControls().ttsEnabled ? "" : "none";
-
-    const voiceSel = named(el("select", "af-audio-select"), "tts-voice", "TTS voice", "af-tts-voice");
-    voiceSel.title = "TTS voice";
-    voiceSel.appendChild(option("", "— loading voices… —"));
-
-    const populateVoices = (): void => {
-        const voices = voiceControls().voices;
-        if (!voices.length) {
-            return;
-        }
-        while (voiceSel.options.length > 1) {
-            voiceSel.remove(1);
-        }
-        voices.forEach(v => {
-            voiceSel.appendChild(
-                option(v.name, v.name.replace(/^Microsoft\s+/, "").replace(/\s+Online.*$/i, "")),
-            );
-        });
-        const saved = voiceControls().selectedVoice;
-        if (saved) {
-            voiceSel.value = saved;
-        }
-    };
-
-    populateVoices();
-    const stopFollowing = listen("tts-voices-loaded", () => populateVoices());
-    voiceSel.addEventListener("change", () => voiceControls().setVoice(voiceSel.value));
-
-    voiceRow.appendChild(voiceSel);
-    return { row: voiceRow, release: stopFollowing };
-}
-
-/** Ambient volume slider row (visibility toggled by the track buttons). */
-function buildVolumeRow(): HTMLElement {
-    const volRow = el("div", "af-audio-row af-audio-vol-row");
-    volRow.style.display = ambient.track === "none" ? "none" : "";
-
-    const volIcon = el("span", "", "🔉");
-    volIcon.style.fontSize = "14px";
-
-    const volSlider = named(el("input", "af-audio-slider"), "ambient-volume", "Ambient volume");
-    volSlider.type = "range";
-    volSlider.min = "0";
-    volSlider.max = "1";
-    volSlider.step = "0.05";
-    volSlider.value = String(ambient.volume);
-    volSlider.addEventListener("input", () => ambient.setVolume(parseFloat(volSlider.value)));
-
-    volRow.append(volIcon, volSlider);
-    return volRow;
-}
-
-/** Ambient track buttons; selecting one updates the volume row's visibility. */
-function buildAmbientTracks(volRow: HTMLElement): HTMLElement {
-    const trackRow = el("div", "af-audio-tracks");
-
-    AMBIENT_TRACKS.forEach(({ id, label }) => {
-        const btn = button(`af-audio-track-btn${ambient.track === id ? " on" : ""}`, label);
-        btn.addEventListener("click", () => {
-            trackRow.querySelectorAll(".af-audio-track-btn").forEach(b => b.classList.remove("on"));
-            btn.classList.add("on");
-            ambient.setTrack(id);
-            volRow.style.display = id === "none" ? "none" : "";
-        });
-        trackRow.appendChild(btn);
-    });
-    return trackRow;
-}
-
-/** Ambient track buttons + volume slider (volume hidden when track is "none"). */
-function buildAmbientRows(): DocumentFragment {
-    const frag = document.createDocumentFragment();
-
-    const trackLabel = el("div", "af-audio-label", "Ambient");
-    frag.appendChild(trackLabel);
-
-    const volRow = buildVolumeRow();
-    frag.appendChild(buildAmbientTracks(volRow));
-    frag.appendChild(volRow);
-    return frag;
-}
-
-/** An audio popover carrying teardown for its `tts-voices-loaded` listener
- *  (invoked by `releaseHeaderPopovers` before the element is removed). */
-export interface AudioPopover extends HTMLElement {
-    release: () => void;
-}
-
-/** Audio controls: beep/TTS toggles, voice select, ambient track + volume. */
-export function buildAudioPopover(): AudioPopover {
-    const pop = el("div", "af-audio-popover glass");
-
-    const { row: voiceRow, release } = buildVoiceRow();
-    pop.appendChild(buildAudioToggles(voiceRow));
-    pop.appendChild(voiceRow);
-
-    pop.appendChild(el("div", "af-audio-divider"));
-
-    pop.appendChild(buildAmbientRows());
-    return Object.assign(pop, { release: release });
-}
 
 const RESET_ICONS: Record<string, string> = {
     chat: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9.5a5 5 0 0 1-5 5H3l-2 2V5a5 5 0 0 1 5-5h3"/><circle cx="12" cy="4" r="3"/></svg>`,

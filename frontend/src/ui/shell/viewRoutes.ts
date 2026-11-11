@@ -7,9 +7,9 @@
  * reads what each view keeps in its route's path.
  *
  * A view's path is its own. The chat keeps the agent whose conversation is
- * open, as `[agent]`, the Models view the model open, as `[name]`, and the
- * Inbox the list open, as `[tab]`; a view with levels of its own adds what it
- * reads here.
+ * open, as `[agent]`, the Models view the model open, as `[name]`, the
+ * Inbox the list open, as `[tab]`, and Settings the section open, as
+ * `[section]`; a view with levels of its own adds what it reads here.
  */
 import { emit } from "../../events";
 import type { Route } from "../../router";
@@ -39,6 +39,10 @@ export interface ViewRoutesHost {
     inboxTab(): string;
     /** Open the list `tab` in the Inbox. */
     setInboxTab(tab: string): void;
+    /** The section Settings has open: "" for the first. */
+    settingsSection(): string;
+    /** Open the section `key` in Settings; "" for the first. */
+    setSettingsSection(key: string): void;
 }
 
 /** Opens routes for the dashboard, holding one that waits for an extension's view. */
@@ -76,6 +80,9 @@ export class ViewRoutes {
         }
         if (route.view === "inbox") {
             this.host.setInboxTab(route.path[0] ?? "");
+        }
+        if (route.view === SETTINGS_VIEW.key) {
+            this.host.setSettingsSection(route.path[0] ?? "");
         }
         this._levels.set(route.view, route.path);
         this.host.setView(route.view);
@@ -115,6 +122,9 @@ export class ViewRoutes {
         }
         if (view === "models") {
             return this.host.model();
+        }
+        if (view === SETTINGS_VIEW.key) {
+            return this.host.settingsSection();
         }
         return view === "inbox" ? this.host.inboxTab() : "";
     }

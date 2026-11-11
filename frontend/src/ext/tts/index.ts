@@ -50,6 +50,8 @@ export function register(config: TTSConfig): () => void {
     const stops = [
         listen("tts-stop", () => tts.stopSpeaking()),
         listen("tts-notify", ({ text, from }) => tts.notify(text, from)),
+        // Muted means silent now, the reply being read included.
+        listen("af-mute-changed", ({ muted }) => muted && tts.stopSpeaking()),
     ];
     if (!config.configRead || safeStorage.get("wactorz-tts-available") === "1") {
         void tts.init();

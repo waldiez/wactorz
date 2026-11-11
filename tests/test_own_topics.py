@@ -186,6 +186,8 @@ _GENERIC_READERS = {
     ("wactorz/agents/planner/context.py", "topics_named_in"),
     # A filter a person configured for nodes, checked level by level against the fences.
     ("wactorz/core/broker_accounts.py", "_reaches_a_fence"),
+    # Whether an access rule's filter covers a topic or a filter, level for level, whatever the root.
+    ("wactorz/core/broker_accounts.py", "filter_covers"),
 }
 
 

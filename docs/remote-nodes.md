@@ -385,9 +385,16 @@ compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
 
 **An agent on a node that uses a topic outside the list gets no error.** The
 broker drops the publish and delivers nothing to the subscription, which is how
-MQTT refuses, so the agent looks idle rather than broken. If an agent that works
-on the server goes quiet on a node, add its topic prefix to
-`WACTORZ_NODE_TOPICS`.
+MQTT refuses, so the agent looks idle rather than broken. The server says so
+instead: an agent's manifest names the topics it publishes and subscribes to,
+and for each one the list refuses its node, a notice in chat and a line in the
+log name the agent, the node and the topic, with the entry to add to
+`WACTORZ_NODE_TOPICS` (`read:` in front of one that is only subscribed to). A
+topic every node is kept from, such as another node's or `agents/+/commands`,
+cannot be added, and the notice says the agent has to use another. This is said
+only where the server writes the list: on a broker it does not write the files
+for, it cannot know what a node may use, so if an agent that works on the server
+goes quiet on a node there, look at that broker's own rules.
 
 **List every other account once a node is deployed.** Mosquitto gives an account
 the list does not mention no access at all, so with a node deployed, Home

@@ -52,6 +52,7 @@ from ...core.topics import (
     owner_of,
     root_prefix,
 )
+from .node_access import RefusedTopics
 from .voices import placed_node, speaks_for
 
 if TYPE_CHECKING:
@@ -137,6 +138,8 @@ class ManifestRegistry:
         self.topic_registry: dict[str, list[AgentManifest]] = {}
         #: Whether main's own manifest from before the namespace was set has been said.
         self.leftover_said: bool = False
+        #: The topics of nodes' agents the broker's access list refuses, each said once.
+        self.refused: RefusedTopics = RefusedTopics()
 
     def say_leftover(self, topic: str, payload: Any) -> None:
         """Log once that main's own manifest from before the namespace is still retained.
@@ -244,6 +247,20 @@ class ManifestRegistry:
         trusted = self._trusted(topic, payload, data, properties)
         if trusted is not None:
             self._accept_manifest(trusted)
+            self._say_refused(trusted)
+
+    def _say_refused(self, data: AgentManifest) -> None:
+        """Say which of the topics a node's agent names its broker account is refused."""
+        node = str(data.get("node") or "")
+        if self.host is None or not node or node == MAIN_NODE:
+            return
+        self.refused.say(
+            self.host,
+            str(data.get("name") or "?"),
+            node,
+            data.get("publishes", []) or [],
+            data.get("subscribes", []) or [],
+        )
 
     def _trusted(
         self,

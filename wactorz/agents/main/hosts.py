@@ -104,6 +104,10 @@ class ManifestHost(ListenerHost, VoiceHost, Protocol):
         """An agent took its manifest back; whether that stands."""
         ...
 
+    def _queue_notification(self, notice: dict[str, Any]) -> None:
+        """Say something in chat: a topic of a node's agent that its broker account is refused."""
+        ...
+
 
 class LabelHost(ListenerHost, VoiceHost, Protocol):
     """The label recorder needs a connection and where agents are, to take a book from the right node."""

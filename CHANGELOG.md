@@ -514,6 +514,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A topic the broker refuses a node's agent is said.** With node accounts on, an agent on a node whose code picked a
+  topic outside the access list ran, looked healthy, and nothing it published arrived: a broker answers nothing to a
+  refused publish. The server now reads each such agent's topics from its manifest and says in chat and in the log, once
+  per agent and topic, which one its node may not publish or subscribe to, with the entry to add to
+  `WACTORZ_NODE_TOPICS`, or that it is a topic every node is kept from.
+
 - **A library agent works under a namespace.** A rule, a recorder, a drift agent or a function agent given one of
   Wactorz's own topics bare -- `agents/<id>/data/...`, `models/<name>/drift` -- now publishes and subscribes under the
   namespace, as an agent program does, and a recorder or a trial files what it records under the bare name, so its

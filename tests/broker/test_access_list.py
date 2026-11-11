@@ -25,7 +25,7 @@ import pytest
 from wactorz.core import broker_accounts, node_signing
 from wactorz.core.topics import NAMESPACE, wire_topic
 
-from .acl_fixture import LISTED, PASSWORD, SERVER, UNLISTED
+from .acl_fixture import LISTED, PASSWORD, SERVER, UNLISTED, node_topics
 
 pytestmark = [pytest.mark.real_mqtt_client, pytest.mark.timeout(120)]
 
@@ -275,3 +275,46 @@ class TestAServerWithNoAccount:
         assert await _may_not_write(unnamed, "node-a", "zigbee2mqtt/lock/set", NO_ACCOUNT)
         assert await _may_not_write(unnamed, "node-a", "agents/abc/commands", NO_ACCOUNT)
         assert not await _hears_statistics(unnamed, "node-a", 3.0)
+
+
+class TestMainsAnswerIsTheBrokers:
+    """`node_may` is what main tells an operator a node may use: the broker has to agree."""
+
+    @pytest.mark.parametrize(
+        ("use", "topic"),
+        [
+            ("publish", "sensors/imu"),
+            ("subscribe", "sensors/imu"),
+            ("publish", "anomalies/imu"),
+            ("subscribe", "anomalies/imu"),
+            ("publish", "plant/pump"),
+            ("publish", "weather/today"),
+            ("subscribe", "weather/today"),
+            ("publish", "homeassistant/state_changes/light.kitchen"),
+            ("subscribe", "homeassistant/state_changes/light.kitchen"),
+            ("publish", "agents/abc/status"),
+            ("publish", "agents/abc/commands"),
+            ("subscribe", "agents/abc/commands"),
+            ("publish", "main/reply/abc"),
+            ("subscribe", "main/reply/abc"),
+            ("publish", "nodes/node-a/heartbeat"),
+            ("publish", "nodes/node-b/spawn"),
+            ("subscribe", "nodes/node-b/heartbeat"),
+            ("publish", "models/air/drift"),
+            ("publish", "models/air/active"),
+        ],
+    )
+    async def test_for_a_topic_a_nodes_agent_might_pick(
+        self, locked: tuple[str, int], use: str, topic: str
+    ) -> None:
+        said = broker_accounts.node_may(
+            "node-a",
+            "publish" if use == "publish" else "subscribe",
+            wire_topic(topic),
+            node_topics(),
+        )
+        sender, receiver = ("node-a", SERVER) if use == "publish" else (SERVER, "node-a")
+
+        arrived = await _delivered(locked, sender, topic, receiver, ARRIVES_S if said else ABSENT_S)
+
+        assert arrived is said

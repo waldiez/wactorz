@@ -132,28 +132,72 @@
   inset: 0;
   overflow: visible;
 }
+/* A line and the handles at its ends share one colour: what the line means. */
+.af-wire-line,
+.af-wire-handle {
+  color: rgba(148, 163, 184, 0.7);
+}
+.af-wire-line.selected,
+.af-wire-line.near,
+.af-wire-handle.selected,
+.af-wire-handle.near {
+  color: #cbd5e1;
+}
+.af-wire-line.feeds,
+.af-wire-handle.feeds {
+  color: #38bdf8;
+}
+.af-wire-line.asks,
+.af-wire-handle.asks {
+  color: #c4b5fd;
+}
+.af-wire-line.shadow,
+.af-wire-handle.shadow {
+  color: #fbbf24;
+}
+.af-wire-line.problem,
+.af-wire-handle.problem {
+  color: #f87171;
+}
 .af-wire-line {
   fill: none;
-  stroke: rgba(148, 163, 184, 0.7);
+  stroke: currentColor;
   stroke-width: 1.5;
 }
-.af-wire-line.feeds {
-  stroke: #38bdf8;
-}
-.af-wire-line.asks {
-  stroke: #c4b5fd;
-}
 .af-wire-line.shadow {
-  stroke: #fbbf24;
   stroke-dasharray: 5 4;
 }
 .af-wire-line.problem {
-  stroke: #f87171;
   stroke-width: 2;
 }
-.af-wire-line.selected {
-  stroke: #60a5fa;
+.af-wire-line.selected,
+.af-wire-line.near {
   stroke-width: 2.5;
+}
+/* The handles lie over the boxes and take no press: a box under one is still what is pressed. */
+.af-wire-handles {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  z-index: 2;
+  pointer-events: none;
+}
+/* A filled dot where a line leaves a box, a ring where it arrives at one. */
+.af-wire-handle {
+  stroke-width: 1.5;
+}
+.af-wire-handle.out {
+  fill: currentColor;
+  stroke: #0b0e14;
+}
+.af-wire-handle.in {
+  fill: #0b0e14;
+  stroke: currentColor;
+}
+/* With a box chosen, the lines that are not its own step back. */
+.af-wire-canvas.choosing .af-wire-line:not(.selected, .near),
+.af-wire-canvas.choosing .af-wire-handle:not(.selected, .near) {
+  opacity: 0.25;
 }
 .af-wire-line-label {
   font-size: 11px;
@@ -185,7 +229,8 @@
 }
 
 /* Exactly as tall as the layout made it: every line one row, cut short, never wrapped
-   (layout.ts heightOf counts on FIRST_LINE, LINE and PADDING matching these). */
+   (layout.ts heightOf counts on FIRST_LINE, LINE and PADDING matching these, and its CORNER
+   on each kind's border-radius, so a handle sits on a rounded corner's curve). */
 .af-wire-node {
   position: absolute;
   display: flex;
@@ -265,6 +310,27 @@
 .af-wire-node-line.problem {
   color: #fca5a5;
 }
+/* With a box chosen, one it is not joined to steps back: dimmer words that can still be read, a fainter edge. */
+.af-wire-node.apart {
+  background: #11151d;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.af-wire-node.apart .af-wire-node-name,
+.af-wire-node.apart .af-wire-node-line {
+  color: var(--af-text-dim);
+}
+.af-wire-node.apart.source {
+  border-color: rgba(56, 189, 248, 0.35);
+}
+.af-wire-node.apart.operator {
+  border-color: rgba(196, 181, 253, 0.35);
+}
+.af-wire-node.apart.shadow {
+  border-color: rgba(251, 191, 36, 0.35);
+}
+.af-wire-node.apart.warned {
+  border-color: rgba(248, 113, 113, 0.35);
+}
 
 .af-wire-legend {
   display: flex;
@@ -297,6 +363,17 @@
 }
 .af-wire-legend-item.feeds .af-wire-legend-key {
   border-top-color: #38bdf8;
+}
+.af-wire-legend-item.leaves .af-wire-legend-key,
+.af-wire-legend-item.arrives .af-wire-legend-key {
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 2px solid rgba(148, 163, 184, 0.8);
+  border-radius: 50%;
+}
+.af-wire-legend-item.leaves .af-wire-legend-key {
+  background: rgba(148, 163, 184, 0.8);
 }
 
 .af-wire-detail {

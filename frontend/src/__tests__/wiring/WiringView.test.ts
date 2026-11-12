@@ -16,8 +16,15 @@ import { KEY_STEP } from "../../ui/wiring/wiringDrag";
 import { WiringPins } from "../../ui/wiring/wiringPins";
 import { statusText, warningLabel, WiringView } from "../../ui/wiring/WiringView";
 import { fieldsText, payloadText, warningSentence } from "../../ui/wiring/wiringDetail";
-import { linePath } from "../../ui/wiring/wiringGraph";
-import { modelLine } from "../../wiring/graph";
+import {
+    HANDLE_RADIUS,
+    HANDLE_RADIUS_LIT,
+    joinedTo,
+    labelSpots,
+    linePath,
+} from "../../ui/wiring/wiringGraph";
+import { modelLine, type GraphEdge } from "../../wiring/graph";
+import type { Routed } from "../../wiring/layout";
 import { allByRole, byRole, nameOf } from "../queries";
 import { agent, topic, wiring } from "./fixtures";
 
@@ -309,6 +316,211 @@ function press(box: HTMLElement, type: string, x: number, y: number): void {
         new PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, pointerId: 1 }),
     );
 }
+
+/** What was drawn for the lines of the box `id`: paths or handles, by `kind`. */
+function marksOf(root: HTMLElement, kind: "line" | "handle", id: string): SVGElement[] {
+    return [...root.querySelectorAll<SVGElement>(`.af-wire-${kind}`)].filter(
+        m => m.dataset["from"] === id || m.dataset["to"] === id,
+    );
+}
+
+function routedTo(to: string, label: string, y2: number): Routed {
+    const edge: GraphEdge = {
+        from: `agent:${label}${y2}`,
+        to,
+        kind: "asks",
+        problem: false,
+        label,
+        shadow: false,
+    };
+    return { edge, x1: 0, y1: 0, x2: 100, y2, backwards: false };
+}
+
+describe("the handles", () => {
+    it("mark both ends of every line, a dot out and a ring in, in the line's own meaning", async () => {
+        narrow(false);
+        const { root } = await open();
+        const lines = root.querySelectorAll(".af-wire-line");
+        const handles = [...root.querySelectorAll(".af-wire-handle")];
+
+        expect(handles).toHaveLength(lines.length * 2);
+        expect(handles.filter(h => h.classList.contains("out"))).toHaveLength(lines.length);
+        expect(handles.filter(h => h.classList.contains("in"))).toHaveLength(lines.length);
+        expect(handles.every(h => h.getAttribute("r") === String(HANDLE_RADIUS))).toBe(true);
+        // Drawing only, over the boxes.
+        const layer = root.querySelector(".af-wire-handles")!;
+        expect(layer.getAttribute("aria-hidden")).toBe("true");
+        expect(layer.previousElementSibling?.classList.contains("af-wire-node")).toBe(true);
+        // A reader missing a field has a problem's handles; what a trial publishes, a trial's.
+        const comfort = marksOf(root, "handle", "agent:comfort");
+        expect(comfort.length).toBeGreaterThan(0);
+        expect(comfort.every(h => h.classList.contains("problem"))).toBe(true);
+        const trial = marksOf(root, "handle", "topic:shadow/air/kitchen/score");
+        expect(trial.map(h => h.classList.contains("shadow"))).toEqual([true, true]);
+        expect(marksOf(root, "handle", "operator").every(h => h.classList.contains("asks"))).toBe(true);
+    });
+
+    it("light at both ends of a chosen box's lines, while what it is not joined to steps back", async () => {
+        narrow(false);
+        const { root } = await open();
+        expect(root.querySelector(".af-wire-canvas")!.classList.contains("choosing")).toBe(false);
+
+        node(root, "Topic air/kitchen/score").click();
+
+        expect(root.querySelector(".af-wire-canvas")!.classList.contains("choosing")).toBe(true);
+        const mine = marksOf(root, "handle", "topic:air/kitchen/score");
+        // Published by one agent and read by one: two lines, four handles.
+        expect(mine).toHaveLength(4);
+        expect(mine.every(h => h.classList.contains("selected"))).toBe(true);
+        expect(mine.every(h => h.getAttribute("r") === String(HANDLE_RADIUS_LIT))).toBe(true);
+        const others = [...root.querySelectorAll(".af-wire-handle")].filter(
+            h => !mine.includes(h as SVGElement),
+        );
+        expect(others.length).toBeGreaterThan(0);
+        expect(others.some(h => h.classList.contains("selected"))).toBe(false);
+        // The chosen box and the two it is joined to stay; the rest step back.
+        const apart = (name: string): boolean => node(root, name).classList.contains("apart");
+        expect([apart("Topic air/kitchen/score"), apart("Agent detect"), apart("Agent watch")]).toEqual([
+            false,
+            false,
+            false,
+        ]);
+        expect([apart("Agent planner"), apart("Operator"), apart("Topic air/alarms")]).toEqual([
+            true,
+            true,
+            true,
+        ]);
+
+        node(root, "Topic air/kitchen/score").click();
+
+        expect(root.querySelector(".apart")).toBeNull();
+        expect(root.querySelector(".af-wire-canvas")!.classList.contains("choosing")).toBe(false);
+    });
+
+    it("light for the box pointed at or holding the focus, and no longer once it is left", async () => {
+        narrow(false);
+        const { root } = await open();
+        const planner = node(root, "Agent planner");
+        const near = (): Element[] => [...root.querySelectorAll(".near")];
+
+        planner.dispatchEvent(new Event("pointerenter"));
+
+        // Its one line and that line's two handles.
+        expect(near()).toHaveLength(3);
+        expect(near()).toEqual(expect.arrayContaining(marksOf(root, "line", "agent:planner")));
+        expect(near()).toEqual(expect.arrayContaining(marksOf(root, "handle", "agent:planner")));
+
+        planner.dispatchEvent(new Event("pointerleave"));
+        expect(near()).toHaveLength(0);
+
+        planner.focus();
+        expect(near()).toHaveLength(3);
+        planner.blur();
+        expect(near()).toHaveLength(0);
+    });
+
+    it("stay lit for a focused box the pointer leaves, and for a pointed box the focus leaves", async () => {
+        narrow(false);
+        const { root } = await open();
+        const planner = node(root, "Agent planner");
+        const near = (): Element[] => [...root.querySelectorAll(".near")];
+
+        planner.focus();
+        planner.dispatchEvent(new Event("pointerenter"));
+        planner.dispatchEvent(new Event("pointerleave"));
+        expect(document.activeElement).toBe(planner);
+        expect(near()).toHaveLength(3);
+
+        planner.dispatchEvent(new Event("pointerenter"));
+        planner.blur();
+        expect(near()).toHaveLength(3);
+
+        planner.dispatchEvent(new Event("pointerleave"));
+        expect(near()).toHaveLength(0);
+    });
+
+    it("light for the focused box and the one pointed at together", async () => {
+        narrow(false);
+        const { root } = await open();
+        const planner = node(root, "Agent planner");
+        const comfort = node(root, "Agent comfort");
+
+        planner.focus();
+        comfort.dispatchEvent(new Event("pointerenter"));
+
+        const lit = [...marksOf(root, "line", "agent:planner"), ...marksOf(root, "line", "agent:comfort")];
+        expect(lit.length).toBeGreaterThan(1);
+        expect(lit.every(m => m.classList.contains("near"))).toBe(true);
+
+        comfort.dispatchEvent(new Event("pointerleave"));
+
+        expect(marksOf(root, "line", "agent:planner").every(m => m.classList.contains("near"))).toBe(true);
+        expect(marksOf(root, "line", "agent:comfort").some(m => m.classList.contains("near"))).toBe(false);
+    });
+
+    it("stay lit for a box while it is dragged, its lines drawn again under it", async () => {
+        narrow(false);
+        const { root } = await open();
+        const planner = node(root, "Agent planner");
+        const before = marksOf(root, "handle", "agent:planner").map(h => h.getAttribute("cy"));
+
+        planner.dispatchEvent(new Event("pointerenter"));
+        planner.dispatchEvent(new MouseEvent("pointerdown", { button: 0, clientX: 0, clientY: 0 }));
+        planner.dispatchEvent(new MouseEvent("pointermove", { clientX: 0, clientY: 200 }));
+
+        const during = marksOf(root, "handle", "agent:planner");
+        expect(during.map(h => h.getAttribute("cy"))).not.toEqual(before);
+        expect(during.every(h => h.classList.contains("near"))).toBe(true);
+        planner.dispatchEvent(new MouseEvent("pointerup", { clientX: 0, clientY: 200 }));
+    });
+
+    it("are named in the legend", async () => {
+        narrow(false);
+        const { root } = await open();
+
+        const legend = root.querySelector('[aria-label="Legend"]')!.textContent;
+        expect(legend).toContain("leaves");
+        expect(legend).toContain("arrives");
+    });
+});
+
+describe("what a line says", () => {
+    it("is written above the handle it arrives at, once for each box it is said of", () => {
+        const first = routedTo("operator", "dashboard", 100);
+        const same = routedTo("operator", "dashboard", 140);
+        const elsewhere = routedTo("agent:other", "dashboard", 300);
+        const silent = routedTo("operator", "", 50);
+
+        const spots = labelSpots([first, same, elsewhere, silent]);
+
+        expect([...spots.keys()]).toEqual([first, elsewhere]);
+        expect(spots.get(first)).toBeLessThan(100);
+        expect(spots.get(elsewhere)).toBeLessThan(300);
+    });
+
+    it("moves up, one label above the next, where handles are too close to be read apart", () => {
+        const [low, mid, high] = [
+            routedTo("operator", "telegram", 106),
+            routedTo("operator", "dashboard", 103),
+            routedTo("operator", "whatsapp", 40),
+        ];
+
+        const spots = labelSpots([low, mid, high]);
+
+        expect(spots.get(low)).toBe(100);
+        // Too close to the one below it: moved up a row. The far one stays by its own handle.
+        expect(spots.get(mid)).toBe(87);
+        expect(spots.get(high)).toBe(34);
+    });
+
+    it("joins a chosen box to both ends of its lines, and nothing to no choice", () => {
+        const routed = [routedTo("operator", "x", 1), routedTo("agent:other", "y", 2)];
+        routed[1]!.edge.from = "operator";
+
+        expect(joinedTo(routed, "")).toEqual(new Set());
+        expect(joinedTo(routed, "operator")).toEqual(new Set(["operator", "agent:x1", "agent:other"]));
+    });
+});
 
 describe("moving a box", () => {
     it("drags it, keeps it there across a redraw, and does not choose it", async () => {

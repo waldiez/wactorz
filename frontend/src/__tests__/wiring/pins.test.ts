@@ -45,8 +45,12 @@ describe("a box moved by hand", () => {
 
         detect.y += 300;
 
-        const out = reroute(placed).find(r => r.edge.from === agentNode("detect"))!;
-        expect(out.y1).toBe(detect.y + detect.h / 2);
+        const out = reroute(placed).filter(r => r.edge.from === agentNode("detect"));
+        expect(out.length).toBeGreaterThan(1);
+        for (const r of out) {
+            expect(r.y1).toBeGreaterThan(detect.y);
+            expect(r.y1).toBeLessThan(detect.y + detect.h);
+        }
     });
 });
 

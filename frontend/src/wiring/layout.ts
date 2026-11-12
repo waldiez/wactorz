@@ -28,6 +28,13 @@
  * **Pins.** A box a person moved stays where they put it (`Pins`); the lines
  * follow it.
  *
+ * **Handles.** A line leaves the right side of the box it starts at and
+ * arrives at the left side of the box it ends at, at a handle of its own: a
+ * side's handles are spread along it, in the order of the boxes at their
+ * other ends from top to bottom, so the lines of one box fan out without
+ * crossing each other. A side with many lines packs them closer rather than
+ * running past its corners.
+ *
  * **Lanes.** Grouped by machine, each machine has its own band of rows across
  * every column, labelled, and a node stays in its machine's band; topics fed
  * from outside and the operator have a band of their own.
@@ -49,6 +56,12 @@ export function heightOf(node: GraphNode): number {
     const lines = boxLines(node).length;
     return PADDING + FIRST_LINE + Math.max(0, lines - 1) * LINE;
 }
+/** The most room between two handles on one side, and the room kept clear of them at each end of it. */
+export const HANDLE_GAP = 12;
+export const HANDLE_INSET = 6;
+/** How round each kind of box's corners are, in pixels: a handle near one sits on the curve. */
+export const CORNER: Record<NodeKind, number> = { source: 8, topic: 18, agent: 8, operator: 8 };
+
 /** The room between columns, which the lines cross, and between rows. */
 export const COLUMN_GAP = 84;
 export const ROW_GAP = 22;
@@ -86,7 +99,7 @@ export interface Lane {
     h: number;
 }
 
-/** A line, placed: the points it runs between, and whether it runs backwards. */
+/** A line, placed: the handles it runs between, and whether it runs backwards. */
 export interface Routed {
     edge: GraphEdge;
     x1: number;
@@ -241,30 +254,90 @@ function ordered(graph: Graph, column: Map<string, number>, grouped: boolean): G
 }
 
 /**
- * Where the line for `edge` runs: from the right of where it starts to the
- * left of where it ends. One whose end is not to the right of its start --
- * a cycle, or a box moved there by hand -- is drawn as a loop.
+ * How far down a side `h` tall the handle `index` of `count` sits: the
+ * handles centred on the side, `HANDLE_GAP` apart, or closer when that many
+ * would not fit between its ends.
  */
-function route(edge: GraphEdge, at: Map<string, Placed>): Routed | null {
-    const from = at.get(edge.from);
-    const to = at.get(edge.to);
-    if (!from || !to) {
-        return null;
+export function handleOffset(h: number, index: number, count: number): number {
+    if (count < 2) {
+        return h / 2;
     }
-    return {
-        edge,
-        x1: from.x + from.w,
-        y1: from.y + from.h / 2,
-        x2: to.x,
-        y2: to.y + to.h / 2,
-        backwards: to.x < from.x + from.w,
-    };
+    const gap = Math.min(HANDLE_GAP, Math.max(0, h - 2 * HANDLE_INSET) / (count - 1));
+    return h / 2 + (index - (count - 1) / 2) * gap;
+}
+
+/** How far in from the straight part of `box`'s side its border is at `y`: more than nothing only on a corner's curve. */
+function cornerInset(box: Placed, y: number): number {
+    const radius = Math.min(CORNER[box.node.kind], box.h / 2);
+    const into = Math.max(0, radius - Math.min(y - box.y, box.y + box.h - y));
+    return radius - Math.sqrt(radius * radius - into * into);
+}
+
+/** Which end of a line is meant: where it leaves a box, or where it arrives at one. */
+type End = "from" | "to";
+
+/**
+ * Where each line meets the box at its `end`, as `y` by the line's place in
+ * `edges`: one box's lines in the order of the boxes at their other ends,
+ * top to bottom, then left to right, then as the graph lists them.
+ */
+function handles(edges: readonly GraphEdge[], at: Map<string, Placed>, end: End): Map<number, number> {
+    const other: End = end === "from" ? "to" : "from";
+    const byBox = new Map<string, number[]>();
+    edges.forEach((edge, i) => {
+        if (at.has(edge.from) && at.has(edge.to)) {
+            byBox.set(edge[end], [...(byBox.get(edge[end]) ?? []), i]);
+        }
+    });
+    const ys = new Map<number, number>();
+    for (const [id, mine] of byBox) {
+        const box = at.get(id)!;
+        const far = (i: number): Placed => at.get(edges[i]![other])!;
+        mine.sort(
+            (a, b) => far(a).y + far(a).h / 2 - (far(b).y + far(b).h / 2) || far(a).x - far(b).x || a - b,
+        );
+        mine.forEach((i, place) => ys.set(i, box.y + handleOffset(box.h, place, mine.length)));
+    }
+    return ys;
+}
+
+/**
+ * Where every line of `edges` runs between the boxes of `at`: from a handle
+ * on the right of where it starts to one on the left of where it ends. One
+ * whose end is not to the right of its start -- a cycle, or a box moved
+ * there by hand -- is drawn as a loop. A line with an end that is not placed
+ * is left out.
+ */
+function routes(edges: readonly GraphEdge[], at: Map<string, Placed>): Routed[] {
+    const leaves = handles(edges, at, "from");
+    const arrives = handles(edges, at, "to");
+    const routed: Routed[] = [];
+    edges.forEach((edge, i) => {
+        const from = at.get(edge.from);
+        const to = at.get(edge.to);
+        const y1 = leaves.get(i);
+        const y2 = arrives.get(i);
+        if (!from || !to || y1 === undefined || y2 === undefined) {
+            return;
+        }
+        routed.push({
+            edge,
+            x1: from.x + from.w - cornerInset(from, y1),
+            y1,
+            x2: to.x + cornerInset(to, y2),
+            y2,
+            backwards: to.x < from.x + from.w,
+        });
+    });
+    return routed;
 }
 
 /** The lines of `drawing`, run again between where its boxes stand now: after one was moved. */
 export function reroute(drawing: Pick<Layout, "placed" | "routed">): Routed[] {
-    const at = new Map(drawing.placed.map(p => [p.node.id, p]));
-    return drawing.routed.map(r => route(r.edge, at)).filter((r): r is Routed => r !== null);
+    return routes(
+        drawing.routed.map(r => r.edge),
+        new Map(drawing.placed.map(p => [p.node.id, p])),
+    );
 }
 
 /** How large the drawing must be to hold every box, wherever it stands, with the margin round it. */
@@ -319,7 +392,7 @@ export function layout(graph: Graph, grouped = false, pins: Pins = new Map()): L
         top += header + tallest + (grouped ? ROW_GAP : 0);
     }
     const at = new Map(placed.map(p => [p.node.id, p]));
-    const routed = graph.edges.map(e => route(e, at)).filter((r): r is Routed => r !== null);
+    const routed = routes(graph.edges, at);
     const width = MARGIN * 2 + Math.max(1, cols.length) * (widest + COLUMN_GAP) - COLUMN_GAP;
     return { placed, routed, lanes, ...extent(placed, width, top + MARGIN) };
 }

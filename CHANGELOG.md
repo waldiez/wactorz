@@ -35,6 +35,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The Wiring graph marks where each line starts and ends.** A line leaves a box at a filled dot and arrives at a
+  ring, in the line's own colour, and a box's lines are spread along its side in the order of what they join, so
+  they fan out instead of meeting at one point. Choosing a box lights its lines and the handles at both ends, in
+  their own colours, while what it is not joined to steps back; pointing at a box, or moving the focus to it, lights
+  its lines without choosing it.
 - **A package's tab can have settings.** Its `Panel` declares them (`settings=(PanelSetting("temperature",
   "Temperature", kind="choice", choices=(("c", "°C"), ("f", "°F")), default="c"),)`: a switch, a choice among a few, or a
   number), and the dashboard draws them as a section of Settings named after the tab, at `#/settings/panel-<name>`. Each

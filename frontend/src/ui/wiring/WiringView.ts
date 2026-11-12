@@ -312,6 +312,8 @@ export class WiringView {
             ["problem", "problem"],
             ["asks", "asks a person"],
             ["feeds", "from outside"],
+            ["leaves", "leaves"],
+            ["arrives", "arrives"],
         ]) {
             const item = el("li", `af-wire-legend-item ${kind}`);
             item.append(el("span", "af-wire-legend-key"), el("span", "", text));

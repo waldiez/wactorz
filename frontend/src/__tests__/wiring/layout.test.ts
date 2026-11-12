@@ -155,6 +155,43 @@ describe("the layout", () => {
     it("lays out an empty graph without failing", () => {
         expect(layout({ nodes: [], edges: [] }).placed).toEqual([]);
     });
+
+    it("centres each column on the tallest, so a lone box stands beside the middle of a long column", () => {
+        const drawing = layout(fan(5));
+        const middle = (column: number): number => {
+            const boxes = drawing.placed.filter(p => p.column === column);
+            return (Math.min(...boxes.map(p => p.y)) + Math.max(...boxes.map(p => p.y + p.h))) / 2;
+        };
+        const hub = boxOf(drawing, agentNode("hub"));
+
+        expect(drawing.placed.filter(p => p.column === hub.column)).toHaveLength(1);
+        expect(drawing.placed.filter(p => p.column === 1)).toHaveLength(5);
+        // Within a pixel: a column is moved by whole pixels.
+        expect(Math.abs(middle(0) - middle(1))).toBeLessThanOrEqual(1);
+        expect(Math.abs(middle(2) - middle(1))).toBeLessThanOrEqual(1);
+        // Its lines fan out to both sides of it.
+        const out = drawing.routed.filter(r => r.edge.from === hub.node.id);
+        expect(out.some(r => r.y2 < r.y1)).toBe(true);
+        expect(out.some(r => r.y2 > r.y1)).toBe(true);
+        expect(drawing.placed.every(p => Number.isInteger(p.y))).toBe(true);
+    });
+
+    it("centres a column within its machine's band when grouped, never across bands", () => {
+        const graph = fan(5);
+        graph.nodes.find(n => n.id === agentNode("hub"))!.machine = "edge";
+        const drawing = layout(graph, true);
+        const band = drawing.lanes.find(l => l.machine === "edge")!;
+        const hub = boxOf(drawing, agentNode("hub"));
+
+        // Alone in its band: where a band with one box puts it, not beside the other band's middle.
+        expect(drawing.lanes.map(l => l.machine)).toEqual(["edge", "main"]);
+        expect(hub.y).toBeGreaterThanOrEqual(band.y);
+        expect(hub.y + hub.h).toBeLessThanOrEqual(band.y + band.h);
+        for (const lane of drawing.lanes) {
+            const inside = drawing.placed.filter(p => (p.node.machine || "") === lane.machine);
+            expect(inside.every(p => p.y >= lane.y && p.y + p.h <= lane.y + lane.h)).toBe(true);
+        }
+    });
 });
 
 describe("the handles", () => {

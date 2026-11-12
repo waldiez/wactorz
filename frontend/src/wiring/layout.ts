@@ -25,6 +25,11 @@
  * the same graph is always laid out the same: a refresh that changes nothing
  * moves nothing.
  *
+ * **Rows.** Each column's boxes are stacked with the same room between them,
+ * and the stack is centred on the tallest column's, within its lane: a short
+ * column stands beside the middle of a long one, not at its top, so the lines
+ * between them run flatter.
+ *
  * **Pins.** A box a person moved stays where they put it (`Pins`); the lines
  * follow it.
  *
@@ -352,6 +357,11 @@ export function extent(
     };
 }
 
+/** How tall a column's boxes are, stacked: each with the room below it that parts it from the next. */
+function stackHeight(nodes: readonly GraphNode[]): number {
+    return nodes.reduce((sum, node) => sum + heightOf(node) + ROW_GAP, 0);
+}
+
 /**
  * Lay `graph` out, in lanes by machine when `grouped`, with each box in
  * `pins` where a person put it instead. A pinned box keeps its place
@@ -368,10 +378,13 @@ export function layout(graph: Graph, grouped = false, pins: Pins = new Map()): L
     let top = MARGIN;
     for (const machine of lanesNamed) {
         const header = grouped ? LANE_HEADER : 0;
-        let tallest = 0;
-        cols.forEach((col, c) => {
-            let y = top + header;
-            for (const node of col.filter(n => laneOf(n, grouped) === machine)) {
+        const stacks = cols.map(col => col.filter(n => laneOf(n, grouped) === machine));
+        const heights = stacks.map(stackHeight);
+        const tallest = Math.max(0, ...heights);
+        stacks.forEach((stack, c) => {
+            // Whole pixels, so a box's edge is drawn sharp.
+            let y = top + header + Math.round((tallest - heights[c]!) / 2);
+            for (const node of stack) {
                 const w = WIDTH[node.kind];
                 const h = heightOf(node);
                 const pin = pins.get(node.id);
@@ -386,7 +399,6 @@ export function layout(graph: Graph, grouped = false, pins: Pins = new Map()): L
                 });
                 y += h + ROW_GAP;
             }
-            tallest = Math.max(tallest, y - (top + header));
         });
         lanes.push({ machine, y: top, h: header + tallest });
         top += header + tallest + (grouped ? ROW_GAP : 0);

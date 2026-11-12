@@ -35,6 +35,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The Wiring graph centres its columns on each other.** A short column stands beside the middle of a long one
+  instead of at its top, within its machine's band when grouped, so an agent sits level with what it publishes and
+  reads and the lines between them run flatter. A box moved by hand stays where it was put.
 - **The Wiring graph marks where each line starts and ends.** A line leaves a box at a filled dot and arrives at a
   ring, in the line's own colour, and a box's lines are spread along its side in the order of what they join, so
   they fan out instead of meeting at one point. Choosing a box lights its lines and the handles at both ends, in
